@@ -6,6 +6,8 @@ pub(crate) mod cloud_env;
 #[cfg(test)]
 mod cloud_tests;
 mod data;
+#[cfg(test)]
+mod import_tests;
 mod keymap;
 #[cfg(test)]
 mod layout_tests;
@@ -143,6 +145,8 @@ pub(crate) struct MonoSetting {
 
 pub(crate) enum SettingsEvent {
     WhatsNew,
+    /// Restart the app, so it opens the data the Import page copied in.
+    RestartApp,
     CheckAppUpdates,
     CheckHarnessUpdates,
     ManageInboxProvider(String),
@@ -376,6 +380,7 @@ pub(crate) struct SettingsView {
     web_app: pages::WebAppState,
     ticket_scoring: pages::ScoringState,
     cloud: pages::CloudState,
+    import: pages::ImportState,
     /// The emoji library page of the Monos section, once the app has installed the library.
     emoji_library: Option<Entity<crate::emoji_library::EmojiLibraryView>>,
     _subscriptions: Vec<Subscription>,
@@ -535,9 +540,11 @@ impl SettingsView {
             web_app: pages::WebAppState::default(),
             ticket_scoring: pages::ScoringState::default(),
             cloud: pages::CloudState::default(),
+            import: pages::ImportState::default(),
             emoji_library,
             _subscriptions: subscriptions,
         };
+        this.refresh_import();
         this.watch_mobile(cx);
         this.watch_connections(cx);
         if this.prefs.notifications {
@@ -589,6 +596,7 @@ impl SettingsView {
                 _ => true,
             };
             self.ctx = ctx;
+            self.refresh_import();
             self.mobile_context_changed(cx);
             self.web_context_changed(cx);
             if remote_changed {
@@ -864,8 +872,17 @@ impl SettingsView {
     }
 
     /// What the search field shows, so a cached rail can tell it changed.
-    pub(crate) fn search_state(&self) -> (String, usize) {
-        (self.search_query.clone(), self.search_active)
+    pub(crate) fn search_state(&self) -> (String, usize, bool) {
+        (
+            self.search_query.clone(),
+            self.search_active,
+            self.import.visible(),
+        )
+    }
+
+    /// Whether the rail lists Import from Monoptah.
+    pub(crate) fn import_visible(&self) -> bool {
+        self.import.visible()
     }
 
     /// The settings search: atop the settings nav, or in the header while
@@ -1071,6 +1088,7 @@ pub(crate) fn nav(
     select: impl Fn(Section, &mut Window, &mut App) + Clone + 'static,
     back: impl Fn(&mut Window, &mut App) + 'static,
     web_waiting: usize,
+    import_visible: bool,
 ) -> AnyElement {
     let row = |id: SharedString, label: &'static str, path: &'static str, active: bool| {
         div()
@@ -1164,6 +1182,9 @@ pub(crate) fn nav(
                                 .iter()
                                 .copied()
                                 .chain((*group == "Agents").then_some(Section::Cloud))
+                                .chain(
+                                    (*group == "App" && import_visible).then_some(Section::Import),
+                                )
                                 .map(|item| {
                                     let select = select.clone();
                                     row(

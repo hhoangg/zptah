@@ -8,6 +8,7 @@ pub(super) mod cloud_backends;
 pub(super) mod cloud_docker;
 mod connections;
 mod general;
+mod import;
 mod inbox;
 mod keybindings;
 mod mcp;
@@ -26,6 +27,7 @@ pub(super) use cloud::CloudState;
 #[cfg(test)]
 pub(super) use cloud::Load as CloudLoad;
 pub(super) use connections::ConnectionsState;
+pub(super) use import::ImportState;
 pub(crate) use keybindings::command_shortcut;
 pub(super) use mobile::MobileState;
 pub(super) use monos::EMOJI_LIBRARY;
@@ -58,6 +60,7 @@ impl SettingsView {
             Section::Archive => self.archive_page(cx),
             Section::Worktrees => self.worktrees_page(cx),
             Section::Cloud => self.cloud_page(cx),
+            Section::Import => self.import_page(cx),
         }
     }
 }

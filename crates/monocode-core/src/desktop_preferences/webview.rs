@@ -49,30 +49,10 @@ impl DesktopPreferences {
     /// merge localhost development origins or Inspector storage into the app.
     #[cfg(any(target_os = "macos", test))]
     pub(super) fn load_webkit(root: &Path) -> Self {
-        let mut paths = Vec::new();
-        if let Ok(first) = std::fs::read_dir(root) {
-            for directory in first.flatten() {
-                if let Ok(second) = std::fs::read_dir(directory.path()) {
-                    for origin in second.flatten() {
-                        let path = origin.path();
-                        if std::fs::read(path.join("origin"))
-                            .ok()
-                            .is_some_and(|bytes| desktop_origin(&bytes))
-                        {
-                            let database = path.join("LocalStorage/localstorage.sqlite3");
-                            if database.is_file() {
-                                paths.push(database);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        paths.sort();
-        paths
+        webkit_origin_dirs(root)
             .into_iter()
-            .find_map(|path| {
-                Self::read_database(&path)
+            .find_map(|dir| {
+                Self::read_database(&dir.join(WEBKIT_DATABASE))
                     .ok()
                     .filter(|prefs| prefs.available)
             })
@@ -259,6 +239,35 @@ pub(super) fn decode_webkit_value(bytes: &[u8]) -> Option<String> {
             .collect::<Vec<_>>(),
     )
     .ok()
+}
+
+/// The localStorage database inside an origin directory.
+#[cfg(any(target_os = "macos", test))]
+pub(super) const WEBKIT_DATABASE: &str = "LocalStorage/localstorage.sqlite3";
+
+/// The origin directories of `root` that belong to the desktop app and hold a localStorage
+/// database, in the order they are read.
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn webkit_origin_dirs(root: &Path) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(first) = std::fs::read_dir(root) {
+        for directory in first.flatten() {
+            if let Ok(second) = std::fs::read_dir(directory.path()) {
+                for origin in second.flatten() {
+                    let path = origin.path();
+                    if std::fs::read(path.join("origin"))
+                        .ok()
+                        .is_some_and(|bytes| desktop_origin(&bytes))
+                        && path.join(WEBKIT_DATABASE).is_file()
+                    {
+                        dirs.push(path);
+                    }
+                }
+            }
+        }
+    }
+    dirs.sort();
+    dirs
 }
 
 #[cfg(any(target_os = "macos", test))]

@@ -267,7 +267,7 @@ fn classify(stderr: &str) -> AccessStatus {
         AccessStatus::Network
     }
 }
-fn associated_data(id: &str, origin: &str, username: &str) -> Vec<u8> {
+pub(crate) fn associated_data(id: &str, origin: &str, username: &str) -> Vec<u8> {
     format!("monoptah-git-credential-v1\0{id}\0{origin}\0{username}").into_bytes()
 }
 

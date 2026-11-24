@@ -10,6 +10,16 @@ use std::{
     path::Path,
 };
 
+/// The origin directories of a WebKit storage root that hold the desktop app's localStorage.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn webkit_origin_dirs(root: &Path) -> Vec<std::path::PathBuf> {
+    webview::webkit_origin_dirs(root)
+}
+
+/// Where an origin directory keeps its localStorage database.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) const WEBKIT_DATABASE: &str = webview::WEBKIT_DATABASE;
+
 #[derive(Clone, Debug, Default)]
 pub struct DesktopPreferences {
     values: BTreeMap<String, String>,

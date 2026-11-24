@@ -108,6 +108,12 @@ fn associated_data(account: &str, kind: ClaudeCredential) -> Vec<u8> {
     .into_bytes()
 }
 
+/// The associated data of a stored row, from its `kind` column; `None` for an unknown kind.
+/// Used by the Monoptah import to check that copied rows still open with the copied key.
+pub(crate) fn stored_associated_data(account: &str, kind: &str) -> Option<Vec<u8>> {
+    ClaudeCredential::parse(kind).map(|kind| associated_data(account, kind))
+}
+
 /// The key operations report why they failed; this module words it for Claude.
 fn read_failure(error: KeyError) -> String {
     match error {

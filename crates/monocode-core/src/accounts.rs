@@ -1,7 +1,9 @@
 //! Provider-owned sign-ins. Metadata never contains credentials.
 pub(crate) mod sealed;
 mod token;
-pub(crate) use token::{database_for, register_database, CREDENTIALS_TABLE};
+pub(crate) use token::{
+    database_for, register_database, stored_associated_data, CREDENTIALS_TABLE,
+};
 pub use token::{
     normalize_claude_api_key, normalize_claude_token, ClaudeCredential, CREDENTIAL_UNREADABLE,
 };

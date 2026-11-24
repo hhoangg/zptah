@@ -13,9 +13,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The app's own application-data database, keyed by its bundle identifier. It is never the
-/// Monoptah data directory: that one is only read by an explicit import.
-pub fn monocode_database() -> PathBuf {
+/// The platform folder that holds one data directory per app.
+pub(super) fn platform_data_base() -> PathBuf {
     #[cfg(target_os = "macos")]
     let base = crate::accounts::home()
         .unwrap_or_default()
@@ -30,7 +29,14 @@ pub fn monocode_database() -> PathBuf {
                 .unwrap_or_default()
                 .join(".local/share")
         });
-    base.join(crate::brand::DESKTOP_APP_ID)
+    base
+}
+
+/// The app's own application-data database, keyed by its bundle identifier. It is never the
+/// Monoptah data directory: that one is only read by an explicit import.
+pub fn monocode_database() -> PathBuf {
+    platform_data_base()
+        .join(crate::brand::DESKTOP_APP_ID)
         .join(crate::brand::DATABASE_FILE)
 }
 

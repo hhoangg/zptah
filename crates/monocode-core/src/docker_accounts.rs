@@ -299,7 +299,7 @@ fn validate_pat(pat: &str) -> Result<String, String> {
     }
     Ok(pat.to_owned())
 }
-fn associated_data(id: &str, docker_id: &str) -> Vec<u8> {
+pub(crate) fn associated_data(id: &str, docker_id: &str) -> Vec<u8> {
     format!("monoptah-docker-account-v1\0{id}\0{docker_id}").into_bytes()
 }
 

@@ -669,7 +669,7 @@ CREATE INDEX IF NOT EXISTS mono_browser_audit_mono ON mono_browser_audit(mono_id
 const UNAVAILABLE: &str = "Browser storage is unavailable.";
 
 /// The associated data a token is sealed under: moving a row to another Mono breaks opening.
-fn secret_aad(mono_id: &str, name: &str) -> Vec<u8> {
+pub(crate) fn secret_aad(mono_id: &str, name: &str) -> Vec<u8> {
     let mut aad = b"mono-secret\0".to_vec();
     aad.extend_from_slice(mono_id.as_bytes());
     aad.push(0);

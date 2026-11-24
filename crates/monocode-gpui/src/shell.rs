@@ -2559,6 +2559,26 @@ impl Shell {
         })
         .detach();
     }
+    /// The restart that finishes an import from Monoptah. There is no Cancel: the prepared data
+    /// is moved in at the next start, and the running app must not keep writing meanwhile.
+    fn request_import_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quit_prompted {
+            return;
+        }
+        self.quit_prompted = true;
+        let answer = window.prompt(
+            gpui::PromptLevel::Info,
+            "Restart zptah to finish the import",
+            Some("Running agents and terminals will stop. Your Monoptah data is moved in as zptah starts."),
+            &["Restart"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let _ = answer.await;
+            let _ = this.update(cx, |_, cx| crate::restart(cx));
+        })
+        .detach();
+    }
     /// Menu Quit, the Cmd+Q gate and the window's close button all come here.
     /// Quitting stops running terminals and drops unsaved file edits, so either
     /// one asks first, in a single dialog.
@@ -7495,6 +7515,7 @@ impl Shell {
             let select = cx.weak_entity();
             let back = select.clone();
             let web_waiting = self.web_badge(cx);
+            let import_visible = settings.read(cx).import_visible();
             return crate::settings::nav(
                 section,
                 search,
@@ -7505,6 +7526,7 @@ impl Shell {
                     let _ = back.update(cx, |this, cx| this.close_settings(window, cx));
                 },
                 web_waiting,
+                import_visible,
             );
         }
         if self.workspace.classic_layout {

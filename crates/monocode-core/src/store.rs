@@ -12,6 +12,7 @@ mod cloud_rows;
 pub use cloud_rows::{AppendOutcome, RowAnchor};
 mod managed_sessions;
 mod monocode_import;
+pub mod monoptah_import;
 mod monos;
 mod notes;
 mod remote;

@@ -205,6 +205,7 @@ impl Shell {
                     }
                     this.sync_settings(cx);
                 }
+                SettingsEvent::RestartApp => this.request_import_restart(window, cx),
                 SettingsEvent::WhatsNew => {
                     this.open_whats_new(crate::notifications::updater::version().into(), cx)
                 }

@@ -20,6 +20,8 @@ pub(crate) enum Section {
     Worktrees,
     /// Not in [`Section::ALL`] (so Settings search does not list it yet); the rail adds it.
     Cloud,
+    /// Not in [`Section::ALL`]: the rail adds it while Monoptah data can be imported.
+    Import,
 }
 
 pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
@@ -79,6 +81,7 @@ impl Section {
             Section::Archive => "archive",
             Section::Worktrees => "worktrees",
             Section::Cloud => "cloud",
+            Section::Import => "import",
         }
     }
     pub(crate) fn label(self) -> &'static str {
@@ -96,6 +99,7 @@ impl Section {
             Section::Archive => "Archive",
             Section::Worktrees => "Worktrees",
             Section::Cloud => "Cloud",
+            Section::Import => "Import from Monoptah",
         }
     }
     pub(crate) fn description(self) -> &'static str {
@@ -129,6 +133,9 @@ impl Section {
             Section::Cloud => {
                 "Applies to every project. Repository, machine and credentials of each project live in its Cloud settings dialog."
             }
+            Section::Import => {
+                "Bring your conversations, settings and sign-ins over from Monoptah, once."
+            }
         }
     }
     fn keywords(self) -> &'static str {
@@ -158,6 +165,7 @@ impl Section {
             Section::Cloud => {
                 "codespace sandbox docker account token gh backend ssh kit claude setup secrets sign in copy"
             }
+            Section::Import => "monoptah migrate copy move transfer data",
         }
     }
     /// SettingsRail.tsx's SECTION_ICONS.
@@ -176,6 +184,7 @@ impl Section {
             Section::Archive => "archive",
             Section::Worktrees => "folder-tree",
             Section::Cloud => "cloud-upload",
+            Section::Import => "archive",
         }
     }
 }

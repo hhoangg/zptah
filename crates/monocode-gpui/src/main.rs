@@ -349,6 +349,15 @@ fn main() {
         );
         std::process::exit(2);
     }
+    // An import from Monoptah that was prepared before the restart is moved in now, before
+    // anything opens the data folder (the database, the search index, the writers).
+    if !check_data && let Some(directory) = database.parent() {
+        match monocode_core::store::monoptah_import::apply_pending(directory) {
+            Ok(Some(_)) => eprintln!("Imported your Monoptah data."),
+            Ok(None) => {}
+            Err(error) => eprintln!("{error}"),
+        }
+    }
     let mut db = if check_data {
         Store::read_monocode(&database)
     } else {
