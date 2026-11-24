@@ -93,7 +93,7 @@ Fixes: #151
 
 Open issues with one of the two forms in `.github/ISSUE_TEMPLATE/`:
 
-- **Bug** (`[Bug] ...`, label `bug`): Monoptah version, OS and version, provider CLI and
+- **Bug** (`[Bug] ...`, label `bug`): zptah version, OS and version, provider CLI and
   version, steps to reproduce, expected and actual behavior, logs or screenshots.
 - **Feature** (`[Feature] ...`, label `enhancement`): problem or need, proposal, alternatives
   considered, acceptance criteria.
@@ -119,14 +119,14 @@ Open issues with one of the two forms in `.github/ISSUE_TEMPLATE/`:
   upstream changes in the highlights, or label the sync PR `user-visible`.
 - Optional highlights: pass `--notes FILE`, or put them in
   `docs/native/monoptah-release-notes.md` with the first line exactly
-  `# Monoptah Native X.Y.Z` for the version being released (a file for another version is
+  `# zptah X.Y.Z` for the version being released (a file for another version is
   ignored). The text after the heading is added above the generated sections.
   See "Releasing the native app" in `CLAUDE.md` and `docs/native/release-flow.md` for the steps.
 
 Example of the generated notes (the highlights paragraph is optional):
 
 ```markdown
-# Monoptah Native 0.54.0
+# zptah 0.54.0
 
 Mono terminals can now be split side by side.
 

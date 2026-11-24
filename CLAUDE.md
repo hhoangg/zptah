@@ -1,7 +1,8 @@
-# Monoptah
+# zptah
 
-This repository is a fork of [`hardbeat920/monocode`](https://github.com/hardbeat920/monocode),
-renamed **Monoptah**. It tracks upstream and merges from it regularly, while carrying
+This repository is **zptah**, a native desktop app (Rust + GPUI) plus a remote Host and a web
+companion. It originated from [`hardbeat920/monocode`](https://github.com/hardbeat920/monocode)
+via the Monoptah fork. It tracks upstream and merges from it regularly, while carrying
 fork-local changes that are never offered back upstream.
 
 ## Git conventions
@@ -19,7 +20,7 @@ Full rules and examples: [`docs/git-conventions.md`](docs/git-conventions.md).
 
 Upstream keeps adding links, menu items, dialog copy and docs that say "MonoCode" and
 point at `hardbeat920/monocode`. Every merge can therefore quietly reintroduce the
-upstream identity into a build called Monoptah. **Re-check after each merge** — do not
+upstream identity into a build called zptah. **Re-check after each merge** — do not
 rely on remembering which files were fixed last time, because the next merge will touch
 different ones.
 
@@ -40,7 +41,7 @@ For each hit, decide:
 - **A link to upstream** → point it at this fork (`hhoangg/zptah`), except the
   Website menu item, which goes to `https://zptah.app`.
 - **Text a user can read** (dialog titles, tray tooltip, window title, button labels,
-  "What's new in …", error copy) → say Monoptah.
+  "What's new in …", error copy) → say zptah.
 - **A test asserting old copy** → update the assertion. A test that still passes only
   because it asserts "MonoCode" is a failure, not coverage.
 
@@ -89,8 +90,8 @@ npm run native:dev -- --detach
 
 `--detach` keeps the app alive when the task that started it ends (a background task
 would otherwise take it down) and writes its stdout and stderr to a log file whose path it
-prints. Native Dev keeps its data in `~/Library/Application Support/Monoptah Development`,
-separate from the installed app.
+prints. Native Dev keeps its data in `~/Library/Application Support/zptah Development`
+(`DEV_DATA_DIR` in `crates/monocode-core/src/brand.rs`), separate from the installed app.
 
 ## Developing the native app
 
@@ -206,7 +207,7 @@ in `host/VERSION` as `X.Y.Z+monoptah` (semver build metadata marks the fork flav
 
 ### Releasing the native app
 
-Monoptah Native (GPUI) ships for macOS arm64 (signed with a stable self-signed certificate, not notarized), Linux x86_64 and
+zptah (GPUI) ships for macOS arm64 (signed with a stable self-signed certificate, not notarized), Linux x86_64 and
 Windows x86_64 (unsigned installer). It has its own release flow. No macOS job
 runs on GitHub Actions (hosted macOS runners are not being acquired): the macOS app is checked,
 built and packaged on the maintainer's Mac, everything else is on CI.
@@ -236,7 +237,7 @@ How to release (timeline, notes rules, recovery and stuck runs: [`docs/native/re
 1. **No notes PR.** Release notes are generated from the titles of the PRs merged since the
    previous `native-v*` tag (see `docs/git-conventions.md`, "Releases"). Optional highlights:
    `--notes FILE`, or `docs/native/monoptah-release-notes.md` with first line
-   `# Monoptah Native X.Y.Z` for this version. Pick X.Y.Z by semver: `feat` is minor, `fix` and
+   `# zptah X.Y.Z` for this version. Pick X.Y.Z by semver: `feat` is minor, `fix` and
    `perf` are patch, a `BREAKING CHANGE` is major.
 2. **One command**, from an up-to-date `main` on the Mac, right after the last PR merges:
    `npm run native:release:mac -- X.Y.Z` (plain `X.Y.Z`; options `--since REF`, `--notes FILE`,
@@ -265,12 +266,12 @@ end, when `publish` and `homebrew` succeed. The workflow publishes:
 
 - Release `native-vX.Y.Z` (never "latest": Tauri's updater reads `releases/latest`) with, for
   each updater package, the file and its `.sig`:
-  - macOS arm64: `MonoptahNative_X.Y.Z_aarch64.app.tar.gz`, plus the `.zip` and `.zip.sha256`
+  - macOS arm64: `zptah_X.Y.Z_aarch64.app.tar.gz`, plus the `.zip` and `.zip.sha256`
     the cask pins.
-  - Linux x86_64: `MonoptahNative_X.Y.Z_amd64.AppImage`, `monoptah-native_X.Y.Z_amd64.deb`
-    and `monoptah-native-X.Y.Z-0.preview.0.el10.x86_64.rpm` (the release string comes from
+  - Linux x86_64: `zptah_X.Y.Z_amd64.AppImage`, `zptah_X.Y.Z_amd64.deb`
+    and `zptah-X.Y.Z-0.preview.0.el10.x86_64.rpm` (the release string comes from
     upstream's spec, which is written for previews).
-  - Windows x86_64: `MonoptahNative_X.Y.Z_x64-setup.exe` (NSIS).
+  - Windows x86_64: `zptah_X.Y.Z_x64-setup.exe` (NSIS).
 - `latest.json` on the rolling pre-release `native-latest`, the feed compiled into the app.
   It lists `darwin-aarch64-app`, `linux-x86_64-appimage`, `linux-x86_64-deb`,
   `linux-x86_64-rpm` and `windows-x86_64-nsis`, and it is never replaced by an older version.
@@ -293,7 +294,7 @@ asset. The fork scripts are `scripts/native-release-macos-local.mjs`,
 `scripts/native-release-notes.mjs`, `scripts/package-native-monoptah.mjs` (also the asset table
 for every platform) and `scripts/native-release-monoptah.mjs`.
 
-The release script removes the built `Monoptah Native.app` from `target/.../release` after packaging (also on failure and in `--dry-run`) and marks that directory `.metadata_never_index`. Agents must not leave built `.app` bundles behind: remove any you build outside the release flow when done (Native Dev's `~/Applications/Monoptah Native Dev.app` is the exception).
+The release script removes the built `zptah.app` from `target/.../release` after packaging (also on failure and in `--dry-run`) and marks that directory `.metadata_never_index`. Agents must not leave built `.app` bundles behind: remove any you build outside the release flow when done (Native Dev's `~/Applications/zptah Dev.app` is the exception).
 
 Things to keep true after merging from upstream or changing repo settings:
 

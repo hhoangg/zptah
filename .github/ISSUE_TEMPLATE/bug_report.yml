@@ -1,17 +1,17 @@
 name: Bug report
-description: Report a problem in Monoptah
+description: Report a problem in zptah
 title: "[Bug] "
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        Monoptah supports macOS, Linux, and Windows. Search existing issues first.
+        zptah supports macOS, Linux, and Windows. Search existing issues first.
 
   - type: input
     id: version
     attributes:
-      label: Monoptah version
+      label: zptah version
       description: Shown in the About dialog or the release you installed.
       placeholder: "zptah 0.1.0"
     validations:

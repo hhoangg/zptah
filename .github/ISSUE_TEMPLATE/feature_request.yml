@@ -1,12 +1,12 @@
 name: Feature request
-description: Suggest an idea or improvement for Monoptah
+description: Suggest an idea or improvement for zptah
 title: "[Feature] "
 labels: [enhancement]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping improve Monoptah. Search existing issues first.
+        Thanks for helping improve zptah. Search existing issues first.
 
   - type: textarea
     id: problem
@@ -20,7 +20,7 @@ body:
     id: proposal
     attributes:
       label: Proposal
-      description: What should Monoptah do?
+      description: What should zptah do?
     validations:
       required: true
 

@@ -7,7 +7,7 @@ Download the x86_64 `.deb`, `.rpm`, or AppImage from [GitHub Releases](https://g
 Install the downloaded `.deb` with apt so its runtime dependencies are installed too:
 
 ```bash
-sudo apt install ./Monoptah_*.deb
+sudo apt install ./zptah_*.deb
 ```
 
 ## Fedora / Enterprise Linux packages
@@ -67,8 +67,8 @@ sudo dnf install webkit2gtk4.1
 Keep the AppImage somewhere you can write to, such as `~/Applications`, so updates can replace it. In that directory, make it executable and run it:
 
 ```bash
-chmod +x Monoptah_*.AppImage
-./Monoptah_*.AppImage
+chmod +x zptah_*.AppImage
+./zptah_*.AppImage
 ```
 
 ## Updates
@@ -82,7 +82,7 @@ For beta release feeds and testing AppImage updates, see [release and updater de
 The AppImage uses the host WebKitGTK 4.1 stack and native Wayland, like the `.deb` and `.rpm`. Set `GDK_BACKEND=x11` to keep the previous X11-forced behavior (for example NVIDIA plus Wayland):
 
 ```bash
-GDK_BACKEND=x11 ./Monoptah_*.AppImage
+GDK_BACKEND=x11 ./zptah_*.AppImage
 ```
 
 Older AppImages that bundled Ubuntu-built libraries aborted with `Could not create default EGL display: EGL_BAD_PARAMETER`; current builds do not.
