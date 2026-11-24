@@ -4047,7 +4047,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-core"
-version = "0.16.0"
+version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "ammonia",
@@ -4101,7 +4101,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-gpui"
-version = "0.16.0"
+version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "async-channel",

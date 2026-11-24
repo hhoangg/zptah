@@ -1,5 +1,5 @@
 //! The cloud workspaces overview: every codespace of the project's repository and every
-//! Monoptah-made Docker sandbox, one [`WorkspaceRow`] each, so a failed or forgotten workspace
+//! zptah-made Docker sandbox, one [`WorkspaceRow`] each, so a failed or forgotten workspace
 //! that still draws quota or credit can be found, stopped or deleted.
 //!
 //! * [`CloudSessions::workspaces_overview`] reads `gh codespace list` and `sbx ls` (nothing else:
@@ -12,7 +12,7 @@
 //! * Whose workspace it is. Only a workspace this app's own store knows ([`WorkspaceRow::ours`]: a
 //!   session, a start record, a move, a saved copy or a Docker account pin names it) can be called
 //!   an orphan. Every other one is `Not created by this app`: another app, another computer or the
-//!   user by hand made it, and Monoptah cannot see what is in it. Deleting such a workspace takes a
+//!   user by hand made it, and zptah cannot see what is in it. Deleting such a workspace takes a
 //!   stronger confirmation ([`DeletePreview::needs_acknowledgement`]), and the core refuses it
 //!   without `DeleteOptions::acknowledged` whatever a dialog did.
 //! * Which sessions use a workspace comes from the local store: the live sessions bound to it and
@@ -290,7 +290,7 @@ pub struct WorkspaceRow {
     pub last_used_ms: Option<u64>,
     /// This app's own store knows the workspace: a session, a start record, a move, a saved copy
     /// or a Docker account pin names it. `false` means it was made elsewhere (another app or
-    /// computer, or by hand), and Monoptah cannot tell what is in it or who uses it.
+    /// computer, or by hand), and zptah cannot tell what is in it or who uses it.
     pub ours: bool,
     pub sessions: Vec<UsingSession>,
     /// What deleting would lose, as recorded when its sessions were saved.
@@ -310,7 +310,7 @@ pub struct WorkspaceRow {
 }
 
 impl WorkspaceRow {
-    /// This app made it and no live session uses it: nothing in Monoptah will ever stop it. A
+    /// This app made it and no live session uses it: nothing in zptah will ever stop it. A
     /// workspace that is not [`Self::ours`] is never an orphan: whoever made it may be using it.
     pub fn orphan(&self) -> bool {
         self.ours && self.sessions.is_empty()
@@ -420,7 +420,7 @@ pub struct DeletePreview {
     pub blockers: Vec<String>,
     /// This app's store knows the workspace, see [`WorkspaceRow::ours`].
     pub ours: bool,
-    /// Monoptah cannot look inside (a sandbox is not started to read it).
+    /// zptah cannot look inside (a sandbox is not started to read it).
     pub contents_unknown: bool,
 }
 
@@ -504,9 +504,9 @@ pub const LINE_UNPUSHED: &str = "It has commits that were not pushed.";
 pub const LINE_GIT_UNKNOWN: &str =
     "GitHub did not report whether it has uncommitted or unpushed changes.";
 /// What a sandbox delete cannot read.
-pub const NOTE_SANDBOX_CONTENTS: &str = "Monoptah cannot look inside a sandbox without starting it, which would bill it again. Anything in it that was not pushed or copied to this computer is lost.";
+pub const NOTE_SANDBOX_CONTENTS: &str = "zptah cannot look inside a sandbox without starting it, which would bill it again. Anything in it that was not pushed or copied to this computer is lost.";
 /// What a delete of a workspace that is not this app's cannot read.
-pub const NOTE_NOT_OURS: &str = "Monoptah did not create this workspace and cannot see who uses it or what is in it. Another app, another computer or a person may be working in it right now.";
+pub const NOTE_NOT_OURS: &str = "zptah did not create this workspace and cannot see who uses it or what is in it. Another app, another computer or a person may be working in it right now.";
 
 impl CloudSessions {
     /// A loaded overview of `project` that is still fresh, with no CLI call.
@@ -1021,7 +1021,7 @@ impl CloudSessions {
         }
         if unreadable {
             reasons.push(
-                "A session's cloud location cannot be read, so Monoptah cannot tell whether it lives in this workspace."
+                "A session's cloud location cannot be read, so zptah cannot tell whether it lives in this workspace."
                     .to_owned(),
             );
         }
@@ -1052,7 +1052,7 @@ impl CloudSessions {
                 // neither stopped nor deleted blind.
                 WorkspaceState::Unknown => {
                     return Err(format!(
-                        "{} reports a state Monoptah does not recognise (\u{201c}{}\u{201d}), so it was not stopped or deleted. Stop it first, then try again.",
+                        "{} reports a state zptah does not recognise (\u{201c}{}\u{201d}), so it was not stopped or deleted. Stop it first, then try again.",
                         cloud.name,
                         raw.trim()
                     ));
@@ -1108,7 +1108,7 @@ impl CloudSessions {
 }
 
 /// A sandbox this app makes is named `monoptah-<branch>-<id>` (`sandboxes::NAME_PREFIX`); others
-/// are not listed at all. The name says only that SOME Monoptah made it: [`WorkspaceRow::ours`] is
+/// are not listed at all. The name says only that SOME zptah made it: [`WorkspaceRow::ours`] is
 /// what says this store did.
 fn is_ours_by_name(name: &str) -> bool {
     name.starts_with(sandboxes::NAME_PREFIX)

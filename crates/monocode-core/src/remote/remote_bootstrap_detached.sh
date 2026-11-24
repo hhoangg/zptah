@@ -12,7 +12,7 @@ host_answering() {
 }
 start_detached_host() {
   if ! command -v setsid >/dev/null 2>&1 && ! command -v nohup >/dev/null 2>&1; then
-    echo 'Neither setsid nor nohup is available, so the Monoptah Host can not be started detached.' | tee -a "$BASE/host.log" >&2
+    echo 'Neither setsid nor nohup is available, so the zptah Host can not be started detached.' | tee -a "$BASE/host.log" >&2
     exit 1
   fi
   (
@@ -35,7 +35,7 @@ ensure_detached_host() {
     sleep 1
     DETACHED_WAIT=$((DETACHED_WAIT + 1))
   done
-  echo "The Monoptah Host did not start. Check $BASE/host.log." >&2
+  echo "The zptah Host did not start. Check $BASE/host.log." >&2
   tail -n 20 "$BASE/host.log" >&2 2>/dev/null || true
   exit 1
 }

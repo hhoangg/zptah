@@ -71,13 +71,13 @@ install_gh() {
     printf 'SOCK=%s\nGIT_HOST=%s\nREPO_PATH=%s\n' \
       "$(quote "$SOCKET")" "$(quote "$GIT_HOST")" "$(quote "$REPO_PATH")"
     cat <<'WRAPPER'
-# Hands the Monoptah Git token for this repository to the real gh, for one call only.
+# Hands the zptah Git token for this repository to the real gh, for one call only.
 # The token is read from the in-memory credential cache every time and never stored.
 case "${1:-}" in
 auth)
   case "${2:-}" in
   token)
-    echo 'gh auth token is disabled in this sandbox: the token stays inside Monoptah.' >&2
+    echo 'gh auth token is disabled in this sandbox: the token stays inside zptah.' >&2
     exit 2
     ;;
   git-credential)
@@ -85,7 +85,7 @@ auth)
     exit 2
     ;;
   login | setup-git)
-    echo "gh auth $2 is disabled: this sandbox is already authenticated through Monoptah." >&2
+    echo "gh auth $2 is disabled: this sandbox is already authenticated through zptah." >&2
     exit 2
     ;;
   status)
@@ -151,7 +151,7 @@ if [ -n "$token" ]; then
   export GH_TOKEN
   token=
 else
-  echo "Monoptah: no Git credential for $GIT_HOST/$REPO_PATH is available to gh here (it expires after 24 h; reconnecting the session delivers it again, unless the credential socket is not readable by this user)." >&2
+  echo "zptah: no Git credential for $GIT_HOST/$REPO_PATH is available to gh here (it expires after 24 h; reconnecting the session delivers it again, unless the credential socket is not readable by this user)." >&2
 fi
 exec "$real" "$@"
 WRAPPER

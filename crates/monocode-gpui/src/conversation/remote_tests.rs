@@ -2247,7 +2247,7 @@ fn the_host_update_copy_differs_for_cloud_and_user_machines(cx: &mut TestAppCont
             assert_eq!(view.cloud_noun(), None);
             assert_eq!(
                 view.host_update_copy("use Plan mode"),
-                "Update Monoptah Host in Connections settings to use Plan mode."
+                "Update zptah Host in Connections settings to use Plan mode."
             );
         })
     });
@@ -2263,7 +2263,7 @@ fn the_host_update_copy_differs_for_cloud_and_user_machines(cx: &mut TestAppCont
             let copy = view.host_update_copy("use Plan mode");
             assert_eq!(
                 copy,
-                "Monoptah Host will be updated on the next connect. Then you can use Plan mode."
+                "zptah Host will be updated on the next connect. Then you can use Plan mode."
             );
             assert!(!copy.contains("Connections settings"));
         })

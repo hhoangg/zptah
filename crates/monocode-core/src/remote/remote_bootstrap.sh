@@ -131,11 +131,11 @@ on_exit() {
     SWAP_ACTIVE=0
     if rollback_swap; then
       set_status restored
-      echo 'Monoptah Host update failed; the previous Host was restored.'
+      echo 'zptah Host update failed; the previous Host was restored.'
       exit 75
     fi
     set_status unrestored
-    echo 'Monoptah Host update failed and the previous Host could not be restored.'
+    echo 'zptah Host update failed and the previous Host could not be restored.'
     exit 76
   fi
   case "$_code" in
@@ -255,7 +255,7 @@ if [ ! -x "$ENTRY" ] || [ "$FORCE_UPGRADE" = 1 ]; then
   trap 'exit 130' INT TERM
   [ "$PHASE" = swapnow ] || trap 'exit 130' HUP
   if [ "$PHASE" != swapnow ]; then
-  case "$(uname -s)" in Darwin) OS=darwin ;; Linux) OS=linux ;; *) echo 'Monoptah Host supports Linux and macOS.' >&2; exit 1 ;; esac
+  case "$(uname -s)" in Darwin) OS=darwin ;; Linux) OS=linux ;; *) echo 'zptah Host supports Linux and macOS.' >&2; exit 1 ;; esac
   case "$(uname -m)" in arm64|aarch64) ARCH=arm64 ;; x86_64|amd64) ARCH=x64 ;; *) echo 'Unsupported host architecture.' >&2; exit 1 ;; esac
   # The Host bundles a glibc build of Node (glibc 2.28 or newer) and no musl one. Say so
   # before downloading: on musl the loader fails with a message about a missing symbol.
@@ -274,7 +274,7 @@ if [ ! -x "$ENTRY" ] || [ "$FORCE_UPGRADE" = 1 ]; then
     fi
     case "$LIBC" in
       musl)
-        echo 'This machine uses musl libc (for example Alpine Linux). Monoptah Host needs a glibc-based Linux with glibc 2.28 or newer.' >&2
+        echo 'This machine uses musl libc (for example Alpine Linux). zptah Host needs a glibc-based Linux with glibc 2.28 or newer.' >&2
         exit 1 ;;
       'glibc '*.*)
         _gv=${LIBC#glibc }
@@ -285,7 +285,7 @@ if [ ! -x "$ENTRY" ] || [ "$FORCE_UPGRADE" = 1 ]; then
           *[!0-9]*|'') ;;
           *)
             if [ -n "$_gmaj" ] && [ -n "$_gmin" ] && { [ "$_gmaj" -lt 2 ] || { [ "$_gmaj" -eq 2 ] && [ "$_gmin" -lt 28 ]; }; }; then
-              echo "This machine has $LIBC. Monoptah Host needs glibc 2.28 or newer." >&2
+              echo "This machine has $LIBC. zptah Host needs glibc 2.28 or newer." >&2
               exit 1
             fi ;;
         esac ;;
@@ -301,14 +301,14 @@ if [ ! -x "$ENTRY" ] || [ "$FORCE_UPGRADE" = 1 ]; then
     _printed=$("$1/monocode-host" --version 2>"$TMP/runtime.err") || _rc=$?
     if [ "$_rc" -ne 0 ]; then
       {
-        echo 'The Monoptah Host runtime cannot run on this machine:'
+        echo 'The zptah Host runtime cannot run on this machine:'
         if [ -s "$TMP/runtime.err" ]; then head -n 5 "$TMP/runtime.err"; else echo "(exit status $_rc, no output)"; fi
         echo "Detected libc: ${LIBC:-unknown}"
       } >&2
       rm -rf "$1"
       exit 1
     fi
-    [ "$_printed" = "$VERSION" ] || { echo 'Monoptah Host version mismatch.' >&2; rm -rf "$1"; exit 1; }
+    [ "$_printed" = "$VERSION" ] || { echo 'zptah Host version mismatch.' >&2; rm -rf "$1"; exit 1; }
   }
   download() {
     if command -v curl >/dev/null 2>&1; then
@@ -328,10 +328,10 @@ if [ ! -x "$ENTRY" ] || [ "$FORCE_UPGRADE" = 1 ]; then
   case "$EXPECTED" in *[!0-9a-f]*|'') echo 'Invalid host package checksum.' >&2; exit 1 ;; esac
   [ "${#EXPECTED}" -eq 64 ] || exit 1
   if ! download "$RELEASE/$FILE" "$TMP/$FILE" || ! download "$RELEASE/$FILE.sha256" "$TMP/checksum"; then
-    echo "The Monoptah Host package for version $VERSION is unavailable. Install a Monoptah release that includes host packages." >&2; exit 1
+    echo "The zptah Host package for version $VERSION is unavailable. Install a zptah release that includes host packages." >&2; exit 1
   fi
   PUBLISHED=$(awk 'NR == 1 {print $1}' "$TMP/checksum")
-  [ "$PUBLISHED" = "$EXPECTED" ] || { echo 'Monoptah Host pinned checksum mismatch: the published checksum differs.' >&2; exit 1; }
+  [ "$PUBLISHED" = "$EXPECTED" ] || { echo 'zptah Host pinned checksum mismatch: the published checksum differs.' >&2; exit 1; }
   if command -v shasum >/dev/null 2>&1; then
     ACTUAL=$(shasum -a 256 "$TMP/$FILE" | awk '{print $1}')
   elif command -v sha256sum >/dev/null 2>&1; then
@@ -339,7 +339,7 @@ if [ ! -x "$ENTRY" ] || [ "$FORCE_UPGRADE" = 1 ]; then
   else
     echo 'Install shasum or sha256sum on this host and reconnect.' >&2; exit 1
   fi
-  [ "$EXPECTED" = "$ACTUAL" ] || { echo 'Monoptah Host package checksum mismatch.' >&2; exit 1; }
+  [ "$EXPECTED" = "$ACTUAL" ] || { echo 'zptah Host package checksum mismatch.' >&2; exit 1; }
   mkdir "$TMP/unpacked"
   tar -xzf "$TMP/$FILE" -C "$TMP/unpacked"
   check_runtime "$TMP/unpacked"
@@ -357,15 +357,15 @@ if [ ! -x "$ENTRY" ] || [ "$FORCE_UPGRADE" = 1 ]; then
   fi
   if [ "$PHASE" = swapnow ]; then
     DEST=$(cat "$STAGED_FILE" 2>/dev/null || true)
-    case "$DEST" in "$BASE"/runtime/staged-*) ;; *) echo 'No staged Monoptah Host package.'; exit 3 ;; esac
-    [ "$("$DEST/monocode-host" --version 2>/dev/null)" = "$VERSION" ] || { echo 'The staged Monoptah Host package is not usable.'; exit 3; }
+    case "$DEST" in "$BASE"/runtime/staged-*) ;; *) echo 'No staged zptah Host package.'; exit 3 ;; esac
+    [ "$("$DEST/monocode-host" --version 2>/dev/null)" = "$VERSION" ] || { echo 'The staged zptah Host package is not usable.'; exit 3; }
     # Keep what is running now, so a Host that fails to start can be put back. Without a
     # previous runtime and launcher there is no way back: the Host is left alone.
     if [ "$EXISTED" = 1 ]; then
       if [ -f "$BASE/runtime-path" ] && cp -p "$BASE/runtime-path" "$BASE/runtime-path.prev" && cp -p "$ENTRY" "$BASE/bin/monocode-host.prev"; then
         :
       else
-        echo 'There is no previous Monoptah Host to roll back to.'
+        echo 'There is no previous zptah Host to roll back to.'
         exit 78
       fi
     fi
@@ -452,7 +452,7 @@ if [ "$PHASE" = swapnow ]; then
   _wait=0
   until "$ENTRY" connection-info >/dev/null 2>&1; do
     _wait=$((_wait + 1))
-    [ "$_wait" -lt 30 ] || { echo 'The updated Monoptah Host did not start.'; exit 1; }
+    [ "$_wait" -lt 30 ] || { echo 'The updated zptah Host did not start.'; exit 1; }
     sleep 1
   done
   # Captured, not printed: a closed ssh must not turn a finished update into a rollback.

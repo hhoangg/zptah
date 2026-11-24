@@ -212,7 +212,7 @@ function fakeRun(overrides = {}) {
     return { stdout: "", stderr: "", ...table[key] };
   };
 }
-const docsNotes = `# Monoptah Native ${V}\n\nBody\n`;
+const docsNotes = `# zptah ${V}\n\nBody\n`;
 
 test("gatherState reads the repository state through the injected runner", () => {
   const state = gatherState(fakeRun(), { version: V });
@@ -280,7 +280,7 @@ test("publish commands: tag at the checked commit, push only that tag, release w
   assert.equal(release[2], "native-v0.40.5");
   assert.deepEqual(release.slice(3, 6), params.files.map((n) => join("/tmp/out", n)));
   for (const flag of ["--verify-tag", "--latest=false"]) assert.ok(release.includes(flag));
-  assert.equal(release[release.indexOf("--title") + 1], "Monoptah Native 0.40.5");
+  assert.equal(release[release.indexOf("--title") + 1], "zptah 0.40.5");
   assert.equal(release[release.indexOf("--notes-file") + 1], "/tmp/out/release-notes.md");
   assert.ok(!JSON.stringify(commands).includes("SIGNING"));
 });
@@ -683,7 +683,7 @@ test("runRelease generates the notes, prints them, writes them to the release di
   const { io, events, logs, texts } = fakeIo();
   await runRelease([V], io);
   const text = texts[NOTES_OUT];
-  assert.ok(text.startsWith(`# Monoptah Native ${V}\n\nBody\n\n## Changes since 0.40.4`));
+  assert.ok(text.startsWith(`# zptah ${V}\n\nBody\n\n## Changes since 0.40.4`));
   assert.match(text, /### Features\n\n- New panel \(#7\)/);
   assert.match(text, /### Fixes\n\n- Y is fixed \(#8\)/);
   assert.ok(logs.join("\n").includes("- New panel (#7)"));
@@ -693,10 +693,10 @@ test("runRelease generates the notes, prints them, writes them to the release di
 });
 
 test("runRelease --dry-run prints the notes and no longer needs a notes heading for this version", async () => {
-  const { io, logs, texts } = fakeIo({ docs: "# Monoptah Native 0.40.4\n\nOld notes\n" });
+  const { io, logs, texts } = fakeIo({ docs: "# zptah 0.40.4\n\nOld notes\n" });
   await runRelease([V, "--dry-run"], io);
   const out = logs.join("\n");
-  assert.ok(out.includes(`# Monoptah Native ${V}`) && out.includes("- New panel (#7)"));
+  assert.ok(out.includes(`# zptah ${V}`) && out.includes("- New panel (#7)"));
   assert.match(out, /Ignoring docs\/native\/monoptah-release-notes\.md.*0\.40\.4/);
   assert.ok(!texts[NOTES_OUT].includes("Old notes"));
 });
@@ -711,7 +711,7 @@ test("runRelease --notes adds highlights and --since overrides the start", async
       ? { status: 0, stdout: "", stderr: "" }
       : capture(c, a);
   await runRelease([V, "--dry-run", "--notes", "hl.md", "--since", "native-v0.40.4"], io);
-  assert.match(texts[NOTES_OUT], /^# Monoptah Native 0\.40\.5\n\nHand written\n\n## Changes since 0\.40\.4/);
+  assert.match(texts[NOTES_OUT], /^# zptah 0\.40\.5\n\nHand written\n\n## Changes since 0\.40\.4/);
 });
 
 test("runRelease stops before the long checks when a PR cannot be read", async () => {

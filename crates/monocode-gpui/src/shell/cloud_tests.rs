@@ -3157,14 +3157,14 @@ fn the_sandbox_menu_stops_and_deletes_by_name_and_removes_a_stopped_one_locally(
             ] {
                 assert!(labels.contains(&expected), "{expected}: {labels:?}");
             }
-            assert!(!labels.contains(&"Remove from Monoptah".to_string()));
+            assert!(!labels.contains(&"Remove from zptah".to_string()));
             assert!(
                 !labels.iter().any(|l| l.contains("codespace")),
                 "{labels:?}"
             );
         })
         .unwrap();
-    // Stopped: no Stop, but Remove from Monoptah.
+    // Stopped: no Stop, but Remove from zptah.
     let (window, id, sbx) = shell_with_sandbox(cx, "stopped", CloudState::Stopped, true);
     window
         .update(cx, |shell, _, cx| {
@@ -3175,7 +3175,7 @@ fn the_sandbox_menu_stops_and_deletes_by_name_and_removes_a_stopped_one_locally(
             );
             assert!(labels.contains(&format!("Delete sandbox {SBX_NAME}")));
             assert!(
-                labels.contains(&"Remove from Monoptah".to_string()),
+                labels.contains(&"Remove from zptah".to_string()),
                 "{labels:?}"
             );
         })
@@ -3235,7 +3235,7 @@ fn a_codespace_menu_keeps_its_entries_and_has_no_sandbox_ones(cx: &mut TestAppCo
             assert!(
                 !labels
                     .iter()
-                    .any(|l| l.contains("sandbox") || l == "Remove from Monoptah"),
+                    .any(|l| l.contains("sandbox") || l == "Remove from zptah"),
                 "{labels:?}"
             );
         })
@@ -3432,7 +3432,7 @@ fn the_sandbox_terminal_args_carry_the_connection_options_and_the_delete_note_is
     assert_eq!(cloud::delete_start_note(&cs, true), None);
     assert_eq!(
         cloud::remove_confirm_body("Fix  login", "box-1", None),
-        "Remove \u{2018}Fix login\u{2019} from Monoptah? The sandbox box-1 keeps existing and keeps \
+        "Remove \u{2018}Fix login\u{2019} from zptah? The sandbox box-1 keeps existing and keeps \
          costing money until you delete it (`sbx --cloud rm box-1`). Its conversation is not saved \
          on this computer."
     );
@@ -5435,7 +5435,7 @@ fn a_sandbox_terminal_whose_ssh_exits_255_drops_the_accounts_cached_token(cx: &m
 fn removing_a_sandbox_session_locally_names_the_account_its_delete_command_needs() {
     assert_eq!(
         cloud::remove_confirm_body("Fix login", "box-1", Some("Docker account alice")),
-        "Remove \u{2018}Fix login\u{2019} from Monoptah? The sandbox box-1 keeps existing and keeps \
+        "Remove \u{2018}Fix login\u{2019} from zptah? The sandbox box-1 keeps existing and keeps \
          costing money until you delete it (`sbx --cloud rm box-1`, which must run with the token of \
          Docker account alice). Its conversation is not saved on this computer."
     );

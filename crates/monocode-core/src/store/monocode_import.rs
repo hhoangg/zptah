@@ -13,7 +13,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Tauri's application-data location, keyed by its bundle identifier.
+/// The app's own application-data database, keyed by its bundle identifier. It is never the
+/// Monoptah data directory: that one is only read by an explicit import.
 pub fn monocode_database() -> PathBuf {
     #[cfg(target_os = "macos")]
     let base = crate::accounts::home()
@@ -29,7 +30,8 @@ pub fn monocode_database() -> PathBuf {
                 .unwrap_or_default()
                 .join(".local/share")
         });
-    base.join(crate::brand::DESKTOP_APP_ID).join("monocode.db")
+    base.join(crate::brand::DESKTOP_APP_ID)
+        .join(crate::brand::DATABASE_FILE)
 }
 
 #[derive(Debug, Default)]
@@ -87,7 +89,7 @@ fn import_sessions(
     ] {
         if !columns.contains(required) {
             return Err(invalid(format!(
-                "Not a Monoptah session database (missing {required})"
+                "Not a zptah session database (missing {required})"
             )));
         }
     }
@@ -354,8 +356,8 @@ mod tests {
     }
 
     #[test]
-    fn desktop_database_uses_the_monoptah_identifier() {
-        assert!(monocode_database().ends_with("com.monoptah.desktop/monocode.db"));
+    fn desktop_database_uses_the_zptah_identifier() {
+        assert!(monocode_database().ends_with("app.zptah.desktop/zptah.db"));
     }
 
     #[test]
@@ -579,7 +581,7 @@ mod tests {
         let error = store
             .import_monocode(&dir.path().join("native.sqlite3"))
             .unwrap_err();
-        assert!(error.contains("Not a Monoptah session database"));
+        assert!(error.contains("Not a zptah session database"));
     }
 
     #[test]

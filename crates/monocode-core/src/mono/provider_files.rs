@@ -129,7 +129,7 @@ pub fn mono_provider_files(
         let note = if current_supported {
             format!("There are no {label} session files to delete yet.")
         } else {
-            format!("Monoptah can't delete {label} session files yet.")
+            format!("zptah can't delete {label} session files yet.")
         };
         return MonoProviderFiles {
             sessions,
@@ -319,7 +319,7 @@ mod tests {
             assert!(files.sessions.is_empty());
             assert!(!files.supported);
             let note = files.note.unwrap();
-            assert!(note.starts_with("Monoptah can't delete "), "{note}");
+            assert!(note.starts_with("zptah can't delete "), "{note}");
             assert!(note.ends_with(" session files yet."), "{note}");
         }
     }
@@ -328,13 +328,13 @@ mod tests {
     fn uses_the_harness_display_name_in_the_unsupported_note() {
         assert_eq!(
             mono_provider_files("cursor", Some(A), &[]).note.as_deref(),
-            Some("Monoptah can't delete Cursor session files yet.")
+            Some("zptah can't delete Cursor session files yet.")
         );
         assert_eq!(
             mono_provider_files("opencode", Some(A), &[])
                 .note
                 .as_deref(),
-            Some("Monoptah can't delete OpenCode session files yet.")
+            Some("zptah can't delete OpenCode session files yet.")
         );
     }
 
@@ -660,7 +660,7 @@ mod tests {
         assert!(!files.supported);
         assert_eq!(
             files.note.as_deref(),
-            Some("Monoptah can't delete Cursor session files yet.")
+            Some("zptah can't delete Cursor session files yet.")
         );
     }
 }

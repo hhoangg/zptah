@@ -299,7 +299,7 @@ mod tests {
     fn native_app_commands_recognize_the_packaged_executable() {
         for command in [
             "monocode-gpui app sessions.start --json '{}'",
-            r#"'/Applications/Monoptah Native.app/Contents/MacOS/monocode-gpui' app sessions.start --json '{}'"#,
+            r#"'/Applications/zptah.app/Contents/MacOS/monocode-gpui' app sessions.start --json '{}'"#,
             r#"/bin/zsh -lc 'monocode-gpui app sessions.start --json "{}"'"#,
             "C:/Mono/monocode-gpui.exe app sessions.start --json '{}'",
         ] {

@@ -357,7 +357,7 @@ fn an_older_idle_host_is_staged_swapped_and_the_tunnel_reopened_with_sends_held_
     let (outcome, lines) = upgrade(&fx, None);
     assert!(matches!(outcome, Outcome::Upgraded(_)), "{outcome:?}");
     assert_eq!(fx.runner.phases(), ["stage", "swapnow", "status"]);
-    assert_eq!(lines, ["Updating Monoptah Host…"]);
+    assert_eq!(lines, ["Updating zptah Host…"]);
     let seen = seen.lock().unwrap();
     assert_eq!(seen[0].0.as_ref().unwrap_err(), HOST_UPDATING);
     assert!(seen[0].1.is_ok());
@@ -853,7 +853,7 @@ fn a_cancel_during_the_download_is_a_cancel_and_leaves_no_staged_package() {
     canceller.join().unwrap();
     assert_eq!(outcome, Outcome::Cancelled);
     // No warning for a cancel; the discard ran on a job that is not cancelled.
-    assert_eq!(lines, ["Updating Monoptah Host…"]);
+    assert_eq!(lines, ["Updating zptah Host…"]);
     assert_eq!(fx.runner.phases(), ["stage", "discard"]);
     // The pass is not recorded for this tunnel: the next ask runs again.
     fx.runner.block_stage.store(false, Ordering::Relaxed);

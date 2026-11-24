@@ -27,7 +27,7 @@ import {
 } from "./native-signing.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const APP_NAME = "Monoptah Native.app";
+const APP_NAME = "zptah.app";
 
 // Plain release versions only. Pre-release forms such as 0.34.0-preview.1 are
 // rejected on purpose: the cask, the sha256 asset and the rolling feed all
@@ -43,7 +43,7 @@ export function releaseVersion(version) {
 
 export function assetNames(version) {
   releaseVersion(version);
-  const stem = `MonoptahNative_${version}_aarch64`;
+  const stem = `zptah_${version}_aarch64`;
   return {
     updater: `${stem}.app.tar.gz`,
     zip: `${stem}.zip`,
@@ -102,11 +102,11 @@ export const PLATFORMS = [
     arch: "x86_64",
     assets: (version) => [
       {
-        pattern: exact(`MonoptahNative_${version}_amd64.AppImage`),
+        pattern: exact(`zptah_${version}_amd64.AppImage`),
         target: "linux-x86_64-appimage",
       },
       {
-        pattern: exact(`monoptah-native_${version}_amd64.deb`),
+        pattern: exact(`zptah_${version}_amd64.deb`),
         target: "linux-x86_64-deb",
       },
     ],
@@ -119,7 +119,7 @@ export const PLATFORMS = [
     assets: (version) => [
       {
         pattern: new RegExp(
-          `^monoptah-native-${escapeRegExp(version)}-[0-9A-Za-z._~+]+\\.x86_64\\.rpm$`,
+          `^zptah-${escapeRegExp(version)}-[0-9A-Za-z._~+]+\\.x86_64\\.rpm$`,
         ),
         target: "linux-x86_64-rpm",
       },
@@ -132,7 +132,7 @@ export const PLATFORMS = [
     arch: "x86_64",
     assets: (version) => [
       {
-        pattern: exact(`MonoptahNative_${version}_x64-setup.exe`),
+        pattern: exact(`zptah_${version}_x64-setup.exe`),
         target: "windows-x86_64-nsis",
       },
     ],
@@ -167,7 +167,7 @@ function capture(command, args, options = {}) {
 }
 
 // Deletes a built bundle, and only that: the path must be a real directory named
-// exactly "Monoptah Native.app" directly inside a "release" directory. A symlink
+// exactly "zptah.app" directly inside a "release" directory. A symlink
 // is refused, never followed. Nothing else in target (the build cache) is touched.
 // Returns true when something was removed, false when there was nothing to remove.
 export function removeBuiltAppBundle(app, log = console.log) {
@@ -217,7 +217,7 @@ export async function packageMonoptahNative({ binary, out, version }) {
   out = resolve(out);
   assertOutsideBundle(out, binary);
   const embedded = capture(binary, ["--version"]);
-  if (embedded !== `Monoptah Native ${version}`)
+  if (embedded !== `zptah ${version}`)
     throw new Error(`Native executable version does not match ${version}`);
   const arch = capture("lipo", ["-archs", binary]);
   if (arch !== "arm64") throw new Error(`Expected arm64, found ${arch}`);
@@ -230,7 +230,7 @@ export async function packageMonoptahNative({ binary, out, version }) {
   let result;
   try {
     // bundle-native-macos.sh writes the app next to the binary's profile directory
-    // (<target>/release/Monoptah Native.app). It signs with the stable self-signed
+    // (<target>/release/zptah.app). It signs with the stable self-signed
     // identity (selfsigned mode); there is no ad-hoc fallback.
     const resolved = resolveSigningIdentity(process.env, (command, args) => {
       const r = spawnSync(command, args, { encoding: "utf8" });
@@ -270,7 +270,7 @@ export async function packageMonoptahNative({ binary, out, version }) {
     await mkdir(out, { recursive: true });
     const names = assetNames(version);
     // The updater archive must hold only files and directories under
-    // "Monoptah Native.app/": the client refuses links and other roots.
+    // "zptah.app/": the client refuses links and other roots.
     // COPYFILE_DISABLE keeps AppleDouble (._*) entries out of it.
     run("tar", ["-czf", join(out, names.updater), "-C", dirname(app), APP_NAME], {
       env: { ...process.env, COPYFILE_DISABLE: "1" },

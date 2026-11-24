@@ -6449,9 +6449,9 @@ mod mono_status_tests {
         assert_eq!(
             label(vec![
                 prompt.clone(),
-                row("reasoning", "**Finding the Monoptah repo**\n\nLooking…")
+                row("reasoning", "**Finding the zptah repo**\n\nLooking…")
             ]),
-            "Finding the Monoptah repo…"
+            "Finding the zptah repo…"
         );
         // Raw thinking prose has no heading, so it stays generic.
         assert_eq!(
@@ -7465,7 +7465,7 @@ mod scroll_tests {
         let start = serde_json::to_string(&ToolCall {
             id: "t".into(),
             name: "exec_command".into(),
-            input: r#"{"cmd":"'/Applications/Monoptah Native.app/Contents/MacOS/monocode-gpui' app sessions.start --json '{}'"}"#.into(),
+            input: r#"{"cmd":"'/Applications/zptah.app/Contents/MacOS/monocode-gpui' app sessions.start --json '{}'"}"#.into(),
             output: r#"{"ok":true,"result":{"sessionId":776,"accepted":true}}"#.into(),
             state: ToolState::Completed,
             panel: None,

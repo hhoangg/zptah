@@ -71,7 +71,7 @@ mod unix {
         for (key, value) in [
             ("TERM", "xterm-256color".to_owned()),
             ("COLORTERM", "truecolor".to_owned()),
-            ("TERM_PROGRAM", "Monoptah".to_owned()),
+            ("TERM_PROGRAM", "zptah".to_owned()),
             ("PATH", monocode_core::scm::terminal_search_path()),
             ("PWD", spec.cwd.to_string_lossy().into_owned()),
         ] {

@@ -101,7 +101,7 @@ impl Section {
     pub(crate) fn description(self) -> &'static str {
         match self {
             Section::General => {
-                "The build you are running, how Monoptah reaches you, and the panels it shows."
+                "The build you are running, how zptah reaches you, and the panels it shows."
             }
             Section::Connections => "Connect your machines and run agents remotely through SSH.",
             Section::Appearance => {
@@ -114,7 +114,7 @@ impl Section {
                 "How transcripts read, what the composer does with a follow-up, how files save, and how diffs open."
             }
             Section::Providers => {
-                "Provider accounts, agent CLIs Monoptah can drive, and the model new sessions start with."
+                "Provider accounts, agent CLIs zptah can drive, and the model new sessions start with."
             }
             Section::Mcp => "Find MCP servers across providers and manage their connections.",
             Section::Skills => {
@@ -516,7 +516,7 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
     (
         "claude-entrypoint",
         Section::Providers,
-        "Identify as Monoptah to Claude",
+        "Identify as zptah to Claude",
         "entrypoint sdk-cli label usage limit 5-hour window rate experimental",
     ),
     (

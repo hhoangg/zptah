@@ -38,16 +38,16 @@ import {
 
 // What each package job writes, as upstream's package-native.mjs and
 // packageMonoptahNative produce them (the rpm dist tag comes from the container).
-const RPM = "monoptah-native-0.34.0-0.preview.0.el10.x86_64.rpm";
+const RPM = "zptah-0.34.0-0.preview.0.el10.x86_64.rpm";
 const records = {
   "artifacts-macos-aarch64.json": artifactRecords("0.34.0"),
   "artifacts-linux-x86_64.json": [
-    { filename: "monoptah-native_0.34.0_amd64.deb", target: "linux-x86_64-deb" },
-    { filename: "MonoptahNative_0.34.0_amd64.AppImage", target: "linux-x86_64-appimage" },
+    { filename: "zptah_0.34.0_amd64.deb", target: "linux-x86_64-deb" },
+    { filename: "zptah_0.34.0_amd64.AppImage", target: "linux-x86_64-appimage" },
   ],
   "artifacts-rpm-x86_64.json": [{ filename: RPM, target: "linux-x86_64-rpm" }],
   "artifacts-windows-x86_64.json": [
-    { filename: "MonoptahNative_0.34.0_x64-setup.exe", target: "windows-x86_64-nsis" },
+    { filename: "zptah_0.34.0_x64-setup.exe", target: "windows-x86_64-nsis" },
   ],
 };
 const artifacts = Object.values(records)
@@ -64,7 +64,7 @@ function manifest(changes = {}) {
     version: "0.34.0",
     baseUrl: downloadBase("0.34.0"),
     artifacts,
-    notes: "# Monoptah Native 0.34.0",
+    notes: "# zptah 0.34.0",
     ...changes,
   });
 }
@@ -88,27 +88,27 @@ test("only plain X.Y.Z versions are accepted", () => {
 
 test("asset names follow the cask and release layout", () => {
   assert.deepEqual(assetNames("0.34.0"), {
-    updater: "MonoptahNative_0.34.0_aarch64.app.tar.gz",
-    zip: "MonoptahNative_0.34.0_aarch64.zip",
-    sha256: "MonoptahNative_0.34.0_aarch64.zip.sha256",
+    updater: "zptah_0.34.0_aarch64.app.tar.gz",
+    zip: "zptah_0.34.0_aarch64.zip",
+    sha256: "zptah_0.34.0_aarch64.zip.sha256",
   });
 });
 
 test("the manifest lists every target on the versioned release URL", () => {
   const result = manifest();
-  assert.equal(result.app_id, "com.monoptah.native");
+  assert.equal(result.app_id, "app.zptah.desktop");
   assert.equal(result.channel, "native-preview");
   assert.equal(result.version, "0.34.0");
   assert.deepEqual(Object.keys(result.platforms).sort(), [...TARGETS].sort());
   const base = "https://github.com/hhoangg/monoptah/releases/download/native-v0.34.0/";
   assert.deepEqual(result.platforms["darwin-aarch64-app"], {
-    url: `${base}MonoptahNative_0.34.0_aarch64.app.tar.gz`,
+    url: `${base}zptah_0.34.0_aarch64.app.tar.gz`,
     signature: "signed-darwin-aarch64-app",
   });
-  assert.equal(result.platforms["linux-x86_64-appimage"].url, `${base}MonoptahNative_0.34.0_amd64.AppImage`);
-  assert.equal(result.platforms["linux-x86_64-deb"].url, `${base}monoptah-native_0.34.0_amd64.deb`);
+  assert.equal(result.platforms["linux-x86_64-appimage"].url, `${base}zptah_0.34.0_amd64.AppImage`);
+  assert.equal(result.platforms["linux-x86_64-deb"].url, `${base}zptah_0.34.0_amd64.deb`);
   assert.equal(result.platforms["linux-x86_64-rpm"].url, `${base}${RPM}`);
-  assert.equal(result.platforms["windows-x86_64-nsis"].url, `${base}MonoptahNative_0.34.0_x64-setup.exe`);
+  assert.equal(result.platforms["windows-x86_64-nsis"].url, `${base}zptah_0.34.0_x64-setup.exe`);
 });
 
 test("the platform table covers exactly the feed targets and the release file count", () => {
@@ -126,7 +126,7 @@ test("the platform table covers exactly the feed targets and the release file co
 });
 
 test("the build plan skips platforms whose files are all published", () => {
-  const all = [...assetFiles(), "MonoptahNative_0.34.0_aarch64.app.tar.gz.sig"];
+  const all = [...assetFiles(), "zptah_0.34.0_aarch64.app.tar.gz.sig"];
   const kinds = (plan) => plan.matrix.map((e) => e.kind);
   // Fresh tag: everything is built, the rpm in its own job.
   const fresh = planBuilds("0.34.0", []);
@@ -142,13 +142,13 @@ test("the build plan skips platforms whose files are all published", () => {
   assert.deepEqual(fresh.reuse, []);
   // Release published by the previous macOS-only workflow: only the new
   // platforms are built and the mac files are reused as they are.
-  const macOnly = planBuilds("0.34.0", all.filter((n) => n.startsWith("MonoptahNative_0.34.0_aarch64")));
+  const macOnly = planBuilds("0.34.0", all.filter((n) => n.startsWith("zptah_0.34.0_aarch64")));
   assert.deepEqual(kinds(macOnly), ["linux", "windows"]);
   assert.equal(macOnly.rpm, true);
   assert.deepEqual(macOnly.reuse, [
-    "MonoptahNative_0.34.0_aarch64.app.tar.gz",
-    "MonoptahNative_0.34.0_aarch64.zip",
-    "MonoptahNative_0.34.0_aarch64.zip.sha256",
+    "zptah_0.34.0_aarch64.app.tar.gz",
+    "zptah_0.34.0_aarch64.zip",
+    "zptah_0.34.0_aarch64.zip.sha256",
   ]);
   // A fully published release builds nothing and reuses the real rpm name.
   const done = planBuilds("0.34.0", all);
@@ -159,11 +159,11 @@ test("the build plan skips platforms whose files are all published", () => {
   assert.equal(done.reuse.length, 7);
   // A platform with only some of its files published is refused, naming it.
   assert.throws(
-    () => planBuilds("0.34.0", ["MonoptahNative_0.34.0_aarch64.zip"]),
+    () => planBuilds("0.34.0", ["zptah_0.34.0_aarch64.zip"]),
     /macos files on release native-v0\.34\.0 are incomplete.*Delete every published macos asset/s,
   );
   assert.throws(
-    () => planBuilds("0.34.0", ["MonoptahNative_0.34.0_amd64.AppImage", ...done.reuse.filter((n) => n.endsWith(".exe") || n.endsWith(".rpm") || n.startsWith("MonoptahNative_0.34.0_aarch64"))]),
+    () => planBuilds("0.34.0", ["zptah_0.34.0_amd64.AppImage", ...done.reuse.filter((n) => n.endsWith(".exe") || n.endsWith(".rpm") || n.startsWith("zptah_0.34.0_aarch64"))]),
     /linux files/,
   );
   // Files of another version never count.
@@ -210,11 +210,11 @@ test("the manifest refuses other targets, missing or duplicate packages, unsigne
 
 test("release notes must be about the version being released", () => {
   assert.equal(
-    checkNotes("# Monoptah Native 0.34.0\n\nbody", "0.34.0"),
-    "# Monoptah Native 0.34.0\n\nbody",
+    checkNotes("# zptah 0.34.0\n\nbody", "0.34.0"),
+    "# zptah 0.34.0\n\nbody",
   );
   assert.throws(
-    () => checkNotes("# Monoptah Native 0.33.0\n", "0.34.0"),
+    () => checkNotes("# zptah 0.33.0\n", "0.34.0"),
     /must start with/,
   );
   assert.throws(() => checkNotes("", "0.34.0"), /must start with/);
@@ -268,10 +268,10 @@ const signingTest = existsSync(tauriCli)
       test(name, { skip: "node_modules/@tauri-apps/cli is not installed" }, fn);
 
 test("the plan command prints step output lines", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "monoptah-native-plan-"));
+  const directory = await mkdtemp(join(tmpdir(), "zptah-plan-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const published = join(directory, "published.txt");
-  const macFiles = assetFiles().filter((n) => n.startsWith("MonoptahNative_0.34.0_aarch64"));
+  const macFiles = assetFiles().filter((n) => n.startsWith("zptah_0.34.0_aarch64"));
   await writeFile(published, `${[...macFiles, ...assetFiles().filter((n) => n.endsWith(".exe"))].join("\n")}\n`);
   const script = join(root, "scripts/native-release-monoptah.mjs");
   const run = (args) =>
@@ -289,10 +289,10 @@ test("the plan command prints step output lines", async (t) => {
   assert.equal(lines.build_any, "true");
   assert.equal(
     lines.reuse,
-    [...macFiles, "MonoptahNative_0.34.0_x64-setup.exe"].join(" "),
+    [...macFiles, "zptah_0.34.0_x64-setup.exe"].join(" "),
   );
   // The macOS files are not on the release: macOS is never built on CI.
-  await writeFile(published, "MonoptahNative_0.34.0_x64-setup.exe\n");
+  await writeFile(published, "zptah_0.34.0_x64-setup.exe\n");
   const noMac = run(["plan", published]);
   assert.notEqual(noMac.status, 0);
   assert.equal(noMac.stdout, "");
@@ -302,7 +302,7 @@ test("the plan command prints step output lines", async (t) => {
   assert.notEqual(none.status, 0);
   assert.match(none.stderr, /native:release:mac/);
   // A partially published platform makes the plan command fail.
-  await writeFile(published, "MonoptahNative_0.34.0_aarch64.zip\n");
+  await writeFile(published, "zptah_0.34.0_aarch64.zip\n");
   const bad = run(["plan", published]);
   assert.notEqual(bad.status, 0);
   assert.match(bad.stderr, /incomplete or ambiguous/);
@@ -310,7 +310,7 @@ test("the plan command prints step output lines", async (t) => {
 });
 
 test("the records command writes metadata only for reused platforms", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "monoptah-native-records-"));
+  const directory = await mkdtemp(join(tmpdir(), "zptah-records-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const script = join(root, "scripts/native-release-monoptah.mjs");
   const run = (version) =>
@@ -341,7 +341,7 @@ test("the records command writes metadata only for reused platforms", async (t) 
 });
 
 signingTest("signing produces a feed and package signature that verify with the public key", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "monoptah-native-release-"));
+  const directory = await mkdtemp(join(tmpdir(), "zptah-release-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   // A throwaway key; the real updater key is never used by tests.
   const keyFile = join(directory, "throwaway.key");
@@ -375,7 +375,7 @@ signingTest("signing produces a feed and package signature that verify with the 
       );
   }
   const notes = join(directory, "notes.md");
-  await writeFile(notes, "# Monoptah Native 0.34.0\n\nFirst release.\n");
+  await writeFile(notes, "# zptah 0.34.0\n\nFirst release.\n");
   const env = {
     ...process.env,
     MONOCODE_NATIVE_VERSION: "0.34.0",
@@ -385,18 +385,18 @@ signingTest("signing produces a feed and package signature that verify with the 
   const files = await prepareMonoptahRelease(dist, notes, env);
   assert.equal(files.length, RELEASE_FILE_COUNT);
   assert.deepEqual(files, [
-    "monoptah-native_0.34.0_amd64.deb",
-    "monoptah-native_0.34.0_amd64.deb.sig",
-    "MonoptahNative_0.34.0_amd64.AppImage",
-    "MonoptahNative_0.34.0_amd64.AppImage.sig",
+    "zptah_0.34.0_amd64.deb",
+    "zptah_0.34.0_amd64.deb.sig",
+    "zptah_0.34.0_amd64.AppImage",
+    "zptah_0.34.0_amd64.AppImage.sig",
     names.updater,
     `${names.updater}.sig`,
     names.zip,
     names.sha256,
     RPM,
     `${RPM}.sig`,
-    "MonoptahNative_0.34.0_x64-setup.exe",
-    "MonoptahNative_0.34.0_x64-setup.exe.sig",
+    "zptah_0.34.0_x64-setup.exe",
+    "zptah_0.34.0_x64-setup.exe.sig",
   ]);
   assert.deepEqual(
     JSON.parse(await readFile(join(dist, "release-files.json"), "utf8")),
@@ -409,7 +409,7 @@ signingTest("signing produces a feed and package signature that verify with the 
   assert.ok(!minisignVerify(publicKey, envelope.signature, Buffer.from("other")));
   const parsed = JSON.parse(payload.toString("utf8"));
   assert.equal(parsed.version, "0.34.0");
-  assert.equal(parsed.notes, "# Monoptah Native 0.34.0\n\nFirst release.\n");
+  assert.equal(parsed.notes, "# zptah 0.34.0\n\nFirst release.\n");
   assert.deepEqual(Object.keys(parsed.platforms).sort(), [...TARGETS].sort());
   for (const [target, entry] of Object.entries(parsed.platforms)) {
     const filename = decodeURIComponent(entry.url.split("/").at(-1));
@@ -429,9 +429,9 @@ signingTest("signing produces a feed and package signature that verify with the 
   // A package under the wrong target or another version is never signed.
   await writeFile(
     join(dist, "artifacts-windows-x86_64.json"),
-    JSON.stringify([{ filename: "MonoptahNative_0.33.0_x64-setup.exe", target: "windows-x86_64-nsis" }]),
+    JSON.stringify([{ filename: "zptah_0.33.0_x64-setup.exe", target: "windows-x86_64-nsis" }]),
   );
-  await writeFile(join(dist, "MonoptahNative_0.33.0_x64-setup.exe"), "old");
+  await writeFile(join(dist, "zptah_0.33.0_x64-setup.exe"), "old");
   await assert.rejects(
     prepareMonoptahRelease(dist, notes, env),
     /Unexpected updater package for windows-x86_64-nsis/,
@@ -451,7 +451,7 @@ signingTest("signing produces a feed and package signature that verify with the 
     JSON.stringify(records["artifacts-rpm-x86_64.json"]),
   );
   // Stale notes and a missing key stop the release before anything is published.
-  await writeFile(notes, "# Monoptah Native 0.33.0\n");
+  await writeFile(notes, "# zptah 0.33.0\n");
   await assert.rejects(prepareMonoptahRelease(dist, notes, env), /must start with/);
   await assert.rejects(
     prepareMonoptahRelease(dist, notes, { ...env, TAURI_SIGNING_PRIVATE_KEY: "" }),
@@ -469,13 +469,13 @@ signingTest("signing produces a feed and package signature that verify with the 
 test("requireReused refuses a plan that would build the platform", () => {
   const withMac = planBuilds("0.34.0", []);
   assert.throws(() => requireReused(withMac, "macos", "0.34.0"), /npm run native:release:mac -- 0\.34\.0/);
-  const macPublished = planBuilds("0.34.0", assetFiles().filter((n) => n.startsWith("MonoptahNative_0.34.0_aarch64")));
+  const macPublished = planBuilds("0.34.0", assetFiles().filter((n) => n.startsWith("zptah_0.34.0_aarch64")));
   assert.equal(requireReused(macPublished, "macos", "0.34.0"), macPublished);
   // Other platforms may still be built.
   assert.ok(macPublished.buildAny);
 });
 
-const MAC_FILES = () => assetFiles().filter((n) => n.startsWith("MonoptahNative_0.34.0_aarch64"));
+const MAC_FILES = () => assetFiles().filter((n) => n.startsWith("zptah_0.34.0_aarch64"));
 
 test("a run that starts before the release exists defers macOS instead of failing", () => {
   const kinds = (plan) => plan.matrix.map((e) => e.kind);
@@ -484,7 +484,7 @@ test("a run that starts before the release exists defers macOS instead of failin
   assert.equal(early.rpm, true);
   assert.deepEqual(early.reuse, []);
   // Some macOS files uploaded so far: still deferred, never built, never reused.
-  const partial = planBuilds("0.34.0", ["MonoptahNative_0.34.0_aarch64.zip"], { deferMacos: true });
+  const partial = planBuilds("0.34.0", ["zptah_0.34.0_aarch64.zip"], { deferMacos: true });
   assert.deepEqual(kinds(partial), ["linux", "windows"]);
   assert.deepEqual(partial.reuse, []);
   // All macOS files present: reused as in the normal mode.
@@ -494,7 +494,7 @@ test("a run that starts before the release exists defers macOS instead of failin
   assert.deepEqual(kinds(planBuilds("0.34.0", [])), ["macos", "linux", "windows"]);
   // A partially published non-macOS platform still fails.
   assert.throws(
-    () => planBuilds("0.34.0", ["MonoptahNative_0.34.0_amd64.AppImage"], { deferMacos: true }),
+    () => planBuilds("0.34.0", ["zptah_0.34.0_amd64.AppImage"], { deferMacos: true }),
     /linux files on release native-v0\.34\.0 are incomplete/,
   );
 });
@@ -514,14 +514,14 @@ test("the recomputed plan must build exactly what the first plan built", () => {
   const first = planBuilds("0.34.0", [], { deferMacos: true });
   assert.doesNotThrow(() => checkPlanned(first, planBuilds("0.34.0", MAC_FILES())));
   // Linux got published in between: this run built it too, so refuse.
-  const published = [...MAC_FILES(), "MonoptahNative_0.34.0_amd64.AppImage", "monoptah-native_0.34.0_amd64.deb"];
+  const published = [...MAC_FILES(), "zptah_0.34.0_amd64.AppImage", "zptah_0.34.0_amd64.deb"];
   assert.throws(() => checkPlanned(first, planBuilds("0.34.0", published)), /changed since the plan job.*planned: linux,rpm,windows, now: rpm,windows/s);
   // Something that was not planned would have to be built now: macOS missing.
   assert.throws(() => checkPlanned(first, planBuilds("0.34.0", [])), /planned: .*now: linux,macos,rpm,windows/);
 });
 
 test("a second run over a fully published release builds and uploads nothing", () => {
-  const all = [...assetFiles(), "MonoptahNative_0.34.0_aarch64.app.tar.gz.sig"];
+  const all = [...assetFiles(), "zptah_0.34.0_aarch64.app.tar.gz.sig"];
   const plan = planBuilds("0.34.0", all);
   assert.equal(plan.buildAny, false);
   assert.deepEqual(plan.matrix, []);
@@ -537,7 +537,7 @@ test("a second run over a fully published release builds and uploads nothing", (
 });
 
 test("the plan command: --defer-macos, --check-planned and macos-ready", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "monoptah-native-defer-"));
+  const directory = await mkdtemp(join(tmpdir(), "zptah-defer-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const script = join(root, "scripts/native-release-monoptah.mjs");
   const run = (args, env = {}) =>

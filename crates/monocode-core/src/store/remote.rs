@@ -55,7 +55,7 @@ impl RemoteProject {
 
 /// Why deleting the conversation of a stopped sandbox is refused; see
 /// [`Store::remove_cloud_session_locally`].
-pub const SANDBOX_STOPPED_DELETE: &str = "This sandbox is stopped, so its conversation can not be deleted without resuming it. Reconnect the session first, or remove it from Monoptah only.";
+pub const SANDBOX_STOPPED_DELETE: &str = "This sandbox is stopped, so its conversation can not be deleted without resuming it. Reconnect the session first, or remove it from zptah only.";
 
 /// Prefix of the provisional environment id of a cloud session whose codespace is still
 /// starting (see [`CloudRef::pending_env`]). It never names a connected machine.
@@ -1070,7 +1070,7 @@ impl Store {
         self.forget_cloud_session(id)
     }
 
-    /// "Remove from Monoptah" for a session whose sandbox still exists but is not connected:
+    /// "Remove from zptah" for a session whose sandbox still exists but is not connected:
     /// forgets the local record only. Returns the warning to show: the sandbox keeps existing
     /// (and costing money) until the user deletes it, and the session is gone from the app, so
     /// the only way left is the `sbx` command.
@@ -1091,13 +1091,13 @@ impl Store {
         self.forget_cloud_session(id)?;
         Ok(match account {
             Some(account) => format!(
-                "Removed from Monoptah. The {} {} still exists and keeps costing money until you delete it with `sbx --cloud rm {}`. That command must run with the token of {account}: a sandbox is not visible to any other Docker account.",
+                "Removed from zptah. The {} {} still exists and keeps costing money until you delete it with `sbx --cloud rm {}`. That command must run with the token of {account}: a sandbox is not visible to any other Docker account.",
                 cloud.noun(),
                 cloud.name,
                 cloud.name
             ),
             None => format!(
-                "Removed from Monoptah. The {} {} still exists and keeps costing money until you delete it with `sbx --cloud rm {}`.",
+                "Removed from zptah. The {} {} still exists and keeps costing money until you delete it with `sbx --cloud rm {}`.",
                 cloud.noun(),
                 cloud.name,
                 cloud.name

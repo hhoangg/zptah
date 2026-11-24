@@ -1,7 +1,7 @@
-//! The Browser gate: a Monoptah MCP server that stands between the agent and the Mono's
+//! The Browser gate: a zptah MCP server that stands between the agent and the Mono's
 //! Playwright server. The agent is only given the gate's URL, so every browser tool call passes
 //! through [`Policy::evaluate`] before it is forwarded. It works in every permission mode (Auto
-//! and Full Access included) because it is Monoptah code, not a harness ask mode.
+//! and Full Access included) because it is zptah code, not a harness ask mode.
 //!
 //! What is enforced here, and what is not (see also [`super::BrowserTrust`]):
 //!
@@ -1461,7 +1461,7 @@ impl Inner {
             book.sync(&after);
         }
         Some(format!(
-            "Monoptah closed the tab {url} that you opened earlier and used least, because this browser keeps at most {} tabs. Tabs the user opened are never closed.",
+            "zptah closed the tab {url} that you opened earlier and used least, because this browser keeps at most {} tabs. Tabs the user opened are never closed.",
             tabs::MAX_TABS
         ))
     }

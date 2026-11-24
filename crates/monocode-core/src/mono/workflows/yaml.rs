@@ -572,7 +572,7 @@ fn fail<T>(message: impl Into<String>) -> Result<T, String> {
 pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPreview, String> {
     let file = parse_file(text)?;
     let Json::Object(file) = file else {
-        return fail("Not a Monoptah workflow file");
+        return fail("Not a zptah workflow file");
     };
     let file_json = Json::Object(file.clone());
 

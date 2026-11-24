@@ -1104,7 +1104,7 @@ fn the_three_levels_have_clear_names_ids_and_distinct_explanations() {
         .contains("money actions and before running code"));
     // What is enforced and what is trusted is said once, in the UI.
     let note = BrowserTrust::ENFORCEMENT_NOTE;
-    assert!(note.contains("Code and finance sites are always checked by Monoptah"));
+    assert!(note.contains("Code and finance sites are always checked by zptah"));
     assert!(note.contains("rely on the Mono asking you first"));
     // Serialized names are stable.
     assert_eq!(serde_json::to_string(&one).unwrap(), "\"readOnly\"");

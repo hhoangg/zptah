@@ -376,7 +376,7 @@ pub fn app_tool(name: &str) -> bool {
 }
 
 /// The action of a Mono's app CLI call in a shell command:
-/// `'/Applications/Monoptah.app/…/monocode-gpui' app memory.add --json …`.
+/// `'/Applications/zptah.app/…/monocode-gpui' app memory.add --json …`.
 pub fn app_cli_action(command: &str) -> Option<&str> {
     let words: Vec<&str> = command.split_whitespace().collect();
     words.windows(3).find_map(|w| {
@@ -860,7 +860,7 @@ mod tests {
         assert!(!app_tool("mcp__monocode_visual__visual_show"));
         assert_eq!(
             app_cli_action(
-                r#"'/Applications/Monoptah.app/Contents/MacOS/monocode-gpui' app memory.add --json '{"fact":"x"}'"#
+                r#"'/Applications/zptah.app/Contents/MacOS/monocode-gpui' app memory.add --json '{"fact":"x"}'"#
             ),
             Some("memory.add")
         );

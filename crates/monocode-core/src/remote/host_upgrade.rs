@@ -23,7 +23,7 @@ use super::host_info::HostInfo;
 use super::host_release::HOST_VERSION;
 
 /// Shown while the upgrade script runs.
-pub const UPDATING: &str = "Updating Monoptah Host…";
+pub const UPDATING: &str = "Updating zptah Host…";
 
 /// The bare `X.Y.Z` of the pinned Host.
 pub fn pinned_version() -> &'static str {
@@ -33,7 +33,7 @@ pub fn pinned_version() -> &'static str {
 /// Shown while an upgrade waits for the running turn to end.
 pub fn deferred_message() -> String {
     format!(
-        "Monoptah Host {} will be installed the next time this workspace connects",
+        "zptah Host {} will be installed the next time this workspace connects",
         pinned_version()
     )
 }
@@ -164,7 +164,7 @@ impl Drop for Held<'_> {
     }
 }
 
-/// Phase 2. `progress` hears the status lines ("Updating Monoptah Host…", the deferred text,
+/// Phase 2. `progress` hears the status lines ("Updating zptah Host…", the deferred text,
 /// the warning). Never fails.
 pub fn upgrade_if_needed(env: &dyn UpgradeEnv, progress: &mut dyn FnMut(&str)) -> Outcome {
     env.recover();
@@ -245,7 +245,7 @@ pub fn upgrade_if_needed(env: &dyn UpgradeEnv, progress: &mut dyn FnMut(&str)) -
                     Ok(_) => failed(env, progress, &error),
                     Err(after) => {
                         let text = format!(
-                            "Monoptah Host could not be updated and the previous Host does not answer: {}",
+                            "zptah Host could not be updated and the previous Host does not answer: {}",
                             clip(&after)
                         );
                         progress(&text);
@@ -256,7 +256,7 @@ pub fn upgrade_if_needed(env: &dyn UpgradeEnv, progress: &mut dyn FnMut(&str)) -
             Err(SwapError::Failed(error)) => {
                 let _ = env.reconnect();
                 let text = format!(
-                    "Monoptah Host could not be updated and the Host may not be running: {}",
+                    "zptah Host could not be updated and the Host may not be running: {}",
                     clip(&error)
                 );
                 progress(&text);
@@ -323,8 +323,7 @@ fn looks_blocked(error: &str) -> bool {
 /// looks refused in a sandbox adds the `sbx policy allow` hint.
 pub fn warning(error: &str, sandbox: bool) -> String {
     let detail = clip(error);
-    let mut text =
-        format!("Monoptah Host could not be updated, the current Host is kept: {detail}");
+    let mut text = format!("zptah Host could not be updated, the current Host is kept: {detail}");
     if sandbox && looks_blocked(&detail) {
         text.push_str(&format!(
             ". The download may be blocked by the sandbox network policy; allow it with `{POLICY_HINT}`"
@@ -617,12 +616,12 @@ mod tests {
     #[test]
     fn a_failed_download_keeps_the_old_host_warns_and_is_not_fatal() {
         let mut fake = Fake::new(info("upstream", None));
-        fake.stage = Err("SSH setup failed: Monoptah Host package checksum mismatch.".into());
+        fake.stage = Err("SSH setup failed: zptah Host package checksum mismatch.".into());
         let (outcome, lines) = run(&fake);
         let Outcome::Failed(warning) = outcome else {
             panic!("expected a warning");
         };
-        assert!(warning.starts_with("Monoptah Host could not be updated"));
+        assert!(warning.starts_with("zptah Host could not be updated"));
         assert!(warning.contains("checksum mismatch"));
         assert!(!warning.contains("sbx policy"), "{warning}");
         assert_eq!(fake.swaps(), 0, "the running Host was never touched");

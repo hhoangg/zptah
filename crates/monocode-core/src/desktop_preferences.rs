@@ -33,7 +33,8 @@ impl DesktopPreferences {
             available: true,
         }
     }
-    /// Only the actual desktop data directory may read the desktop webview.
+    /// Only the app's own data directory (`app.zptah.desktop`) may read the webview storage
+    /// stored under that identifier.
     /// Isolated development databases and copies never inherit personal settings.
     /// Read committed SQLite/WAL data once when opening a store. The store owns
     /// the verified snapshot so session reads never rescan WebKit directories.

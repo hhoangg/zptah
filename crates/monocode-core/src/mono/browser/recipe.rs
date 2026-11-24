@@ -1,4 +1,4 @@
-//! Browser recipes: a reusable, read-only task on one origin that Monoptah replays without a
+//! Browser recipes: a reusable, read-only task on one origin that zptah replays without a
 //! model call per step. Design and measurements:
 //! `docs/superpowers/specs/2026-11-22-browser-recipes-design.md` (Phase 1).
 //!

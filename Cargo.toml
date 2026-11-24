@@ -4,7 +4,7 @@ members = ["crates/mobile-link"]
 exclude = ["vendor/portable-pty", "vendor/gpui-pre", "vendor/gpui-pre-apple", "vendor/gpui-pre-linux", "vendor/gpui-pre-macos", "vendor/gpui-pre-windows", "crates/monocode-core", "crates/monocode-gpui"]
 
 [workspace.package]
-version = "0.33.0"
+version = "0.1.0"
 edition = "2021"
 license = "MIT"
 

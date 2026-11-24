@@ -1,4 +1,4 @@
-# Fork-local release workflow (Monoptah Native). Run by hand (workflow_dispatch),
+# Fork-local release workflow (zptah). Run by hand (workflow_dispatch),
 # normally by `npm run native:release:mac -- X.Y.Z`. That script builds and
 # packages the macOS app on the maintainer's Mac (GitHub-hosted macOS runners are
 # not used at all), pushes the tag native-vX.Y.Z and creates the release with the
@@ -6,16 +6,16 @@
 # apps on CI and publishes:
 #   - a GitHub Release native-vX.Y.Z with, per platform, the updater package and
 #     its signature (what the in-app updater downloads):
-#       macOS arm64    MonoptahNative_X.Y.Z_aarch64.app.tar.gz (+ .sig), plus the
+#       macOS arm64    zptah_X.Y.Z_aarch64.app.tar.gz (+ .sig), plus the
 #                      .zip and .zip.sha256 that the monoptah-native Homebrew
 #                      cask pins (self-signed, not notarized: no Apple account).
 #                      The three unsigned files are uploaded by the local script;
 #                      this workflow only adds the .sig.
-#       Linux x86_64   MonoptahNative_X.Y.Z_amd64.AppImage (+ .sig),
-#                      monoptah-native_X.Y.Z_amd64.deb (+ .sig) and
-#                      monoptah-native-X.Y.Z-<release>.x86_64.rpm (+ .sig), the
+#       Linux x86_64   zptah_X.Y.Z_amd64.AppImage (+ .sig),
+#                      zptah_X.Y.Z_amd64.deb (+ .sig) and
+#                      zptah-X.Y.Z-<release>.x86_64.rpm (+ .sig), the
 #                      rpm built on AlmaLinux 10 in a container
-#       Windows x86_64 MonoptahNative_X.Y.Z_x64-setup.exe (+ .sig), an NSIS
+#       Windows x86_64 zptah_X.Y.Z_x64-setup.exe (+ .sig), an NSIS
 #                      installer (unsigned, so SmartScreen warns)
 #   - latest.json (the signed update feed) on the rolling release native-latest,
 #     which is the endpoint compiled into the app. It lists all five targets
@@ -388,8 +388,8 @@ jobs:
           name: platform-${{ matrix.kind }}
           path: |
             native-dist/artifacts-*.json
-            native-dist/MonoptahNative_*
-            native-dist/monoptah-native*
+            native-dist/zptah_*
+            native-dist/zptah*
           if-no-files-found: error
 
   # Enterprise Linux rpm, built the way upstream does: AlmaLinux 10 in a
@@ -445,7 +445,7 @@ jobs:
           name: platform-rpm
           path: |
             native-dist/artifacts-*.json
-            native-dist/monoptah-native*
+            native-dist/zptah*
           if-no-files-found: error
 
   # Runs in parallel with the builds. It waits until the local script has pushed
@@ -587,7 +587,7 @@ jobs:
   # Skipped packaging jobs are fine (a platform whose files were already
   # published); a failed or cancelled one stops the release.
   publish:
-    name: Sign and publish Monoptah Native
+    name: Sign and publish zptah
     needs: [plan, package, package-rpm, await-release]
     if: ${{ !cancelled() && needs.await-release.result == 'success' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-22.04
@@ -693,7 +693,7 @@ jobs:
           for name in $REUSE; do
             gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir native-dist
           done
-          SUM="native-dist/MonoptahNative_${MONOCODE_NATIVE_VERSION}_aarch64.zip.sha256"
+          SUM="native-dist/zptah_${MONOCODE_NATIVE_VERSION}_aarch64.zip.sha256"
           if [[ -f "$SUM" ]]; then
             (cd native-dist && sha256sum -c "$(basename "$SUM")")
           fi
@@ -736,8 +736,8 @@ jobs:
         with:
           name: native-release-${{ env.MONOCODE_NATIVE_VERSION }}
           path: |
-            native-dist/MonoptahNative_*
-            native-dist/monoptah-native*
+            native-dist/zptah_*
+            native-dist/zptah*
             native-dist/latest.json
             native-dist/release-files.json
           retention-days: 30
@@ -812,8 +812,8 @@ jobs:
               --target "$GITHUB_SHA" \
               --latest=false \
               --prerelease \
-              --title "Monoptah Native update feed" \
-              --notes "Rolling release that holds latest.json, the signed update feed read by Monoptah Native. Do not download from here; use the native-vX.Y.Z releases."
+              --title "zptah update feed" \
+              --notes "Rolling release that holds latest.json, the signed update feed read by zptah. Do not download from here; use the native-vX.Y.Z releases."
           else
             echo "$out" >&2
             exit 1
@@ -890,9 +890,9 @@ jobs:
           mkdir -p "$DIR"
           gh release download "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern "MonoptahNative_${V}_aarch64.zip.sha256" \
+            --pattern "zptah_${V}_aarch64.zip.sha256" \
             --dir "$DIR"
-          SHA=$(awk 'NR == 1 { print $1 }' "$DIR/MonoptahNative_${V}_aarch64.zip.sha256")
+          SHA=$(awk 'NR == 1 { print $1 }' "$DIR/zptah_${V}_aarch64.zip.sha256")
           if [[ ! "$SHA" =~ ^[0-9a-f]{64}$ ]]; then
             echo "Published sha256 is not 64 lowercase hex characters: $SHA" >&2
             exit 1
@@ -926,7 +926,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
           git add Casks/monoptah-native.rb
-          git commit -m "Update Monoptah Native to $V"
+          git commit -m "Update zptah to $V"
           # Rebase onto the tap's main before pushing, and retry once when the
           # push is rejected because someone else pushed in between.
           for attempt in 1 2; do

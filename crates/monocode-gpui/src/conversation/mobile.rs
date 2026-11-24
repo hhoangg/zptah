@@ -711,7 +711,7 @@ pub(crate) fn usage_state(
         } else if remote {
             "Continue this session on its remote desktop. Mobile usage-limit recovery is unavailable for this session."
         } else {
-            "Automatic continuation requires Monoptah running with this session loaded. Your preference is saved, but scheduling resumes only when the session loads again."
+            "Automatic continuation requires zptah running with this session loaded. Your preference is saved, but scheduling resumes only when the session loads again."
         },
     })
 }

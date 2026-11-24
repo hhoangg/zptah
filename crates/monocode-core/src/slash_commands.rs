@@ -1,4 +1,4 @@
-//! The `/` menu of a session composer: Monoptah's own commands and the skills of the project.
+//! The `/` menu of a session composer: zptah's own commands and the skills of the project.
 //!
 //! The native composer (`monocode-gpui`, `composer_completion.rs`) and a paired web device
 //! (`commands.list`) build their list from the same table and the same rules, so the two
@@ -8,7 +8,7 @@ use crate::{provider::Kind, skills::DiscoveredSkill};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-/// One of Monoptah's own commands.
+/// One of zptah's own commands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Builtin {
     pub id: &'static str,
@@ -36,7 +36,7 @@ pub const BUILTINS: &[Builtin] = &[
     Builtin {
         id: "operator",
         label: "Operator",
-        detail: "Give this thread access to Monoptah",
+        detail: "Give this thread access to zptah",
         web: true,
     },
     Builtin {

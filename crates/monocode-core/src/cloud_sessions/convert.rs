@@ -2168,7 +2168,7 @@ fn finish_restore(
             &[]
         } else {
             &[
-                ("GIT_COMMITTER_NAME", "Monoptah"),
+                ("GIT_COMMITTER_NAME", "zptah"),
                 ("GIT_COMMITTER_EMAIL", "monoptah@localhost"),
             ]
         };

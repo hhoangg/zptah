@@ -87,7 +87,7 @@ resolver = "2"
 members = [".", "../monocode-core"]
 
 [workspace.package]
-version = "0.16.0"
+version = "0.1.0"
 edition = "2021"
 license = "MIT"
 

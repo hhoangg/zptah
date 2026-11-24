@@ -76,7 +76,7 @@ impl Drop for JobLease {
 struct Health {
     label: String,
     needs_update: bool,
-    /// Host flavor and version, e.g. `Monoptah 1.1.0`.
+    /// Host flavor and version, e.g. `zptah 1.1.0`.
     host: String,
 }
 
@@ -693,7 +693,7 @@ impl SettingsView {
             .flex().items_end().justify_between().gap_4()
             .child(div().min_w_0().flex_1()
                 .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child("Your machines"))
-                .child(paragraph("Run agents on another computer and return to them from your laptop. The host keeps working when you close Monoptah here.").mt_1()))
+                .child(paragraph("Run agents on another computer and return to them from your laptop. The host keeps working when you close zptah here.").mt_1()))
             .when(!self.connections.adding, |d| d.child(
                 secondary_button("add-machine", "Add machine", false, disabled).child(icon("plus", 16.)).child("Add machine")
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -779,7 +779,7 @@ impl SettingsView {
                     .child(if self.connections.advanced { "▾ Advanced" } else { "▸ Advanced" })
                     .on_click(cx.listener(|this, _, _, cx| { this.connections.advanced = !this.connections.advanced; cx.notify(); })))
                 .when(self.connections.advanced, |d| d.child(div().max_w(px(160.)).child(port)))
-                .child(paragraph("Monoptah installs and starts its background host, then connects securely. Your SSH keys and config are used automatically. Enable SSH on the host and sign in to Codex or Claude Code there. On Windows and Mac, keep the host’s desktop account signed in and the machine awake. Locking the desktop is fine."))
+                .child(paragraph("zptah installs and starts its background host, then connects securely. Your SSH keys and config are used automatically. Enable SSH on the host and sign in to Codex or Claude Code there. On Windows and Mac, keep the host’s desktop account signed in and the machine awake. Locking the desktop is fine."))
                 .child(paragraph("On Linux, setup installs a systemd user service and turns on lingering for your account (loginctl enable-linger), so the host and your other user services keep running after you log out. Without systemd, as in many containers and microVMs, the host runs as a background process instead and is started again when you reconnect. The host keeps running until you stop it on that machine; removing it here only disconnects this desktop."))
                 .child(div().flex().justify_end().gap_2()
                     .child(secondary_button("cancel-machine", "Cancel", false, busy).child("Cancel").on_click(cx.listener(|this, _, _, cx| {
@@ -1051,7 +1051,7 @@ mod tests {
             host: "Upstream (version unknown)".into()
         });
         let fork = describe_health("host", &json!({"environmentId": "host", "providers": ["codex"], "host": {"flavor": "monoptah", "version": "1.1.0"}, "capabilities": ["workspace.run", "git.worktreeCreate"]})).unwrap();
-        assert_eq!(fork.host, "Monoptah 1.1.0");
+        assert_eq!(fork.host, "zptah 1.1.0");
         assert_eq!(fork.label, "Connected");
     }
 

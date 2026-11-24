@@ -325,12 +325,12 @@ impl CloudSessions {
         }
         match cloud.kind {
             CloudBackendKind::Codespaces => format!(
-                "Monoptah no longer lists it, so it stays until you delete it yourself, for example with `gh codespace delete -c {}`.",
+                "zptah no longer lists it, so it stays until you delete it yourself, for example with `gh codespace delete -c {}`.",
                 cloud.name
             ),
             CloudBackendKind::DockerSandbox => {
                 let hint = format!(
-                    "Monoptah no longer lists it, so it stays until you delete the sandbox {} yourself with Docker's sandbox tools (sbx).",
+                    "zptah no longer lists it, so it stays until you delete the sandbox {} yourself with Docker's sandbox tools (sbx).",
                     cloud.name
                 );
                 // A sandbox in a Docker account is not visible to any other account.
@@ -660,7 +660,7 @@ impl CloudSessions {
                         self,
                         &mut record,
                         format!(
-                            "the {what} must be running so Monoptah can check that no other session uses it ({live}); start it, then choose Retry"
+                            "the {what} must be running so zptah can check that no other session uses it ({live}); start it, then choose Retry"
                         ),
                     )
                 }
@@ -727,9 +727,8 @@ impl CloudSessions {
             // The backend delete may have worked and only the bookkeeping failed: when the
             // instance is confirmed gone, say so and keep a record for a Retry.
             Err(e) if matches!(backend.exists(&cloud.name), Ok(false)) => {
-                let warning = format!(
-                    "Monoptah could not finish forgetting it ({e}); choose Retry to clean up"
-                );
+                let warning =
+                    format!("zptah could not finish forgetting it ({e}); choose Retry to clean up");
                 record.attempt_started_at = None;
                 record.last_error = Some(warning.clone());
                 record.gone = true;

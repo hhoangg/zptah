@@ -1,4 +1,4 @@
-//! Replays a recipe. Monoptah code does it, with no model call per step: each step becomes an
+//! Replays a recipe. zptah code does it, with no model call per step: each step becomes an
 //! ordinary `browser_*` call that goes through the same policy as an agent call (trust level,
 //! blocked and finance origins, approval cards), via the [`Host`].
 //!

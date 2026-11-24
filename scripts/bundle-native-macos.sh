@@ -20,24 +20,24 @@ case "$native_data_mode" in
   dev-data|monocode-data) ;;
   *) echo "Unknown data mode: $native_data_mode" >&2; exit 1 ;;
 esac
-native_bundle="$native_target/Monoptah Native.app"
-native_bundle_name="Monoptah Native"
-native_bundle_id="com.monoptah.native"
+native_bundle="$native_target/zptah.app"
+native_bundle_name="zptah"
+native_bundle_id="app.zptah.desktop"
 if [ "$native_profile" != release ]; then
   # Dev builds live in one fixed bundle with its own name and identifier, so the
   # Dock, Spotlight and Launch Services never confuse it with the installed app.
-  native_bundle_name="Monoptah Native Dev"
-  native_bundle_id="com.monoptah.native.dev"
+  native_bundle_name="zptah Dev"
+  native_bundle_id="app.zptah.desktop.dev"
   native_dev_dir="${MONOCODE_DEV_APP_DIR:-${HOME:?HOME is not set}/Applications}"
   native_final_bundle="$native_dev_dir/$native_bundle_name.app"
   case "$native_final_bundle" in
-    /*/"Monoptah Native Dev.app") ;;
+    /*/"zptah Dev.app") ;;
     *) echo "Refusing unsafe dev bundle path: $native_final_bundle" >&2; exit 1 ;;
   esac
   # Build and sign beside the final path; the old bundle stays until the swap.
   native_bundle="$native_dev_dir/.$native_bundle_name.app.next"
   case "$native_bundle" in
-    /*/".Monoptah Native Dev.app.next") ;;
+    /*/".zptah Dev.app.next") ;;
     *) echo "Refusing unsafe dev staging path: $native_bundle" >&2; exit 1 ;;
   esac
 fi
@@ -132,7 +132,7 @@ if [ "$native_profile" != release ]; then
   rm -rf "$native_final_bundle"
   mv "$native_bundle" "$native_final_bundle"
   # Older versions wrote the dev bundle into the cargo target directory.
-  rm -rf "$native_target/Monoptah Native.app"
+  rm -rf "$native_target/zptah.app"
   codesign --verify --deep --strict "$native_final_bundle"
   native_bundle="$native_final_bundle"
 fi

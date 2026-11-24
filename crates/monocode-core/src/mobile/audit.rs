@@ -255,7 +255,7 @@ pub struct ApprovalAnswer<'a> {
 
 /// One `commands.run` call to record: the command id from the `/` menu (a closed set, never
 /// the text of the message), whether it switched a mode on or off, the conversation and how it
-/// ended. `operator` gives the thread access to Monoptah, which is why every outcome is kept.
+/// ended. `operator` gives the thread access to zptah, which is why every outcome is kept.
 #[derive(Clone, Copy)]
 pub struct SlashCommand<'a> {
     pub fingerprint: &'a str,

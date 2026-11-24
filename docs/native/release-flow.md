@@ -1,4 +1,4 @@
-# Monoptah Native release flow
+# zptah release flow
 
 How `npm run native:release:mac -- X.Y.Z` and `.github/workflows/native-release-monoptah.yml`
 fit together, what runs in parallel, and what to do when a step fails. The short version is in
@@ -20,7 +20,7 @@ watch that the run started                     publish: sign, verify, upload, fe
                                                homebrew: bump the cask
 ```
 
-The script deletes the built `Monoptah Native.app` from `target/aarch64-apple-darwin/release`
+The script deletes the built `zptah.app` from `target/aarch64-apple-darwin/release`
 once packaging ends (on success, on failure and in `--dry-run`), so Spotlight and Launchpad do not
 list stale copies. Only the archives in the temp release dir are kept.
 
@@ -54,14 +54,14 @@ script early.
   highlights (`--notes FILE` or the docs file), or put the `user-visible` label on the sync PR
   to list the PR title itself.
 - Highlights (optional): `--notes FILE`, otherwise `docs/native/monoptah-release-notes.md` when
-  its first line is exactly `# Monoptah Native X.Y.Z` for this version. A file for another
+  its first line is exactly `# zptah X.Y.Z` for this version. A file for another
   version is ignored (the script says so).
 - The notes are written to `release-notes.md` in the temp release dir, used for
   `gh release create --notes-file`, and printed. The publish job reads the release body back
   and signs the feed with exactly that text. `checkNotes` still requires the body to start with
   the version heading. If the release body is emptied or its first line is edited afterwards,
   `publish` fails at `checkNotes` before anything is published. Restore the body (first line
-  `# Monoptah Native X.Y.Z`) with `gh release edit native-vX.Y.Z --notes-file FILE`, then re-run
+  `# zptah X.Y.Z`) with `gh release edit native-vX.Y.Z --notes-file FILE`, then re-run
   the failed jobs.
 
 ## The early run and await-release
@@ -159,7 +159,7 @@ A run that GitHub leaves `queued` with no job for more than 10 minutes is stuck 
 macOS releases are signed with a stable self-signed certificate (CN "Monoptah Native Release
 Signing"), not ad-hoc. An ad-hoc signature has a cdhash-based designated requirement (DR), so
 every update looked like a new app to macOS TCC and dropped grants such as Full Disk Access.
-With the certificate the DR is `identifier "com.monoptah.native" and certificate leaf = H"<sha1>"`
+With the certificate the DR is `identifier "app.zptah.desktop" and certificate leaf = H"<sha1>"`
 and stays the same across rebuilds, so grants survive updates. The certificate is not trusted
 and does not need to be: `codesign` signs with it anyway (`security find-identity` shows it as
 `CSSMERR_TP_NOT_TRUSTED`). The app is still not notarized. Signing uses no hardened runtime, no
@@ -212,17 +212,17 @@ an SSH or locked session makes codesign fail or prompt).
 `--dry-run`, which signs too) that `MONOPTAH_NATIVE_SIGNING_IDENTITY` is set and listed by
 `security find-identity -p codesigning`. `package-native-monoptah.mjs` then signs with
 `MONOCODE_NATIVE_SIGNING_MODE=selfsigned`, runs `codesign --verify --deep --strict --verbose=2`,
-prints `codesign -d -r-` and fails unless the DR is exactly `identifier "com.monoptah.native" and certificate leaf = H"<sha1 of the configured identity>"`
+prints `codesign -d -r-` and fails unless the DR is exactly `identifier "app.zptah.desktop" and certificate leaf = H"<sha1 of the configured identity>"`
 (no other hash, no extra clauses) and the signature is not ad-hoc. A common name that matches more than
 one certificate is refused: use the SHA-1. There is no silent fallback to ad-hoc signing.
 
 ### First signed release: required highlight
 
 The first release signed this way changes the DR once, so macOS asks users to grant again.
-Pass this text as highlights with `--notes FILE` (first line `# Monoptah Native X.Y.Z`):
+Pass this text as highlights with `--notes FILE` (first line `# zptah X.Y.Z`):
 
 > After updating to this version, open System Settings > Privacy & Security > Full Disk Access,
-> remove Monoptah Native and add it again one last time. Later updates keep the permission.
+> remove zptah and add it again one last time. Later updates keep the permission.
 
 (Do not rely on `docs/native/monoptah-release-notes.md` for this: it is only used when its first
 line names the exact version being released.)

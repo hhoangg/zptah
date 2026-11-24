@@ -37,7 +37,7 @@
 // The release notes are generated from the titles of the pull requests merged
 // since the previous native tag (scripts/native-release-notes.mjs), so a
 // release needs no separate notes PR. If docs/native/monoptah-release-notes.md
-// starts with "# Monoptah Native X.Y.Z" for this version, its text is used as
+// starts with "# zptah X.Y.Z" for this version, its text is used as
 // highlights; a file for another version is ignored.
 //
 // The logic lives in exported pure functions and in runRelease, which takes its
@@ -299,7 +299,7 @@ export function publishCommands({ version, sha, dir, files, notesFile }) {
         "--verify-tag",
         "--latest=false",
         "--title",
-        `Monoptah Native ${version}`,
+        `zptah ${version}`,
         "--notes-file",
         notesFile,
       ],
@@ -648,7 +648,7 @@ export class InterruptedError extends Error {
 //   io.capture(command, args) -> { status, stdout, stderr }   (never throws)
 //   io.visible(command, args, env)                            (throws on failure)
 //   io.readText(path), io.exists(path), io.listDir(dir)
-//   io.removeBuiltApp() (deletes the built Monoptah Native.app from target),
+//   io.removeBuiltApp() (deletes the built zptah.app from target),
 //   io.makeTempDir(version), io.removeDir(dir), io.writeStamp(text), io.log(text)
 //   io.writeText(path, text), io.now() (ms), io.sleep(ms) (awaitable)
 //   io.randomId() -> a short unique string for the workflow run name
@@ -970,9 +970,9 @@ function realIo() {
     writeText: (path, text) => writeFileSync(path, text),
     exists: (path) => existsSync(abs(path)),
     listDir: (dir) => readdirSync(dir),
-    makeTempDir: (version) => mkdtempSync(join(tmpdir(), "monoptah-native-" + version + "-")),
+    makeTempDir: (version) => mkdtempSync(join(tmpdir(), "zptah-" + version + "-")),
     removeDir: (dir) => rmSync(dir, { recursive: true, force: true }),
-    removeBuiltApp: () => removeBuiltAppBundle(abs(join(dirname(BINARY), "Monoptah Native.app")), (text) => console.log(text)),
+    removeBuiltApp: () => removeBuiltAppBundle(abs(join(dirname(BINARY), "zptah.app")), (text) => console.log(text)),
     writeStamp(text) {
       mkdirSync(join(root, "crates/monocode-gpui/target"), { recursive: true });
       writeFileSync(abs(STAMP_FILE), text);

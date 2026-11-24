@@ -42,7 +42,7 @@ const COMMANDS: [(Command, &str); 4] = [
     ),
     (
         Command::Operator,
-        "Give this thread access to Monoptah sessions, folders, and notes.",
+        "Give this thread access to zptah sessions, folders, and notes.",
     ),
     (Command::Orchestrator, "Plan and coordinate agent work."),
     (
@@ -337,7 +337,7 @@ impl QuickComposer {
     }
     fn update_placeholder(&mut self, cx: &mut Context<Self>) {
         let text = if self.cwd.is_empty() {
-            "Open a project in Monoptah first".to_owned()
+            "Open a project in zptah first".to_owned()
         } else {
             format!(
                 "Start a {} session in {}…",

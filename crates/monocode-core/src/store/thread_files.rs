@@ -247,6 +247,14 @@ mod tests {
     }
 
     #[test]
+    fn the_zptah_database_keeps_its_attachments_in_zptah_db_threads() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::open_monocode(&temp.path().join(crate::brand::DATABASE_FILE)).unwrap();
+        let root = store.threads_root().unwrap();
+        assert_eq!(root.file_name().unwrap(), "zptah.db.threads");
+    }
+
+    #[test]
     fn adopting_moves_only_staged_files() {
         let temp = tempfile::tempdir().unwrap();
         let store = Store::open_monocode(&temp.path().join("data/sessions.db")).unwrap();

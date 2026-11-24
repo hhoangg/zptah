@@ -424,7 +424,7 @@ impl SettingsView {
                             ),
                     )
                     .child(paragraph(
-                        "Check on projects and conversations from the Monoptah mobile app. Your phone connects straight to this desktop.",
+                        "Check on projects and conversations from the zptah mobile app. Your phone connects straight to this desktop.",
                     ))
                     .child(
                         paragraph("The iPhone app is in beta on TestFlight.")
@@ -941,7 +941,7 @@ impl SettingsView {
         let max_height = (viewport.height.as_f32() - 32.).max(0.);
         // Keep the QR square on narrow windows, without growing past size-96.
         let qr_side = QR_SIDE.min((width - 50.).max(0.));
-        let lead = "Open Monoptah on your phone, tap ";
+        let lead = "Open zptah on your phone, tap ";
         let action = "Connect to desktop";
         let instructions = format!("{lead}{action}, and scan the code.");
         let bold = lead.len()..lead.len() + action.len();
@@ -950,7 +950,7 @@ impl SettingsView {
             .id("mobile-pair-code")
             .debug_selector(|| "mobile-pair-code".into())
             .role(Role::Image)
-            .aria_label("Scan this one-use pairing code in the Monoptah mobile app")
+            .aria_label("Scan this one-use pairing code in the zptah mobile app")
             .relative()
             .size(px(qr_side))
             .flex_shrink_0()
@@ -1551,7 +1551,11 @@ mod tests {
         assert_eq!(overlay.size, size(px(1200.), px(900.)));
         assert_eq!(dialog.size.width, px(560.));
         assert!(dialog.size.height > px(620.) && dialog.size.height < px(720.));
-        assert_eq!(dialog.center(), overlay.center());
+        // The dialog height follows the wrapped copy, so its centre may sit a layout step
+        // (0.25px) off the exact middle.
+        let (dialog_center, overlay_center) = (dialog.center(), overlay.center());
+        assert!((dialog_center.x - overlay_center.x).abs() < px(0.5));
+        assert!((dialog_center.y - overlay_center.y).abs() < px(0.5));
         assert_eq!(code.size, size(px(384.), px(384.)));
         assert_eq!(code.center().x, dialog.center().x);
 

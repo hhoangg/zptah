@@ -120,7 +120,7 @@ impl Decision {
             Decision::UpToDate { current } => json!({
                 "status": "up_to_date",
                 "current": current,
-                "message": format!("Monoptah is up to date ({current})."),
+                "message": format!("zptah is up to date ({current})."),
             }),
             Decision::Confirm { sessions } => json!({
                 "status": "confirmation_required",

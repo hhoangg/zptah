@@ -1,7 +1,7 @@
-// Release signing identity for Monoptah Native (macOS).
+// Release signing identity for zptah (macOS).
 //
 // Releases are signed with a stable self-signed certificate, not ad-hoc, so the
-// designated requirement (DR) stays `identifier "com.monoptah.native" and
+// designated requirement (DR) stays `identifier "app.zptah.desktop" and
 // certificate leaf = H"<sha1>"` across updates and macOS TCC keeps grants such as
 // Full Disk Access. Setup and recovery: docs/native/release-flow.md, "Stable signing identity".
 
@@ -67,7 +67,7 @@ export const signingIdentityProblem = (env, run) => resolveSigningIdentity(env, 
 // leaf hash and no extra `or` clauses.
 export function signatureProblem(requirementText, detailsText, sha1) {
   if (/^Signature=adhoc$/m.test(detailsText)) return "The packaged app is ad-hoc signed";
-  const expected = `designated => identifier "com.monoptah.native" and certificate leaf = H"${sha1.toLowerCase()}"`;
+  const expected = `designated => identifier "app.zptah.desktop" and certificate leaf = H"${sha1.toLowerCase()}"`;
   const lines = requirementText.split("\n").map((l) => l.trim());
   if (!lines.includes(expected))
     return `The designated requirement is not exactly the expected stable form (${expected}): ${requirementText.trim() || "(empty)"}`;

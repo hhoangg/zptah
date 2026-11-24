@@ -254,7 +254,7 @@ pub(super) fn delete_start_note(words: &Words, stopped: bool) -> Option<String> 
     })
 }
 
-/// The body of the "Remove from Monoptah" confirmation.
+/// The body of the "Remove from zptah" confirmation.
 ///
 /// A sandbox in a Docker account other than the machine's sign-in is not visible to a plain
 /// `sbx`: `account` (the account named for the user, never a token) adds that the command
@@ -267,7 +267,7 @@ pub(super) fn remove_confirm_body(title: &str, name: &str, account: Option<&str>
         None => format!("`sbx --cloud rm {name}`"),
     };
     format!(
-        "Remove {} from Monoptah? The sandbox {name} keeps existing and keeps costing money \
+        "Remove {} from zptah? The sandbox {name} keeps existing and keeps costing money \
          until you delete it ({command}). Its conversation is not saved on this \
          computer.",
         quoted_title_single(title),
@@ -895,7 +895,7 @@ pub(super) enum Phase {
         choice: ArchiveChoice,
         error: String,
     },
-    /// "Remove from Monoptah" of session `id` (a stopped sandbox's): confirm first.
+    /// "Remove from zptah" of session `id` (a stopped sandbox's): confirm first.
     ConfirmRemove {
         id: i64,
         title: String,
@@ -2482,7 +2482,7 @@ impl Shell {
         self.forget_session(id, cx);
     }
 
-    /// Asks before "Remove from Monoptah" of a stopped sandbox's session `id`.
+    /// Asks before "Remove from zptah" of a stopped sandbox's session `id`.
     pub(super) fn confirm_remove_cloud_session(
         &mut self,
         id: i64,
@@ -2535,7 +2535,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// "Remove from Monoptah" for a sandbox session whose sandbox is stopped: forgets the
+    /// "Remove from zptah" for a sandbox session whose sandbox is stopped: forgets the
     /// local record only (the sandbox keeps existing) and shows the store's warning. Never
     /// contacts the sandbox, so it can not resume it.
     pub(super) fn remove_cloud_session_locally(
@@ -2550,7 +2550,7 @@ impl Shell {
         {
             return;
         }
-        // "Remove from Monoptah" leaves the workspace running on purpose: no automatic stop.
+        // "Remove from zptah" leaves the workspace running on purpose: no automatic stop.
         if let Some(mark) = self.cloud_marks.get(&id) {
             self.auto_stop.keep_running(&mark.cloud());
         }
@@ -2817,7 +2817,7 @@ impl Shell {
             } => {
                 let id = *id;
                 (
-                    "Remove from Monoptah?".to_string(),
+                    "Remove from zptah?".to_string(),
                     div().child(text(
                         "cloud-archive-remove",
                         remove_confirm_body(title, name, account.as_deref()),

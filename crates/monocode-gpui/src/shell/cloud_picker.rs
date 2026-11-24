@@ -429,7 +429,7 @@ impl Render for CodespacePicker {
                     .text_color(content(0.55))
                     .child(match &self.listing {
                         Some(listing) => format!(
-                            "The session runs Claude Code in a GitHub codespace of {}. It keeps running when you close Monoptah.",
+                            "The session runs Claude Code in a GitHub codespace of {}. It keeps running when you close zptah.",
                             listing.repo
                         ),
                         None => "The session runs Claude Code in a GitHub codespace.".into(),

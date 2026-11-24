@@ -10,7 +10,7 @@ const workspace = fileURLToPath(new URL("../", import.meta.url));
 
 // The one dev bundle; scripts/bundle-native-macos.sh uses the same default.
 export function devAppPath(env = process.env) {
-  return join(env.MONOCODE_DEV_APP_DIR || join(env.HOME || homedir(), "Applications"), "Monoptah Native Dev.app");
+  return join(env.MONOCODE_DEV_APP_DIR || join(env.HOME || homedir(), "Applications"), "zptah Dev.app");
 }
 
 function track(child) {
@@ -123,7 +123,7 @@ export async function startDev({
         if (closing) return;
         if (builtRevision !== revision) continue;
         if (detach) {
-          const logDirectory = buildEnv.MONOCODE_DEV_LOG_DIR || mkdtempSync(join(tmpdir(), "monoptah-native-dev-"));
+          const logDirectory = buildEnv.MONOCODE_DEV_LOG_DIR || mkdtempSync(join(tmpdir(), "zptah-dev-"));
           mkdirSync(logDirectory, { recursive: true, mode: 0o700 });
           const logPath = join(logDirectory, `app-${Date.now()}-${process.pid}.log`);
           const logFile = openSync(logPath, "a", 0o600);

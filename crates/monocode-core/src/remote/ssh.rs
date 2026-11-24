@@ -348,7 +348,7 @@ impl Job {
             inner: Mutex::new(JobData {
                 view: JobView {
                     id: uuid::Uuid::new_v4().to_string(),
-                    message: "Connecting to SSH and setting up Monoptah Host…".into(),
+                    message: "Connecting to SSH and setting up zptah Host…".into(),
                     prompt: None,
                     done: false,
                     error: None,
@@ -957,7 +957,7 @@ mkdir -p "$BASE"
 {alive}
 # One worker at a time: a live one owns the lock.
 if [ -f "$BASE/swap.lock" ] && worker_alive "$(cat "$BASE/swap.lock" 2>/dev/null)"; then
-  echo 'Another Monoptah Host update is still running on this machine.' >&2
+  echo 'Another zptah Host update is still running on this machine.' >&2
   exit 1
 fi
 rm -f "$BASE/swap-status"
@@ -1531,9 +1531,9 @@ pub fn device_name() -> String {
         .take(80)
         .collect();
     if name.is_empty() {
-        "Monoptah desktop".into()
+        "zptah desktop".into()
     } else {
-        format!("Monoptah on {name}")
+        format!("zptah on {name}")
     }
 }
 
@@ -3283,7 +3283,7 @@ mod tests {
     #[test]
     fn device_names_are_bounded_single_lines() {
         let name = device_name();
-        assert!(name.starts_with("Monoptah"));
+        assert!(name.starts_with("zptah"));
         assert!(name.chars().count() <= 100);
         assert!(!name.chars().any(char::is_control));
     }

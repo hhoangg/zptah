@@ -456,7 +456,7 @@ pub fn workflow_guide() -> String {
     add(
         &mut sections,
         &[
-            r##"# Writing a Monoptah workflow"##,
+            r##"# Writing a zptah workflow"##,
             "",
             r##"Read this whole guide before you add or change a workflow. Check every definition with `workflows.validate` before you save it."##,
         ],

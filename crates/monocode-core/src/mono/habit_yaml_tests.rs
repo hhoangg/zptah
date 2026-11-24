@@ -102,8 +102,8 @@ fn json_files_are_read_too() {
 
 #[test]
 fn files_that_are_not_habits_are_refused() {
-    assert_eq!(refusal("- a\n- b\n"), "Not a Monoptah habit file");
-    assert_eq!(refusal("name: x\n"), "Not a Monoptah habit file");
+    assert_eq!(refusal("- a\n- b\n"), "Not a zptah habit file");
+    assert_eq!(refusal("name: x\n"), "Not a zptah habit file");
     assert!(refusal("").contains("empty"));
     assert!(refusal("a: [unclosed").starts_with("Could not read the habit file"));
     assert_eq!(

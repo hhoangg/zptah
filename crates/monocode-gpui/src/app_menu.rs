@@ -53,17 +53,17 @@ pub(crate) fn install(prefs: &crate::settings::Preferences, cx: &mut App) {
         return;
     }
     cx.set_menus(vec![
-        Menu::new("Monoptah Native").items([
-            MenuItem::action("About Monoptah Native", About),
+        Menu::new("zptah").items([
+            MenuItem::action("About zptah", About),
             MenuItem::separator(),
             MenuItem::action("Settings…", OpenSettings),
             MenuItem::action("Check for Updates…", CheckForUpdates),
             MenuItem::separator(),
-            MenuItem::action("Hide Monoptah Native", Hide),
+            MenuItem::action("Hide zptah", Hide),
             MenuItem::action("Hide Others", HideOthers),
             MenuItem::action("Show All", ShowAll),
             MenuItem::separator(),
-            MenuItem::action("Quit Monoptah Native", Quit),
+            MenuItem::action("Quit zptah", Quit),
         ]),
         Menu::new("File").items([
             MenuItem::action("Open Project…", OpenProject),
@@ -145,7 +145,7 @@ pub(crate) fn install(prefs: &crate::settings::Preferences, cx: &mut App) {
             MenuItem::action("Zoom", ZoomWindow),
         ]),
         Menu::new("Help").items([
-            MenuItem::action("Monoptah Website", OpenUrl("https://zptah.app")),
+            MenuItem::action("zptah Website", OpenUrl("https://zptah.app")),
             MenuItem::action("View on GitHub", OpenUrl(REPO)),
             MenuItem::separator(),
             MenuItem::action(

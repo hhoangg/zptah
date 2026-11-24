@@ -206,7 +206,7 @@ impl Shell {
         if request.mode == Mode::Install {
             // A request to install is always told to the person at the computer.
             self.remote_update_notice(
-                &format!("{} asked to update and restart Monoptah.", origin.name()),
+                &format!("{} asked to update and restart zptah.", origin.name()),
                 cx,
             );
         }
@@ -340,7 +340,7 @@ impl Shell {
             .monos
             .as_ref()
             .and_then(|monos| monos.read(cx).roster.get(chat).map(|mono| mono.label()))
-            .unwrap_or_else(|| "Monoptah".into());
+            .unwrap_or_else(|| "zptah".into());
         #[cfg(test)]
         cx.default_global::<State>()
             .pushes

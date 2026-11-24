@@ -29,7 +29,7 @@ const TAGS_MIGRATED_KEY: &str = "today.tagsMigrated";
 const MAX_ROLLOVER_MINUTES: u32 = 720;
 const NOTE_MAX: usize = 5_000;
 const NOT_FOUND: &str = "Task not found";
-const READ_ONLY: &str = "This Monoptah store is read-only";
+const READ_ONLY: &str = "This zptah store is read-only";
 
 fn sql(error: rusqlite::Error) -> String {
     error.to_string()

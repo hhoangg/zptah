@@ -327,7 +327,7 @@ fn account_failure(why: &str) -> Item {
     } else if why.contains("not available in this session") {
         Item::problem(
             id,
-            "Docker accounts are not available in this session. Choose Machine sign-in in the Docker account list below, or restart Monoptah and check again.",
+            "Docker accounts are not available in this session. Choose Machine sign-in in the Docker account list below, or restart zptah and check again.",
             None,
         )
     } else {

@@ -1062,7 +1062,7 @@ fn the_codespace_guide_is_golden_and_the_sandbox_guide_differs_only_in_the_place
          ## Evidence for the local user\n\
          You run in a GitHub codespace. Save screenshots, test output and written reports that prove\n\
          your work under `/workspaces/w/.evidence/` (create subfolders freely). That folder is excluded\n\
-         from git and is never committed. The user's Monoptah app copies it to their machine on request,\n\
+         from git and is never committed. The user's zptah app copies it to their machine on request,\n\
          so do not put secrets there. Mention the file names in your final message.\n\
          The user can click a file path in the chat to view it.\n\
          <!-- monoptah-evidence:end -->"

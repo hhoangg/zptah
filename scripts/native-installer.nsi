@@ -1,15 +1,15 @@
 Unicode True
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
-Name "Monoptah Native"
+Name "zptah"
 OutFile "@OUTFILE@"
-InstallDir "$LOCALAPPDATA\Programs\Monoptah Native"
-InstallDirRegKey HKCU "Software\Monoptah Native" "InstallDir"
+InstallDir "$LOCALAPPDATA\Programs\zptah"
+InstallDirRegKey HKCU "Software\zptah" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 VIProductVersion "@WINDOWS_VERSION@"
-VIAddVersionKey "ProductName" "Monoptah Native"
-VIAddVersionKey "FileDescription" "Monoptah Native preview installer"
+VIAddVersionKey "ProductName" "zptah"
+VIAddVersionKey "FileDescription" "zptah preview installer"
 VIAddVersionKey "FileVersion" "@VERSION@"
 !define MUI_ICON "@ICON@"
 !insertmacro MUI_PAGE_DIRECTORY
@@ -29,10 +29,10 @@ Function .onInit
   System::Call 'kernel32::WaitForSingleObject(p r1, i 120000) i .r2'
   System::Call 'kernel32::CloseHandle(p r1)'
   StrCmp $2 0 ready
-  Abort "Monoptah Native did not close. Please try updating again."
+  Abort "zptah did not close. Please try updating again."
   ready:
 FunctionEnd
-Section "Monoptah Native"
+Section "zptah"
   SetOutPath "$INSTDIR"
   ClearErrors
   File /oname=monocode-gpui.next.exe "@STAGE@\monocode-gpui.exe"
@@ -51,12 +51,12 @@ Section "Monoptah Native"
   File "@STAGE@\native-install.json"
   File /r "@STAGE@\licenses"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
-  WriteRegStr HKCU "Software\Monoptah Native" "InstallDir" "$INSTDIR"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MonoptahNative" "DisplayName" "Monoptah Native"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MonoptahNative" "DisplayVersion" "@VERSION@"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MonoptahNative" "UninstallString" '"$INSTDIR\Uninstall.exe"'
-  CreateShortcut "$SMPROGRAMS\Monoptah Native.lnk" "$INSTDIR\monocode-gpui.exe"
-  CreateShortcut "$DESKTOP\Monoptah Native.lnk" "$INSTDIR\monocode-gpui.exe"
+  WriteRegStr HKCU "Software\zptah" "InstallDir" "$INSTDIR"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\zptah" "DisplayName" "zptah"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\zptah" "DisplayVersion" "@VERSION@"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\zptah" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+  CreateShortcut "$SMPROGRAMS\zptah.lnk" "$INSTDIR\monocode-gpui.exe"
+  CreateShortcut "$DESKTOP\zptah.lnk" "$INSTDIR\monocode-gpui.exe"
   Delete "$INSTDIR\monocode-gpui.previous.exe"
   Goto install_done
   rollback_binary:
@@ -64,7 +64,7 @@ Section "Monoptah Native"
   Rename "$INSTDIR\monocode-gpui.previous.exe" "$INSTDIR\monocode-gpui.exe"
   install_failed:
   Delete "$INSTDIR\monocode-gpui.next.exe"
-  MessageBox MB_ICONSTOP "Monoptah Native could not be updated. The previous executable was retained. Close other Monoptah Native processes and try again."
+  MessageBox MB_ICONSTOP "zptah could not be updated. The previous executable was retained. Close other zptah processes and try again."
   Abort
   install_done:
 SectionEnd
@@ -80,13 +80,13 @@ Function .onInstSuccess
   done:
 FunctionEnd
 Section "Uninstall"
-  Delete "$SMPROGRAMS\Monoptah Native.lnk"
-  Delete "$DESKTOP\Monoptah Native.lnk"
+  Delete "$SMPROGRAMS\zptah.lnk"
+  Delete "$DESKTOP\zptah.lnk"
   Delete "$INSTDIR\monocode-gpui.exe"
   Delete "$INSTDIR\native-install.json"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir /r "$INSTDIR\licenses"
   RMDir "$INSTDIR"
-  DeleteRegKey HKCU "Software\Monoptah Native"
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MonoptahNative"
+  DeleteRegKey HKCU "Software\zptah"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\zptah"
 SectionEnd

@@ -7,7 +7,7 @@ use monocode_core::cloud_sessions::{
     auto_stop::{DEFAULT_SANDBOX_IDLE_MINUTES, IDLE_CHOICES},
 };
 
-// These are Monoptah's own rule (it stops the workspace). They are worded apart from the
+// These are zptah's own rule (it stops the workspace). They are worded apart from the
 // per-project "Stop when idle" of the cloud settings, which is GitHub's codespace timeout.
 const SANDBOX_IDLE: &str = "Auto-stop sandboxes after inactivity";
 const CODESPACE_IDLE: &str = "Auto-stop codespaces after inactivity";
@@ -49,7 +49,7 @@ impl SettingsView {
                 SANDBOX_IDLE,
                 Some(
                     format!(
-                        "A sandbox bills per runtime second until its runtime limit ends it. Monoptah stops it after this long with no turn running, nothing queued or starting, no typing and no terminal open on it. Default {DEFAULT_SANDBOX_IDLE_MINUTES} min."
+                        "A sandbox bills per runtime second until its runtime limit ends it. zptah stops it after this long with no turn running, nothing queued or starting, no typing and no terminal open on it. Default {DEFAULT_SANDBOX_IDLE_MINUTES} min."
                     )
                     .into(),
                 ),
@@ -71,7 +71,7 @@ impl SettingsView {
                 false,
                 SANDBOX_UNUSED,
                 Some(
-                    "Gone means archived or deleted. Waits a few minutes first. A sandbox you kept running when archiving, or removed from Monoptah, is left alone."
+                    "Gone means archived or deleted. Waits a few minutes first. A sandbox you kept running when archiving, or removed from zptah, is left alone."
                         .into(),
                 ),
                 vec![self.toggle(
@@ -90,7 +90,7 @@ impl SettingsView {
                 false,
                 CODESPACE_IDLE,
                 Some(
-                    "Off by default: GitHub already idles a codespace out after its own timeout (Stop when idle in the cloud settings of a project). Turn this on to have Monoptah stop it sooner, by the same rules as sandboxes."
+                    "Off by default: GitHub already idles a codespace out after its own timeout (Stop when idle in the cloud settings of a project). Turn this on to have zptah stop it sooner, by the same rules as sandboxes."
                         .into(),
                 ),
                 vec![self.segmented(
@@ -111,7 +111,7 @@ impl SettingsView {
                 false,
                 CODESPACE_UNUSED,
                 Some(
-                    "A codespace you kept running when archiving, or removed from Monoptah, is left alone."
+                    "A codespace you kept running when archiving, or removed from zptah, is left alone."
                         .into(),
                 ),
                 vec![self.toggle(
@@ -131,7 +131,7 @@ impl SettingsView {
             false,
             "Cost control",
             Some(
-                "Monoptah stops a workspace that is no longer needed, and only stops it: nothing is deleted and your work is kept. Send a message in its session to resume it. A turn that is running, a queued message, an unsaved copy or an open terminal keeps a workspace running. Workspaces without a Monoptah session are never stopped here; use Cloud workspaces for those."
+                "zptah stops a workspace that is no longer needed, and only stops it: nothing is deleted and your work is kept. Send a message in its session to resume it. A turn that is running, a queued message, an unsaved copy or an open terminal keeps a workspace running. Workspaces without a zptah session are never stopped here; use Cloud workspaces for those."
                     .into(),
             ),
             None,

@@ -477,18 +477,18 @@ mod tests {
     }
 
     #[test]
-    fn webview2_root_uses_the_monoptah_identifier() {
+    fn webview2_root_uses_the_zptah_identifier() {
         assert_eq!(
             webview2_root(Path::new("/local")),
-            Path::new("/local/com.monoptah.desktop")
+            Path::new("/local/app.zptah.desktop")
         );
     }
 
     #[test]
-    fn webkit_root_uses_the_monoptah_identifier() {
+    fn webkit_root_uses_the_zptah_identifier() {
         assert_eq!(
             webkit_root(Path::new("/home/a")),
-            Path::new("/home/a/Library/WebKit/com.monoptah.desktop/WebsiteData/Default")
+            Path::new("/home/a/Library/WebKit/app.zptah.desktop/WebsiteData/Default")
         );
     }
 

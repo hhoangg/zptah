@@ -33,10 +33,10 @@ if (name === 'tar') {
   fs.writeFileSync(args[1], fs.existsSync(plist) ? fs.readFileSync(plist) : 'archive bytes');
 }
 if (name === 'codesign' && args[0] === '-dv') {
-  process.stderr.write(process.env.FAKE_SIGNATURE || 'Identifier=com.monoptah.native\\n');
+  process.stderr.write(process.env.FAKE_SIGNATURE || 'Identifier=app.zptah.desktop\\n');
 }
 if (name === 'codesign' && args[0] === '-d' && args[1] === '-r-') {
-  process.stderr.write(process.env.FAKE_REQUIREMENT ?? ('designated => identifier "com.monoptah.native" and certificate leaf = H"' + '${SHA.toLowerCase()}' + '"\\n'));
+  process.stderr.write(process.env.FAKE_REQUIREMENT ?? ('designated => identifier "app.zptah.desktop" and certificate leaf = H"' + '${SHA.toLowerCase()}' + '"\\n'));
 }
 if (name === 'security') {
   process.stdout.write(process.env.FAKE_IDENTITIES ?? ('  1) ${SHA} "Monoptah Native Release Signing" (CSSMERR_TP_NOT_TRUSTED)\\n     1 identities found\\n'));
@@ -53,7 +53,7 @@ async function setup(t, { binaryVersion = "0.34.0" } = {}) {
   const binary = join(release, "monocode-gpui");
   await writeFile(
     binary,
-    `#!/bin/sh\nprintf 'Monoptah Native ${binaryVersion}\\n'\n`,
+    `#!/bin/sh\nprintf 'zptah ${binaryVersion}\\n'\n`,
   );
   await chmod(binary, 0o755);
   for (const name of ["uname", "lipo", "ditto", "tar", "codesign", "security"]) {
@@ -86,19 +86,19 @@ test(
   async (t) => {
     const { binary, out, log } = await setup(t);
     const result = await packageMonoptahNative({ binary, out, version: "0.34.0" });
-    const zip = await readFile(join(out, "MonoptahNative_0.34.0_aarch64.zip"));
+    const zip = await readFile(join(out, "zptah_0.34.0_aarch64.zip"));
     const expected = createHash("sha256").update(zip).digest("hex");
     assert.equal(result.sha256, expected);
     assert.equal(
-      await readFile(join(out, "MonoptahNative_0.34.0_aarch64.zip.sha256"), "utf8"),
-      `${expected}  MonoptahNative_0.34.0_aarch64.zip\n`,
+      await readFile(join(out, "zptah_0.34.0_aarch64.zip.sha256"), "utf8"),
+      `${expected}  zptah_0.34.0_aarch64.zip\n`,
     );
     assert.deepEqual(
       JSON.parse(await readFile(join(out, "artifacts-macos-aarch64.json"), "utf8")),
       [
-        { filename: "MonoptahNative_0.34.0_aarch64.app.tar.gz", target: "darwin-aarch64-app" },
-        { filename: "MonoptahNative_0.34.0_aarch64.zip", target: null },
-        { filename: "MonoptahNative_0.34.0_aarch64.zip.sha256", target: null },
+        { filename: "zptah_0.34.0_aarch64.app.tar.gz", target: "darwin-aarch64-app" },
+        { filename: "zptah_0.34.0_aarch64.zip", target: null },
+        { filename: "zptah_0.34.0_aarch64.zip.sha256", target: null },
       ],
     );
     const made = await calls(log);
@@ -112,14 +112,14 @@ test(
     assert.ok(made.some(([n, ...a]) => n === "codesign" && a[0] === "--verify" && a.includes("--deep") && a.includes("--strict")));
     assert.ok(!made.some(([n]) => n === "xcrun" || n === "spctl"), "no notarization");
     const tar = made.find(([n]) => n === "tar");
-    assert.equal(tar.at(-1), "Monoptah Native.app");
+    assert.equal(tar.at(-1), "zptah.app");
     assert.ok(made.some(([n, ...a]) => n === "ditto" && a.includes("--keepParent")));
     // The fake tar copies Info.plist into the archive, so the bundle content is checked there.
-    const plist = await readFile(join(out, "MonoptahNative_0.34.0_aarch64.app.tar.gz"), "utf8");
-    assert.match(plist, /<string>com\.monoptah\.native<\/string>/);
+    const plist = await readFile(join(out, "zptah_0.34.0_aarch64.app.tar.gz"), "utf8");
+    assert.match(plist, /<string>app\.zptah\.desktop<\/string>/);
     assert.match(plist, /<key>MonocodeNativeVersion<\/key><string>0\.34\.0<\/string>/);
     // The built bundle is removed after packaging; the binary and the marker stay.
-    assert.ok(!existsSync(join(binary, "../Monoptah Native.app")));
+    assert.ok(!existsSync(join(binary, "../zptah.app")));
     assert.ok(existsSync(binary));
     assert.ok(existsSync(join(binary, "../.metadata_never_index")));
   },
@@ -164,7 +164,7 @@ test(
     );
     const made = await calls(log);
     assert.ok(!made.some(([n]) => n === "codesign"), "nothing was signed");
-    assert.ok(!existsSync(join(binary, "../Monoptah Native.app")));
+    assert.ok(!existsSync(join(binary, "../zptah.app")));
   },
 );
 
@@ -207,7 +207,7 @@ test(
     const { binary, out } = await setup(t);
     process.env.FAKE_SIGNATURE = "Signature=adhoc\n";
     await assert.rejects(packageMonoptahNative({ binary, out, version: "0.34.0" }), /ad-hoc signed/);
-    assert.ok(!existsSync(join(binary, "../Monoptah Native.app")), "bundle removed after failure");
+    assert.ok(!existsSync(join(binary, "../zptah.app")), "bundle removed after failure");
     delete process.env.FAKE_SIGNATURE;
     process.env.FAKE_REQUIREMENT = 'designated => cdhash H"8875c4604ec0c782ee2321079a2a9ea0af3c2a9a"\n';
     await assert.rejects(
@@ -215,13 +215,13 @@ test(
       /not exactly the expected stable form.*designated => cdhash/,
     );
     const other = "1".repeat(40);
-    process.env.FAKE_REQUIREMENT = `designated => identifier "com.monoptah.native" and certificate leaf = H"${other}"\n`;
+    process.env.FAKE_REQUIREMENT = `designated => identifier "app.zptah.desktop" and certificate leaf = H"${other}"\n`;
     await assert.rejects(packageMonoptahNative({ binary, out, version: "0.34.0" }), /not exactly the expected stable form/);
-    process.env.FAKE_REQUIREMENT = `designated => identifier "com.monoptah.native" and certificate leaf = H"${SHA.toLowerCase()}" or cdhash H"${other}"\n`;
+    process.env.FAKE_REQUIREMENT = `designated => identifier "app.zptah.desktop" and certificate leaf = H"${SHA.toLowerCase()}" or cdhash H"${other}"\n`;
     await assert.rejects(packageMonoptahNative({ binary, out, version: "0.34.0" }), /not exactly the expected stable form/);
     process.env.FAKE_REQUIREMENT = 'designated => identifier "com.other" and certificate leaf = H"' + SHA.toLowerCase() + '"\n';
     await assert.rejects(packageMonoptahNative({ binary, out, version: "0.34.0" }), /not exactly the expected stable form/);
-    assert.ok(!existsSync(join(binary, "../Monoptah Native.app")), "bundle removed after failure");
+    assert.ok(!existsSync(join(binary, "../zptah.app")), "bundle removed after failure");
   },
 );
 
@@ -242,7 +242,7 @@ if (name === 'makensis') {
 if (name === 'rpmbuild') {
   const top = args.find((a) => a.startsWith('_topdir ')).slice(8);
   fs.mkdirSync(path.join(top, 'RPMS/x86_64'), { recursive: true });
-  fs.writeFileSync(path.join(top, 'RPMS/x86_64/monoptah-native-0.34.0-0.preview.0.el10.x86_64.rpm'), 'rpm bytes');
+  fs.writeFileSync(path.join(top, 'RPMS/x86_64/zptah-0.34.0-0.preview.0.el10.x86_64.rpm'), 'rpm bytes');
 }
 `;
 
@@ -259,7 +259,7 @@ test(
       await chmod(join(bin, name), 0o755);
     }
     const binary = join(directory, "monocode-gpui");
-    await writeFile(binary, "#!/bin/sh\nprintf 'Monoptah Native 0.34.0\\n'\n");
+    await writeFile(binary, "#!/bin/sh\nprintf 'zptah 0.34.0\\n'\n");
     await chmod(binary, 0o755);
     const saved = { PATH: process.env.PATH, APPIMAGETOOL: process.env.APPIMAGETOOL };
     process.env.PATH = `${bin}${delimiter}${process.env.PATH}`;
@@ -286,15 +286,15 @@ test(
     }
     // The installed layout and marker are Monoptah's, and the client accepts them.
     const nsi = await readFile(join(out, "work/installer.nsi"), "utf8");
-    assert.match(nsi, /Name "Monoptah Native"/);
+    assert.match(nsi, /Name "zptah"/);
     assert.match(nsi, /VIProductVersion "0\.34\.0\.0"/);
     assert.match(
       await readFile(join(out, "work/windows/native-install.json"), "utf8"),
-      /"app_id":"com\.monoptah\.native","kind":"nsis"/,
+      /"app_id":"app\.zptah\.desktop","kind":"nsis"/,
     );
     assert.match(
-      await readFile(join(out, "work/deb/usr/share/applications/monoptah-native.desktop"), "utf8"),
-      /^Name=Monoptah Native$/m,
+      await readFile(join(out, "work/deb/usr/share/applications/zptah.desktop"), "utf8"),
+      /^Name=zptah$/m,
     );
   },
 );
@@ -324,7 +324,7 @@ async function releaseDir(t) {
 
 test("removeBuiltAppBundle removes only the bundle and logs it", async (t) => {
   const { release } = await releaseDir(t);
-  const app = join(release, "Monoptah Native.app");
+  const app = join(release, "zptah.app");
   await mkdir(join(app, "Contents"), { recursive: true });
   const logs = [];
   assert.equal(removeBuiltAppBundle(app, (l) => logs.push(l)), true);
@@ -341,14 +341,14 @@ test("removeBuiltAppBundle refuses other names, other parents and symlinks", asy
   await mkdir(other);
   assert.throws(() => removeBuiltAppBundle(other, () => {}), /not named/);
   assert.ok(existsSync(other));
-  const wrongParent = join(directory, "target/debug/Monoptah Native.app");
+  const wrongParent = join(directory, "target/debug/zptah.app");
   await mkdir(wrongParent, { recursive: true });
   assert.throws(() => removeBuiltAppBundle(wrongParent, () => {}), /release directory/);
   assert.ok(existsSync(wrongParent));
   const precious = join(directory, "precious");
   await mkdir(precious);
   await writeFile(join(precious, "keep"), "x");
-  const link = join(release, "Monoptah Native.app");
+  const link = join(release, "zptah.app");
   symlinkSync(precious, link);
   assert.throws(() => removeBuiltAppBundle(link, () => {}), /not a real directory/);
   assert.ok(lstatSync(link).isSymbolicLink());
@@ -365,7 +365,7 @@ test("markNeverIndex creates the marker once and is idempotent", async (t) => {
 
 test("the output directory may not be inside the built bundle", () => {
   const binary = "/x/target/aarch64-apple-darwin/release/monocode-gpui";
-  const app = "/x/target/aarch64-apple-darwin/release/Monoptah Native.app";
+  const app = "/x/target/aarch64-apple-darwin/release/zptah.app";
   assert.throws(() => assertOutsideBundle(app, binary), /must not be inside/);
   assert.throws(() => assertOutsideBundle(`${app}/Contents/out`, binary), /must not be inside/);
   assert.doesNotThrow(() => assertOutsideBundle(`${app}-out`, binary));

@@ -48,10 +48,10 @@ test("Finder launches use development data for dev bundles and installed data fo
       assert.ifError(packaged.error);
       assert.equal(packaged.status, 0, packaged.stdout + packaged.stderr);
       const bundle = dev
-        ? join(devDir, "Monoptah Native Dev.app/Contents")
-        : join(output, "Monoptah Native.app/Contents");
-      const name = dev ? "Monoptah Native Dev" : "Monoptah Native";
-      const id = dev ? "com.monoptah.native.dev" : "com.monoptah.native";
+        ? join(devDir, "zptah Dev.app/Contents")
+        : join(output, "zptah.app/Contents");
+      const name = dev ? "zptah Dev" : "zptah";
+      const id = dev ? "app.zptah.desktop.dev" : "app.zptah.desktop";
       const plist = await readFile(join(bundle, "Info.plist"), "utf8");
       assert.ok(plist.includes(`<key>MonocodeDataMode</key><string>${mode}</string>`));
       assert.ok(plist.includes(`<key>CFBundleIdentifier</key><string>${id}</string>`));
@@ -102,30 +102,30 @@ async function setup(t, codesign = "#!/bin/sh\nexit 0\n") {
 test("dev bundling twice leaves exactly one dev bundle and prints its path", { skip: process.platform === "win32" }, async (t) => {
   const f = await setup(t);
   for (let i = 0; i < 2; i++) {
-    if (i === 1) await writeFile(join(f.devDir, "Monoptah Native Dev.app/stale"), "");
+    if (i === 1) await writeFile(join(f.devDir, "zptah Dev.app/stale"), "");
     const result = f.run("native-dev");
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.ok(result.stdout.includes(`App: ${join(f.devDir, "Monoptah Native Dev.app")}\n`));
+    assert.ok(result.stdout.includes(`App: ${join(f.devDir, "zptah Dev.app")}\n`));
   }
-  assert.deepEqual(await readdir(f.devDir), ["Monoptah Native Dev.app"]);
-  await assert.rejects(access(join(f.devDir, "Monoptah Native Dev.app/stale")));
-  await assert.rejects(access(join(f.target, "native-dev/Monoptah Native.app")));
+  assert.deepEqual(await readdir(f.devDir), ["zptah Dev.app"]);
+  await assert.rejects(access(join(f.devDir, "zptah Dev.app/stale")));
+  await assert.rejects(access(join(f.target, "native-dev/zptah.app")));
 });
 
 test("dev bundling removes a stale legacy bundle from the target directory", { skip: process.platform === "win32" }, async (t) => {
   const f = await setup(t);
-  const legacy = join(f.target, "native-dev/Monoptah Native.app/Contents");
+  const legacy = join(f.target, "native-dev/zptah.app/Contents");
   await mkdir(legacy, { recursive: true });
   const result = f.run("native-dev");
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  await assert.rejects(access(join(f.target, "native-dev/Monoptah Native.app")));
+  await assert.rejects(access(join(f.target, "native-dev/zptah.app")));
 });
 
 test("release bundling keeps the production name and location and never touches the dev dir", { skip: process.platform === "win32" }, async (t) => {
   const f = await setup(t);
   const result = f.run("release");
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.ok(result.stdout.includes(`App: ${join(f.target, "release/Monoptah Native.app")}\n`));
+  assert.ok(result.stdout.includes(`App: ${join(f.target, "release/zptah.app")}\n`));
   await assert.rejects(access(f.devDir));
 });
 
@@ -138,18 +138,18 @@ test("dev bundling refuses to run without a safe destination", { skip: process.p
 
 test("a failing signing step keeps the previous dev bundle and leaves no temp dir", { skip: process.platform === "win32" }, async (t) => {
   const f = await setup(t, "#!/bin/sh\nexit 1\n");
-  const old = join(f.devDir, "Monoptah Native Dev.app");
+  const old = join(f.devDir, "zptah Dev.app");
   await mkdir(old, { recursive: true });
   await writeFile(join(old, "previous"), "keep");
   const result = f.run("native-dev");
   assert.notEqual(result.status, 0);
   assert.equal(await readFile(join(old, "previous"), "utf8"), "keep");
-  assert.deepEqual(await readdir(f.devDir), ["Monoptah Native Dev.app"]);
+  assert.deepEqual(await readdir(f.devDir), ["zptah Dev.app"]);
 });
 
 test("a failing copy step keeps the previous dev bundle and leaves no temp dir", { skip: process.platform === "win32" }, async (t) => {
   const f = await setup(t);
-  const old = join(f.devDir, "Monoptah Native Dev.app");
+  const old = join(f.devDir, "zptah Dev.app");
   await mkdir(old, { recursive: true });
   await writeFile(join(old, "previous"), "keep");
   // A directory where the executable should be makes cp fail after staging began.
@@ -158,7 +158,7 @@ test("a failing copy step keeps the previous dev bundle and leaves no temp dir",
   const result = f.run("native-dev");
   assert.notEqual(result.status, 0);
   assert.equal(await readFile(join(old, "previous"), "utf8"), "keep");
-  assert.deepEqual(await readdir(f.devDir), ["Monoptah Native Dev.app"]);
+  assert.deepEqual(await readdir(f.devDir), ["zptah Dev.app"]);
 });
 
 test("the dev bundle falls back to $HOME/Applications", { skip: process.platform === "win32" }, async (t) => {
@@ -166,13 +166,13 @@ test("the dev bundle falls back to $HOME/Applications", { skip: process.platform
   const home = join(f.directory, "home");
   const result = f.run("native-dev", { MONOCODE_DEV_APP_DIR: undefined, HOME: home });
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.deepEqual(await readdir(join(home, "Applications")), ["Monoptah Native Dev.app"]);
-  assert.ok(result.stdout.includes(`App: ${join(home, "Applications/Monoptah Native Dev.app")}\n`));
+  assert.deepEqual(await readdir(join(home, "Applications")), ["zptah Dev.app"]);
+  assert.ok(result.stdout.includes(`App: ${join(home, "Applications/zptah Dev.app")}\n`));
 });
 
 test("an unset or empty HOME with no override fails and removes nothing", { skip: process.platform === "win32" }, async (t) => {
   const f = await setup(t);
-  const legacy = join(f.target, "native-dev/Monoptah Native.app");
+  const legacy = join(f.target, "native-dev/zptah.app");
   await mkdir(legacy, { recursive: true });
   for (const home of [undefined, ""]) {
     const result = f.run("native-dev", { MONOCODE_DEV_APP_DIR: undefined, HOME: home });
@@ -183,15 +183,15 @@ test("an unset or empty HOME with no override fails and removes nothing", { skip
 
 test("a release run leaves an unrelated existing release bundle contents alone except for refreshing it", { skip: process.platform === "win32" }, async (t) => {
   const f = await setup(t);
-  const dev = join(f.devDir, "Monoptah Native Dev.app");
+  const dev = join(f.devDir, "zptah Dev.app");
   await mkdir(dev, { recursive: true });
-  const legacyLike = join(f.target, "native-dev/Monoptah Native.app");
+  const legacyLike = join(f.target, "native-dev/zptah.app");
   await mkdir(legacyLike, { recursive: true });
   const result = f.run("release");
   assert.equal(result.status, 0, result.stdout + result.stderr);
   await access(dev);
   await access(legacyLike);
-  await access(join(f.target, "release/Monoptah Native.app/Contents/Info.plist"));
+  await access(join(f.target, "release/zptah.app/Contents/Info.plist"));
 });
 
 test("release bundling marks the release directory as never indexed, dev bundling does not", { skip: process.platform === "win32" }, async (t) => {
@@ -221,7 +221,7 @@ test("selfsigned mode signs with the identity, no timestamp, no runtime, no enti
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const [line] = await f.signLines();
-  assert.match(line, /^--force --sign ABCDEF0123456789ABCDEF0123456789ABCDEF01 --timestamp=none .*Monoptah Native\.app$/);
+  assert.match(line, /^--force --sign ABCDEF0123456789ABCDEF0123456789ABCDEF01 --timestamp=none .*zptah\.app$/);
   assert.ok(!/--options|--entitlements/.test(line));
 });
 
@@ -252,6 +252,6 @@ test("without the mode, ad-hoc and Developer ID signing are unchanged", { skip: 
   assert.equal(f.run("release", { MONOCODE_NATIVE_SIGNING_IDENTITY: "" }).status, 0);
   assert.equal(f.run("release", { MONOCODE_NATIVE_SIGNING_IDENTITY: "Developer ID Application: X" }).status, 0);
   const [adhoc, dev] = await f.signLines();
-  assert.match(adhoc, /^--force --sign - .*Monoptah Native\.app$/);
+  assert.match(adhoc, /^--force --sign - .*zptah\.app$/);
   assert.match(dev, /^--force --sign Developer ID Application: X --options runtime --timestamp --entitlements assets\/native\/Entitlements\.plist /);
 });

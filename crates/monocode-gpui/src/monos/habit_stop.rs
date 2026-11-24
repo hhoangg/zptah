@@ -141,7 +141,7 @@ impl Monos {
             .unwrap_or_default();
         let prompt = window.prompt(
             gpui::PromptLevel::Warning,
-            "Monoptah",
+            "zptah",
             Some(&stop_text(&name)),
             &buttons(),
             cx,
@@ -153,7 +153,7 @@ impl Monos {
                 if this.choose_stop(&habit, answer, cx) == StopChoice::Finished {
                     drop(window.prompt(
                         gpui::PromptLevel::Info,
-                        "Monoptah",
+                        "zptah",
                         Some(&finished_text(&name)),
                         &["OK"],
                         cx,

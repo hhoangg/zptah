@@ -981,7 +981,7 @@ fn a_recorded_clear_is_trusted_only_for_a_short_while() {
     let wakes = r.host.ensures.load(Ordering::SeqCst);
     let error = r.svc.run_return_cleanup("cs-1").unwrap_err();
     assert!(
-        error.contains("must be running so Monoptah can check that no other session uses it"),
+        error.contains("must be running so zptah can check that no other session uses it"),
         "{error}"
     );
     assert_eq!(r.host.ensures.load(Ordering::SeqCst), wakes, "never woken");

@@ -26,8 +26,8 @@ use std::path::Path;
 /// The single line under the Credentials group: the account pickers apply later.
 pub(super) const ACCOUNT_CHANGE_NOTE: &str =
     "Changing an account applies from the next start or reconnect; running sessions keep theirs.";
-pub(super) const ENV_TEMPLATE_HINT: &str = "The template must already exist in the Docker cloud registry (sbx --cloud template ls). Monoptah does not upload it, and its size is fixed.";
-pub(super) const ENV_IMAGE_HINT: &str = "A public OCI image, for example docker.io/library/rust:slim. It needs sh, git and curl; Monoptah does not build or publish it.";
+pub(super) const ENV_TEMPLATE_HINT: &str = "The template must already exist in the Docker cloud registry (sbx --cloud template ls). zptah does not upload it, and its size is fixed.";
+pub(super) const ENV_IMAGE_HINT: &str = "A public OCI image, for example docker.io/library/rust:slim. It needs sh, git and curl; zptah does not build or publish it.";
 pub(super) const ENV_DEVCONTAINER_LABEL: &str = "Also build the repository's dev container";
 pub(super) const ENV_DEVCONTAINER_NOTE: &str = "Off by default: the toolchain comes from the template or image, so the session runs directly in the sandbox.";
 pub(super) const GIT_CODESPACE_LINE: &str = "GitHub token built into the codespace (git and gh)";

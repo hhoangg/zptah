@@ -1910,7 +1910,7 @@ impl CloudSessions {
         self.publish(run.record, run.events);
 
         // 1. The Host, with the pinned Claude credential in its environment (stdin only).
-        self.progress_line(run, "Starting Monoptah Host in the sandbox");
+        self.progress_line(run, "Starting zptah Host in the sandbox");
         let prelude = auth.map(ClaudeAuth::prelude);
         if prelude.is_none() {
             self.progress_line(

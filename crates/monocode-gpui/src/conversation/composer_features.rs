@@ -163,7 +163,7 @@ impl Conversation {
                 }
                 self.save_settings(cx);
                 text = if rest.is_empty() && mode == "operator" {
-                    "Explain what you can do in Monoptah with the app CLI.".into()
+                    "Explain what you can do in zptah with the app CLI.".into()
                 } else {
                     rest
                 };

@@ -2186,7 +2186,7 @@ pub fn render_report_html(data: &ReportData) -> String {
     if let Some(scored_with) = &data.scored_with {
         meta_parts.push(format!("Scored with {}", esc(scored_with)));
     }
-    meta_parts.push("Monoptah".into());
+    meta_parts.push("zptah".into());
     let meta = meta_parts.join(" &middot; ");
     let mut note_rows: Vec<String> = Vec::new();
     if let Some(note) = &data.comparison_note {

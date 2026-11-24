@@ -1803,7 +1803,7 @@ mod roots {
     fn data_dir(env: &Env) -> PathBuf {
         env.roots
             .home
-            .join("Library/Application Support/com.monoptah.desktop")
+            .join("Library/Application Support/app.zptah.desktop")
     }
 
     #[test]

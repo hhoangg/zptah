@@ -1,4 +1,4 @@
-//! Fork-local (Monoptah). Offline publication check for the Monoptah Native
+//! Fork-local (zptah). Offline publication check for the zptah
 //! release, run with the actual client verifier and embedded public key.
 //! Upstream's verify_native_update example expects all six upstream packages;
 //! this fork publishes five: macOS arm64, Linux x86_64 (AppImage, deb, rpm) and

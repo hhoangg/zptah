@@ -150,7 +150,7 @@ export function chooseHighlights({ version, notesFileText, docsText }) {
     return { highlights: highlightsFrom(notesFileText), note: "Highlights: taken from --notes." };
   if (docsText) {
     const heading = docsText.split("\n", 1)[0].trim();
-    if (heading === `# Monoptah Native ${version}`)
+    if (heading === `# zptah ${version}`)
       return { highlights: highlightsFrom(docsText), note: "Highlights: taken from docs/native/monoptah-release-notes.md." };
     return {
       highlights: "",
@@ -161,7 +161,7 @@ export function chooseHighlights({ version, notesFileText, docsText }) {
 }
 
 export function renderNotes({ version, previous, groups, highlights }) {
-  const parts = [`# Monoptah Native ${version}`];
+  const parts = [`# zptah ${version}`];
   if (highlights) parts.push(highlights);
   const body = [`## Changes since ${previous}`];
   if (groups.length === 0) body.push(`No user-visible changes since ${previous}.`);

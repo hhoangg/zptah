@@ -455,7 +455,7 @@ impl SettingsView {
                     .line_height(px(19.5))
                     .text_color(content(0.45))
                     .child(
-                        "Use Monoptah from a browser. Your desktop stays the one that runs your work: the browser pairs with it, and you confirm each device here.",
+                        "Use zptah from a browser. Your desktop stays the one that runs your work: the browser pairs with it, and you confirm each device here.",
                     ),
             )
             .into_any_element()

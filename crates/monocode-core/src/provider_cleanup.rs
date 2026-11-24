@@ -1,5 +1,5 @@
 //! Optional cleanup of the on-disk files a Claude Code or Codex CLI keeps for a
-//! conversation, run after a Monoptah session is deleted so they do not pile up
+//! conversation, run after a zptah session is deleted so they do not pile up
 //! on disk. Account transfer copies transcripts instead of moving them, so every
 //! known home of the provider is searched, not only the session's own account.
 //! Cleanup is best-effort: problems are reported as messages, never as errors.
@@ -301,7 +301,7 @@ struct ProviderHome {
     is_default: bool,
 }
 
-/// The default home plus every account home Monoptah created for the provider.
+/// The default home plus every account home zptah created for the provider.
 fn provider_homes(data_dir: &Path, kind: Kind) -> Vec<ProviderHome> {
     let mut homes = Vec::new();
     if let Ok(path) = Profile::default().home(kind) {

@@ -338,7 +338,7 @@ mod tests {
     }
     fn hook() -> Option<(PathBuf, PathBuf)> {
         Some((
-            PathBuf::from("/Applications/Monoptah.app/Contents/MacOS/monocode"),
+            PathBuf::from("/Applications/zptah.app/Contents/MacOS/monocode"),
             PathBuf::from("/Users/me/Library/Application Support/x/tui-hooks"),
         ))
     }
@@ -559,7 +559,7 @@ mod tests {
     fn no_settings_on_windows() {
         let launch = build(LaunchInput {
             hook: Some((
-                PathBuf::from("C:\\Program Files\\Monoptah\\monocode.exe"),
+                PathBuf::from("C:\\Program Files\\zptah\\monocode.exe"),
                 PathBuf::from("C:\\Users\\me\\AppData\\tui-hooks"),
             )),
             windows: true,
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn settings_json_is_exact_and_quotes_paths_with_spaces() {
         let (cli, spool) = hook().unwrap();
-        let command = "/Applications/Monoptah.app/Contents/MacOS/monocode tui-hook --spool '/Users/me/Library/Application Support/x/tui-hooks'";
+        let command = "/Applications/zptah.app/Contents/MacOS/monocode tui-hook --spool '/Users/me/Library/Application Support/x/tui-hooks'";
         let entry =
             format!(r#"[{{"hooks":[{{"type":"command","command":"{command}","async":true}}]}}]"#);
         let expected = format!(

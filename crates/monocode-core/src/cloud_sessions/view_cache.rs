@@ -76,7 +76,7 @@ fn quarantine(path: &Path) {
         let mut command = std::process::Command::new("xattr");
         command
             .args(["-w", "com.apple.quarantine"])
-            .arg(format!("0083;{stamp:x};Monoptah;"))
+            .arg(format!("0083;{stamp:x};zptah;"))
             .arg(path);
         crate::process::configure_child(&mut command);
         let _ = command.output();

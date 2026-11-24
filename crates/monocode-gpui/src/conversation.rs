@@ -2861,7 +2861,7 @@ impl Conversation {
                             .disabled(self.is_remote())
                             .icon("cursor-magic")
                             .icon_color(tint(SKY_300, 0.8))
-                            .description("Give this thread access to Monoptah"),
+                            .description("Give this thread access to zptah"),
                         MenuAction::new("orchestrator", "Orchestrator")
                             .disabled(self.is_remote())
                             .icon("share")

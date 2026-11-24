@@ -91,7 +91,7 @@ impl Shell {
                 is_resizable: false,
                 is_minimizable: false,
                 window_background: crate::theme::window_backdrop(true),
-                app_id: Some("com.monoptah.native.quick-composer".into()),
+                app_id: Some("app.zptah.desktop.quick-composer".into()),
                 ..Default::default()
             },
             move |window, cx| {

@@ -338,8 +338,8 @@ fn context_shows_how_to_delegate_without_running_help() {
         memory_path: String::new(),
         topics: Vec::new(),
     };
-    let executable = std::path::Path::new("/Applications/Monoptah.app/monocode");
-    let start = r#"/Applications/Monoptah.app/monocode app sessions.start --json '{"project":"<assigned path>","title":"<short title>","prompt":"<complete instructions>","notifyOnComplete":true}'"#;
+    let executable = std::path::Path::new("/Applications/zptah.app/monocode");
+    let start = r#"/Applications/zptah.app/monocode app sessions.start --json '{"project":"<assigned path>","title":"<short title>","prompt":"<complete instructions>","notifyOnComplete":true}'"#;
     let rules = instructions(&mono, executable);
     assert!(rules.contains(start));
     assert!(rules.contains("## Be quick"));
@@ -572,7 +572,7 @@ fn rules_live_in_instructions_and_the_context_only_repeats_them_when_not_in_syst
         "folderName",
         "Workflows are graphs of steps",
         "workflows.guide",
-        "Monoptah",
+        "zptah",
     ] {
         assert!(rules.contains(needle), "instructions lack {needle}");
     }
@@ -585,7 +585,7 @@ fn rules_live_in_instructions_and_the_context_only_repeats_them_when_not_in_syst
     ] {
         assert!(!slim.contains(absent), "context repeats {absent}");
     }
-    for needle in ["<soul>", "<memory>", "Monoptah adds this context"] {
+    for needle in ["<soul>", "<memory>", "zptah adds this context"] {
         assert!(slim.contains(needle), "context lacks {needle}");
     }
     // Without system instructions the same rules travel in the message.

@@ -414,7 +414,7 @@ fn the_host_update_text_tells_a_deferred_update_and_a_blocked_one() {
     }
     .to_string();
     assert!(
-        blocked.contains("Monoptah Host could not be updated"),
+        blocked.contains("zptah Host could not be updated"),
         "{blocked}"
     );
     assert!(

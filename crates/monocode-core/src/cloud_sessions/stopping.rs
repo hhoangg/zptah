@@ -126,15 +126,15 @@ pub(super) struct StopWatch {
 
 fn reason(connection: &Connection, when: &str) -> String {
     let ours = match connection {
-        Connection::NoneOpen => "Monoptah had no connection to it open.".to_owned(),
+        Connection::NoneOpen => "zptah had no connection to it open.".to_owned(),
         Connection::Closed(_) => {
-            "Monoptah closed its own connection to it before stopping.".to_owned()
+            "zptah closed its own connection to it before stopping.".to_owned()
         }
         Connection::CloseFailed(error) => {
-            format!("Monoptah could not close its own connection to it before stopping ({error}).")
+            format!("zptah could not close its own connection to it before stopping ({error}).")
         }
         Connection::Deferred => {
-            "Monoptah's own connection to it was busy and could only be closed after its request ended."
+            "zptah's own connection to it was busy and could only be closed after its request ended."
                 .to_owned()
         }
     };

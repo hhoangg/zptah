@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Why a NEW session on a workspace is refused while it is being stopped. Nothing was created.
-pub(crate) const STOPPING_NEW_SESSION: &str = "Monoptah is stopping this workspace after it sat idle. \
+pub(crate) const STOPPING_NEW_SESSION: &str = "zptah is stopping this workspace after it sat idle. \
      Nothing was started; try again in a moment and it will resume.";
 
 /// The workspaces (`CloudRef::key`) whose automatic stop runs now. A shared handle: the shell

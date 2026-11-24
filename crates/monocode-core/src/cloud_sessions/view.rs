@@ -234,7 +234,7 @@ impl std::fmt::Display for ViewError {
                 ),
                 HostUpdate::NextConnect => write!(
                     f,
-                    "{name} opens after the Host update. Monoptah Host will be updated on the next connect."
+                    "{name} opens after the Host update. zptah Host will be updated on the next connect."
                 ),
                 HostUpdate::Failed(warning) => write!(f, "{name} cannot be opened yet. {warning}"),
             },

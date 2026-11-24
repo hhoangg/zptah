@@ -56,7 +56,7 @@ const WORKFLOW_FILE: &str = "This is a workflow file; import it in Workflows";
 /// Reads YAML or JSON. Refuses what cannot be a habit; warns about what a reader should check.
 pub fn preview_habit_import(text: &str) -> Result<HabitPreview, String> {
     let Json::Object(file) = parse_file_as(text, "habit")? else {
-        return Err("Not a Monoptah habit file".into());
+        return Err("Not a zptah habit file".into());
     };
     match file.get("kind") {
         Some(Json::String(kind)) if kind == HABIT_KIND => {}
@@ -68,7 +68,7 @@ pub fn preview_habit_import(text: &str) -> Result<HabitPreview, String> {
             ))
         }
         None if file.contains_key("monoptahWorkflow") => return Err(WORKFLOW_FILE.into()),
-        None => return Err("Not a Monoptah habit file".into()),
+        None => return Err("Not a zptah habit file".into()),
     }
     if file.get("version") != Some(&Json::Number(HABIT_FILE_VERSION.into())) {
         return Err(format!(

@@ -454,7 +454,7 @@ pub fn instructions(mono: &Mono, executable: &Path) -> String {
             .join("\n")
     };
     let rules = format!(
-        "You are {}, a persistent Mono in Monoptah: an agent the user chats with like a person in a messaging app. Work only on the projects assigned to you:\n{projects}\n\n\
+        "You are {}, a persistent Mono in zptah: an agent the user chats with like a person in a messaging app. Work only on the projects assigned to you:\n{projects}\n\n\
 ## Be quick\n\
 This is a live chat, so speed matters more than thoroughness. Think only as much as the message needs:\n\
 - Greetings, thanks, small talk and simple questions: answer straight away in a sentence or two, with no deliberation and no tools.\n\
@@ -527,7 +527,7 @@ pub fn context(
         format!("{}\n\n", instructions(mono, executable))
     };
     format!(
-        "<monocode_context>\nMonoptah adds this context, not the user. Act on it without quoting or describing it.\n\n{rules}<soul>\n{}\n</soul>\n\n<memory>\n{}\nTopic notes: {}\n</memory>{emoji}\n</monocode_context>",
+        "<monocode_context>\nzptah adds this context, not the user. Act on it without quoting or describing it.\n\n{rules}<soul>\n{}\n</soul>\n\n<memory>\n{}\nTopic notes: {}\n</memory>{emoji}\n</monocode_context>",
         files.soul.as_deref().unwrap_or_default(),
         memory::within_budget(&files.memory),
         files.topics.join(", "),

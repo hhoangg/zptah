@@ -132,7 +132,7 @@ pub(super) struct NewSessionDefaults {
     account: monocode_core::accounts::Profile,
     access: monocode_core::agent::AccessMode,
     effort: Option<String>,
-    /// Where the session would like to open; Monoptah only.
+    /// Where the session would like to open; zptah only.
     surface: monocode_core::surface::Surface,
 }
 

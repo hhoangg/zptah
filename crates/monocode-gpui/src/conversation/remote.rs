@@ -397,7 +397,7 @@ impl Conversation {
     /// updated on the next connect, or it waits for the running turn to end.
     pub(super) fn host_update_copy(&self, action: &str) -> String {
         if self.cloud_noun().is_none() {
-            return format!("Update Monoptah Host in Connections settings to {action}.");
+            return format!("Update zptah Host in Connections settings to {action}.");
         }
         let waiting = self.remote_state.client.as_ref().is_some_and(|client| {
             locked(&self.store)
@@ -410,11 +410,11 @@ impl Conversation {
         });
         if waiting {
             format!(
-                "Monoptah Host {} will be installed the next time this workspace connects. Then you can {action}.",
+                "zptah Host {} will be installed the next time this workspace connects. Then you can {action}.",
                 monocode_core::remote::host_upgrade::pinned_version()
             )
         } else {
-            format!("Monoptah Host will be updated on the next connect. Then you can {action}.")
+            format!("zptah Host will be updated on the next connect. Then you can {action}.")
         }
     }
     pub(crate) fn remote_connection_error(&mut self, error: &str, cx: &mut Context<Self>) {

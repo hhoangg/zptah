@@ -142,7 +142,7 @@ fn extract_app(package: &Path, directory: &Path) -> Result<(), String> {
         let mut entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path().map_err(|e| e.to_string())?.into_owned();
         let mut components = path.components();
-        if components.next() != Some(Component::Normal("Monoptah Native.app".as_ref()))
+        if components.next() != Some(Component::Normal("zptah.app".as_ref()))
             || components.any(|c| !matches!(c, Component::Normal(_)))
         {
             return Err("The update archive contains an invalid app path".into());
@@ -164,8 +164,8 @@ fn extract_app(package: &Path, directory: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Fork-local. SHA-1 of the stable self-signed certificate that signs Monoptah
-/// Native releases. Compiled in so an update must be signed by the same identity.
+/// Fork-local. SHA-1 of the stable self-signed certificate that signs zptah
+/// releases. Compiled in so an update must be signed by the same identity.
 #[cfg(any(target_os = "macos", test))]
 const PINNED_LEAF_CERTIFICATE_SHA1: &str = "0a44567bf676438c0dad7e5b3ec5ef80708bebfe";
 
@@ -311,7 +311,7 @@ fn install_mac(update: &Update, package: &Path, target: &Path) -> Result<Install
         Err(e) => return Err(e.to_string()),
     };
     extract_app(package, stage.path())?;
-    let prepared = stage.path().join("Monoptah Native.app");
+    let prepared = stage.path().join("zptah.app");
     let plist =
         fs::read_to_string(prepared.join("Contents/Info.plist")).map_err(|e| e.to_string())?;
     for expected in [
@@ -328,7 +328,7 @@ fn install_mac(update: &Update, package: &Path, target: &Path) -> Result<Install
             .arg(&prepared),
         "The downloaded app signature is invalid",
     )?;
-    // Fork-local: Monoptah Native releases are signed with a stable self-signed
+    // Fork-local: zptah releases are signed with a stable self-signed
     // certificate and not notarized, so Gatekeeper can never approve them. Identity is
     // pinned instead (see `decide_acceptance`); the feed and package signatures, bundle
     // identity and `codesign --verify` above still apply.
@@ -410,29 +410,25 @@ mod tests {
         let package = temp.path().join("package.tar.gz");
         let stage = temp.path().join("stage");
         fs::create_dir(&stage).unwrap();
-        archive(
-            &package,
-            "Monoptah Native.app/Contents/MacOS/monocode-gpui",
-            false,
-        );
+        archive(&package, "zptah.app/Contents/MacOS/monocode-gpui", false);
         extract_app(&package, &stage).unwrap();
         assert_eq!(
-            fs::read(stage.join("Monoptah Native.app/Contents/MacOS/monocode-gpui")).unwrap(),
+            fs::read(stage.join("zptah.app/Contents/MacOS/monocode-gpui")).unwrap(),
             b"hello"
         );
         archive(&package, "Another.app/Contents/file", false);
         assert!(extract_app(&package, &stage).is_err());
-        archive(&package, "Monoptah Native.app/escape", true);
+        archive(&package, "zptah.app/escape", true);
         assert!(extract_app(&package, &stage).is_err());
         assert!(!temp.path().join("outside").exists());
     }
-    const ADHOC: &str = "Executable=/Applications/Monoptah Native.app/Contents/MacOS/monocode-gpui\nIdentifier=com.monoptah.native\nCodeDirectory v=20400 size=1 flags=0x2(adhoc) hashes=1+3 location=embedded\nSignature=adhoc\nTeamIdentifier=not set\n";
-    const SELF_SIGNED: &str = "Identifier=com.monoptah.native\nCodeDirectory v=20400 size=1 flags=0x0(none) hashes=1+3 location=embedded\nSignature size=1700\nAuthority=Monoptah Native Release Signing\nTeamIdentifier=not set\n";
+    const ADHOC: &str = "Executable=/Applications/zptah.app/Contents/MacOS/monocode-gpui\nIdentifier=app.zptah.desktop\nCodeDirectory v=20400 size=1 flags=0x2(adhoc) hashes=1+3 location=embedded\nSignature=adhoc\nTeamIdentifier=not set\n";
+    const SELF_SIGNED: &str = "Identifier=app.zptah.desktop\nCodeDirectory v=20400 size=1 flags=0x0(none) hashes=1+3 location=embedded\nSignature size=1700\nAuthority=Monoptah Native Release Signing\nTeamIdentifier=not set\n";
     #[test]
     fn signature_kinds_are_read_from_codesign_output() {
         assert_eq!(signature_kind(ADHOC), SignatureKind::AdHoc);
         assert_eq!(signature_kind(SELF_SIGNED), SignatureKind::Signed);
-        let developer_id = "Identifier=com.monoptah.native\nCodeDirectory v=20500 flags=0x10000(runtime)\nAuthority=Developer ID Application: Example (TEAM)\nTeamIdentifier=TEAM\n";
+        let developer_id = "Identifier=app.zptah.desktop\nCodeDirectory v=20500 flags=0x10000(runtime)\nAuthority=Developer ID Application: Example (TEAM)\nTeamIdentifier=TEAM\n";
         assert_eq!(signature_kind(developer_id), SignatureKind::Signed);
         assert_eq!(signature_kind(""), SignatureKind::Unknown);
         assert_eq!(
@@ -446,10 +442,10 @@ mod tests {
     }
     #[test]
     fn designated_requirement_is_read_from_its_line() {
-        let output = "# comment\ndesignated => identifier \"com.monoptah.native\" and certificate leaf = H\"0a44\"\n";
+        let output = "# comment\ndesignated => identifier \"app.zptah.desktop\" and certificate leaf = H\"0a44\"\n";
         assert_eq!(
             designated_requirement(output).as_deref(),
-            Some("identifier \"com.monoptah.native\" and certificate leaf = H\"0a44\"")
+            Some("identifier \"app.zptah.desktop\" and certificate leaf = H\"0a44\"")
         );
         assert_eq!(designated_requirement(""), None);
         assert_eq!(designated_requirement("designated => \n"), None);

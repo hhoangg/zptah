@@ -1168,11 +1168,11 @@ impl Connections {
                         // state, so a codespace reconnect always re-runs it.
                         let platform = ssh::detect_platform(&target, &job, &askpass)?;
                         job.message(if upgrade {
-                            "Updating Monoptah Host on the machine…"
+                            "Updating zptah Host on the machine…"
                         } else if target.sandbox.is_some() {
-                            "Starting Monoptah Host in the sandbox…"
+                            "Starting zptah Host in the sandbox…"
                         } else {
-                            "Starting Monoptah Host on the codespace…"
+                            "Starting zptah Host on the codespace…"
                         });
                         let script = if upgrade {
                             let script = ssh::upgrade_script(platform, target.remote_port);
@@ -1221,7 +1221,7 @@ impl Connections {
                     existing
                 } else {
                     let platform = ssh::detect_platform(&target, &job, &askpass)?;
-                    job.message("Installing or starting Monoptah Host…");
+                    job.message("Installing or starting zptah Host…");
                     let output = ssh::run_script(
                         &target,
                         platform,
@@ -1307,7 +1307,7 @@ impl Connections {
                         || !supports("files.create")
                         || !supports("files.searchContent")
                     {
-                        return Err("The installed host package still lacks Explorer and Changes. Install a newer Monoptah release with updated host packages.".into());
+                        return Err("The installed host package still lacks Explorer and Changes. Install a newer zptah release with updated host packages.".into());
                     }
                 }
                 if machine.name.trim().is_empty() {

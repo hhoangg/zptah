@@ -800,7 +800,7 @@ impl CloudApi {
             let state = self.cloud.cloud_state_of(cloud);
             if matches!(state, CloudState::Available | CloudState::Starting) {
                 return Err(format!(
-                    "{} started again while Monoptah waited for it to stop (a session or another app woke it), so it was not deleted. Check what is using it, then try again.",
+                    "{} started again while zptah waited for it to stop (a session or another app woke it), so it was not deleted. Check what is using it, then try again.",
                     cloud.name
                 ));
             }
@@ -831,7 +831,7 @@ impl CloudApi {
             && !self.cloud.known_to_this_app(cloud)
         {
             return Err(format!(
-                "Not deleted: Monoptah did not create {} {}, and the confirmation did not say the user was told so. Open Delete again and tick the acknowledgement.",
+                "Not deleted: zptah did not create {} {}, and the confirmation did not say the user was told so. Open Delete again and tick the acknowledgement.",
                 cloud.noun(),
                 cloud.name
             ));

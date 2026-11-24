@@ -14,7 +14,7 @@ pub(crate) const RESET_CONFIRM: &str = "This stops syncing with the cloud worksp
 
 /// Added to the confirmation when the cloud copy may hold turns that were not copied here, or
 /// that cannot be known (the Host is unreachable).
-pub(crate) const RESET_CONFIRM_UNSYNCED: &str = "The cloud copy may contain turns that were not copied here. After you continue locally they cannot be opened in Monoptah. They remain in the cloud workspace.";
+pub(crate) const RESET_CONFIRM_UNSYNCED: &str = "The cloud copy may contain turns that were not copied here. After you continue locally they cannot be opened in zptah. They remain in the cloud workspace.";
 
 /// The status line after a confirmed reset.
 pub(crate) const RESET_DONE: &str =
@@ -452,7 +452,7 @@ mod tests {
         ahead.unsynced = true;
         let strong = confirm_text(&ahead);
         assert!(strong.starts_with(RESET_CONFIRM_UNSYNCED));
-        assert!(strong.contains("cannot be opened in Monoptah"));
+        assert!(strong.contains("cannot be opened in zptah"));
         assert!(strong.ends_with(RESET_CONFIRM));
         assert!(!strong.contains('\u{2014}') && !strong.contains('\u{2013}'));
     }

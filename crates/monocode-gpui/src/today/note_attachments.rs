@@ -3,7 +3,7 @@
 //! as rows. Everything opens the stored copy with the system default app, as
 //! if it were opened from Finder, except Markdown and HTML files, which open
 //! in the in-app document lightbox. A right-click (or the row's "..." button)
-//! offers Open, Show in Finder and Copy, plus "Open in Monoptah" for those.
+//! offers Open, Show in Finder and Copy, plus "Open in zptah" for those.
 use super::Today;
 use crate::{
     file_icons::file_type_icon,
@@ -461,7 +461,7 @@ impl Today {
         if crate::document_lightbox::kind_of(&path).is_some() {
             items.push(MenuItem::from(MenuAction::new(
                 "today-attachment-view",
-                "Open in Monoptah",
+                "Open in zptah",
             )));
         }
         items.extend([

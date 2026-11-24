@@ -33,7 +33,7 @@ const POLL_FAILURES: u32 = 5;
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(60);
 
 /// Returned for a request that starts a turn while the Host is being swapped.
-pub const HOST_UPDATING: &str = "Monoptah Host is being updated. Try again in a moment.";
+pub const HOST_UPDATING: &str = "zptah Host is being updated. Try again in a moment.";
 /// Returned for a request that starts a turn while a codespace's Claude account is applied.
 pub const ACCOUNT_APPLYING: &str =
     "Applying the Claude account to the codespace. Try again in a moment.";
@@ -287,7 +287,7 @@ impl Connections {
                     changed
                 });
                 progress(
-                    "Monoptah Host could not be updated now: another operation on this workspace is still running. It will be retried at the next connect",
+                    "zptah Host could not be updated now: another operation on this workspace is still running. It will be retried at the next connect",
                 );
                 return Outcome::Deferred;
             }

@@ -21,7 +21,7 @@
 //!       what lets a report a script wrote be opened;
 //!    3. the file was changed after the conversation started (its inode change time, or its
 //!       modification time off unix; a modification time in the future never counts) and lies
-//!       inside the session's own folder: its live Monoptah worktree, else its working folder.
+//!       inside the session's own folder: its live zptah worktree, else its working folder.
 //!       Only for a session, never for a Mono (its start can be months old). That folder is no
 //!       tree when it is the home folder, a filesystem root or an ancestor of the home folder,
 //!       when it lies in (or is a worktree of) a known project the device did not select, or when
@@ -225,7 +225,7 @@ pub struct Context<'a> {
     /// worktree when it has one). Empty for a Mono that has not talked yet. For a session it is
     /// also the tree of the freshness rule (see [`fresh_tree`]).
     pub cwd: &'a str,
-    /// The session's Monoptah worktree of one of [`Context::projects`], when it has a live one.
+    /// The session's zptah worktree of one of [`Context::projects`], when it has a live one.
     pub worktree: Option<Worktree<'a>>,
     /// The conversation is a Mono's: the freshness rule never applies to it.
     pub mono: bool,

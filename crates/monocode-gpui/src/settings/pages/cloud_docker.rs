@@ -35,8 +35,8 @@ pub(crate) const SAVED: &str = "Checked: token works and has Cloud Sandboxes acc
 pub(crate) const TOKEN_URL: &str = "https://app.docker.com/settings/personal-access-tokens";
 const TOKEN_LINK_TEXT: &str = "app.docker.com/settings/personal-access-tokens";
 pub(crate) const HINT: &str = "Tick Allow Cloud Sandboxes access; Repository permissions can stay \"Repo Public Read-only\". Prefer an expiration date. Not your Docker password.";
-const FOOTER: &str = "Tokens are stored encrypted in Monoptah's database, never in the Keychain. Access tokens derived from them live only in memory (15 minutes).";
-const NO_STORE: &str = "Docker accounts need the Monoptah database, which is not available here.";
+const FOOTER: &str = "Tokens are stored encrypted in zptah's database, never in the Keychain. Access tokens derived from them live only in memory (15 minutes).";
+const NO_STORE: &str = "Docker accounts need the zptah database, which is not available here.";
 
 pub(in crate::settings) enum AccountList {
     Idle,

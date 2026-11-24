@@ -148,12 +148,12 @@ test("highlights come from --notes, from the docs file of this version, and a mi
   const fromNotes = chooseHighlights({
     version: "0.54.0",
     notesFileText: "# Anything\n\nBig news\n",
-    docsText: "# Monoptah Native 0.54.0\n\nFrom docs\n",
+    docsText: "# zptah 0.54.0\n\nFrom docs\n",
   });
   assert.equal(fromNotes.highlights, "Big news");
-  const fromDocs = chooseHighlights({ version: "0.54.0", docsText: "# Monoptah Native 0.54.0\n\nFrom docs\n" });
+  const fromDocs = chooseHighlights({ version: "0.54.0", docsText: "# zptah 0.54.0\n\nFrom docs\n" });
   assert.equal(fromDocs.highlights, "From docs");
-  const ignored = chooseHighlights({ version: "0.54.0", docsText: "# Monoptah Native 0.53.4\n\nOld\n" });
+  const ignored = chooseHighlights({ version: "0.54.0", docsText: "# zptah 0.53.4\n\nOld\n" });
   assert.equal(ignored.highlights, "");
   assert.match(ignored.note, /Ignoring .*0\.53\.4.*not for 0\.54\.0/);
   assert.equal(chooseHighlights({ version: "0.54.0", docsText: "" }).highlights, "");
@@ -166,7 +166,7 @@ test("the rendered notes keep the heading checkNotes needs and the constant sect
     groups: classify([entry(2, "feat: split view")]),
     highlights: "Big news",
   });
-  assert.equal(text.split("\n", 1)[0], "# Monoptah Native 0.54.0");
+  assert.equal(text.split("\n", 1)[0], "# zptah 0.54.0");
   assert.equal(checkNotes(text, "0.54.0"), text);
   assert.match(text, /\n\nBig news\n\n## Changes since 0\.53\.4\n\n### Features\n\n- Split view \(#2\)\n\n## Downloads and updates/);
   assert.ok(text.includes(DOWNLOADS_SECTION.trimEnd()));
@@ -207,10 +207,10 @@ test("generateNotes reads commits, squash and merge PR numbers, and PR titles an
     [pull(141)]: { status: 0, stdout: JSON.stringify({ title: "feat(ui): new panel", labels: ["enhancement"] }) },
     [pull(142)]: { status: 0, stdout: JSON.stringify({ title: "docs: guide", labels: ["user-visible"] }) },
   });
-  const result = generateNotes({ run, version: "0.54.0", docsText: "# Monoptah Native 0.54.0\n\nHighlight text\n" });
+  const result = generateNotes({ run, version: "0.54.0", docsText: "# zptah 0.54.0\n\nHighlight text\n" });
   assert.equal(result.since, "native-v0.53.3");
   assert.equal(result.commits, 4);
-  assert.match(result.text, /^# Monoptah Native 0\.54\.0\n\nHighlight text\n\n## Changes since 0\.53\.3/);
+  assert.match(result.text, /^# zptah 0\.54\.0\n\nHighlight text\n\n## Changes since 0\.53\.3/);
   assert.match(result.text, /### Features\n\n- New panel \(#141\)/);
   assert.match(result.text, /### Fixes\n\n- Keep the interrupt notice \(#140\)/);
   assert.match(result.text, /### Other changes\n\n- Direct commit without a PR\n- Guide \(#142\)/);

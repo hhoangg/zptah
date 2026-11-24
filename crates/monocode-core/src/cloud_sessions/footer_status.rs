@@ -29,7 +29,7 @@ pub enum Concern {
     /// The workspace failed: it may still draw compute and cannot be used.
     Failed,
     /// This app's store knows it, no live session uses it and it is up or coming up or down:
-    /// nothing in Monoptah will ever stop it ([`WorkspaceRow::orphan`]). A stopped orphan costs
+    /// nothing in zptah will ever stop it ([`WorkspaceRow::orphan`]). A stopped orphan costs
     /// nothing and is not flagged; a workspace this app did not create is never an orphan.
     Orphan,
     /// It has been up longer than [`LONG_RUNNING`] and no session of it is working.

@@ -499,7 +499,7 @@ impl Shell {
                     .submenu(vec![
                         MenuAction::new("copy-harness-session-id", "Harness session ID")
                             .disabled(summary.provider_id.is_none()),
-                        MenuAction::new("copy-monocode-session-id", "Monoptah session ID"),
+                        MenuAction::new("copy-monocode-session-id", "zptah session ID"),
                         MenuAction::new("copy-database-session-id", "Desktop database ID"),
                     ])
                     .into(),
@@ -595,10 +595,10 @@ impl Shell {
                         .into(),
                     );
                     // A stopped sandbox cannot be reached without resuming (and billing) it,
-                    // so the session can also be dropped from Monoptah alone.
+                    // so the session can also be dropped from zptah alone.
                     if stopped {
                         items.push(
-                            MenuAction::new("sandbox-remove-local", "Remove from Monoptah").into(),
+                            MenuAction::new("sandbox-remove-local", "Remove from zptah").into(),
                         );
                     }
                 }

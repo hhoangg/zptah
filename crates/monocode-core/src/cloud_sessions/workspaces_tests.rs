@@ -508,7 +508,7 @@ fn lists_a_row_per_workspace_of_both_backends() {
     let view = fx.svc.workspaces_overview(PROJECT, false);
     assert_eq!(view.repo.as_deref(), Some("octo/widgets"));
     assert!(view.codespaces_error.is_none() && view.sandbox_problems.is_empty());
-    // The sandbox that is not Monoptah's is not listed.
+    // The sandbox that is not zptah's is not listed.
     assert_eq!(view.rows.len(), 4, "{:?}", view.rows);
 
     let used = row(&view, "octo-used");
@@ -865,7 +865,7 @@ fn deleting_a_running_sandbox_stops_it_waits_for_stopped_then_removes_it() {
     let rm = verbs.iter().position(|v| v == "rm").expect("removed");
     assert!(stop < rm, "{verbs:?}");
     assert!(fx.sbx.state_of("sbx_001a").is_none());
-    // The Monoptah side is cleaned like any other delete: sessions forgotten, cloud gone.
+    // The zptah side is cleaned like any other delete: sessions forgotten, cloud gone.
     assert!(fx.svc.session_ids_on(&cloud).is_empty());
     assert!(fx.svc.cloud_gone(&cloud));
     assert!(
@@ -1115,7 +1115,7 @@ fn a_delete_refuses_what_appeared_after_the_user_confirmed() {
 #[test]
 fn a_workspace_this_store_does_not_know_is_not_an_orphan_and_needs_a_strong_confirmation() {
     let fx = full();
-    // Made by hand or by another app: a codespace of the repository and a Monoptah-named sandbox
+    // Made by hand or by another app: a codespace of the repository and a zptah-named sandbox
     // that no session, start, move or pin of this store names.
     let mut list: Vec<Value> = serde_json::from_str(&fx.gh.list.lock().unwrap()).unwrap();
     list.push(codespace(
@@ -1167,7 +1167,7 @@ fn a_workspace_this_store_does_not_know_is_not_an_orphan_and_needs_a_strong_conf
 #[test]
 fn the_api_refuses_a_workspace_this_store_does_not_know_without_the_acknowledgement() {
     let fx = full();
-    // A codespace made by hand and a Monoptah-named sandbox made elsewhere.
+    // A codespace made by hand and a zptah-named sandbox made elsewhere.
     let mut list: Vec<Value> = serde_json::from_str(&fx.gh.list.lock().unwrap()).unwrap();
     list.push(codespace(
         "octo-by-hand",

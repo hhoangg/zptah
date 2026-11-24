@@ -196,7 +196,7 @@ pub(super) fn confirm_text(kind: Kind, title: &str, noun: &str) -> String {
             "The {noun} of {who} was deleted, so the turns written there after the last sync are lost. The conversation continues on this computer. Its next message starts a new Claude session from a summary of the messages kept here; the old local Claude file is not resumed."
         ),
         Kind::Moved { unsynced } => format!(
-            "{who} comes back to this computer as the same conversation. Monoptah will wake the {noun} if it is stopped, {sync}apply the cloud code here (in place if your files are unchanged since the move, otherwise in a new worktree; your uncommitted changes are never overwritten), bring the Claude transcript back and then close the cloud copy. Nothing changes until all of that succeeded; if it fails, the conversation stays in the cloud. After it succeeded, the {noun} is deleted when no other session uses it and nothing on it is missing here; otherwise it is kept and you are told why.",
+            "{who} comes back to this computer as the same conversation. zptah will wake the {noun} if it is stopped, {sync}apply the cloud code here (in place if your files are unchanged since the move, otherwise in a new worktree; your uncommitted changes are never overwritten), bring the Claude transcript back and then close the cloud copy. Nothing changes until all of that succeeded; if it fails, the conversation stays in the cloud. After it succeeded, the {noun} is deleted when no other session uses it and nothing on it is missing here; otherwise it is kept and you are told why.",
             sync = if unsynced {
                 "copy the cloud turns that are not here yet, "
             } else {
@@ -204,7 +204,7 @@ pub(super) fn confirm_text(kind: Kind, title: &str, noun: &str) -> String {
             }
         ),
         Kind::Born => format!(
-            "{who} gets a copy on this computer that replaces it in the list (it is not archived). Monoptah will wake the {noun} if it is stopped, copy the conversation, put the cloud code in a new worktree and bring the Claude transcript back. After that, the {noun} is deleted when no other session uses it and nothing on it is missing here; otherwise it is kept and you are told why."
+            "{who} gets a copy on this computer that replaces it in the list (it is not archived). zptah will wake the {noun} if it is stopped, copy the conversation, put the cloud code in a new worktree and bring the Claude transcript back. After that, the {noun} is deleted when no other session uses it and nothing on it is missing here; otherwise it is kept and you are told why."
         ),
     }
 }

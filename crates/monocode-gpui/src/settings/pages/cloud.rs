@@ -1,5 +1,5 @@
 //! Settings > Cloud: the one global kit (design 3.2.2). Skills, MCP servers and plugins that
-//! Monoptah copies from this computer to new cloud workspaces. Everything compatible is
+//! zptah copies from this computer to new cloud workspaces. Everything compatible is
 //! checked by default, secrets included and OAuth-style servers carried config-only;
 //! local-only items cannot be checked.
 //!

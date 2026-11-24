@@ -2543,7 +2543,7 @@ impl Shell {
         };
         let answer = window.prompt(
             gpui::PromptLevel::Warning,
-            "Reload Monoptah Native?",
+            "Reload zptah?",
             Some(detail),
             &["Reload", "Cancel"],
             cx,
@@ -9637,7 +9637,7 @@ impl Render for Shell {
             .id("monocode-workspace")
             .relative()
             .role(Role::Application)
-            .aria_label("Monoptah Native")
+            .aria_label("zptah")
             .key_context("Workspace")
             .track_focus(&self.focus)
             .when(self.blocking_modal().is_some(), |el| {
@@ -12869,7 +12869,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        // Harness ID is skipped (none), so one `down` lands on the Monoptah ID,
+        // Harness ID is skipped (none), so one `down` lands on the zptah ID,
         // which must be the numeric handle the app API and Monos accept.
         cx.simulate_keystrokes(window.into(), "down down right down enter");
         cx.run_until_parked();

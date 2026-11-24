@@ -18,7 +18,7 @@
 //! The policy is conservative: an unknown state, a session that is working, waiting, starting,
 //! restoring, being archived, holding a queued prompt or with files not yet copied locally
 //! all count as "not idle", and so does an open terminal on the workspace. A workspace the
-//! user chose to keep running, or removed from Monoptah, is never stopped for being unused
+//! user chose to keep running, or removed from zptah, is never stopped for being unused
 //! ([`AutoStop::keep_running`]). It only ever stops. A stopped workspace is resumed by the user's
 //! next send, as before; nothing in the background wakes it.
 use super::{CloudBackendKind, CloudRef, CloudSessions, CloudState};

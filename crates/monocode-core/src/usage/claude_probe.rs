@@ -92,7 +92,7 @@ fn status_error(status: u16) -> FetchError {
             "Claude rejected the setup token. Run claude setup-token and save the new one.".into()
         }
         403 => "This setup token is not allowed to check usage.".into(),
-        404 => format!("Claude no longer offers {MODEL} for the usage check. Update Monoptah."),
+        404 => format!("Claude no longer offers {MODEL} for the usage check. Update zptah."),
         429 => "Claude is rate limiting this account. Try again in a few minutes.".into(),
         status => format!("Claude usage check failed ({status})."),
     })

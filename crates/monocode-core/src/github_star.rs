@@ -1,4 +1,4 @@
-//! Whether the active GitHub CLI account has starred Monoptah, and starring it.
+//! Whether the active GitHub CLI account has starred zptah, and starring it.
 use std::path::PathBuf;
 
 pub const REPOSITORY_URL: &str = "https://github.com/hhoangg/monoptah";

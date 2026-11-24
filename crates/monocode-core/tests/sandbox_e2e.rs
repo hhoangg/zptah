@@ -9,7 +9,7 @@
 //! Needs `sbx` signed in to the cloud and `sbx --cloud setup ssh` done. It uses no Git
 //! credential (public repo) and no Claude account, a scratch session store and a scratch
 //! connection store, so the installed app's data is untouched. It never prints a secret.
-//! It also needs the Monoptah Host package of this crate's version to be downloadable from
+//! It also needs the zptah Host package of this crate's version to be downloadable from
 //! the release URL the bootstrap uses.
 use monocode_core::{
     cloud_sessions::{

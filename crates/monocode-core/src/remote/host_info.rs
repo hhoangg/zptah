@@ -68,10 +68,10 @@ impl HostInfo {
         self.flavor == FLAVOR_MONOPTAH
     }
 
-    /// One line for Settings, e.g. `Monoptah 1.1.0` or `Upstream (version unknown)`.
+    /// One line for Settings, e.g. `zptah 1.1.0` or `Upstream (version unknown)`.
     pub fn summary(&self) -> String {
         let flavor = if self.is_monoptah() {
-            "Monoptah"
+            "zptah"
         } else if self.flavor == FLAVOR_UPSTREAM {
             "Upstream"
         } else {
@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(info.version.as_deref(), Some("1.1.0"));
         assert_eq!(info.capabilities.len(), 3);
         assert!(info.supports("workspace.watch"));
-        assert_eq!(info.summary(), "Monoptah 1.1.0");
+        assert_eq!(info.summary(), "zptah 1.1.0");
     }
 
     #[test]

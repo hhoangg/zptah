@@ -760,7 +760,7 @@ fn delete_reads_what_would_be_lost_asks_first_and_sends_back_what_was_shown(
     assert!(
         prompt
             .iter()
-            .any(|l| l.contains("1 Monoptah session on it will be removed"))
+            .any(|l| l.contains("1 zptah session on it will be removed"))
     );
     assert!(prompt.iter().any(|l| l == "What would be lost:"));
     assert!(
@@ -908,7 +908,7 @@ fn a_workspace_this_app_did_not_create_is_not_an_orphan_and_deleting_it_is_guard
     act(&window, cx, |d, cx| d.ask_to_delete(&hand, cx));
     let prompt = prompt_of(&window, cx, &hand.cloud);
     assert!(
-        prompt[0].starts_with("Monoptah did not create") && prompt[0].contains(BY_HAND),
+        prompt[0].starts_with("zptah did not create") && prompt[0].contains(BY_HAND),
         "{prompt:?}"
     );
     assert!(prompt.iter().any(|l| l.contains("cannot see who uses it")));
@@ -920,7 +920,7 @@ fn a_workspace_this_app_did_not_create_is_not_an_orphan_and_deleting_it_is_guard
             model::acknowledgement_label(&view_row(d, BY_HAND), d.preview().expect("read"))
         })
         .unwrap();
-    assert!(label.contains("not Monoptah"), "{label}");
+    assert!(label.contains("not zptah"), "{label}");
     click(&mut visual, &format!("cloud-ws-acknowledge-{BY_HAND}"));
     click(&mut visual, &format!("cloud-ws-confirm-delete-{BY_HAND}"));
     assert_eq!(
@@ -1288,7 +1288,7 @@ fn stop_asks_first_when_a_session_works_on_the_row_or_the_workspace_is_not_ours(
     );
     let prompt = model::stop_prompt(row(BY_HAND));
     assert!(
-        prompt[0].starts_with("Monoptah did not create") && prompt[0].contains(BY_HAND),
+        prompt[0].starts_with("zptah did not create") && prompt[0].contains(BY_HAND),
         "{prompt:?}"
     );
     assert!(prompt.last().unwrap().starts_with("Stop codespace"));

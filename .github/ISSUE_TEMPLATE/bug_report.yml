@@ -13,7 +13,7 @@ body:
     attributes:
       label: Monoptah version
       description: Shown in the About dialog or the release you installed.
-      placeholder: "Monoptah Native 0.53.3"
+      placeholder: "zptah 0.1.0"
     validations:
       required: true
 

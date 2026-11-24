@@ -769,7 +769,7 @@ fn names_the_input_that_has_no_value_when_importing() {
     assert!(e.contains("\"project\""), "{e}");
     let e = f.err("workflows.import", json!({"yaml": "nope: 1"}));
     assert!(
-        e.contains("Not a Monoptah workflow") || e.contains("Unsupported"),
+        e.contains("Not a zptah workflow") || e.contains("Unsupported"),
         "{e}"
     );
     assert_eq!(f.stored().len(), 1);

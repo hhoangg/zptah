@@ -367,7 +367,7 @@ fn spawn(cwd: &str, size: GridSize, id: u64, plan: Plan) -> Spawned {
         ("TERM", "xterm-256color".to_owned()),
         ("COLORTERM", "truecolor".to_owned()),
         ("COLORFGBG", "15;0".to_owned()),
-        ("TERM_PROGRAM", "Monoptah".to_owned()),
+        ("TERM_PROGRAM", "zptah".to_owned()),
         ("PATH", monocode_core::scm::terminal_search_path()),
         ("PWD", workdir.to_string_lossy().into_owned()),
     ] {

@@ -7,7 +7,7 @@ use monocode_core::codespaces::{
 use std::path::Path;
 
 pub(super) const CLAUDE_TOKEN_NOTE: &str = "GitHub only injects a changed secret into a codespace when it starts. After changing CLAUDE_CODE_OAUTH_TOKEN, stop and restart the codespace (or create a new one), then reconnect. Whitespace from a wrapped `claude setup-token` paste is removed.";
-pub(super) const PRIVACY_NOTE: &str = "Monoptah keeps no copy of these values. They go straight to GitHub as user Codespaces secrets for this repository.";
+pub(super) const PRIVACY_NOTE: &str = "zptah keeps no copy of these values. They go straight to GitHub as user Codespaces secrets for this repository.";
 pub(super) const NO_REPO_LINE: &str =
     "No GitHub repository found: the project needs a git origin on github.com.";
 // The gh checks live in `cloud_checks`, shared with Settings > Cloud.

@@ -584,7 +584,7 @@ impl Host for FakeHost {
             auth.map(|a| a.prelude.to_string()),
             auth.map(|a| a.secret.to_string()),
         ));
-        progress("Updating Monoptah Host…");
+        progress("Updating zptah Host…");
         if *self.upgrade_leaks.lock().unwrap() {
             if let Some(auth) = auth {
                 progress(&format!("download failed, env {}", auth.prelude));
@@ -4219,7 +4219,7 @@ fn a_start_upgrades_the_host_with_the_connect_prelude_and_leaks_no_secret() {
     );
     // The status line is shown and the secret never reaches what the user can see.
     let shown = format!("{events:?}");
-    assert!(shown.contains("Updating Monoptah Host"), "{shown}");
+    assert!(shown.contains("Updating zptah Host"), "{shown}");
     assert!(
         !shown.contains(SECRET) && !shown.contains("sk-ant"),
         "{shown}"
@@ -4241,7 +4241,7 @@ fn a_reconnect_upgrades_the_host_with_the_connect_prelude_and_leaks_no_secret() 
     assert_eq!(upgrades.len(), 1, "{upgrades:?}");
     let prelude = ClaudeAuth::new("CLAUDE_CODE_OAUTH_TOKEN", SECRET.into()).prelude();
     assert_eq!(upgrades[0].1.as_deref(), Some(prelude.as_str()));
-    assert!(lines.iter().any(|l| l.contains("Updating Monoptah Host")));
+    assert!(lines.iter().any(|l| l.contains("Updating zptah Host")));
     assert!(!lines.iter().any(|l| l.contains(SECRET)), "{lines:?}");
 }
 

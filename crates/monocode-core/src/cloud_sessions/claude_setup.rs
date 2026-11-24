@@ -66,7 +66,7 @@ pub const CAPABILITY: &str = "claude.kit";
 pub const INSTRUCTIONS_CAPABILITY: &str = "claude.kit.instructions";
 /// Shown when instructions are on but the Host cannot take them yet.
 pub const INSTRUCTIONS_HOST_NOTE: &str =
-    "Your instructions need a newer Monoptah Host; they will be copied after it is updated.";
+    "Your instructions need a newer zptah Host; they will be copied after it is updated.";
 /// The Host capability for `uploads.*`.
 pub const UPLOADS_CAPABILITY: &str = "uploads";
 /// Store setting holding the JSON map `CloudRef::key() -> SetupState`.

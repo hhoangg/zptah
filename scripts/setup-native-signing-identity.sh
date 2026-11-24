@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-time setup of the stable self-signed code-signing identity used to sign
-# Monoptah Native macOS releases (see docs/native/release-flow.md, "Stable signing identity").
+# zptah macOS releases (see docs/native/release-flow.md, "Stable signing identity").
 #
 #   scripts/setup-native-signing-identity.sh              create, import, write a backup .p12
 #   scripts/setup-native-signing-identity.sh --import F   restore from backup file F (new Mac)
@@ -21,6 +21,9 @@
 # Trust is NOT needed: codesign signs with an untrusted self-signed certificate.
 set -euo pipefail
 
+# The CN and the backup name keep their Monoptah spelling on purpose: the pinned leaf
+# certificate (install.rs PINNED_LEAF_CERTIFICATE_SHA1) was created under this name, and
+# renaming would stop the existing certificate from being found and reused.
 CN="Monoptah Native Release Signing"
 mode=create
 import_file=""

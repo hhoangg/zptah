@@ -39,7 +39,7 @@ use std::{
 const PRIORITY: usize = 85;
 /// Above the dialog, so the model list opens over it.
 const PICKER_PRIORITY: usize = 90;
-const NOTE: &str = "Files are copied into Monoptah's data folder; the zip can be deleted.";
+const NOTE: &str = "Files are copied into zptah's data folder; the zip can be deleted.";
 
 /// What a sorting run needs to talk to the chosen model.
 pub(crate) struct SortParts {

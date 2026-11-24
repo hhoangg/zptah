@@ -977,7 +977,7 @@ fn open_link(url: &str, window: &mut Window, cx: &mut App) {
         cx.open_url(url);
     } else if !url.starts_with('#') && (!url.contains("://") || url.starts_with("file://")) {
         // A click previews the file in the app (the document, image or code viewer that fits
-        // it); the link menu's "Open in Monoptah" still opens it in the editor.
+        // it); the link menu's "Open in zptah" still opens it in the editor.
         window.dispatch_action(Box::new(crate::file_preview::PreviewPath(url.into())), cx);
     }
 }

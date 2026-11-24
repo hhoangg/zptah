@@ -1086,6 +1086,10 @@ fn credential_and_app_data_places_under_home_are_refused() {
         "Library/Application Support/com.monoptah.desktop/provider-accounts/a/x.txt",
         "Library/Application Support/Monoptah Native/x.txt",
         "Library/Application Support/Monoptah Development/x.txt",
+        "Library/Application Support/app.zptah.desktop/provider-accounts/a/x.txt",
+        "Library/Application Support/zptah/x.txt",
+        "Library/Application Support/zptah Development/x.txt",
+        "Library/WebKit/app.zptah.desktop/x.txt",
         "Library/Application Support/com.monoptah.desktop.dev/x.txt",
         "Library/WebKit/com.monoptah.desktop/x.txt",
         ".config/monoptah/updater.key.txt",
@@ -1833,10 +1837,7 @@ fn a_deny_listed_file_named_in_a_command_is_still_refused() {
     let work = fx.path("work");
     fx.write("work/.env", "SECRET=1");
     let aws = fx.write("home/.aws/credentials", "fake");
-    let app = fx.write(
-        "home/Library/Application Support/Monoptah Native/x.txt",
-        "fake",
-    );
+    let app = fx.write("home/Library/Application Support/zptah/x.txt", "fake");
     let (aws, app) = (
         aws.to_string_lossy().into_owned(),
         app.to_string_lossy().into_owned(),

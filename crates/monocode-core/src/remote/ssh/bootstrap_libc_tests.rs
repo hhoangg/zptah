@@ -215,7 +215,7 @@ fn a_runtime_that_cannot_execute_is_reported_as_such_and_leaves_nothing() {
     assert!(
         outcome
             .stderr
-            .contains("The Monoptah Host runtime cannot run on this machine:"),
+            .contains("The zptah Host runtime cannot run on this machine:"),
         "{}",
         outcome.stderr
     );
@@ -241,7 +241,7 @@ fn a_runtime_that_runs_but_prints_another_version_is_a_version_mismatch() {
     });
     assert!(!outcome.ok);
     assert!(
-        outcome.stderr.contains("Monoptah Host version mismatch."),
+        outcome.stderr.contains("zptah Host version mismatch."),
         "{}",
         outcome.stderr
     );

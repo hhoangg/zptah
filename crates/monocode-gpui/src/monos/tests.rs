@@ -3924,7 +3924,7 @@ mod reset_flow {
         let cursor = provider_files::mono_provider_files("cursor", Some(A), &[]);
         assert_eq!(
             reset::option_note(&cursor),
-            "Monoptah can't delete Cursor session files yet."
+            "zptah can't delete Cursor session files yet."
         );
         let mixed = provider_files::mono_provider_files(
             "cursor",

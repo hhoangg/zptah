@@ -9,7 +9,7 @@ fn git(dir: &Path, args: &[&str]) -> bool {
     Command::new("git")
         .args([
             "-c",
-            "user.name=Monoptah",
+            "user.name=zptah",
             "-c",
             "user.email=monocode@test",
             "-c",
@@ -17,9 +17,9 @@ fn git(dir: &Path, args: &[&str]) -> bool {
         ])
         .args(args)
         .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "Monoptah")
+        .env("GIT_AUTHOR_NAME", "zptah")
         .env("GIT_AUTHOR_EMAIL", "monocode@test")
-        .env("GIT_COMMITTER_NAME", "Monoptah")
+        .env("GIT_COMMITTER_NAME", "zptah")
         .env("GIT_COMMITTER_EMAIL", "monocode@test")
         .status()
         .map(|status| status.success())
@@ -32,7 +32,7 @@ fn init_git(dir: &Path, branch: &str) -> bool {
             dir,
             &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
         )
-        && git(dir, &["config", "user.name", "Monoptah"])
+        && git(dir, &["config", "user.name", "zptah"])
         && git(dir, &["config", "user.email", "monocode@test"])
         && git(dir, &["config", "commit.gpgsign", "false"])
         && git(dir, &["config", "core.autocrlf", "false"])
@@ -348,7 +348,7 @@ fn history_lists_commits_parents_and_head() {
     );
     assert!(history.commits[0].head);
     assert!(!history.commits[1].head);
-    assert_eq!(history.commits[0].author, "Monoptah");
+    assert_eq!(history.commits[0].author, "zptah");
     assert!(history.commits[0]
         .refs
         .iter()
@@ -814,7 +814,7 @@ fn sync_pulls_then_pushes() {
         ]
     ));
     for args in [
-        ["config", "user.name", "Monoptah"],
+        ["config", "user.name", "zptah"],
         ["config", "user.email", "monocode@test"],
         ["config", "commit.gpgsign", "false"],
     ] {
@@ -1140,7 +1140,7 @@ fn blame_attributes_lines_to_commits_and_uncommitted_edits() {
             (second.as_str(), 4, 1, false),
         ]
     );
-    assert_eq!(hunks[0].author, "Monoptah");
+    assert_eq!(hunks[0].author, "zptah");
     assert_eq!(hunks[0].summary, "init");
     assert_eq!(hunks[3].summary, "add four");
     assert_eq!(hunks[0].short_sha, first[..7]);

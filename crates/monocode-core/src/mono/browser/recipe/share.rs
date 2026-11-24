@@ -131,14 +131,12 @@ pub fn parse(text: &str, blocked: &[String]) -> Result<RecipeFile, String> {
     let value: Value =
         serde_json::from_str(text).map_err(|_| "This file is not a recipe (not valid JSON).")?;
     if value["format"] != FORMAT {
-        return Err("This file is not a Monoptah recipe.".into());
+        return Err("This file is not a zptah recipe.".into());
     }
     match value["format_version"].as_u64() {
         Some(v) if v == u64::from(FORMAT_VERSION) => {}
         Some(v) if v > u64::from(FORMAT_VERSION) => {
-            return Err(
-                "This recipe file is from a newer Monoptah. Update the app to use it.".into(),
-            )
+            return Err("This recipe file is from a newer zptah. Update the app to use it.".into())
         }
         _ => return Err("This recipe file has an unknown format version.".into()),
     }

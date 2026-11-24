@@ -274,7 +274,7 @@ impl TabBook {
 /// A note for the agent that the gate reused a tab.
 pub fn reuse_note(index: usize, url: &str) -> String {
     format!(
-        "Monoptah reused the already open tab {index} ({url}) instead of opening a new one. Open a second tab to the same site only when the user asks for it: call browser_tabs with action new and {DUPLICATE_FLAG} true."
+        "zptah reused the already open tab {index} ({url}) instead of opening a new one. Open a second tab to the same site only when the user asks for it: call browser_tabs with action new and {DUPLICATE_FLAG} true."
     )
 }
 

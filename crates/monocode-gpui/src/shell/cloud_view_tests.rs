@@ -488,10 +488,7 @@ fn a_blocked_host_update_shows_the_policy_hint_and_queues_nothing() {
     match read_for_view(&svc, id, "shot.png", &never) {
         Outcome::HostUpdate { text, queue } => {
             assert!(!queue, "a blocked update does not fix itself");
-            assert!(
-                text.contains("Monoptah Host could not be updated"),
-                "{text}"
-            );
+            assert!(text.contains("zptah Host could not be updated"), "{text}");
             assert!(
                 text.contains("blocked by the sandbox network policy"),
                 "{text}"

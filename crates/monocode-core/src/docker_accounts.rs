@@ -723,7 +723,7 @@ impl std::fmt::Display for DockerAuthError {
             ),
             Self::Storage(text) => f.write_str(text),
             Self::NotAvailable => f.write_str(
-                "Docker accounts are not available in this session. Restart Monoptah and try again.",
+                "Docker accounts are not available in this session. Restart zptah and try again.",
             ),
         }
     }

@@ -120,32 +120,42 @@ pub(crate) const SECRET_STORE_DIRS: &[&str] = &[
 ];
 
 /// Names of the app's data folders under the platform data dirs (`Application Support`,
-/// `~/.local/share`, `~/.config`, `AppData`), both flavors: the Tauri app, the native app, its
-/// development build and the upstream names it can still read.
-pub(crate) const APP_DATA_NAMES: [&str; 8] = [
+/// `~/.local/share`, `~/.config`, `AppData`): zptah and its development build, the Monoptah apps
+/// that run beside it and the upstream names it can still read.
+pub(crate) const APP_DATA_NAMES: [&str; 12] = [
+    "zptah",
+    crate::brand::DEV_DATA_DIR,
     "Monoptah",
     "Monoptah Native",
-    "Monoptah Development",
+    crate::brand::MONOPTAH_DEV_DATA_DIR,
     "MonoCode",
     "monoptah",
     "monocode",
     crate::brand::NATIVE_APP_ID,
+    crate::brand::MONOPTAH_DESKTOP_APP_ID,
+    crate::brand::MONOPTAH_NATIVE_APP_ID,
     "com.monocode.desktop",
 ];
 
 /// Folders that hold the app's own data, as the app finds them plus the per-OS layouts
 /// under the given home (the home may differ from the process one).
 pub(crate) fn app_data_dirs(home: &Path) -> Vec<PathBuf> {
-    let id = crate::brand::DESKTOP_APP_ID;
-    let mut out = vec![
-        home.join("Library/Application Support").join(id),
-        home.join(".local/share").join(id),
+    let ids = [
+        crate::brand::DESKTOP_APP_ID,
+        crate::brand::MONOPTAH_DESKTOP_APP_ID,
     ];
+    let mut out = Vec::new();
+    for id in ids {
+        out.push(home.join("Library/Application Support").join(id));
+        out.push(home.join(".local/share").join(id));
+    }
     if let Some(dir) = crate::store::monocode_database().parent() {
         out.push(dir.to_path_buf());
     }
     if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-        out.push(PathBuf::from(xdg).join(id));
+        for id in ids {
+            out.push(PathBuf::from(&xdg).join(id));
+        }
     }
     out
 }
@@ -171,11 +181,18 @@ pub(crate) fn all_app_data_dirs(home: &Path) -> Vec<PathBuf> {
         for name in APP_DATA_NAMES {
             out.push(base.join(name));
         }
-        out.push(base.join(format!("{}.dev", crate::brand::DESKTOP_APP_ID)));
+        for id in [
+            crate::brand::DESKTOP_APP_ID,
+            crate::brand::MONOPTAH_DESKTOP_APP_ID,
+        ] {
+            out.push(base.join(format!("{id}.dev")));
+        }
     }
     for id in [
         crate::brand::DESKTOP_APP_ID,
         crate::brand::NATIVE_APP_ID,
+        crate::brand::MONOPTAH_DESKTOP_APP_ID,
+        crate::brand::MONOPTAH_NATIVE_APP_ID,
         "com.monocode.desktop",
     ] {
         out.push(home.join("Library/WebKit").join(id));
@@ -303,6 +320,16 @@ mod tests {
             "/h/Library/Application Support/Monoptah Native",
             "/h/.local/share/com.monoptah.native",
             "/h/Library/WebKit/com.monoptah.desktop.dev",
+            "/h/Library/Application Support/app.zptah.desktop",
+            "/h/Library/Application Support/app.zptah.desktop.dev",
+            "/h/Library/Application Support/zptah Development",
+            "/h/.local/share/app.zptah.desktop",
+            "/h/.local/share/zptah Development",
+            "/h/.config/zptah Development",
+            "/h/AppData/Roaming/zptah Development",
+            "/h/AppData/Local/app.zptah.desktop",
+            "/h/Library/WebKit/app.zptah.desktop",
+            "/h/Library/WebKit/app.zptah.desktop.dev",
         ] {
             assert!(dirs.contains(&PathBuf::from(expected)), "{expected}");
         }

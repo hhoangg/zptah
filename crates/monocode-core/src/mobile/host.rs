@@ -967,7 +967,7 @@ impl MobileHost {
                 // Another copy of the app (or the earlier desktop) holds the
                 // port; phones would reach it instead of this one.
                 if error.contains("in use") || error.contains("os error 48") {
-                    format!("Another Monoptah window or app is already accepting phone connections on port {PORT}. Quit it, then turn Accept connections off and on.")
+                    format!("Port {PORT} is already in use by another app (for example Monoptah or another zptah window) that is accepting phone connections. Quit it, then turn Accept connections off and on.")
                 } else {
                     error
                 }
@@ -1180,7 +1180,7 @@ impl MobileHost {
         audited: &mut Option<(DeviceContext, AuditEvent)>,
     ) -> Result<Value, Failure> {
         if request["version"] != VERSION {
-            return Err("Update Monoptah on both devices".into());
+            return Err("Update zptah on both devices".into());
         }
         let method = request["method"].as_str().ok_or("Invalid mobile method")?;
         let params = request["params"].clone();
@@ -1470,7 +1470,7 @@ impl MobileHost {
         audited: &mut Option<(DeviceContext, AuditEvent)>,
     ) -> Result<(), Failure> {
         if request["version"] != VERSION {
-            return Err("Update Monoptah on both devices".into());
+            return Err("Update zptah on both devices".into());
         }
         if request["method"] != "conversation.watch" {
             return Err(unsupported());

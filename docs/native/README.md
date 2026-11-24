@@ -33,7 +33,7 @@ reports return to the Mono chat.
 Contribution counts come from the Mono's sessions, including saved history:
 commits and pull requests opened, merged or reviewed through supported agent
 tools. Opened pull requests are checked for later merges through the GitHub CLI.
-Records are stored in `monocode.db.gpui.sqlite3` alongside native preferences
+Records are stored in `zptah.db.gpui.sqlite3` alongside native preferences
 when using the installed desktop database.
 
 In the Mono's **Settings → General → Heartbeat** section, **Check in on its own**
@@ -102,35 +102,35 @@ installed Monoptah database, and changes save there.** No extra flags are needed
 On macOS, open:
 
 ```sh
-open "crates/monocode-gpui/target/release/Monoptah Native.app"
+open "crates/monocode-gpui/target/release/zptah.app"
 ```
 
-The app has a separate name and application ID (`com.monoptah.native`) so it can be
-installed alongside Monoptah. Local source builds are signed locally, without
+The app has a separate name and application ID (`app.zptah.desktop`) so it can be
+installed alongside Monoptah Native. Local source builds are signed locally, without
 Apple notarization or configured automatic updates. Linux and Windows builds
 produce a standalone executable
 under `crates/monocode-gpui/target/release/`. `CARGO_TARGET_DIR` and
 `CARGO_BUILD_TARGET` can change these output paths.
 
-The **Monoptah Native Preview** GitHub Actions workflow runs checks and build
+The **zptah Preview** GitHub Actions workflow runs checks and build
 verification.
 
 ## Data and configuration
 
-Development stores `monocode.db` under:
+Development stores `zptah.db` under:
 
 | Platform | Development directory |
 | --- | --- |
-| macOS | `~/Library/Application Support/Monoptah Development/` |
-| Linux | `$XDG_DATA_HOME/Monoptah Development/`, or `~/.local/share/Monoptah Development/` |
-| Windows | `%LOCALAPPDATA%\Monoptah Development\` |
+| macOS | `~/Library/Application Support/zptah Development/` |
+| Linux | `$XDG_DATA_HOME/zptah Development/`, or `~/.local/share/zptah Development/` |
+| Windows | `%LOCALAPPDATA%\zptah Development\` |
 
 `MONOCODE_NATIVE_DATA_DIR` overrides this development directory.
 
-Release builds open `com.monoptah.desktop/monocode.db` under macOS Application
+Release builds open `app.zptah.desktop/zptah.db` under macOS Application
 Support, Linux's XDG data directory, or Windows' `%APPDATA%`. The app uses the
 existing desktop schema and session IDs. GPUI preferences are saved beside the
-database in `monocode.db.gpui.sqlite3`.
+database in `zptah.db.gpui.sqlite3`.
 
 Supported desktop preferences and workspace state are read from the installed
 app's webview localStorage on macOS and Linux. The Windows WebView2 reader is

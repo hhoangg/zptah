@@ -13,7 +13,7 @@ const PROTECTED_BRANCHES = new Set(["main", "master"]);
 const MAIN_REF = "origin/main";
 // Ignored directories that a build regenerates; any other ignored file (.env, local DBs, notes) blocks removal.
 export const REGENERABLE_IGNORED = new Set(["target", "node_modules", "dist", "dist-ssr", "build", ".turbo", ".vite", "coverage", "playwright-report", "test-results", ".next", ".cache", ".tsbuildinfo"]);
-const LOG_PREFIX = "monoptah-native-dev-";
+const LOG_PREFIX = "zptah-dev-";
 const LOG_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // Cargo target pruning. The native workspace builds into <worktree>/crates/monocode-gpui/target
 // and the root workspace into <worktree>/target.
@@ -98,7 +98,7 @@ export function parsePs(output) {
 }
 
 export function isNativeDevProcess(command) {
-  return command.includes("Monoptah Native Dev.app") || /scripts[\\/]dev-native\.mjs/.test(command);
+  return command.includes("zptah Dev.app") || /scripts[\\/]dev-native\.mjs/.test(command);
 }
 
 // Returns human-readable reasons for processes that pin the worktree.

@@ -1,4 +1,4 @@
-// Fork-local (Monoptah). Plans, signs and describes the Monoptah Native release:
+// Fork-local (Monoptah). Plans, signs and describes the zptah release:
 // the signed update feed (latest.json) covers macOS arm64, Linux x86_64 (AppImage,
 // deb, rpm) and Windows x86_64 (NSIS). Upstream's native-release.mjs needs all six
 // upstream targets and an R2 base URL; this fork ships five targets from GitHub
@@ -52,7 +52,7 @@ import {
 } from "./package-native-monoptah.mjs";
 
 export const REPOSITORY = "hhoangg/monoptah";
-export const APP_ID = "com.monoptah.native";
+export const APP_ID = "app.zptah.desktop";
 // Must equal CHANNEL in crates/monocode-core/src/app_update/mod.rs.
 export const CHANNEL = "native-preview";
 export { RELEASE_FILE_COUNT, TARGETS };
@@ -104,9 +104,9 @@ export function monoptahManifest({ version, baseUrl, artifacts, notes = "" }) {
 // so a forgotten notes file cannot publish the previous release's text.
 export function checkNotes(notes, version) {
   const heading = notes.split("\n", 1)[0].trim();
-  if (heading !== `# Monoptah Native ${version}`)
+  if (heading !== `# zptah ${version}`)
     throw new Error(
-      `The release notes must start with "# Monoptah Native ${version}", found: ${heading}`,
+      `The release notes must start with "# zptah ${version}", found: ${heading}`,
     );
   return notes;
 }

@@ -1,5 +1,5 @@
 //! The Cloud workspaces view, shown in a side drawer (see [`crate::drawer`]) opened from the
-//! footer's cloud chip: every codespace of the project's repository and every Monoptah Docker
+//! footer's cloud chip: every codespace of the project's repository and every zptah Docker
 //! sandbox, with its state, age, the sessions that use it and an estimated cost, so a failed or
 //! forgotten workspace that keeps drawing quota or credit can be stopped or deleted. `model` holds
 //! what it says and decides.

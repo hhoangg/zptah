@@ -170,7 +170,7 @@ fn install_answers_first_records_the_request_and_tells_the_computer(cx: &mut Tes
     assert_eq!(pending.requester, "Ada");
     assert_eq!(
         notices(cx),
-        vec!["Ada asked to update and restart Monoptah.".to_string()]
+        vec!["Ada asked to update and restart zptah.".to_string()]
     );
     // Only one install at a time.
     let again = run(&window, cx, device(), install(false));

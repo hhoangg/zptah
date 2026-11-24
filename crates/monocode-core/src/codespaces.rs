@@ -1030,11 +1030,11 @@ if [ -f "$g" ]; then
   begin=$(grep -c '<!-- monoptah-evidence:begin -->' "$g" || true)
   end=$(grep -c '<!-- monoptah-evidence:end -->' "$g" || true)
 fi
-if [ "$begin" != "$end" ] || [ "$begin" -gt 1 ]; then skip "its Monoptah markers are unbalanced"; fi
+if [ "$begin" != "$end" ] || [ "$begin" -gt 1 ]; then skip "its zptah markers are unbalanced"; fi
 if [ "$begin" = 1 ]; then
   bl=$(grep -n '<!-- monoptah-evidence:begin -->' "$g" | cut -d: -f1)
   el=$(grep -n '<!-- monoptah-evidence:end -->' "$g" | cut -d: -f1)
-  if [ "$bl" -ge "$el" ]; then skip "its Monoptah markers are out of order"; fi
+  if [ "$bl" -ge "$el" ]; then skip "its zptah markers are out of order"; fi
 fi
 tmp=$(mktemp "$d/.CLAUDE.local.md.XXXXXX")
 if [ -f "$g" ]; then
@@ -1053,7 +1053,7 @@ cat >> "$tmp" <<'GUIDE'
 ## Evidence for the local user
 You run in @PLACE@. Save screenshots, test output and written reports that prove
 your work under `@WS@/.evidence/` (create subfolders freely). That folder is excluded
-from git and is never committed. The user's Monoptah app copies it to their machine on request,
+from git and is never committed. The user's zptah app copies it to their machine on request,
 so do not put secrets there. Mention the file names in your final message.
 The user can click a file path in the chat to view it.
 <!-- monoptah-evidence:end -->

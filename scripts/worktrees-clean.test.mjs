@@ -188,13 +188,13 @@ test("refuses a worktree with a process cwd inside it or Native Dev running from
   assert.deepEqual(blockingProcesses(wt, { cwds: [{ pid: 1, command: "self", cwd: wt }], ps: [], selfPid: 1 }), []);
 });
 
-test("staleLogDirs picks only old monoptah-native-dev-* directories", async (t) => {
+test("staleLogDirs picks only old zptah-dev-* directories", async (t) => {
   const tmp = await mkdtemp(join(tmpdir(), "wt-clean-logs-"));
   t.after(() => rm(tmp, { recursive: true, force: true }));
-  for (const name of ["monoptah-native-dev-old", "monoptah-native-dev-new", "other-old"]) await mkdir(join(tmp, name));
+  for (const name of ["zptah-dev-old", "zptah-dev-new", "other-old"]) await mkdir(join(tmp, name));
   const old = new Date(Date.now() - 3 * 86400_000);
-  for (const name of ["monoptah-native-dev-old", "other-old"]) utimesSync(join(tmp, name), old, old);
-  assert.deepEqual(staleLogDirs(tmp), [join(tmp, "monoptah-native-dev-old")]);
+  for (const name of ["zptah-dev-old", "other-old"]) utimesSync(join(tmp, name), old, old);
+  assert.deepEqual(staleLogDirs(tmp), [join(tmp, "zptah-dev-old")]);
 });
 
 test("runClean removes a merged worktree and its branches, and dry-run removes nothing", async (t) => {
@@ -462,7 +462,7 @@ test("the worktree a running Native Dev app was launched from is KEEP", async (t
   const f = await fixture(t);
   const { path, branch } = f.addWorktree("w-native", "feat/native");
   // dev-native.mjs spawns the packaged app with cwd = worktree root; the app never changes directory.
-  const app = "/Users/x/Applications/Monoptah Native Dev.app/Contents/MacOS/monocode-gpui";
+  const app = "/Users/x/Applications/zptah Dev.app/Contents/MacOS/monocode-gpui";
   const processes = { cwds: [{ pid: 4242, command: "monocode-gpui", cwd: path }], ps: [{ pid: 4242, command: app }] };
   const v = evaluate(f, "w-native", branch, noPrs, { processes });
   assert.equal(v.ok, false);

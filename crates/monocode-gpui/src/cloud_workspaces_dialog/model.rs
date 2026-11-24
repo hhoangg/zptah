@@ -124,7 +124,7 @@ pub(super) fn uses_line(row: &WorkspaceRow) -> (String, Use) {
     }
     if row.sessions.is_empty() {
         return (
-            "No Monoptah session uses it \u{2014} nothing will stop it for you".into(),
+            "No zptah session uses it \u{2014} nothing will stop it for you".into(),
             Use::Orphan,
         );
     }
@@ -331,7 +331,7 @@ pub(super) const READING_PROMPT: &str = "Checking what would be lost\u{2026}";
 pub(super) fn acknowledgement_label(row: &WorkspaceRow, preview: &DeletePreview) -> String {
     let noun = row.cloud.noun();
     if !preview.ours {
-        format!("I know what is in this {noun}, it is not Monoptah\u{2019}s, and I want it deleted")
+        format!("I know what is in this {noun}, it is not zptah\u{2019}s, and I want it deleted")
     } else {
         format!("I understand what is lost and want this {noun} deleted")
     }
@@ -343,7 +343,7 @@ pub(super) fn delete_prompt(row: &WorkspaceRow, preview: &DeletePreview) -> Vec<
     let mut lines = Vec::new();
     if !preview.ours {
         lines.push(format!(
-            "Monoptah did not create \u{201c}{}\u{201d}: another app, another computer or a person made this {noun}, and it may be in use right now.",
+            "zptah did not create \u{201c}{}\u{201d}: another app, another computer or a person made this {noun}, and it may be in use right now.",
             row.display_name
         ));
     }
@@ -361,7 +361,7 @@ pub(super) fn delete_prompt(row: &WorkspaceRow, preview: &DeletePreview) -> Vec<
     if !row.sessions.is_empty() {
         let n = row.sessions.len();
         lines.push(format!(
-            "The {n} Monoptah session{} on it will be removed: {}.",
+            "The {n} zptah session{} on it will be removed: {}.",
             if n == 1 { "" } else { "s" },
             titles(row)
         ));
@@ -402,7 +402,7 @@ pub(super) fn stop_prompt(row: &WorkspaceRow) -> Vec<String> {
     let mut lines = Vec::new();
     if !row.ours {
         lines.push(format!(
-            "Monoptah did not create \u{201c}{}\u{201d}: another app, another computer or a person made this {noun}, and it may be in use right now. Stopping it ends whatever is running in it.",
+            "zptah did not create \u{201c}{}\u{201d}: another app, another computer or a person made this {noun}, and it may be in use right now. Stopping it ends whatever is running in it.",
             row.display_name
         ));
     }

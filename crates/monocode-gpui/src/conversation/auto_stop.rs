@@ -7,7 +7,7 @@ use std::time::Instant;
 
 /// Why a send is refused while the shell stops this session's workspace (cost control). Nothing
 /// is lost: the typed text stays in the composer and the next send resumes the workspace.
-pub(crate) const AUTO_STOPPING: &str = "Monoptah is stopping this workspace after it sat idle. \
+pub(crate) const AUTO_STOPPING: &str = "zptah is stopping this workspace after it sat idle. \
      Nothing was sent; send again in a moment and it will resume.";
 
 impl Conversation {

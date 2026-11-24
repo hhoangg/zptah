@@ -25,7 +25,7 @@ use std::{
 /// How long a text field rests before what was typed is written.
 pub(crate) const SAVE_DELAY: Duration = Duration::from_millis(400);
 
-pub(crate) const READ_ONLY: &str = "This emoji library was saved by a newer version of Monoptah. It is shown here but cannot be changed.";
+pub(crate) const READ_ONLY: &str = "This emoji library was saved by a newer version of zptah. It is shown here but cannot be changed.";
 
 /// What the library tells its listeners.
 pub(crate) enum EmojiEvent {

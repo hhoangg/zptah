@@ -1,5 +1,5 @@
 //! FloatingMonoChat.tsx: the menu bar's chat panel. It floats over other
-//! apps without activating Monoptah, and its rail moves between Monos without
+//! apps without activating zptah, and its rail moves between Monos without
 //! touching the workspace window's selection.
 use super::*;
 #[cfg(any(target_os = "macos", test))]
@@ -281,7 +281,7 @@ impl Floating {
                 )
             })
             .child(
-                header_button("floating-reveal", "Open in Monoptah", "external-link").on_click(
+                header_button("floating-reveal", "Open in zptah", "external-link").on_click(
                     cx.listener(|this, _, window, cx| {
                         let id = this.selected.clone();
                         let owner = this.owner.clone();
@@ -616,7 +616,7 @@ impl Monos {
             is_minimizable: false,
             display_id: display.map(|d| d.id()),
             window_background: crate::theme::window_backdrop(!is_light()),
-            app_id: Some("com.monoptah.native.mono-chat".into()),
+            app_id: Some("app.zptah.desktop.mono-chat".into()),
             ..Default::default()
         };
         // Opening a window draws its root immediately. Release the manager's

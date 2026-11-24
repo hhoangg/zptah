@@ -487,7 +487,7 @@ fn an_import_refuses_tampered_unknown_secret_blocked_newer_and_oversized_files()
     refuses(
         &edit(&good, |v| v["format"] = json!("x")),
         &[],
-        "not a monoptah",
+        "not a zptah",
     );
     refuses("{not json", &[], "not a recipe");
     refuses(&"x".repeat(share::MAX_FILE_BYTES + 1), &[], "too big");
