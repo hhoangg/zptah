@@ -129,6 +129,10 @@ test.describe("push deep link", () => {
     await seedPending(MONO_URL);
     await page.goto(`${base}${START}`);
     await expect(page).toHaveURL(new RegExp(`${MONO_URL}$`), { timeout: 60_000 });
+    // The URL changes before the lazy Mono route chunk has loaded. Leaving now aborts that import, and TanStack's
+    // lazyRouteComponent answers a failed import with window.location.reload(), which races the next goto (WebKit:
+    // "Frame load interrupted"). Wait for the screen so nothing is in flight.
+    await expect(page.getByRole("link", { name: "Mono profile" })).toBeVisible({ timeout: 60_000 });
     // Consumed: a later start stays where it opens.
     await page.goto(`${base}${START}`);
     await expect(page).toHaveURL(new RegExp(`/d/${DESKTOP_ID}/p/proj-alpha$`), { timeout: 60_000 });
