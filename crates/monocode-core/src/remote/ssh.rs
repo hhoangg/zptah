@@ -2120,8 +2120,7 @@ mod tests {
         assert!(unix.contains(&format!("VERSION={}\n", shell_quote(HOST_VERSION))));
         assert!(HOST_RELEASE_BASE
             .starts_with("https://github.com/hhoangg/zptah/releases/download/host-v"));
-        // The pin keeps its `+monoptah` flavor until the zptah Host is released and re-pinned.
-        assert!(HOST_VERSION.ends_with("+monoptah") || HOST_VERSION.ends_with("+zptah"));
+        assert!(HOST_VERSION.ends_with("+zptah"));
         assert!(!unix.contains("hardbeat920"));
         for (target, hash) in HOST_SHA256 {
             assert_eq!(
@@ -3198,14 +3197,10 @@ mod tests {
         assert!(!check("1.1.0-rc.1+zptah", "1.1.0-rc.1+zptah"));
         assert!(check("1.1.0-rc.1+zptah", "1.1.0-rc.2+zptah"));
         assert!(check("1.1.0+zptahx", pin), "not the flavor marker");
-        // The legacy "+monoptah" marker counts as foreign once the pin is a zptah build...
+        // The legacy "+monoptah" marker is foreign at any number.
         assert!(check("1.2.1+monoptah", pin));
         assert!(check("99.0.0+monoptah", pin));
         assert!(check("1.2.1+monoptah.3", pin));
-        // ...but is compared by number while the pin is still a "+monoptah" build.
-        assert!(!check("1.2.1+monoptah", "1.2.1+monoptah"));
-        assert!(check("1.2.0+monoptah", "1.2.1+monoptah"));
-        assert!(!check("1.3.0+zptah", "1.2.1+monoptah"));
         assert!(check("1.1.0+other", pin));
     }
     #[test]

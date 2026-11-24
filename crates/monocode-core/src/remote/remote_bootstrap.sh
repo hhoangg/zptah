@@ -11,8 +11,8 @@ HOST_PORT=${ZPTAH_HOST_PORT:-3784}
 
 # True (0) when the installed Host must be replaced by the pinned one: it lacks the
 # "+zptah" flavor marker (an upstream Host, whatever its number; "+zptah.N" counts as
-# the marker) or it is lower than the pin. The legacy "+monoptah" marker (Hosts 1.2.x) also
-# counts as foreign, except while the pin itself is a "+monoptah" build (before the re-pin). A pre-release ("1.1.0-rc.1") is lower than its
+# the marker; the legacy "+monoptah" marker is foreign too) or it is lower than the pin. A
+# pre-release ("1.1.0-rc.1") is lower than its
 # release. Other build metadata is ignored in the comparison. Not used by the install rule
 # below unless ZPTAH_HOST_UPGRADE_IF_OLDER=1 (the two-phase cloud upgrade, which the app
 # only starts after it saw the Host idle); the plain install rule stays "missing or
@@ -20,8 +20,6 @@ HOST_PORT=${ZPTAH_HOST_PORT:-3784}
 is_older_or_foreign() {
   case "$1" in
     *+zptah|*+zptah.*) ;;
-    *+monoptah|*+monoptah.*)
-      case "$2" in *+monoptah|*+monoptah.*) ;; *) return 0 ;; esac ;;
     *) return 0 ;;
   esac
   _installed=${1%%+*}

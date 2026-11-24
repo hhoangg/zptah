@@ -10,6 +10,7 @@ import {
   BINARY,
   HOST_RELEASE_FILE,
   pinnedHostPackage,
+  pinnedHostVersion,
   FEED_URL,
   InterruptedError,
   NOTES_FILE,
@@ -162,6 +163,7 @@ const good = {
   ghAuthed: true,
   release: "absent",
   hostPackage: "zptah-host",
+  hostVersion: "1.4.0+zptah",
 };
 
 test("preconditions pass for a clean, current main and do not look at CI", () => {
@@ -184,6 +186,8 @@ test("every precondition failure is reported with an actionable message", () => 
     [{ tauriCli: false }, /node_modules\/@tauri-apps\/cli is missing.*npm ci/],
     [{ hostPackage: "monocode-host" }, /pins the Host package "monocode-host", not "zptah-host"/],
     [{ hostPackage: null }, /\(unreadable\)/],
+    [{ hostVersion: "1.2.1+monoptah" }, /pins the Host version "1\.2\.1\+monoptah", which does not end with "\+zptah"/],
+    [{ hostVersion: null }, /Host version "\(unreadable\)"/],
     [{ release: "exists" }, /release native-v0\.40\.5 already exists/],
     [{ release: "error", releaseError: "HTTP 500" }, /only HTTP 404 means absent\): HTTP 500/],
   ];
@@ -202,6 +206,15 @@ test("a pin of the old monocode-host package blocks the release", () => {
   assert.ok(evaluatePreconditions(state, V).some((p) => /not "zptah-host"/.test(p)));
   // The checked-in pin is read from the right file and is one of the two known packages.
   assert.ok(["monocode-host", "zptah-host"].includes(pinnedHostPackage(readFileSync(HOST_RELEASE_FILE, "utf8"))));
+});
+
+test("a pinned Host version without the +zptah flavor blocks the release", () => {
+  assert.equal(pinnedHostVersion('pub const HOST_VERSION: &str = "1.4.0+zptah";'), "1.4.0+zptah");
+  assert.equal(pinnedHostVersion("nothing"), null);
+  const pin = 'pub const HOST_PACKAGE_NAME: &str = "zptah-host";\npub const HOST_VERSION: &str = "1.2.1+monoptah";\n';
+  const state = gatherState(fakeRun(), { version: V, hostRelease: pin });
+  assert.ok(evaluatePreconditions(state, V).some((p) => /does not end with "\+zptah"/.test(p)));
+  assert.ok(pinnedHostVersion(readFileSync(HOST_RELEASE_FILE, "utf8")).endsWith("+zptah"));
 });
 
 test("origin must point at the release repository in any git URL form", () => {
@@ -259,7 +272,7 @@ function fakeRun(overrides = {}) {
     return { stdout: "", stderr: "", ...table[key] };
   };
 }
-const GOOD_PIN = 'pub const HOST_PACKAGE_NAME: &str = "zptah-host";\n';
+const GOOD_PIN = 'pub const HOST_PACKAGE_NAME: &str = "zptah-host";\npub const HOST_VERSION: &str = "1.4.0+zptah";\n';
 const docsNotes = `# zptah ${V}\n\nBody\n`;
 
 test("gatherState reads the repository state through the injected runner", () => {

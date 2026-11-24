@@ -19,7 +19,7 @@
 //!
 //! The decision lives in [`upgrade_if_needed`], over the [`UpgradeEnv`] seam, so it is tested
 //! with a fake Host and a fake ssh runner.
-use super::host_info::{HostInfo, FLAVOR_LEGACY_MONOPTAH};
+use super::host_info::HostInfo;
 use super::host_release::HOST_VERSION;
 
 /// Shown while the upgrade script runs.
@@ -68,16 +68,10 @@ pub enum Outcome {
 /// pre-release is lower than its release. The twin of `is_older_or_foreign` in
 /// `remote_bootstrap.sh`, which re-checks it on the machine.
 ///
-/// The legacy `monoptah` flavor (Hosts 1.2.x, before the rename to `zptah`) is replaced like
-/// a foreign Host once the pin is a `zptah` build. While the pin is still a `+monoptah`
-/// build (until the new Host is released and re-pinned) it counts as current-flavor, so it is
-/// compared by number instead of being "upgraded" to the very same version on every connect.
+/// Only a Host of the `zptah` flavor is compared by number; any other flavor (including the
+/// legacy `monoptah` one, which no `zptah-host` ever carried) is replaced.
 pub fn is_older_or_foreign(info: &HostInfo, pin: &str) -> bool {
-    let pin_is_legacy = pin.split_once('+').is_some_and(|(_, marker)| {
-        marker == FLAVOR_LEGACY_MONOPTAH
-            || marker.starts_with(&format!("{FLAVOR_LEGACY_MONOPTAH}."))
-    });
-    if !(info.is_zptah() || (pin_is_legacy && info.is_legacy_monoptah())) {
+    if !info.is_zptah() {
         return true;
     }
     let Some(installed) = info.version.as_deref() else {
@@ -384,28 +378,10 @@ mod tests {
         assert!(!is_older_or_foreign(&info("zptah", Some("1.1.1")), pin));
         assert!(!is_older_or_foreign(&info("zptah", Some("2.0.0")), pin));
         assert!(!is_older_or_foreign(&info("zptah", Some("1.10.0")), pin));
-        // Legacy flavor: replaced like a foreign Host once the pin is a zptah build, at any number.
+        // The legacy flavor never carried a zptah-host: replaced at any number.
         assert!(is_older_or_foreign(&info("monoptah", Some("1.2.1")), pin));
         assert!(is_older_or_foreign(&info("monoptah", Some("99.0.0")), pin));
         assert!(is_older_or_foreign(&info("monoptah", None), pin));
-        // While the pin is still a monoptah build, a legacy Host is compared by number.
-        let legacy_pin = "1.2.1+monoptah";
-        assert!(!is_older_or_foreign(
-            &info("monoptah", Some("1.2.1")),
-            legacy_pin
-        ));
-        assert!(is_older_or_foreign(
-            &info("monoptah", Some("1.2.0")),
-            legacy_pin
-        ));
-        assert!(!is_older_or_foreign(
-            &info("zptah", Some("1.3.0")),
-            legacy_pin
-        ));
-        assert!(is_older_or_foreign(
-            &info("upstream", Some("9.9.9")),
-            legacy_pin
-        ));
     }
 
     /// A fake Host plus a fake ssh runner.

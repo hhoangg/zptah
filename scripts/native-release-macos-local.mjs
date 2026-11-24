@@ -232,6 +232,11 @@ export function pinnedHostPackage(text) {
   return match ? match[1] : null;
 }
 
+export function pinnedHostVersion(text) {
+  const match = /HOST_VERSION: &str = "([^"]*)"/.exec(text ?? "");
+  return match ? match[1] : null;
+}
+
 export function gatherState(run, { version, tauriCli = true, hostRelease }) {
   const tag = tagFor(version);
   const out = (r) => (r.stdout ?? "").trim();
@@ -254,6 +259,7 @@ export function gatherState(run, { version, tauriCli = true, hostRelease }) {
   state.ghAuthed = auth.status === 0;
   state.tauriCli = tauriCli;
   state.hostPackage = pinnedHostPackage(hostRelease);
+  state.hostVersion = pinnedHostVersion(hostRelease);
   const rel = run("gh", ["api", `repos/${REPOSITORY}/releases/tags/${tag}`]);
   if (rel.status === 0) state.release = "exists";
   else if (/HTTP 404/.test(`${rel.stderr ?? ""}${rel.stdout ?? ""}`)) state.release = "absent";
@@ -298,6 +304,10 @@ export function evaluatePreconditions(state, version) {
   if (state.hostPackage !== "zptah-host")
     problems.push(
       `${HOST_RELEASE_FILE} pins the Host package "${state.hostPackage ?? "(unreadable)"}", not "zptah-host". Release the Host and re-pin first: npm run host:release, then node scripts/pin-host-release.mjs host-vX.Y.Z.`,
+    );
+  if (!state.hostVersion?.endsWith("+zptah"))
+    problems.push(
+      `${HOST_RELEASE_FILE} pins the Host version "${state.hostVersion ?? "(unreadable)"}", which does not end with "+zptah". Release the Host and re-pin first: npm run host:release, then node scripts/pin-host-release.mjs host-vX.Y.Z.`,
     );
   if (state.release === "exists")
     problems.push(`A GitHub release ${tag} already exists. This script only starts new releases.`);

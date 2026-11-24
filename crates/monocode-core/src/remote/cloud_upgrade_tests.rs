@@ -438,7 +438,7 @@ fn a_host_whose_sessions_cannot_be_listed_is_deferred_not_touched() {
 fn a_current_fork_host_runs_nothing() {
     let fx = setup(
         false,
-        "monoptah",
+        "zptah",
         host_upgrade::pinned_version(),
         vec![],
         Box::new(|_, _| unreachable!()),
@@ -1331,7 +1331,7 @@ else:
     fn paired(
         chosen: &Arc<Chosen>,
     ) -> Option<(Gh, FakeHost, Arc<Connections>, tempfile::TempDir, String)> {
-        let host = FakeHost::start("monoptah", host_upgrade::pinned_version(), vec!["idle"]);
+        let host = FakeHost::start("zptah", host_upgrade::pinned_version(), vec!["idle"]);
         let gh = Gh::new(host.port)?;
         let dir = tempfile::tempdir().unwrap();
         let connections = Arc::new(Connections::new(dir.path()));
@@ -1459,7 +1459,7 @@ else:
     #[cfg(unix)]
     #[test]
     fn a_job_error_never_shows_the_credential_or_the_prelude() {
-        let host = FakeHost::start("monoptah", host_upgrade::pinned_version(), vec!["idle"]);
+        let host = FakeHost::start("zptah", host_upgrade::pinned_version(), vec!["idle"]);
         let Some(gh) = Gh::new(host.port) else {
             eprintln!("SKIPPED: python3 not found");
             return;
@@ -1484,7 +1484,7 @@ else:
     #[cfg(unix)]
     #[test]
     fn an_account_that_cannot_be_used_fails_the_pairing_without_running_anything() {
-        let host = FakeHost::start("monoptah", host_upgrade::pinned_version(), vec!["idle"]);
+        let host = FakeHost::start("zptah", host_upgrade::pinned_version(), vec!["idle"]);
         let Some(gh) = Gh::new(host.port) else {
             eprintln!("SKIPPED: python3 not found");
             return;
@@ -1943,7 +1943,7 @@ else:
         let current = || {
             setup(
                 false,
-                "monoptah",
+                "zptah",
                 host_upgrade::pinned_version(),
                 vec!["idle"],
                 Box::new(|_, _| Ok(String::new())),

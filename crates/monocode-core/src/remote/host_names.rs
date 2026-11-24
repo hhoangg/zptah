@@ -49,12 +49,8 @@ pub fn check_pin(package: &str, version: &str) -> Result<(), String> {
 }
 
 /// [`check_pin`] for the current pin. Call it before generating or sending any Host bootstrap
-/// or upgrade script (SSH, codespaces, cloud sessions, sandboxes). Unit tests of the flows run
-/// against fake machines with the interim pin, so they skip it; `check_pin` itself is tested.
+/// or upgrade script (SSH, codespaces, cloud sessions, sandboxes).
 pub fn ensure_host_available() -> Result<(), String> {
-    if cfg!(test) {
-        return Ok(());
-    }
     check_pin(
         crate::remote::host_release::HOST_PACKAGE_NAME,
         crate::remote::host_release::HOST_VERSION,
@@ -120,8 +116,7 @@ mod tests {
     }
 
     /// Everything the app sends to a machine (all four bootstraps, upgrade, pairing, the
-    /// sandbox relay) must name the zptah paths only. The package name inside the pinned
-    /// release is the one allowed exception, until the pin moves to a `zptah-host` release.
+    /// sandbox relay) must name the zptah paths only.
     #[test]
     fn scripts_never_name_monocode_host_paths() {
         use crate::remote::ssh::{
@@ -129,7 +124,6 @@ mod tests {
             codespace_stop_host_prestep, pairing_script, sandbox_bootstrap_script, upgrade_script,
             HostPlatform,
         };
-        let package = crate::remote::host_release::HOST_PACKAGE_NAME;
         let mut scripts = vec![
             codespace_bootstrap_script(),
             sandbox_bootstrap_script(None),
@@ -143,19 +137,6 @@ mod tests {
             scripts.push(pairing_script(platform, "name"));
         }
         for script in scripts {
-            // Only while the pin is the old `monocode-host` package: its name appears as the
-            // asset prefix and the executable inside the package, never as a path. After the
-            // re-pin this replace is a no-op and the exception can go.
-            let mut script = script;
-            for allowed in [
-                "FILE=\"{}-$OS-$ARCH.tar.gz\"",
-                "\"$1/{}\" --version",
-                "\"$DEST/{}\" --version",
-                "exec \"$RUNTIME/{}\"",
-                "\"{}-$target.zip\"",
-            ] {
-                script = script.replace(&allowed.replace("{}", package), "ALLOWED");
-            }
             assert!(!script.contains(".monocode-host"), "{script}");
             assert!(!script.contains("com.monocode.host"), "{script}");
             assert!(!script.contains("monocode-host"), "{script}");
