@@ -297,7 +297,7 @@ Connect another computer using an SSH forward to the loopback port.`);
       void stop();
     });
     console.log(
-      `Monoptah Host ${store.environmentId} listening on 127.0.0.1:${port}`,
+      `zptah Host ${store.environmentId} listening on 127.0.0.1:${port}`,
     );
     console.log(
       `Providers: ${available.join(", ") || "none found; install and authenticate a supported provider on this host"}`,

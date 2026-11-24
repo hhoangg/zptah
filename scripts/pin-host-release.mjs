@@ -1,4 +1,4 @@
-// Fork-local (Monoptah). Pins a published Monoptah Host release into the app:
+// Pins a published zptah Host release into the app:
 //   node scripts/pin-host-release.mjs host-vX.Y.Z [--run <workflow run id>]
 // It fetches host-release.json (preferably the artifact of the release workflow run,
 // otherwise the release asset), verifies its build-provenance attestation, cross-checks

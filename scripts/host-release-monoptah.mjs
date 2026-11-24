@@ -1,7 +1,7 @@
-// Fork-local (Monoptah). Prepares a Monoptah Host release:
+// Prepares a zptah Host release:
 //   npm run host:release -- X.Y.Z
 // It requires a clean tree, writes host/VERSION (X.Y.Z+zptah), commits
-// "Release Monoptah Host X.Y.Z" and creates the tag host-vX.Y.Z. When host/VERSION
+// "Release zptah Host X.Y.Z" and creates the tag host-vX.Y.Z. When host/VERSION
 // already is X.Y.Z+zptah it only tags HEAD. It never pushes:
 // it prints the push commands, and publishing stays an explicit step the user
 // approves. Pushing the tag starts .github/workflows/host-release-monoptah.yml.
@@ -25,7 +25,7 @@ export function validateVersion(version) {
 
 export const hostVersion = (version) => `${version}+${FLAVOR}`;
 export const tagFor = (version) => `host-v${validateVersion(version)}`;
-export const commitMessage = (version) => `Release Monoptah Host ${version}`;
+export const commitMessage = (version) => `Release zptah Host ${version}`;
 
 // Compares X.Y.Z numerically; build metadata is ignored.
 export function compareVersions(a, b) {

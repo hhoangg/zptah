@@ -53,7 +53,7 @@ test("validates plain X.Y.Z only", () => {
     assert.throws(() => validateVersion(bad), /Invalid Host version/);
   assert.equal(tagFor("1.2.3"), "host-v1.2.3");
   assert.equal(hostVersion("1.2.3"), "1.2.3+zptah");
-  assert.equal(commitMessage("1.2.3"), "Release Monoptah Host 1.2.3");
+  assert.equal(commitMessage("1.2.3"), "Release zptah Host 1.2.3");
   assert.deepEqual(pushCommands("1.2.3"), [
     "git push origin HEAD",
     "git push origin host-v1.2.3",
@@ -77,7 +77,7 @@ test("writes host/VERSION, commits and tags", async () => {
     );
     assert.equal(
       git(dir, "log", "-1", "--format=%s"),
-      "Release Monoptah Host 1.0.1",
+      "Release zptah Host 1.0.1",
     );
     assert.equal(git(dir, "tag", "--list"), "host-v1.0.1");
     assert.equal(git(dir, "status", "--porcelain"), "");

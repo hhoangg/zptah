@@ -1,4 +1,4 @@
-# Fork-local release workflow (Monoptah Host). Pushing a tag host-vX.Y.Z (made by
+# Fork-local release workflow (zptah Host). Pushing a tag host-vX.Y.Z (made by
 # `npm run host:release -- X.Y.Z`) builds every Host package that
 # `npm run host:package -- --all` produces and publishes them to a GitHub Release
 # host-vX.Y.Z on this repository:
@@ -171,6 +171,6 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --latest=false \
-            --title "Monoptah Host $version" \
+            --title "zptah Host $version" \
             --notes "zptah Host $version (zptah-host $version+zptah). Packages for every target, each with its sha256, and host-release.json." \
             dist/zptah-host-* dist/host-release.json
