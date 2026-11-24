@@ -7,7 +7,7 @@
 #   - a GitHub Release native-vX.Y.Z with, per platform, the updater package and
 #     its signature (what the in-app updater downloads):
 #       macOS arm64    zptah_X.Y.Z_aarch64.app.tar.gz (+ .sig), plus the
-#                      .zip and .zip.sha256 that the monoptah-native Homebrew
+#                      .zip and .zip.sha256 that the zptah Homebrew
 #                      cask pins (self-signed, not notarized: no Apple account).
 #                      The three unsigned files are uploaded by the local script;
 #                      this workflow only adds the .sig.
@@ -83,12 +83,12 @@
 # refuses anything else. A tag such as native-v0.34.0-preview.1 fails the first
 # step.
 #
-# The secrets read are the two updater signing secrets, TAURI_SIGNING_PRIVATE_KEY
-# and its password (they sign the updater packages and the feed with the same key
-# the Tauri app trusts), the automatic GITHUB_TOKEN, and the optional
+# The secrets read are the two updater signing secrets, UPDATER_SIGNING_KEY
+# and UPDATER_SIGNING_KEY_PASSWORD (they sign the updater packages and the feed
+# with the key whose public half is assets/native/updater.pub), the automatic GITHUB_TOKEN, and the optional
 # HOMEBREW_TAP_TOKEN. HOMEBREW_TAP_TOKEN is a fine-grained personal access token
-# with Contents read/write on hhoangg/homebrew-monoptah only; the homebrew job
-# uses it to bump Casks/monoptah-native.rb after the release is published, and
+# with Contents read/write on hhoangg/homebrew-zptah only; the homebrew job
+# uses it to bump Casks/zptah.rb after the release is published, and
 # skips the bump (without failing the release) when it is not set. Fine-grained
 # tokens expire: if the tap checkout fails, the likely cause is an expired
 # HOMEBREW_TAP_TOKEN. There is no Apple signing, notarization or R2 upload here.
@@ -153,9 +153,9 @@ concurrency:
 env:
   RELEASE_TAG: ${{ inputs.tag }}
   # The update feed the app polls, and the key it verifies the feed with.
-  # The key is the public updater key in assets/native/updater.pub (a test keeps them equal).
-  NATIVE_FEED_URL: https://github.com/hhoangg/monoptah/releases/download/native-latest/latest.json
-  NATIVE_UPDATER_PUBKEY: dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdDMjg4MkQ0N0E3MDA1QUYKUldTdkJYQjYxSUlvZks0RGFSU2dkQU91NnBZQitHMC9yVFNwb2swamVLbnpHU2kvVS9yNWRBZkIK
+  # The key it verifies the feed with is the public updater key in assets/native/updater.pub of the
+  # built commit; the steps below read that file, so there is no second copy to keep equal.
+  NATIVE_FEED_URL: https://github.com/hhoangg/zptah/releases/download/native-latest/latest.json
 
 jobs:
   # Validates the inputs and decides what to build. Two modes:
@@ -349,7 +349,7 @@ jobs:
           set -euo pipefail
           echo "MONOCODE_NATIVE_VERSION=${RELEASE_TAG#native-v}" >> "$GITHUB_ENV"
           echo "MONOCODE_NATIVE_UPDATER_ENDPOINT=$NATIVE_FEED_URL" >> "$GITHUB_ENV"
-          echo "MONOCODE_NATIVE_UPDATER_PUBKEY=$NATIVE_UPDATER_PUBKEY" >> "$GITHUB_ENV"
+          echo "MONOCODE_NATIVE_UPDATER_PUBKEY=$(tr -d '[:space:]' < assets/native/updater.pub)" >> "$GITHUB_ENV"
 
       - name: Install native Linux build dependencies
         if: matrix.kind == 'linux'
@@ -437,7 +437,7 @@ jobs:
           set -euo pipefail
           echo "MONOCODE_NATIVE_VERSION=${RELEASE_TAG#native-v}" >> "$GITHUB_ENV"
           echo "MONOCODE_NATIVE_UPDATER_ENDPOINT=$NATIVE_FEED_URL" >> "$GITHUB_ENV"
-          echo "MONOCODE_NATIVE_UPDATER_PUBKEY=$NATIVE_UPDATER_PUBKEY" >> "$GITHUB_ENV"
+          echo "MONOCODE_NATIVE_UPDATER_PUBKEY=$(tr -d '[:space:]' < assets/native/updater.pub)" >> "$GITHUB_ENV"
       - run: cargo build --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-gpui --release
       - run: node scripts/package-native.mjs rpm crates/monocode-gpui/target/release/monocode-gpui native-dist x86_64
       - uses: actions/upload-artifact@v4
@@ -636,7 +636,7 @@ jobs:
           set -euo pipefail
           echo "MONOCODE_NATIVE_VERSION=${RELEASE_TAG#native-v}" >> "$GITHUB_ENV"
           echo "MONOCODE_NATIVE_UPDATER_ENDPOINT=$NATIVE_FEED_URL" >> "$GITHUB_ENV"
-          echo "MONOCODE_NATIVE_UPDATER_PUBKEY=$NATIVE_UPDATER_PUBKEY" >> "$GITHUB_ENV"
+          echo "MONOCODE_NATIVE_UPDATER_PUBKEY=$(tr -d '[:space:]' < assets/native/updater.pub)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
@@ -719,8 +719,10 @@ jobs:
       # step, so no unsigned or partial update can be published.
       - name: Sign the updater packages and the feed
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # The repository secrets are UPDATER_SIGNING_KEY and UPDATER_SIGNING_KEY_PASSWORD;
+          # the signer (@tauri-apps/cli) reads them under these names, in this step only.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATER_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.UPDATER_SIGNING_KEY_PASSWORD }}
         run: node "$TOOLS/native-release-monoptah.mjs" sign native-dist "$RUNNER_TEMP/release-notes.md"
 
       # Checks the feed and all five packages with the app's own verifier and the
@@ -866,7 +868,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${HOMEBREW_TAP_TOKEN:-}" ]]; then
-            echo "::notice::Homebrew tap was not updated: the HOMEBREW_TAP_TOKEN secret is not set. To enable it, add a fine-grained personal access token with Contents read/write on hhoangg/homebrew-monoptah only as a repository secret named HOMEBREW_TAP_TOKEN. Until then, bump Casks/monoptah-native.rb by hand."
+            echo "::notice::Homebrew tap was not updated: the HOMEBREW_TAP_TOKEN secret is not set. To enable it, add a fine-grained personal access token with Contents read/write on hhoangg/homebrew-zptah only as a repository secret named HOMEBREW_TAP_TOKEN. Until then, bump Casks/zptah.rb by hand."
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
@@ -905,7 +907,7 @@ jobs:
         if: steps.gate.outputs.enabled == 'true'
         uses: actions/checkout@v4
         with:
-          repository: hhoangg/homebrew-monoptah
+          repository: hhoangg/homebrew-zptah
           ref: main
           path: homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -917,7 +919,7 @@ jobs:
         run: |
           set -euo pipefail
           V="${RELEASE_TAG#native-v}"
-          bash scripts/update-homebrew-cask.sh homebrew-tap/Casks/monoptah-native.rb "$V" "$SHA"
+          bash scripts/update-homebrew-cask.sh homebrew-tap/Casks/zptah.rb "$V" "$SHA"
           cd homebrew-tap
           if git diff --quiet; then
             echo "Cask already pins $V, nothing to push."
@@ -925,7 +927,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
-          git add Casks/monoptah-native.rb
+          git add Casks/zptah.rb
           git commit -m "Update zptah to $V"
           # Rebase onto the tap's main before pushing, and retry once when the
           # push is rejected because someone else pushed in between.

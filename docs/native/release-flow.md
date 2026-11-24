@@ -101,6 +101,33 @@ the release scripts" step tests these tools. Building and packaging still use th
 commit. Every call of a helper checks its exit status, and the polling reads of the wait loop
 are retried 3 times, 10 seconds apart (an HTTP 404 for the release is an answer, not an error).
 
+## Updater key, feed and cask
+
+- The updater signing key is at `~/.config/zptah/updater.key` (password in
+  `~/.config/zptah/updater.key.password`), never in the repo. Its public half, minisign key id
+  `437A3F6DE4A767DD`, is `assets/native/updater.pub`; the workflow and the local script read that
+  file, so there is one copy.
+- The repository secrets on `hhoangg/zptah` are `UPDATER_SIGNING_KEY` and
+  `UPDATER_SIGNING_KEY_PASSWORD`. Only the `publish` job reads them, and maps them to
+  `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for the signer. The local
+  script removes both name families from the environment of every child process.
+- The feed compiled into the app is
+  `https://github.com/hhoangg/zptah/releases/download/native-latest/latest.json`.
+- The cask is `Casks/zptah.rb` in the tap `hhoangg/homebrew-zptah`. The `homebrew` job only bumps
+  `version` and `sha256`, so push `packaging/homebrew/zptah.rb` to the tap as `Casks/zptah.rb`
+  once, by hand, before the first release. The job needs the `HOMEBREW_TAP_TOKEN` secret.
+
+## The first zptah release
+
+- Run the script from a clone whose `origin` is `hhoangg/zptah` (https or ssh). The script
+  refuses any other origin before it tags or pushes, because tags and pushes go to
+  `origin` while the release goes to `hhoangg/zptah`.
+- Local tags from the Monoptah repository (`native-v*`, `host-v*`) must not be present, or the
+  notes pick the wrong previous tag and a leftover `native-vX.Y.Z` blocks that version. Check
+  with `git tag --list 'native-v*'` and delete them locally (`git tag -d`); never push a mirror of them.
+- With no earlier `native-v*` tag the notes have no starting point: pass `--since <first commit>`
+  (for example the root commit of the repository) and, for hand-written highlights, `--notes FILE`.
+
 ## Concurrency and timeouts
 
 Runs of one tag share the group `native-monoptah-release-<tag>` (nothing is cancelled). GitHub

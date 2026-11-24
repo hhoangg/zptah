@@ -100,7 +100,7 @@ test("the manifest lists every target on the versioned release URL", () => {
   assert.equal(result.channel, "native-preview");
   assert.equal(result.version, "0.34.0");
   assert.deepEqual(Object.keys(result.platforms).sort(), [...TARGETS].sort());
-  const base = "https://github.com/hhoangg/monoptah/releases/download/native-v0.34.0/";
+  const base = "https://github.com/hhoangg/zptah/releases/download/native-v0.34.0/";
   assert.deepEqual(result.platforms["darwin-aarch64-app"], {
     url: `${base}zptah_0.34.0_aarch64.app.tar.gz`,
     signature: "signed-darwin-aarch64-app",
@@ -597,7 +597,7 @@ function gateIo(answers) {
 
 test("the runs path has no status filter and asks for 100 runs", () => {
   const path = ciRunsPath(SHA40);
-  assert.equal(path, `repos/hhoangg/monoptah/actions/workflows/native.yml/runs?head_sha=${SHA40}&event=push&branch=main&per_page=100`);
+  assert.equal(path, `repos/hhoangg/zptah/actions/workflows/native.yml/runs?head_sha=${SHA40}&event=push&branch=main&per_page=100`);
   assert.ok(!path.includes("status="));
   assert.ok(ciRunsPath(SHA40, "o/r").startsWith("repos/o/r/"));
 });

@@ -31,6 +31,7 @@ import {
   interruptActions,
   formatCommand,
   gatherState,
+  originMatchesRepository,
   interruptedMessage,
   macosReleaseFiles,
   packageCommand,
@@ -80,13 +81,19 @@ test("arguments: a plain version, optional --dry-run, nothing else", () => {
   assert.equal(tagFor(V), "native-v0.40.5");
 });
 
-test("the compiled-in feed URL and public key equal the release workflow's", () => {
+test("the compiled-in feed URL, public key and signing secrets match the release workflow", () => {
   const workflow = read(".github/workflows/native-release-monoptah.yml");
   const value = (name) => new RegExp(`^  ${name}: (\\S+)$`, "m").exec(workflow)?.[1];
   assert.ok(value("NATIVE_FEED_URL"));
   assert.equal(FEED_URL, value("NATIVE_FEED_URL"));
   const pubkey = readUpdaterPubkey(read("assets/native/updater.pub"));
-  assert.equal(pubkey, value("NATIVE_UPDATER_PUBKEY"));
+  // The workflow reads the key from the file; it holds no second copy.
+  assert.equal(value("NATIVE_UPDATER_PUBKEY"), undefined);
+  assert.ok(!workflow.includes(pubkey));
+  assert.ok(workflow.includes("< assets/native/updater.pub"));
+  assert.equal(FEED_URL, "https://github.com/hhoangg/zptah/releases/download/native-latest/latest.json");
+  // Minisign key id 437A3F6DE4A767DD.
+  assert.match(Buffer.from(pubkey, "base64").toString("utf8"), /minisign public key: 437A3F6DE4A767DD\n/);
   assert.throws(() => readUpdaterPubkey("\n"), /does not hold one updater public key/);
   assert.throws(() => readUpdaterPubkey("two words"), /does not hold one updater public key/);
   assert.equal(readUpdaterPubkey(" KEY\n"), "KEY");
@@ -99,12 +106,14 @@ test("the build environment carries the release settings and never the signing k
     CARGO_BUILD_TARGET_DIR: "/elsewhere",
     TAURI_SIGNING_PRIVATE_KEY: "secret",
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "secret",
+    UPDATER_SIGNING_KEY: "secret",
+    UPDATER_SIGNING_KEY_PASSWORD: "secret",
   });
   assert.equal(env.MONOCODE_NATIVE_VERSION, V);
   assert.equal(env.MONOCODE_NATIVE_UPDATER_ENDPOINT, FEED_URL);
   assert.equal(env.MONOCODE_NATIVE_UPDATER_PUBKEY, "PUBKEY");
   assert.equal(env.PATH, "/bin");
-  assert.deepEqual(Object.keys(env).filter((k) => k.startsWith("TAURI_SIGNING")), []);
+  assert.deepEqual(Object.keys(env).filter((k) => /^(TAURI_SIGNING|UPDATER_SIGNING)/.test(k)), []);
   // The binary path is fixed, so cargo must not build into another directory.
   assert.equal(env.CARGO_TARGET_DIR, undefined);
   assert.equal(env.CARGO_BUILD_TARGET_DIR, undefined);
@@ -139,6 +148,7 @@ test("the macOS SDK must be 26 or newer", () => {
 });
 
 const good = {
+  originUrl: "git@github.com:hhoangg/zptah.git",
   fetchOk: true,
   branch: "main",
   head: SHA,
@@ -166,6 +176,8 @@ test("every precondition failure is reported with an actionable message", () => 
     [{ remoteTag: true }, /already exists on origin/],
     [{ remoteTagCheckFailed: "denied" }, /Could not check the tag on origin: denied/],
     [{ ghAuthed: false }, /gh auth login/],
+    [{ originUrl: "git@github.com:hhoangg/monoptah.git" }, /remote "origin" is "git@github.com:hhoangg\/monoptah.git", not hhoangg\/zptah/],
+    [{ originUrl: "" }, /"origin" is missing, not hhoangg\/zptah/],
     [{ tauriCli: false }, /node_modules\/@tauri-apps\/cli is missing.*npm ci/],
     [{ release: "exists" }, /release native-v0\.40\.5 already exists/],
     [{ release: "error", releaseError: "HTTP 500" }, /only HTTP 404 means absent\): HTTP 500/],
@@ -178,8 +190,29 @@ test("every precondition failure is reported with an actionable message", () => 
   assert.equal(evaluatePreconditions({ ...good, branch: "x", ghAuthed: false }, V).length, 2);
 });
 
+test("origin must point at the release repository in any git URL form", () => {
+  for (const url of [
+    "https://github.com/hhoangg/zptah.git",
+    "https://github.com/hhoangg/zptah",
+    "https://user@github.com/hhoangg/zptah.git/",
+    "git@github.com:hhoangg/zptah.git",
+    "ssh://git@github.com/hhoangg/zptah.git",
+    "ssh://git@github.com:22/hhoangg/zptah.git",
+    "HTTPS://github.com/HHoangg/Zptah.git",
+  ]) assert.equal(originMatchesRepository(url), true, url);
+  for (const url of [
+    "",
+    "https://github.com/hhoangg/monoptah.git",
+    "git@github.com:hardbeat920/monocode.git",
+    "https://github.com/hhoangg/zptah-fork.git",
+    "https://github.com/evil/hhoangg/zptah.git",
+    "https://example.com/hhoangg/zptah.git",
+  ]) assert.equal(originMatchesRepository(url), false, url);
+});
+
 function fakeRun(overrides = {}) {
   const table = {
+    "git remote get-url origin": { status: 0, stdout: "https://github.com/hhoangg/zptah.git\n" },
     "git fetch origin": { status: 0 },
     "git branch --show-current": { status: 0, stdout: "main\n" },
     "git rev-parse HEAD": { status: 0, stdout: `${SHA}\n` },
@@ -188,7 +221,7 @@ function fakeRun(overrides = {}) {
     [`git rev-parse -q --verify refs/tags/native-v${V}`]: { status: 1 },
     [`git ls-remote --tags origin refs/tags/native-v${V}`]: { status: 0, stdout: "" },
     "gh auth status": { status: 0 },
-    [`gh api repos/hhoangg/monoptah/releases/tags/native-v${V}`]: { status: 1, stderr: "gh: Not Found (HTTP 404)" },
+    [`gh api repos/hhoangg/zptah/releases/tags/native-v${V}`]: { status: 1, stderr: "gh: Not Found (HTTP 404)" },
     "git tag --list native-v*": { status: 0, stdout: "native-v0.40.4\nnative-v0.40.5-preview.1\n" },
     "git merge-base --is-ancestor native-v0.40.4 HEAD": { status: 0 },
     "git log --first-parent -z --format=%H%n%s%n%b native-v0.40.4..HEAD": {
@@ -196,11 +229,11 @@ function fakeRun(overrides = {}) {
       stdout:
         "c1\nfeat(ui): new panel (#7)\n\0c2\nMerge pull request #8 from hhoangg/fix/y\nfix: y\n\0",
     },
-    "gh api repos/hhoangg/monoptah/pulls/7 --jq {title: .title, labels: [.labels[].name]}": {
+    "gh api repos/hhoangg/zptah/pulls/7 --jq {title: .title, labels: [.labels[].name]}": {
       status: 0,
       stdout: JSON.stringify({ title: "feat(ui): new panel", labels: [] }),
     },
-    "gh api repos/hhoangg/monoptah/pulls/8 --jq {title: .title, labels: [.labels[].name]}": {
+    "gh api repos/hhoangg/zptah/pulls/8 --jq {title: .title, labels: [.labels[].name]}": {
       status: 0,
       stdout: JSON.stringify({ title: "fix(core): y is fixed", labels: [] }),
     },
@@ -221,7 +254,7 @@ test("gatherState reads the repository state through the injected runner", () =>
 });
 
 test("gatherState: only HTTP 404 means no release, other gh errors fail", () => {
-  const key = `gh api repos/hhoangg/monoptah/releases/tags/native-v${V}`;
+  const key = `gh api repos/hhoangg/zptah/releases/tags/native-v${V}`;
   const exists = gatherState(fakeRun({ [key]: { status: 0, stdout: "{}" } }), { version: V });
   assert.equal(exists.release, "exists");
   const broken = gatherState(fakeRun({ [key]: { status: 1, stderr: "gh: Bad credentials (HTTP 401)" } }), { version: V });
@@ -245,7 +278,7 @@ test("gatherState: tags are detected", () => {
 test("the CI query lists the native.yml push runs on main for the commit, in any state", () => {
   assert.equal(
     ciRunsPath(SHA),
-    `repos/hhoangg/monoptah/actions/workflows/native.yml/runs?head_sha=${SHA}&event=push&branch=main&per_page=100`,
+    `repos/hhoangg/zptah/actions/workflows/native.yml/runs?head_sha=${SHA}&event=push&branch=main&per_page=100`,
   );
 });
 
@@ -294,8 +327,8 @@ test("the workflow is dispatched by a file name that exists and accepts the tag,
   const args = dispatchArgs({ version: V, sha: SHA, requestId: "abc123" });
   assert.deepEqual(args.slice(0, 3), ["workflow", "run", "native-release-monoptah.yml"]);
   assert.deepEqual(args.slice(-6), ["-f", "tag=native-v0.40.5", "-f", `sha=${SHA}`, "-f", "request_id=abc123"]);
-  assert.equal(manualDispatch(V), "gh workflow run native-release-monoptah.yml --repo hhoangg/monoptah --ref main -f tag=native-v0.40.5");
-  assert.equal(cancelCommand(4242), "gh run cancel 4242 --repo hhoangg/monoptah");
+  assert.equal(manualDispatch(V), "gh workflow run native-release-monoptah.yml --repo hhoangg/zptah --ref main -f tag=native-v0.40.5");
+  assert.equal(cancelCommand(4242), "gh run cancel 4242 --repo hhoangg/zptah");
   const runs = [
     { databaseId: 1, displayTitle: "Native release native-v0.40.5 other", url: "u1" },
     { databaseId: 2, displayTitle: "Native release native-v0.40.5 abc123", url: "u2" },
@@ -318,10 +351,10 @@ test("each failed publish step prints the state left behind and a recovery", () 
   assert.match(dispatch, /safe to repeat/);
   // With an early run every step names it and the exact commands.
   const withEarly = { ...params, early: { id: 4242, url: "https://example.test/runs/4242" } };
-  assert.match(recoveryMessage("tag", withEarly), /gh run cancel 4242 --repo hhoangg\/monoptah/);
+  assert.match(recoveryMessage("tag", withEarly), /gh run cancel 4242 --repo hhoangg\/zptah/);
   const pushE = recoveryMessage("push-tag", withEarly);
   assert.match(pushE, /cancel the early run: gh run cancel 4242/);
-  assert.match(pushE, /early CI run https:\/\/example\.test\/runs\/4242 is still waiting.*120 minutes.*gh workflow run native-release-monoptah\.yml --repo hhoangg\/monoptah --ref main -f tag=native-v0\.40\.5/s);
+  assert.match(pushE, /early CI run https:\/\/example\.test\/runs\/4242 is still waiting.*120 minutes.*gh workflow run native-release-monoptah\.yml --repo hhoangg\/zptah --ref main -f tag=native-v0\.40\.5/s);
   assert.match(recoveryMessage("release", withEarly), /still waiting for the release and the macOS files/);
   assert.match(recoveryMessage("dispatch", withEarly), /early run .*4242.*gh run cancel 4242/s);
   assert.equal(formatCommand({ command: "gh", args: ["a b", "c"] }), 'gh "a b" c');
@@ -397,6 +430,7 @@ function fakeIo({ files = true, headAfter = SHA, dirtyAfter = "", stamp = null, 
       const key = [command, ...args].join(" ");
       events.push(`capture ${key}`);
       if (key in table) return { stdout: "", stderr: "", ...table[key] };
+      if (key === "git remote get-url origin") return { status: 0, stdout: "git@github.com:hhoangg/zptah.git\n", stderr: "" };
       if (key === "git rev-parse HEAD") {
         revParses += 1;
         // The first read is the precondition; later ones are rechecks.
@@ -818,7 +852,7 @@ test("without an early run (dispatch refused or run not found) the workflow is d
   // A refusal of the fresh dispatch too is an error with the manual command.
   const always = fakeIo({ early: { dispatchFails: 2 } });
   const err = await runRelease([V], always.io).catch((e) => e);
-  assert.match(err.message, /Could not dispatch native-release-monoptah\.yml: HTTP 422.*safe to repeat.*gh workflow run native-release-monoptah\.yml --repo hhoangg\/monoptah --ref main -f tag=native-v0\.40\.5/s);
+  assert.match(err.message, /Could not dispatch native-release-monoptah\.yml: HTTP 422.*safe to repeat.*gh workflow run native-release-monoptah\.yml --repo hhoangg\/zptah --ref main -f tag=native-v0\.40\.5/s);
   assert.match(err.message, /safe to repeat/);
   const lost = fakeIo({ early: { findable: false } });
   await runRelease([V], lost.io);
@@ -829,7 +863,7 @@ test("without an early run (dispatch refused or run not found) the workflow is d
 test("a failure before the tag cancels the early run and says so", async () => {
   const failed = fakeIo({ failOn: "npm run native:check" });
   await assert.rejects(runRelease([V], failed.io), /native:check failed.*early CI run https:\/\/example\.test\/runs\/4242 was cancelled/s);
-  assert.ok(cmds(failed.events).includes("gh run cancel 4242 --repo hhoangg/monoptah"));
+  assert.ok(cmds(failed.events).includes("gh run cancel 4242 --repo hhoangg/zptah"));
   const build = fakeIo({ failOn: "cargo build" });
   await assert.rejects(runRelease([V], build.io), /was cancelled/);
   const moved = fakeIo({ headAfter: "d".repeat(40) });
@@ -838,19 +872,19 @@ test("a failure before the tag cancels the early run and says so", async () => {
   await assert.rejects(runRelease([V], ci.io), /native\.yml did not succeed.*was cancelled/s);
   const timeout = fakeIo({ ciRuns: [[run("queued")]] });
   await assert.rejects(runRelease([V, "--ci-timeout", "1"], timeout.io), /did not finish.*was cancelled/s);
-  for (const f of [build, moved, ci, timeout]) assert.ok(cmds(f.events).includes("gh run cancel 4242 --repo hhoangg/monoptah"));
+  for (const f of [build, moved, ci, timeout]) assert.ok(cmds(f.events).includes("gh run cancel 4242 --repo hhoangg/zptah"));
   assert.ok(!cmds(failed.events).some((c) => /^(git tag|git push|gh release)/.test(c)));
 });
 
 test("when the early run cannot be cancelled the exact command is printed", async () => {
   const { io } = fakeIo({ failOn: "npm run native:check", early: { cancelFails: true } });
-  await assert.rejects(runRelease([V], io), /could not be cancelled \(HTTP 403\)\. Cancel it: gh run cancel 4242 --repo hhoangg\/monoptah.*120 minute wait/s);
+  await assert.rejects(runRelease([V], io), /could not be cancelled \(HTTP 403\)\. Cancel it: gh run cancel 4242 --repo hhoangg\/zptah.*120 minute wait/s);
 });
 
 test("a failed git tag cancels the early run, a failed push keeps it and says how to continue", async () => {
   const tagFail = fakeIo({ failOn: "git tag" });
   await assert.rejects(runRelease([V], tagFail.io), /was cancelled.*Nothing was pushed/s);
-  assert.ok(cmds(tagFail.events).includes("gh run cancel 4242 --repo hhoangg/monoptah"));
+  assert.ok(cmds(tagFail.events).includes("gh run cancel 4242 --repo hhoangg/zptah"));
   const pushFail = fakeIo({ failOn: "git push" });
   await assert.rejects(
     runRelease([V], pushFail.io),
@@ -883,7 +917,9 @@ test("the workflow builds from the planned commit and publishes only after await
   assert.ok(!publish.includes("needs.plan.outputs.reuse"));
   assert.match(publish, /git rev-parse HEAD[\s\S]*PLAN_SHA/);
   // Only publish sees the signing key.
-  for (const name of ["plan", "package", "package-rpm", "await-release", "homebrew"]) assert.ok(!job(name).includes("TAURI_SIGNING"), name);
+  for (const name of ["plan", "package", "package-rpm", "await-release", "homebrew"]) assert.ok(!job(name).includes("TAURI_SIGNING") && !job(name).includes("UPDATER_SIGNING"), name);
+  assert.match(publish, /TAURI_SIGNING_PRIVATE_KEY: \$\{\{ secrets\.UPDATER_SIGNING_KEY \}\}/);
+  assert.match(publish, /TAURI_SIGNING_PRIVATE_KEY_PASSWORD: \$\{\{ secrets\.UPDATER_SIGNING_KEY_PASSWORD \}\}/);
   assert.ok(!job("await-release").includes("contents: write"));
 });
 
@@ -916,7 +952,7 @@ test("a run that stays stuck after the release is cancelled, confirmed and only 
   // Re-dispatches 4242 is the early run (completed), 4243 the stuck fresh one.
   await runRelease([V], io);
   assert.deepEqual(dispatched, ["req-1", "req-2", "req-3"]);
-  const cancel = events.indexOf("capture gh run cancel 4243 --repo hhoangg/monoptah");
+  const cancel = events.indexOf("capture gh run cancel 4243 --repo hhoangg/zptah");
   const confirm = events.findIndex((e, i) => i > cancel && e.startsWith("capture gh run view 4243"));
   const redispatch = events.findLastIndex((e) => e.startsWith("capture gh workflow run"));
   assert.ok(cancel > 0 && confirm > cancel && redispatch > confirm);
@@ -935,7 +971,7 @@ test("an unconfirmed cancel of a stuck run never dispatches another run and prin
   });
   await assert.rejects(
     runRelease([V], io),
-    /cancel could not be confirmed.*no new run was dispatched.*gh run cancel 4243 --repo hhoangg\/monoptah.*gh workflow run native-release-monoptah\.yml.*tag=native-v0\.40\.5/s,
+    /cancel could not be confirmed.*no new run was dispatched.*gh run cancel 4243 --repo hhoangg\/zptah.*gh workflow run native-release-monoptah\.yml.*tag=native-v0\.40\.5/s,
   );
   assert.deepEqual(dispatched, ["req-1", "req-2"]);
 });
@@ -1056,7 +1092,7 @@ test("a stuck early run is also caught after the build", async () => {
 test("when the stuck early run cannot be confirmed cancelled the script goes on without it and prints the command", async () => {
   const { io, logs, dispatched } = fakeIo({ early: { ...stuckEarly, cancelFails: true, advance: { "npm run native:check": 15 * MIN } } });
   await runRelease([V], io);
-  assert.ok(logs.some((l) => /Could not confirm that it was cancelled\. Continuing without an early run.*gh run cancel 4242 --repo hhoangg\/monoptah/s.test(l)));
+  assert.ok(logs.some((l) => /Could not confirm that it was cancelled\. Continuing without an early run.*gh run cancel 4242 --repo hhoangg\/zptah/s.test(l)));
   // No replacement before the tag; the fresh run comes after the release.
   assert.deepEqual(dispatched, ["req-1", "req-2"]);
 });
@@ -1098,7 +1134,7 @@ test("after the release an unconfirmed cancel of a lost early run dispatches not
   const { io, dispatched } = fakeIo({ early: { jobList, cancelFails: true } });
   await assert.rejects(
     runRelease([V], io),
-    /cannot be kept \(its job "Package windows" failure\) and its cancel could not be confirmed.*no new run was dispatched.*gh run cancel 4242 --repo hhoangg\/monoptah.*gh workflow run native-release-monoptah\.yml/s,
+    /cannot be kept \(its job "Package windows" failure\) and its cancel could not be confirmed.*no new run was dispatched.*gh run cancel 4242 --repo hhoangg\/zptah.*gh workflow run native-release-monoptah\.yml/s,
   );
   assert.deepEqual(dispatched, ["req-1"]);
 });
@@ -1113,7 +1149,7 @@ test("Ctrl-C during the CI wait before the tag cancels the early run, prints it 
   const { io, events, logs, exits } = fakeIo({ ciRuns: [[run("queued")]], early: { signalAtSleep: 1 } });
   await assert.rejects(runRelease([V], io), /exit 130/);
   assert.deepEqual(exits, [130]);
-  assert.ok(events.includes("capture gh run cancel 4242 --repo hhoangg/monoptah"));
+  assert.ok(events.includes("capture gh run cancel 4242 --repo hhoangg/zptah"));
   assert.ok(logs.some((l) => /Interrupted \(SIGINT\)\..*was cancelled.*Nothing was tagged, pushed or published/s.test(l)));
   assert.ok(!events.some((e) => /^visible (git tag|git push|gh release)/.test(e)));
 });
@@ -1177,7 +1213,7 @@ test("SIGTERM exits 143, and after the tag the recovery names the known run inst
   assert.deepEqual(exits, [143]);
   assert.ok(!events.some((e) => e.startsWith("capture gh run cancel")));
   const text = logs.join("\n");
-  assert.match(text, /Interrupted \(SIGTERM\)\..*The tag native-v0\.40\.5 is on origin\. The workflow run https:\/\/example\.test\/runs\/4242 is probably still going; check it: gh run view 4242 --repo hhoangg\/monoptah.*another run is safe.*gh workflow run/s);
+  assert.match(text, /Interrupted \(SIGTERM\)\..*The tag native-v0\.40\.5 is on origin\. The workflow run https:\/\/example\.test\/runs\/4242 is probably still going; check it: gh run view 4242 --repo hhoangg\/zptah.*another run is safe.*gh workflow run/s);
   assert.ok(!/did not start/.test(text));
 });
 

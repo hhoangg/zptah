@@ -189,7 +189,7 @@ function runnerFor(table) {
 }
 const LOG = "git log --first-parent -z --format=%H%n%s%n%b native-v0.53.3..HEAD";
 const record = (sha, subject, body = "") => `${sha}\n${subject}\n${body}\0`;
-const pull = (n) => `gh api repos/hhoangg/monoptah/pulls/${n} --jq {title: .title, labels: [.labels[].name]}`;
+const pull = (n) => `gh api repos/hhoangg/zptah/pulls/${n} --jq {title: .title, labels: [.labels[].name]}`;
 
 test("generateNotes reads commits, squash and merge PR numbers, and PR titles and labels", () => {
   const { run, calls } = runnerFor({

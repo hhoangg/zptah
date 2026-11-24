@@ -27,7 +27,8 @@
 //       in <dir> but that has no metadata file yet (used when a re-run signs the
 //       assets a release already published)
 //   node scripts/native-release-monoptah.mjs sign <dir> <notes-file>
-//       env: TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD)
+//       env: TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD); the workflow fills them from the
+//       repository secrets UPDATER_SIGNING_KEY and UPDATER_SIGNING_KEY_PASSWORD
 //   node scripts/native-release-monoptah.mjs file-count
 //       prints how many files release-files.json must list
 //   node scripts/native-release-monoptah.mjs feed-supersedes <new> [existing]
@@ -51,7 +52,7 @@ import {
   releaseVersion,
 } from "./package-native-monoptah.mjs";
 
-export const REPOSITORY = "hhoangg/monoptah";
+export const REPOSITORY = "hhoangg/zptah";
 export const APP_ID = "app.zptah.desktop";
 // Must equal CHANNEL in crates/monocode-core/src/app_update/mod.rs.
 export const CHANNEL = "native-preview";
@@ -136,7 +137,7 @@ export async function prepareMonoptahRelease(
   const version = env.MONOCODE_NATIVE_VERSION;
   releaseVersion(version);
   if (!env.TAURI_SIGNING_PRIVATE_KEY)
-    throw new Error("TAURI_SIGNING_PRIVATE_KEY is required");
+    throw new Error("TAURI_SIGNING_PRIVATE_KEY is required (the workflow maps the repository secret UPDATER_SIGNING_KEY to it)");
   directory = resolve(directory);
   // Which filename each updater target must have, so a package from another
   // version or platform cannot be signed under the wrong target.

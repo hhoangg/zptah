@@ -164,8 +164,14 @@ rest stays, then run it without `--dry-run` to delete (it asks first; non-TTY ne
 
 Releases are native only, see "Releasing the native app". The Tauri app and its release
 workflow were removed. The updater signing key (minisign, used by `tauri signer sign` from the
-`@tauri-apps/cli` devDependency) lives at `~/.config/monoptah/updater.key` and is **not** in this
-repo; its public half is `assets/native/updater.pub`. Losing the private key means no further
+`@tauri-apps/cli` devDependency) lives at `~/.config/zptah/updater.key`, with its password in
+`~/.config/zptah/updater.key.password`, and is **not** in this repo; its public half
+(minisign key id `437A3F6DE4A767DD`) is `assets/native/updater.pub`, the only copy: the workflow and the local
+release script both read that file. The same key and password are the repository secrets
+`UPDATER_SIGNING_KEY` and `UPDATER_SIGNING_KEY_PASSWORD` on `hhoangg/zptah`; only the `publish`
+job maps them to `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, which is
+what the signer reads. The feed is
+`https://github.com/hhoangg/zptah/releases/download/native-latest/latest.json`. Losing the private key means no further
 updates can be published to installed apps, because they only trust that one key, so a
 replacement key would strand them. `@tauri-apps/cli` stays in `package.json` only as that signer: the native feed signing and the
 signing tests in `native:test:dev` need it, so keep it until the signer is replaced.
@@ -223,6 +229,10 @@ The release needs `MONOPTAH_NATIVE_SIGNING_IDENTITY` (the certificate SHA-1) and
 
 How to release (timeline, notes rules, recovery and stuck runs: [`docs/native/release-flow.md`](docs/native/release-flow.md)):
 
+0. **First zptah release only.** Run from a clone whose `origin` is `hhoangg/zptah` (the script
+   refuses any other origin), with no Monoptah `native-v*` or `host-v*` tags present locally. With
+   no earlier `native-v*` tag pass `--since <first commit>` and optionally `--notes FILE`. See
+   "The first zptah release" in `docs/native/release-flow.md`.
 1. **No notes PR.** Release notes are generated from the titles of the PRs merged since the
    previous `native-v*` tag (see `docs/git-conventions.md`, "Releases"). Optional highlights:
    `--notes FILE`, or `docs/native/monoptah-release-notes.md` with first line
@@ -273,11 +283,12 @@ only some files published fails the `plan` job: delete that platform's published
 and `.sig`) by hand, then re-run. The signed files and feed are also kept as a workflow
 artifact. The Linux and Windows packages use upstream's `scripts/package-native.mjs`.
 
-The `homebrew` job only bumps `Casks/monoptah-native.rb` in the tap (macOS only; Linux and
-Windows have no package-manager entry), it does not create it: add that file (modelled on
-`Casks/monoptah.rb`) before the first release, or the job fails. It runs after `publish` when
+The `homebrew` job only bumps `Casks/zptah.rb` in the tap `hhoangg/homebrew-zptah` (macOS only;
+Linux and Windows have no package-manager entry), it does not create it: push
+`packaging/homebrew/zptah.rb` to the tap as `Casks/zptah.rb` once before the first release
+(overwriting any older file there), or the job fails. It runs after `publish` when
 `HOMEBREW_TAP_TOKEN` is set. While it is unset, bump the cask by hand with
-`scripts/update-homebrew-cask.sh` and the sha from the `MonoptahNative_<version>_aarch64.zip.sha256`
+`scripts/update-homebrew-cask.sh` and the sha from the `zptah_<version>_aarch64.zip.sha256`
 asset. The fork scripts are `scripts/native-release-macos-local.mjs`,
 `scripts/native-release-notes.mjs`, `scripts/package-native-monoptah.mjs` (also the asset table
 for every platform) and `scripts/native-release-monoptah.mjs`.

@@ -119,7 +119,7 @@ export function buildEnv(version, pubkey, baseEnv = process.env) {
   const env = { ...baseEnv };
   // The updater signing key stays on CI. Never hand it to a child process.
   for (const name of Object.keys(env))
-    if (name.startsWith("TAURI_SIGNING_PRIVATE_KEY")) delete env[name];
+    if (name.startsWith("TAURI_SIGNING_PRIVATE_KEY") || name.startsWith("UPDATER_SIGNING_KEY")) delete env[name];
   // The binary is read from crates/monocode-gpui/target/..., so cargo must not
   // build elsewhere.
   delete env.CARGO_TARGET_DIR;
@@ -216,6 +216,12 @@ export async function waitForCi(io, sha, timeoutMinutes) {
   }
 }
 
+// True when a git remote URL (https, ssh or scp form) points at REPOSITORY.
+export function originMatchesRepository(url) {
+  const m = /^(?:https?:\/\/(?:[^@/]+@)?github\.com\/|ssh:\/\/git@github\.com(?::22)?\/|git@github\.com:)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i.exec(String(url ?? "").trim());
+  return m !== null && m[1].toLowerCase() === REPOSITORY.toLowerCase();
+}
+
 // Reads the state the preconditions look at. `run(command, args)` returns
 // { status, stdout, stderr } and never throws.
 export function gatherState(run, { version, tauriCli = true }) {
@@ -223,6 +229,8 @@ export function gatherState(run, { version, tauriCli = true }) {
   const out = (r) => (r.stdout ?? "").trim();
   const errorOf = (r) => (r.stderr || r.error?.message || "").trim();
   const state = { errors: [] };
+  const originUrl = run("git", ["remote", "get-url", "origin"]);
+  state.originUrl = originUrl.status === 0 ? out(originUrl) : "";
   const fetch = run("git", ["fetch", "origin"]);
   state.fetchOk = fetch.status === 0;
   if (!state.fetchOk) state.fetchError = errorOf(fetch);
@@ -251,6 +259,10 @@ export function gatherState(run, { version, tauriCli = true }) {
 export function evaluatePreconditions(state, version) {
   const tag = tagFor(version);
   const problems = [];
+  if (!originMatchesRepository(state.originUrl))
+    problems.push(
+      `The git remote "origin" is ${state.originUrl ? `"${state.originUrl}"` : "missing"}, not ${REPOSITORY}. Releases must run from a clone whose origin is https://github.com/${REPOSITORY}.git (or git@github.com:${REPOSITORY}.git); every tag, fetch and push here goes to origin while the release goes to ${REPOSITORY}.`,
+    );
   if (!state.fetchOk)
     problems.push(`git fetch origin failed: ${state.fetchError ?? ""}. Check the network and the remote.`);
   if (state.branch !== "main")
@@ -580,7 +592,7 @@ export function recoveryMessage(step, { version, sha, dir, files, notesFile, ear
       ].filter(Boolean).join("\n");
     case "push-tag":
       return [
-        `The tag ${tag} exists locally and may or may not be on origin (check: git ls-remote --tags origin ${tag}). No release exists. ${kept}`,
+        `The tag ${tag} exists locally and may or may not be on origin (check: git ls-remote --tags origin ${tag}; origin must be ${REPOSITORY}). No release exists. ${kept}`,
         `If it is not on origin, delete the local tag and run this script again: git tag -d ${tag}`,
         early ? `Before running the script again, cancel the early run: ${cancelCommand(early.id)}` : "",
         `If it is on origin, continue by hand:`,
@@ -589,7 +601,7 @@ export function recoveryMessage(step, { version, sha, dir, files, notesFile, ear
       ].filter(Boolean).join("\n");
     case "release":
       return [
-        `The tag ${tag} is on origin. The release may be missing or hold only some of the macOS files (check: gh release view ${tag}). ${kept}`,
+        `The tag ${tag} is on origin. The release may be missing or hold only some of the macOS files (check: gh release view ${tag} --repo ${REPOSITORY}). ${kept}`,
         `If it is missing, create it with the same command:`,
         `  ${cmd("release")}`,
         `If some files were uploaded, upload the missing ones from ${dir} with gh release upload ${tag} <file> (never replace an uploaded file), so the release ends with all ${files.length} files.`,
@@ -940,7 +952,7 @@ export function failureOf(result, { command, args }) {
 function withoutSigningKey(base) {
   const env = { ...base };
   for (const name of Object.keys(env))
-    if (name.startsWith("TAURI_SIGNING_PRIVATE_KEY")) delete env[name];
+    if (name.startsWith("TAURI_SIGNING_PRIVATE_KEY") || name.startsWith("UPDATER_SIGNING_KEY")) delete env[name];
   return env;
 }
 

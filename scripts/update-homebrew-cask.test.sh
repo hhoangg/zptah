@@ -12,14 +12,14 @@ NEW_SHA=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
 write_fixture() {
   cat > "$1" <<'CASK'
-cask "monoptah" do
+cask "zptah" do
   version "0.23.0"
   sha256 "dbfe884b2d78377e267cb468ce77a49010777e79e1d5bbaea9713502d5727616"
 
-  url "https://github.com/hhoangg/monoptah/releases/download/v#{version}/Monoptah_#{version}_aarch64.zip"
-  name "Monoptah"
+  url "https://github.com/hhoangg/zptah/releases/download/native-v#{version}/zptah_#{version}_aarch64.zip"
+  name "zptah"
   desc "One UI for every agent harness"
-  homepage "https://github.com/hhoangg/monoptah"
+  homepage "https://zptah.app"
 
   livecheck do
     url :url
@@ -30,7 +30,7 @@ cask "monoptah" do
   depends_on arch: :arm64
   depends_on :macos
 
-  app "Monoptah.app"
+  app "zptah.app"
 
   caveats <<~EOS
     Afterwards it launches normally, and the app updates itself from
@@ -59,7 +59,7 @@ expect_fail() {
   fi
 }
 
-CASK="$WORK/monoptah.rb"
+CASK="$WORK/zptah.rb"
 write_fixture "$CASK"
 
 # 1. Update succeeds and rewrites only the two lines.
@@ -69,7 +69,7 @@ if (( rc == 0 )) && [[ "$out" == "updated" ]] \
   && grep -qx "  sha256 \"$NEW_SHA\"" "$CASK" \
   && ! grep -q "$OLD_SHA" "$CASK" \
   && [[ "$(diff <(write_fixture "$WORK/orig.rb"; cat "$WORK/orig.rb") "$CASK" | grep -c '^>')" == "2" ]] \
-  && grep -qF 'download/v#{version}/Monoptah_#{version}_aarch64.zip' "$CASK"; then
+  && grep -qF 'download/native-v#{version}/zptah_#{version}_aarch64.zip' "$CASK"; then
   ok "update rewrites version and sha256 only"
 else
   bad "update rewrites version and sha256 only (rc=$rc out=$out)"
@@ -157,6 +157,23 @@ if bash "$SCRIPT" "$CASK" 0.24.0 > /dev/null 2>&1; then bad "wrong arg count fai
 # 8. No temp files are left behind.
 leftover=$(find "$WORK" -name '*.rb.*' | wc -l | tr -d ' ')
 if [[ "$leftover" == "0" ]]; then ok "no temp files left behind"; else bad "no temp files left behind ($leftover found)"; fi
+
+# 9. The tap template (packaging/homebrew/zptah.rb) is accepted by the script and
+# points at the zptah release asset.
+TEMPLATE="$HERE/../packaging/homebrew/zptah.rb"
+cp "$TEMPLATE" "$WORK/template.rb"
+out=$(bash "$SCRIPT" "$WORK/template.rb" 0.1.0 "$NEW_SHA" 2>&1); rc=$?
+if (( rc == 0 )) && [[ "$out" == "updated" ]] \
+  && grep -qx '  version "0.1.0"' "$WORK/template.rb" \
+  && grep -qx "  sha256 \"$NEW_SHA\"" "$WORK/template.rb" \
+  && grep -qF 'cask "zptah" do' "$WORK/template.rb" \
+  && grep -qF 'hhoangg/zptah/releases/download/native-v#{version}/zptah_#{version}_aarch64.zip' "$WORK/template.rb" \
+  && grep -qF 'app "zptah.app"' "$WORK/template.rb" \
+  && grep -qF 'homepage "https://zptah.app"' "$WORK/template.rb"; then
+  ok "tap template is bumped by the script"
+else
+  bad "tap template is bumped by the script (rc=$rc out=$out)"
+fi
 
 echo "$PASS passed, $FAIL failed"
 (( FAIL == 0 ))
