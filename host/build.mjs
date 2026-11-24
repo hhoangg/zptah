@@ -5,7 +5,7 @@ const hostVersion = (await readFile("host/VERSION", "utf8")).trim();
 
 await build({
   entryPoints: ["host/cli.ts"],
-  outfile: "build/host/monocode-host.mjs",
+  outfile: "build/host/zptah-host.mjs",
   bundle: true,
   platform: "node",
   format: "esm",

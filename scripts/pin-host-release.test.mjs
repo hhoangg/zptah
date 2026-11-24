@@ -23,8 +23,8 @@ const ext = (t) => (t.startsWith("win32") ? "zip" : "tar.gz");
 const sums = (overrides = {}) =>
   Object.fromEntries(
     TARGETS.map((t) => [
-      `monocode-host-${t}.${ext(t)}.sha256`,
-      `${overrides[t] ?? assets[t]}  monocode-host-${t}.${ext(t)}\n`,
+      `zptah-host-${t}.${ext(t)}.sha256`,
+      `${overrides[t] ?? assets[t]}  zptah-host-${t}.${ext(t)}\n`,
     ]),
   );
 
@@ -86,13 +86,14 @@ test("cross-check accepts matching hashes and rejects a different one", () => {
   crossCheck(assets, sums());
   assert.throws(() => crossCheck(assets, sums({ "linux-x64": hash(9) })), /Hash mismatch for linux-x64/);
   const missing = sums();
-  delete missing["monocode-host-win32-x64.zip.sha256"];
+  delete missing["zptah-host-win32-x64.zip.sha256"];
   assert.throws(() => crossCheck(assets, missing), /win32-x64/);
 });
 
 test("renders the Rust file with the version, base URL and every hash", () => {
   const text = renderHostRelease("host-v2.3.4", manifest);
   assert.match(text, /HOST_VERSION: &str = "2\.3\.4\+zptah"/);
+  assert.match(text, /HOST_PACKAGE_NAME: &str = "zptah-host"/);
   assert.match(text, /hhoangg\/zptah\/releases\/download\/host-v2\.3\.4"/);
   for (const t of TARGETS) assert.ok(text.includes(`"${t}",\n        "${assets[t]}"`));
 });

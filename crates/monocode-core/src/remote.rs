@@ -6,6 +6,7 @@ mod cloud_upgrade;
 mod cloud_upgrade_tests;
 pub mod codespace_claude;
 pub mod host_info;
+pub mod host_names;
 pub mod host_release;
 pub mod host_upgrade;
 #[cfg(test)]
@@ -730,7 +731,7 @@ impl Connections {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
         {
-            return Err("Enter the device token issued by monocode-host pair".into());
+            return Err("Enter the device token issued by zptah-host pair".into());
         }
         let descriptor = rpc(
             &endpoint,
@@ -1166,6 +1167,7 @@ impl Connections {
                         // host. gh starts it on connect, and the bootstrap's
                         // service install brings the host back with its saved
                         // state, so a codespace reconnect always re-runs it.
+                        host_names::ensure_host_available()?;
                         let platform = ssh::detect_platform(&target, &job, &askpass)?;
                         job.message(if upgrade {
                             "Updating zptah Host on the machine…"
@@ -1180,7 +1182,7 @@ impl Connections {
                                 // Track the token like the bootstrap does, so the marker of
                                 // the account the Host now runs under is written.
                                 Some(prelude) => {
-                                    format!("{prelude}\nMONOCODE_HOST_TRACK_TOKEN=1\n{script}")
+                                    format!("{prelude}\nZPTAH_HOST_TRACK_TOKEN=1\n{script}")
                                 }
                                 None => script,
                             }
@@ -1220,6 +1222,7 @@ impl Connections {
                     }
                     existing
                 } else {
+                    host_names::ensure_host_available()?;
                     let platform = ssh::detect_platform(&target, &job, &askpass)?;
                     job.message("Installing or starting zptah Host…");
                     let output = ssh::run_script(
@@ -1379,7 +1382,7 @@ impl Connections {
             SshTarget {
                 target,
                 port,
-                remote_port: 3774,
+                remote_port: 3784,
                 codespace: None,
                 sandbox: None,
             },
@@ -1389,7 +1392,7 @@ impl Connections {
         )
     }
 
-    /// Pair with the monocode-host inside a GitHub Codespace over
+    /// Pair with the zptah-host inside a GitHub Codespace over
     /// `gh codespace ssh`. Poll the returned job with `ssh_poll`.
     pub fn codespace_begin(
         self: &Arc<Self>,
@@ -1424,7 +1427,7 @@ impl Connections {
             SshTarget {
                 target: name.clone(),
                 port: None,
-                remote_port: 3774,
+                remote_port: 3784,
                 codespace: Some(name),
                 sandbox: None,
             },
@@ -1435,7 +1438,7 @@ impl Connections {
         )
     }
 
-    /// Pair with the monocode-host inside a Docker Sandbox's devcontainer over
+    /// Pair with the zptah-host inside a Docker Sandbox's devcontainer over
     /// `ssh <id>@sbx_cloud`. The relay on `sandbox.relay_port` must be running
     /// by the time the tunnel opens (the sandbox start flow sets it up). Poll
     /// the returned job with `ssh_poll`.
@@ -1453,7 +1456,7 @@ impl Connections {
             SshTarget {
                 target: sandbox.destination(),
                 port: None,
-                remote_port: 3774,
+                remote_port: 3784,
                 codespace: None,
                 sandbox: Some(sandbox),
             },

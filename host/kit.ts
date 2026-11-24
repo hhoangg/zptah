@@ -35,7 +35,7 @@ import { providerLaunch } from "./process";
  * The Claude kit on the Host: skills, plugins and MCP servers copied once from
  * the user's machine. See docs/cloud-session-improvements.md section 3.2.3.
  *
- * Everything lives under `~/.monoptah-kit`:
+ * Everything lives under `~/.zptah-kit`:
  *   <hash>/        one unpacked kit, created fresh with mkdir (O_EXCL semantics)
  *   current        symlink to the active <hash>, flipped atomically
  *   managed.json   skill links this module created in ~/.claude/skills, and
@@ -286,7 +286,7 @@ export function installLogScrubber(): () => void {
 // Kit dirs a running child still references are never pruned.
 
 const pinned = new Map<string, number>();
-const KIT_HASH_IN_PATH = /\.monoptah-kit[\\/]([0-9a-f]{64})[\\/]/;
+const KIT_HASH_IN_PATH = /\.zptah-kit[\\/]([0-9a-f]{64})[\\/]/;
 
 /** Pins the kit dirs named in a child's argv. Call the result when it exits. */
 export function pinKitArgs(args: readonly string[]): () => void {
@@ -864,7 +864,7 @@ export class HostKit {
     private readonly options: HostKitOptions = {},
   ) {
     const home = options.home ?? homedir();
-    this.root = join(home, ".monoptah-kit");
+    this.root = join(home, ".zptah-kit");
     this.claudeDir = join(home, ".claude");
     this.skillsDir = join(this.claudeDir, "skills");
     this.limits = { ...DEFAULT_KIT_LIMITS, ...options.limits };
@@ -1822,7 +1822,7 @@ export class HostKit {
           mcpServers: Record<string, unknown>;
         };
         configured = mcp.mcpServers;
-        configDir = mkdtempSync(join(tmpdir(), "monoptah-kit-health-"));
+        configDir = mkdtempSync(join(tmpdir(), "zptah-kit-health-"));
         chmodSync(configDir, 0o700);
         writeFileSync(
           join(configDir, ".claude.json"),

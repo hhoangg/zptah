@@ -79,14 +79,14 @@
 //!   has no credential. A foreign `~/.local/bin/gh` or note is never overwritten.
 //! * Relay: the outer sandbox listens on `127.0.0.1:`[`DEFAULT_RELAY_PORT`] (the only place
 //!   `ssh -L` may point to). Each connection runs `docker exec -i -u <remoteUser> <container>`
-//!   with the Host's own packaged Node (`$(cat ~/.monocode-host/runtime-path)/bin/node -e`)
+//!   with the Host's own packaged Node (`$(cat ~/.zptah-host/runtime-path)/bin/node -e`)
 //!   piping stdin/stdout to the Host's loopback port, so it works in any image and needs no
 //!   socat inside the container.
-//! * Host port: the one the bootstrap reports (`connection-info`), 3774 by default.
+//! * Host port: the one the bootstrap reports (`connection-info`), 3784 by default.
 //! * Host process: a devcontainer can have `/run/systemd/system` although systemd is not PID 1,
 //!   and the released Host's `systemdBooted()` only checks that directory, so `service install`
 //!   would fail with "needs systemd user services and lingering". The sandbox bootstrap
-//!   ([`sandbox_bootstrap_script`]) therefore sets `MONOCODE_HOST_DETACHED=1`: it starts the Host
+//!   ([`sandbox_bootstrap_script`]) therefore sets `ZPTAH_HOST_DETACHED=1`: it starts the Host
 //!   itself like `startDetached` (same data dir, port and `host.log`) before `service install`,
 //!   which then returns early because a Host answers. A restart (token or Claude path change) is
 //!   the template's `service uninstall`, which stops a detached Host too; the same start follows.
@@ -141,7 +141,7 @@ pub const DEFAULT_RELAY_PORT: u16 = 47200;
 /// Where the credential socket directory is bind-mounted inside the container.
 pub const CONTAINER_GIT_DIR: &str = "/run/monoptah-git";
 /// Port the Host listens on unless its bootstrap says otherwise.
-const DEFAULT_HOST_PORT: u16 = 3774;
+const DEFAULT_HOST_PORT: u16 = crate::remote::host_names::DEFAULT_HOST_PORT;
 const FOLLOW_ATTEMPTS: usize = 4;
 const SANDBOX_GONE: &str = "Sandbox was deleted. Start a new session.";
 
@@ -323,7 +323,7 @@ impl ClaudeAuth {
         ));
         if self.variable != "CLAUDE_CODE_OAUTH_TOKEN" {
             // The bootstrap hashes this variable to know when to restart the Host.
-            text.push_str(&format!("MONOCODE_HOST_TOKEN_VAR={}\n", self.variable));
+            text.push_str(&format!("ZPTAH_HOST_TOKEN_VAR={}\n", self.variable));
         }
         text.push_str(&format!(
             "export {}={}\n",
@@ -1918,6 +1918,7 @@ impl CloudSessions {
                 "No Claude credential is saved for this account; Claude will need to sign in",
             );
         }
+        crate::remote::host_names::ensure_host_available()?;
         let script = Zeroizing::new(sandbox_bootstrap_script(
             prelude.as_deref().map(String::as_str),
         ));

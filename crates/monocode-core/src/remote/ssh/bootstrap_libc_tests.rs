@@ -7,14 +7,14 @@ use super::*;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-const RELOCATION_ERROR: &str = "Error relocating /home/vscode/.monocode-host/runtime/.install.nusPebem/unpacked/bin/node: fcntl64: symbol not found";
+const RELOCATION_ERROR: &str = "Error relocating /home/vscode/.zptah-host/runtime/.install.nusPebem/unpacked/bin/node: fcntl64: symbol not found";
 
 struct Machine {
     /// Output of `getconf GNU_LIBC_VERSION`; `None` makes getconf fail.
     getconf: Option<&'static str>,
     /// Output of `ldd --version`; `None` means there is no ldd.
     ldd: Option<&'static str>,
-    /// Body of the packaged `monocode-host`.
+    /// Body of the packaged `zptah-host`.
     host: String,
 }
 
@@ -42,14 +42,17 @@ fn run(machine: &Machine) -> Outcome {
     let work = tempfile::tempdir().unwrap();
     let pkg = work.path().join("pkg");
     std::fs::create_dir_all(&pkg).unwrap();
-    write_exec(&pkg.join("monocode-host"), &machine.host);
+    write_exec(
+        &pkg.join(super::super::host_release::HOST_PACKAGE_NAME),
+        &machine.host,
+    );
     let tarball = work.path().join("pkg.tar.gz");
     let status = Command::new("tar")
         .arg("-czf")
         .arg(&tarball)
         .arg("-C")
         .arg(&pkg)
-        .arg("monocode-host")
+        .arg(super::super::host_release::HOST_PACKAGE_NAME)
         .status()
         .unwrap();
     assert!(status.success());
@@ -96,8 +99,8 @@ fn run(machine: &Machine) -> Outcome {
             "PATH",
             format!("{}:{}", stubs.display(), std::env::var("PATH").unwrap()),
         )
-        .env_remove("MONOCODE_HOST_FORCE_UPGRADE")
-        .env_remove("MONOCODE_HOST_UPGRADE_IF_OLDER")
+        .env_remove("ZPTAH_HOST_FORCE_UPGRADE")
+        .env_remove("ZPTAH_HOST_UPGRADE_IF_OLDER")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -126,8 +129,8 @@ fn run(machine: &Machine) -> Outcome {
 /// Nothing of an install is left: no launcher, no runtime pointer, no runtime directory
 /// (a half-installed `.install.*` or a moved package).
 fn assert_nothing_installed(home: &Path) {
-    let base = home.join(".monocode-host");
-    assert!(!base.join("bin/monocode-host").exists());
+    let base = home.join(".zptah-host");
+    assert!(!base.join("bin/zptah-host").exists());
     assert!(!base.join("runtime-path").exists());
     let leftovers: Vec<_> = std::fs::read_dir(base.join("runtime"))
         .map(|dir| dir.flatten().map(|e| e.file_name()).collect())
@@ -164,7 +167,7 @@ fn getconf_wins_over_a_musl_looking_ldd() {
     assert!(outcome
         .home
         .path()
-        .join(".monocode-host/bin/monocode-host")
+        .join(".zptah-host/bin/zptah-host")
         .is_file());
 }
 

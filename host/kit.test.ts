@@ -776,7 +776,7 @@ setTimeout(() => {}, 25000);
     const grandchild = Number(readFileSync(pidFile, "utf8"));
     await vi.waitFor(() => expect(() => process.kill(grandchild, 0)).toThrow(), { timeout: 5000 });
     // The throwaway config dir was removed even though the run timed out.
-    expect(readdirSync(tmpdir()).filter((name) => name.startsWith("monoptah-kit-health-") && existsSync(join(tmpdir(), name, ".claude.json")) && readFileSync(join(tmpdir(), name, ".claude.json"), "utf8").includes("clickup"))).toEqual([]);
+    expect(readdirSync(tmpdir()).filter((name) => name.startsWith("zptah-kit-health-") && existsSync(join(tmpdir(), name, ".claude.json")) && readFileSync(join(tmpdir(), name, ".claude.json"), "utf8").includes("clickup"))).toEqual([]);
   }, 20_000);
 
   it("rejects a bad working directory", async () => {

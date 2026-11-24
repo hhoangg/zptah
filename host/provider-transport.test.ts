@@ -306,7 +306,7 @@ describe("existing providers over headless process I/O", () => {
         expect(args).toContain("acp");
         const configPath = args[args.indexOf("--config") + 1];
         expect(dirname(configPath)).toBe(
-          join(directory, ".monocode-host", "devin"),
+          join(directory, ".zptah-host", "devin"),
         );
         expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
           agent: { model: "swe-2-high" },

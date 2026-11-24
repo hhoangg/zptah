@@ -47,9 +47,9 @@ const option = (name: string, fallback: string): string => {
   return args[i + 1];
 };
 const directory = resolve(
-  option("data-dir", join(homedir(), ".monocode-host")),
+  option("data-dir", join(homedir(), ".zptah-host")),
 );
-const port = Number(option("port", "3774"));
+const port = Number(option("port", "3784"));
 const statePath = join(directory, "running.json");
 type Running = { pid: number; port: number; secret: string };
 const readRunning = (): Running | undefined => {
@@ -75,7 +75,7 @@ async function main() {
     return;
   }
   if (command === "help" || command === "--help") {
-    console.log(`Monoptah Host (experimental; Node 24+; Windows/Linux/macOS)
+    console.log(`zptah Host (experimental; Node 24+; Windows/Linux/macOS)
   serve                 Run in foreground on 127.0.0.1
   start                 Run detached from this terminal
   service install       Install/start the persistent user service
@@ -86,7 +86,7 @@ async function main() {
   pair --name <device>  Issue a device credential (shown once)
   devices               List paired devices
   revoke <device-id>    Revoke a device credential
-Options: --data-dir <directory> --port <port> (default 3774)
+Options: --data-dir <directory> --port <port> (default 3784)
 Connect another computer using an SSH forward to the loopback port.`);
     return;
   }

@@ -176,7 +176,7 @@ impl CloudRunner for FakeRunner {
         }
         let phase = ["stage", "swapnow", "discard", "status"]
             .into_iter()
-            .find(|p| script.contains(&format!("MONOCODE_HOST_UPGRADE_PHASE={p}\n")))
+            .find(|p| script.contains(&format!("ZPTAH_HOST_UPGRADE_PHASE={p}\n")))
             .expect("an upgrade script")
             .to_owned();
         self.scripts
@@ -1520,7 +1520,7 @@ else:
         // The step stops the Host's service and forgets the token marker, so the same account
         // chosen again later restarts the Host too.
         assert!(prestep.contains("service uninstall"), "{prestep}");
-        assert!(prestep.contains("rm -f \"$HOME/.monocode-host/host-token.sha256\""));
+        assert!(prestep.contains("rm -f \"$HOME/.zptah-host/host-token.sha256\""));
         let runs = gh.scripts().len();
         // The switch fails on the machine: the old account stays recorded, and the next ensure
         // does the whole step again.
@@ -1662,7 +1662,7 @@ else:
         let prelude = delivery("work", SECRET_A).prelude;
         assert!(
             scripts[runs].starts_with(&format!(
-                "{}\nMONOCODE_HOST_TRACK_TOKEN=1\nMONOCODE_HOST_FORCE_UPGRADE=1\n",
+                "{}\nZPTAH_HOST_TRACK_TOKEN=1\nZPTAH_HOST_FORCE_UPGRADE=1\n",
                 prelude.as_str()
             )),
             "{}",

@@ -2,10 +2,10 @@
 # `npm run host:release -- X.Y.Z`) builds every Host package that
 # `npm run host:package -- --all` produces and publishes them to a GitHub Release
 # host-vX.Y.Z on this repository:
-#   monocode-host-<target>.tar.gz   darwin-arm64, darwin-x64, linux-arm64, linux-x64
-#   monocode-host-<target>.zip      win32-x64, win32-arm64
+#   zptah-host-<target>.tar.gz   darwin-arm64, darwin-x64, linux-arm64, linux-x64
+#   zptah-host-<target>.zip      win32-x64, win32-arm64
 #   each with its .sha256, plus host-release.json ({version, assets: {target: sha256}}).
-# Asset names keep "monocode-host" (the CLI name is an identifier, see CLAUDE.md).
+# Asset names start with "zptah-host" (the CLI name, see CLAUDE.md).
 # Windows packages are published too: the SSH bootstrap also serves Windows machines,
 # so a Windows upgrade must not 404.
 #
@@ -97,12 +97,12 @@ jobs:
         run: |
           set -euo pipefail
           for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
-            test -s "build/host-packages/monocode-host-$target.tar.gz"
-            test -s "build/host-packages/monocode-host-$target.tar.gz.sha256"
+            test -s "build/host-packages/zptah-host-$target.tar.gz"
+            test -s "build/host-packages/zptah-host-$target.tar.gz.sha256"
           done
           for target in win32-x64 win32-arm64; do
-            test -s "build/host-packages/monocode-host-$target.zip"
-            test -s "build/host-packages/monocode-host-$target.zip.sha256"
+            test -s "build/host-packages/zptah-host-$target.zip"
+            test -s "build/host-packages/zptah-host-$target.zip.sha256"
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -132,7 +132,7 @@ jobs:
             const version = readFileSync("host/VERSION", "utf8").trim();
             const assets = {};
             for (const name of readdirSync("dist").sort()) {
-              const match = /^monocode-host-(.+)\.(?:tar\.gz|zip)\.sha256$/.exec(name);
+              const match = /^zptah-host-(.+)\.(?:tar\.gz|zip)\.sha256$/.exec(name);
               if (!match) continue;
               const hash = readFileSync(`dist/${name}`, "utf8").trim().split(/\s+/)[0];
               if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error(`Bad checksum in ${name}`);
@@ -152,7 +152,7 @@ jobs:
         with:
           subject-path: |
             dist/host-release.json
-            dist/monocode-host-*
+            dist/zptah-host-*
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -172,5 +172,5 @@ jobs:
             --verify-tag \
             --latest=false \
             --title "Monoptah Host $version" \
-            --notes "zptah Host $version (monocode-host $version+zptah). Packages for every target, each with its sha256, and host-release.json." \
-            dist/monocode-host-* dist/host-release.json
+            --notes "zptah Host $version (zptah-host $version+zptah). Packages for every target, each with its sha256, and host-release.json." \
+            dist/zptah-host-* dist/host-release.json

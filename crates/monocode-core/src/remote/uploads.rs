@@ -328,7 +328,7 @@ mod tests {
                     if got != u.2 {
                         return Err("Upload sha256 does not match".into());
                     }
-                    let path = format!("/home/u/.monocode-host/uploads/{id}/{}", u.0);
+                    let path = format!("/home/u/.zptah-host/uploads/{id}/{}", u.0);
                     self.committed_path = Some(path.clone());
                     Ok(
                         json!({"uploadId": id, "name": u.0, "path": path, "size": u.1, "sha256": u.2}),

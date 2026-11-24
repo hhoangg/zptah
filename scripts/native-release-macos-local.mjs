@@ -224,7 +224,15 @@ export function originMatchesRepository(url) {
 
 // Reads the state the preconditions look at. `run(command, args)` returns
 // { status, stdout, stderr } and never throws.
-export function gatherState(run, { version, tauriCli = true }) {
+export const HOST_RELEASE_FILE = "crates/monocode-core/src/remote/host_release.rs";
+
+// The package name pinned in host_release.rs (HOST_PACKAGE_NAME), or null when it cannot be read.
+export function pinnedHostPackage(text) {
+  const match = /HOST_PACKAGE_NAME: &str = "([^"]*)"/.exec(text ?? "");
+  return match ? match[1] : null;
+}
+
+export function gatherState(run, { version, tauriCli = true, hostRelease }) {
   const tag = tagFor(version);
   const out = (r) => (r.stdout ?? "").trim();
   const errorOf = (r) => (r.stderr || r.error?.message || "").trim();
@@ -245,6 +253,7 @@ export function gatherState(run, { version, tauriCli = true }) {
   const auth = run("gh", ["auth", "status"]);
   state.ghAuthed = auth.status === 0;
   state.tauriCli = tauriCli;
+  state.hostPackage = pinnedHostPackage(hostRelease);
   const rel = run("gh", ["api", `repos/${REPOSITORY}/releases/tags/${tag}`]);
   if (rel.status === 0) state.release = "exists";
   else if (/HTTP 404/.test(`${rel.stderr ?? ""}${rel.stdout ?? ""}`)) state.release = "absent";
@@ -283,6 +292,12 @@ export function evaluatePreconditions(state, version) {
   if (state.tauriCli === false)
     problems.push(
       "node_modules/@tauri-apps/cli is missing, so the signing tests in native:check would be skipped silently. Run: npm ci",
+    );
+  // An app pinned to the old `monocode-host` package would install a Host that acts on
+  // Monoptah's own service names and data. The app refuses at run time too (host_names.rs).
+  if (state.hostPackage !== "zptah-host")
+    problems.push(
+      `${HOST_RELEASE_FILE} pins the Host package "${state.hostPackage ?? "(unreadable)"}", not "zptah-host". Release the Host and re-pin first: npm run host:release, then node scripts/pin-host-release.mjs host-vX.Y.Z.`,
     );
   if (state.release === "exists")
     problems.push(`A GitHub release ${tag} already exists. This script only starts new releases.`);
@@ -682,6 +697,7 @@ export async function runRelease(argv, io) {
   const state = gatherState(io.capture, {
     version,
     tauriCli: io.exists("node_modules/@tauri-apps/cli"),
+    hostRelease: io.readText(HOST_RELEASE_FILE),
   });
   const problems = evaluatePreconditions(state, version);
   if (problems.length > 0) throw new Error("Cannot release " + tag + ":\n- " + problems.join("\n- "));

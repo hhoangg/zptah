@@ -26,7 +26,7 @@ it(
     });
     const port = (probe.address() as AddressInfo).port;
     await new Promise<void>((resolve) => probe.close(() => resolve()));
-    const cli = resolve("build/host/monocode-host.mjs");
+    const cli = resolve("build/host/zptah-host.mjs");
     const run = (...args: string[]) =>
       exec(
         process.execPath,
@@ -108,8 +108,40 @@ it("prints the Host version from host/VERSION for --version", async () => {
   expect(expected).toMatch(/\+zptah$/);
   const { stdout } = await exec(
     process.execPath,
-    [resolve("build/host/monocode-host.mjs"), "--version"],
+    [resolve("build/host/zptah-host.mjs"), "--version"],
     { timeout: 10_000 },
   );
   expect(stdout.trim()).toBe(expected);
 });
+
+it("uses zptah names and a default port that cannot collide with monocode-host", async () => {
+  const { stdout } = await exec(
+    process.execPath,
+    [resolve("build/host/zptah-host.mjs"), "help"],
+    { timeout: 10_000 },
+  );
+  expect(stdout).toContain("zptah Host");
+  expect(stdout).toContain("default 3784");
+  // monocode-host (Monoptah) listens on 3774 and owns ~/.monocode-host.
+  expect(stdout).not.toContain("3774");
+  expect(stdout).not.toMatch(/monocode/i);
+});
+
+it.skipIf(process.platform === "win32")(
+  "keeps its data in ~/.zptah-host and never creates ~/.monocode-host",
+  async () => {
+    const home = mkdtempSync(join(tmpdir(), "zptah-home-test-"));
+    try {
+      await exec(
+        process.execPath,
+        [resolve("build/host/zptah-host.mjs"), "connection-info"],
+        { timeout: 10_000, env: { ...process.env, HOME: home } },
+      ).catch(() => undefined);
+      expect(existsSync(join(home, ".zptah-host"))).toBe(true);
+      expect(existsSync(join(home, ".monocode-host"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+  20_000,
+);

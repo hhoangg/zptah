@@ -4,12 +4,20 @@
 //! hashes come from the attested `host-release.json` of the release workflow run and
 //! are cross-checked against the published `.sha256` assets.
 
-/// Full Host version, as printed by `monocode-host --version`.
+/// Full Host version, as printed by the packaged Host's `--version`.
 pub const HOST_VERSION: &str = "1.2.1+monoptah";
 
 /// Release download base. The tag has no `+`, which URLs would have to escape.
 pub const HOST_RELEASE_BASE: &str =
     "https://github.com/hhoangg/zptah/releases/download/host-v1.2.1";
+
+/// Name of the package: the asset is `<name>-<target>.(tar.gz|zip)` and a Unix package holds
+/// an executable of this name. It is pinned data, like the hashes: the pinned 1.2.1 release
+/// still ships `monocode-host-*`, so this stays `monocode-host` until the pin moves to the
+/// first `zptah-host` release (1.4.0 and later), where the generator writes `zptah-host`.
+/// It only names files inside the package; what the app installs on the machine is always
+/// `zptah-host` (see `host_names.rs`).
+pub const HOST_PACKAGE_NAME: &str = "monocode-host";
 
 /// Expected sha256 of each package, by Host target.
 pub const HOST_SHA256: [(&str, &str); 6] = [

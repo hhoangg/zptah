@@ -34,7 +34,7 @@ pub(crate) struct Facts {
     pub binding: Option<Binding>,
     /// The start in progress or failed, for a cloud session.
     pub start: Option<StartRecord>,
-    /// A session on a `monocode-host` machine: a `remote://` cwd with no
+    /// A session on a `zptah-host` machine: a `remote://` cwd with no
     /// cloud binding.
     pub remote_machine: bool,
 }

@@ -42,7 +42,7 @@ process.stdin.on("end", () => socket.end());
 JS
 cat >"$INNER" <<SH
 #!/bin/sh
-exec docker exec -i -u $RUN_USER -e MONOPTAH_HOST_PORT=$HOST_PORT $CID sh -c 'NODE="\$(cat "\$HOME/.monocode-host/runtime-path")/bin/node"; exec "\$NODE" -e "\$1"' sh "\$(cat "$BRIDGE")"
+exec docker exec -i -u $RUN_USER -e MONOPTAH_HOST_PORT=$HOST_PORT $CID sh -c 'NODE="\$(cat "\$HOME/.zptah-host/runtime-path")/bin/node"; exec "\$NODE" -e "\$1"' sh "\$(cat "$BRIDGE")"
 SH
 chmod 700 "$INNER"
 setsid nohup socat "TCP-LISTEN:$PORT,bind=127.0.0.1,reuseaddr,fork" "EXEC:sh $INNER" </dev/null >"$RUN/relay-$PORT.log" 2>&1 &

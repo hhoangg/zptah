@@ -11,7 +11,7 @@ import {
 } from "./windows";
 
 const exec = promisify(execFile);
-const LABEL = "com.monocode.host";
+const LABEL = "app.zptah.host";
 type ServiceOptions = {
   directory: string;
   port: number;
@@ -206,10 +206,10 @@ export async function uninstallService(
     const env = systemdEnvironment(user.uid);
     await run(
       "systemctl",
-      ["--user", "disable", "--now", "monocode-host.service"],
+      ["--user", "disable", "--now", "zptah-host.service"],
       env,
     ).catch(ignore);
-    await rm(join(home, ".config/systemd/user/monocode-host.service"), {
+    await rm(join(home, ".config/systemd/user/zptah-host.service"), {
       force: true,
     });
     await run("systemctl", ["--user", "daemon-reload"], env).catch(ignore);
@@ -296,7 +296,7 @@ export async function installService(
     }
     const folder = join(homedir(), ".config/systemd/user");
     await mkdir(folder, { recursive: true });
-    const file = join(folder, "monocode-host.service");
+    const file = join(folder, "zptah-host.service");
     try {
       await readFile(file);
     } catch {
@@ -305,7 +305,7 @@ export async function installService(
     await run("systemctl", ["--user", "daemon-reload"], env);
     await run(
       "systemctl",
-      ["--user", "enable", "--now", "monocode-host.service"],
+      ["--user", "enable", "--now", "zptah-host.service"],
       env,
     );
   } else if (process.platform === "win32") {

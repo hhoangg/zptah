@@ -58,7 +58,7 @@ hits=$(printf '%s\n%s\n' "$hits" "$web_hits")
 # matched by exact line content, not line number, so they survive upstream merges shifting
 # the file and a real hit sitting nearby is not hidden.
 #  - remote/protocol.rs doc line: names the MonoCode Host wire protocol, which is the
-#    protocol's own identity (`monocode-host`), not product copy.
+#    protocol's own identity, not product copy.
 #  - skills.rs fixture: a sample SKILL.md description fed to the skill parser and asserted
 #    back, so "MonoCode ship" is data.
 #  - provider/acp.rs handoff marker: the Hermes background handoff message keeps its

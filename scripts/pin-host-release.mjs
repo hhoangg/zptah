@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 export const REPO = "hhoangg/zptah";
 export const WORKFLOW = "host-release-monoptah.yml";
 export const FLAVOR = "zptah";
+// The CLI and asset prefix of the Host release, `zptah-host-<target>.(tar.gz|zip)`.
+export const PACKAGE_NAME = "zptah-host";
 export const TARGETS = [
   "darwin-arm64",
   "darwin-x64",
@@ -53,11 +55,11 @@ export function validateManifest(manifest, tag) {
 }
 
 // Cross-checks the manifest hashes with the published .sha256 files
-// ({ "monocode-host-<target>.tar.gz.sha256": "<content>" }).
+// ({ "zptah-host-<target>.tar.gz.sha256": "<content>" }).
 export function crossCheck(assets, checksumFiles) {
   for (const target of TARGETS) {
     const names = Object.keys(checksumFiles).filter((name) =>
-      new RegExp(`^monocode-host-${target}\\.(?:tar\\.gz|zip)\\.sha256$`).test(name),
+      new RegExp(`^${PACKAGE_NAME}-${target}\\.(?:tar\\.gz|zip)\\.sha256$`).test(name),
     );
     if (names.length !== 1)
       throw new Error(`Expected one published .sha256 for ${target}, found ${names.length}`);
@@ -94,12 +96,17 @@ export function renderHostRelease(tag, manifest) {
 //! hashes come from the attested \`host-release.json\` of the release workflow run and
 //! are cross-checked against the published \`.sha256\` assets.
 
-/// Full Host version, as printed by \`monocode-host --version\`.
+/// Full Host version, as printed by the packaged Host's \`--version\`.
 pub const HOST_VERSION: &str = "${version}";
 
 /// Release download base. The tag has no \`+\`, which URLs would have to escape.
 pub const HOST_RELEASE_BASE: &str =
     "https://github.com/${REPO}/releases/download/${tag}";
+
+/// Name of the package: the asset is \`<name>-<target>.(tar.gz|zip)\` and a Unix package holds
+/// an executable of this name. It is pinned data, like the hashes. It only names files inside
+/// the package; what the app installs on the machine is always \`zptah-host\` (see \`host_names.rs\`).
+pub const HOST_PACKAGE_NAME: &str = "${PACKAGE_NAME}";
 
 /// Expected sha256 of each package, by Host target.
 pub const HOST_SHA256: [(&str, &str); ${TARGETS.length}] = [
@@ -185,7 +192,7 @@ export async function pinHostRelease(tag, { root = process.cwd(), gh = defaultGh
     const { assets } = validateManifest(manifest, tag);
     const sums = join(dir, "sums");
     await mkdir(sums);
-    ghOk(gh, ["release", "download", tag, "-R", REPO, "-p", "monocode-host-*.sha256", "-D", sums]);
+    ghOk(gh, ["release", "download", tag, "-R", REPO, "-p", `${PACKAGE_NAME}-*.sha256`, "-D", sums]);
     const checksumFiles = {};
     for (const name of await readdir(sums))
       checksumFiles[name] = await readFile(join(sums, name), "utf8");

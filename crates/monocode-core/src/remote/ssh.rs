@@ -869,7 +869,7 @@ fn pinned_sha256_lines(platform: HostPlatform) -> String {
 }
 
 fn bootstrap_script_from_template(platform: HostPlatform, template: &str) -> String {
-    use super::host_release::{HOST_RELEASE_BASE, HOST_VERSION};
+    use super::host_release::{HOST_PACKAGE_NAME, HOST_RELEASE_BASE, HOST_VERSION};
     let sha256 = pinned_sha256_lines(platform);
     match platform {
         // include_str! preserves checkout line endings, including Windows CRLF.
@@ -877,11 +877,13 @@ fn bootstrap_script_from_template(platform: HostPlatform, template: &str) -> Str
             .replace("\r\n", "\n")
             .replace("@@VERSION@@", &shell_quote(HOST_VERSION))
             .replace("@@RELEASE@@", &shell_quote(HOST_RELEASE_BASE))
+            .replace("@@PACKAGE@@", HOST_PACKAGE_NAME)
             .replace("@@SHA256@@", &sha256)
             .replace("@@WORKER_ALIVE@@", include_str!("worker_alive.sh")),
         HostPlatform::Windows => template
             .replace("@@VERSION@@", &powershell_quote(HOST_VERSION))
             .replace("@@RELEASE@@", &powershell_quote(HOST_RELEASE_BASE))
+            .replace("@@PACKAGE@@", HOST_PACKAGE_NAME)
             .replace("@@SHA256@@", &sha256)
             .replace("@@ACL@@", include_str!("windows-acl.ps1")),
     }
@@ -892,7 +894,7 @@ fn bootstrap_script_from_template(platform: HostPlatform, template: &str) -> Str
 /// prepended verbatim. The prelude is the seam for per-start secrets, which
 /// reach the container on stdin only.
 ///
-/// Unlike a codespace, a sandbox runs the Host detached (`MONOCODE_HOST_DETACHED=1`): a
+/// Unlike a codespace, a sandbox runs the Host detached (`ZPTAH_HOST_DETACHED=1`): a
 /// devcontainer can have `/run/systemd/system` without systemd as PID 1, which sends
 /// `service install` down a systemd path that fails. The shared template is left untouched;
 /// `ensure_detached_host` from `remote_bootstrap_detached.sh` is inserted before its
@@ -914,7 +916,7 @@ pub(crate) enum UpgradePhase {
     Status,
 }
 impl UpgradePhase {
-    /// The value of `MONOCODE_HOST_UPGRADE_PHASE`. The detached worker of a `Swap` runs as
+    /// The value of `ZPTAH_HOST_UPGRADE_PHASE`. The detached worker of a `Swap` runs as
     /// `swapnow`.
     fn word(self) -> &'static str {
         match self {
@@ -949,10 +951,10 @@ fn swap_launcher(worker: &str, check: Option<SwapCheck<'_>>) -> String {
     };
     let alive = include_str!("worker_alive.sh");
     format!(
-        r#"{exports}[ -z "${{MONOCODE_HOST_TOKEN_VAR:-}}" ] || export MONOCODE_HOST_TOKEN_VAR
+        r#"{exports}[ -z "${{ZPTAH_HOST_TOKEN_VAR:-}}" ] || export ZPTAH_HOST_TOKEN_VAR
 set -eu
 umask 077
-BASE="$HOME/.monocode-host"
+BASE="$HOME/.zptah-host"
 mkdir -p "$BASE"
 {alive}
 # One worker at a time: a live one owns the lock.
@@ -1011,8 +1013,9 @@ fn upgrade_flags(port: u16, phase: UpgradePhase, check: Option<SwapCheck<'_>>) -
         _ => String::new(),
     };
     format!(
-        "MONOCODE_HOST_UPGRADE_IF_OLDER=1\nMONOCODE_HOST_UPGRADE_PHASE={}\nMONOCODE_HOST_PORT={port}\n{nonce}",
-        phase.word()
+        "ZPTAH_HOST_UPGRADE_IF_OLDER=1\nZPTAH_HOST_UPGRADE_PHASE={}\nZPTAH_HOST_PORT={port}\n{nonce}",
+        phase.word(),
+        port = super::host_names::install_port(port),
     )
 }
 
@@ -1031,9 +1034,8 @@ fn sandbox_script_with(prelude: Option<&str>, extra: &str) -> String {
     } else {
         "echo 'The sandbox bootstrap template changed: the service install line is missing.' >&2\nexit 1\n".to_string()
     };
-    let script = format!(
-        "{extra}MONOCODE_HOST_TRACK_TOKEN=1\nMONOCODE_HOST_INSTALL_CLAUDE=1\n{helpers}{body}"
-    );
+    let script =
+        format!("{extra}ZPTAH_HOST_TRACK_TOKEN=1\nZPTAH_HOST_INSTALL_CLAUDE=1\n{helpers}{body}");
     match prelude {
         Some(prelude) => format!("{prelude}\n{script}"),
         None => script,
@@ -1057,7 +1059,7 @@ pub fn codespace_bootstrap_script() -> String {
 /// without an account).
 pub fn codespace_bootstrap_script_with(prelude: Option<&str>) -> String {
     let script = format!(
-        "MONOCODE_HOST_TRACK_TOKEN=1\nMONOCODE_HOST_INSTALL_CLAUDE=1\n{}",
+        "ZPTAH_HOST_TRACK_TOKEN=1\nZPTAH_HOST_INSTALL_CLAUDE=1\n{}",
         bootstrap_script(HostPlatform::Unix)
     );
     match prelude {
@@ -1074,9 +1076,9 @@ pub fn codespace_bootstrap_script_with(prelude: Option<&str>) -> String {
 /// marker (so choosing the same account again later restarts it too). It sits in the same
 /// ssh script, so it is one run and nothing else changes in the bootstrap.
 pub(crate) fn codespace_stop_host_prestep() -> &'static str {
-    "ENTRY_PRE=\"$HOME/.monocode-host/bin/monocode-host\"\n\
+    "ENTRY_PRE=\"$HOME/.zptah-host/bin/zptah-host\"\n\
      if [ -x \"$ENTRY_PRE\" ]; then \"$ENTRY_PRE\" service uninstall >/dev/null 2>&1 || true; fi\n\
-     rm -f \"$HOME/.monocode-host/host-token.sha256\"\n"
+     rm -f \"$HOME/.zptah-host/host-token.sha256\"\n"
 }
 
 /// Prepended to the codespace bootstrap that applies a changed app Claude account to a Host
@@ -1084,7 +1086,7 @@ pub(crate) fn codespace_stop_host_prestep() -> &'static str {
 /// earlier account) cannot make the bootstrap think the Host already runs under this token
 /// and skip the restart.
 pub(crate) fn codespace_forget_token_marker() -> &'static str {
-    "rm -f \"$HOME/.monocode-host/host-token.sha256\"\n"
+    "rm -f \"$HOME/.zptah-host/host-token.sha256\"\n"
 }
 
 /// A step of the cloud Host upgrade in a codespace without an app Claude account.
@@ -1127,21 +1129,23 @@ pub(crate) fn codespace_upgrade_script_with(
 }
 
 pub fn upgrade_script(platform: HostPlatform, port: u16) -> String {
+    // A machine saved with a `monocode-host` port must not make the zptah Host take it over.
+    let port = super::host_names::install_port(port);
     let script = bootstrap_script(platform);
     match platform {
         HostPlatform::Unix => {
-            format!("MONOCODE_HOST_FORCE_UPGRADE=1\nMONOCODE_HOST_PORT={port}\n{script}")
+            format!("ZPTAH_HOST_FORCE_UPGRADE=1\nZPTAH_HOST_PORT={port}\n{script}")
         }
         HostPlatform::Windows => format!(
-            "$env:MONOCODE_HOST_FORCE_UPGRADE = '1'\n$env:MONOCODE_HOST_PORT = '{port}'\n{script}"
+            "$env:ZPTAH_HOST_FORCE_UPGRADE = '1'\n$env:ZPTAH_HOST_PORT = '{port}'\n{script}"
         ),
     }
 }
 
 pub fn pairing_script(platform: HostPlatform, name: &str) -> String {
     match platform {
-        HostPlatform::Unix => format!("set -eu\n\"$HOME/.monocode-host/bin/monocode-host\" pair --name {} --json\n", shell_quote(name)),
-        HostPlatform::Windows => format!("$ErrorActionPreference = 'Stop'\n$base = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.monocode-host'\n$runtime = [IO.File]::ReadAllText((Join-Path $base 'runtime-path')).Trim()\n& (Join-Path $runtime 'node.exe') (Join-Path $runtime 'host.mjs') pair --name {} --json\nif ($LASTEXITCODE -ne 0) {{ throw 'Host pairing failed.' }}\n", powershell_quote(name)),
+        HostPlatform::Unix => format!("set -eu\n\"$HOME/.zptah-host/bin/zptah-host\" pair --name {} --json\n", shell_quote(name)),
+        HostPlatform::Windows => format!("$ErrorActionPreference = 'Stop'\n$base = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.zptah-host'\n$runtime = [IO.File]::ReadAllText((Join-Path $base 'runtime-path')).Trim()\n& (Join-Path $runtime 'node.exe') (Join-Path $runtime 'host.mjs') pair --name {} --json\nif ($LASTEXITCODE -ne 0) {{ throw 'Host pairing failed.' }}\n", powershell_quote(name)),
     }
 }
 
@@ -1813,9 +1817,10 @@ mod tests {
     #[test]
     fn codespace_bootstrap_tracks_the_token_without_exposing_it() {
         let script = codespace_bootstrap_script();
-        assert!(script
-            .starts_with("MONOCODE_HOST_TRACK_TOKEN=1\nMONOCODE_HOST_INSTALL_CLAUDE=1\nset -eu\n"));
-        assert!(!bootstrap_script(HostPlatform::Unix).contains("MONOCODE_HOST_TRACK_TOKEN=1\n"));
+        assert!(
+            script.starts_with("ZPTAH_HOST_TRACK_TOKEN=1\nZPTAH_HOST_INSTALL_CLAUDE=1\nset -eu\n")
+        );
+        assert!(!bootstrap_script(HostPlatform::Unix).contains("ZPTAH_HOST_TRACK_TOKEN=1\n"));
         assert!(script.contains("host-token.sha256"));
         assert!(!script.contains("echo \"$CLAUDE_CODE_OAUTH_TOKEN"));
     }
@@ -1824,10 +1829,10 @@ mod tests {
     fn codespace_bootstrap_restarts_the_host_once_when_the_token_changes() {
         use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
-        let bin = home.path().join(".monocode-host/bin");
+        let bin = home.path().join(".zptah-host/bin");
         std::fs::create_dir_all(&bin).unwrap();
         let log = home.path().join("calls.log");
-        let entry = bin.join("monocode-host");
+        let entry = bin.join("zptah-host");
         std::fs::write(
             &entry,
             format!(
@@ -1873,10 +1878,8 @@ mod tests {
         };
         // Hermetic: never try to install or detect Claude Code from this test.
         let no_claude_install = || {
-            codespace_bootstrap_script().replace(
-                "MONOCODE_HOST_INSTALL_CLAUDE=1",
-                "MONOCODE_HOST_INSTALL_CLAUDE=0",
-            )
+            codespace_bootstrap_script()
+                .replace("ZPTAH_HOST_INSTALL_CLAUDE=1", "ZPTAH_HOST_INSTALL_CLAUDE=0")
         };
         let uninstalls =
             |calls: &[String]| calls.iter().filter(|c| *c == "service uninstall").count();
@@ -1886,7 +1889,7 @@ mod tests {
         let calls = run(no_claude_install(), Some("secret-token"));
         assert_eq!(uninstalls(&calls), 1, "{calls:?}");
         let marker =
-            std::fs::read_to_string(home.path().join(".monocode-host/host-token.sha256")).unwrap();
+            std::fs::read_to_string(home.path().join(".zptah-host/host-token.sha256")).unwrap();
         assert_eq!(marker.trim().len(), 64);
         assert!(!marker.contains("secret-token"));
         // Same token: no further restart.
@@ -1913,10 +1916,10 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let run = |script: String, env: Option<(&str, &str)>| -> (Vec<String>, String) {
             let home = tempfile::tempdir().unwrap();
-            let bin = home.path().join(".monocode-host/bin");
+            let bin = home.path().join(".zptah-host/bin");
             std::fs::create_dir_all(&bin).unwrap();
             let log = home.path().join("calls.log");
-            let entry = bin.join("monocode-host");
+            let entry = bin.join("zptah-host");
             std::fs::write(
                 &entry,
                 format!(
@@ -1958,16 +1961,12 @@ mod tests {
                 .lines()
                 .map(String::from)
                 .collect();
-            let marker =
-                std::fs::read_to_string(home.path().join(".monocode-host/host-token.sha256"))
-                    .unwrap_or_default();
+            let marker = std::fs::read_to_string(home.path().join(".zptah-host/host-token.sha256"))
+                .unwrap_or_default();
             (calls, marker)
         };
         let hermetic = |script: String| {
-            script.replace(
-                "MONOCODE_HOST_INSTALL_CLAUDE=1",
-                "MONOCODE_HOST_INSTALL_CLAUDE=0",
-            )
+            script.replace("ZPTAH_HOST_INSTALL_CLAUDE=1", "ZPTAH_HOST_INSTALL_CLAUDE=0")
         };
         let (_, codespace_marker) = run(
             hermetic(codespace_bootstrap_script()),
@@ -1986,7 +1985,7 @@ mod tests {
             1
         );
         // An API key is tracked through its own variable and hashes the same way.
-        let key_prelude = "unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN\nMONOCODE_HOST_TOKEN_VAR=ANTHROPIC_API_KEY\nexport ANTHROPIC_API_KEY='same-secret'";
+        let key_prelude = "unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN\nZPTAH_HOST_TOKEN_VAR=ANTHROPIC_API_KEY\nexport ANTHROPIC_API_KEY='same-secret'";
         let (calls, marker) = run(hermetic(sandbox_bootstrap_script(Some(key_prelude))), None);
         assert_eq!(marker, codespace_marker);
         assert_eq!(
@@ -2009,10 +2008,10 @@ mod tests {
     fn codespace_bootstrap_restarts_the_host_once_when_claude_appears() {
         use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
-        let bin = home.path().join(".monocode-host/bin");
+        let bin = home.path().join(".zptah-host/bin");
         std::fs::create_dir_all(&bin).unwrap();
         let log = home.path().join("calls.log");
-        let entry = bin.join("monocode-host");
+        let entry = bin.join("zptah-host");
         std::fs::write(
             &entry,
             format!(
@@ -2108,12 +2107,10 @@ mod tests {
         assert!(script.contains("checksum mismatch"));
         assert!(script.contains("\"$FORCE_UPGRADE\" = 1"));
         assert!(script.contains("service uninstall"));
-        assert!(
-            upgrade_script(HostPlatform::Unix, 3774).starts_with("MONOCODE_HOST_FORCE_UPGRADE=1")
-        );
+        assert!(upgrade_script(HostPlatform::Unix, 3774).starts_with("ZPTAH_HOST_FORCE_UPGRADE=1"));
         assert!(!upgrade_script(HostPlatform::Unix, 3774).contains('\r'));
         assert!(upgrade_script(HostPlatform::Windows, 3774)
-            .starts_with("$env:MONOCODE_HOST_FORCE_UPGRADE = '1'"));
+            .starts_with("$env:ZPTAH_HOST_FORCE_UPGRADE = '1'"));
     }
     #[test]
     fn bootstrap_pins_the_fork_release_version_and_hashes() {
@@ -2181,7 +2178,7 @@ mod tests {
         let work = tempfile::tempdir().unwrap();
         let pkg = work.path().join("pkg");
         std::fs::create_dir_all(&pkg).unwrap();
-        let host = pkg.join("monocode-host");
+        let host = pkg.join(super::super::host_release::HOST_PACKAGE_NAME);
         std::fs::write(
             &host,
             "#!/bin/sh\necho \"new $@\" >> \"$HOME/calls.log\"\nenv >> \"$HOME/env.log\"\ncase \"$1\" in --version) echo 'PINNED_VERSION' ;; connection-info) if [ -f \"$HOME/flaky\" ]; then n=$(cat \"$HOME/flaky\"); if [ \"$n\" -gt 0 ]; then echo $((n - 1)) > \"$HOME/flaky\"; exit 1; fi; fi; [ ! -f \"$HOME/fail-new\" ] || exit 1; echo '{\"port\":3774}' ;; service) [ \"$2\" != install ] || [ ! -f \"$HOME/fail-new\" ] || exit 1 ;; esac\nexit 0\n"
@@ -2195,7 +2192,7 @@ mod tests {
             .arg(&tarball)
             .arg("-C")
             .arg(&pkg)
-            .arg("monocode-host")
+            .arg(super::super::host_release::HOST_PACKAGE_NAME)
             .status()
             .unwrap();
         assert!(status.success());
@@ -2243,8 +2240,8 @@ mod tests {
                 "PATH",
                 format!("{}:{}", stubs.display(), std::env::var("PATH").unwrap()),
             )
-            .env_remove("MONOCODE_HOST_FORCE_UPGRADE")
-            .env_remove("MONOCODE_HOST_UPGRADE_IF_OLDER")
+            .env_remove("ZPTAH_HOST_FORCE_UPGRADE")
+            .env_remove("ZPTAH_HOST_UPGRADE_IF_OLDER")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -2281,10 +2278,7 @@ mod tests {
                 "{url}"
             );
         }
-        assert!(home
-            .path()
-            .join(".monocode-host/bin/monocode-host")
-            .is_file());
+        assert!(home.path().join(".zptah-host/bin/zptah-host").is_file());
     }
     #[cfg(unix)]
     #[test]
@@ -2293,18 +2287,12 @@ mod tests {
         let (ok, stderr, _, home) = run_bootstrap_with_fake_package(false, None, false);
         assert!(!ok);
         assert!(stderr.contains("checksum mismatch"), "{stderr}");
-        assert!(!home
-            .path()
-            .join(".monocode-host/bin/monocode-host")
-            .exists());
+        assert!(!home.path().join(".zptah-host/bin/zptah-host").exists());
         // Pin and published checksum agree, but the served bytes differ.
         let (ok, stderr, _, home) = run_bootstrap_with_fake_package(true, None, true);
         assert!(!ok);
         assert!(stderr.contains("package checksum mismatch"), "{stderr}");
-        assert!(!home
-            .path()
-            .join(".monocode-host/bin/monocode-host")
-            .exists());
+        assert!(!home.path().join(".zptah-host/bin/zptah-host").exists());
         // The pin matches the package, but the release publishes another checksum.
         let other = "0".repeat(64);
         let (ok, stderr, _, _) = run_bootstrap_with_fake_package(true, Some(&other), false);
@@ -2316,11 +2304,11 @@ mod tests {
     #[cfg(unix)]
     fn install_old_host(home: &std::path::Path, version: &str) {
         use std::os::unix::fs::PermissionsExt;
-        let base = home.join(".monocode-host");
+        let base = home.join(".zptah-host");
         let runtime = base.join("runtime/old");
         std::fs::create_dir_all(&runtime).unwrap();
         std::fs::create_dir_all(base.join("bin")).unwrap();
-        let host = runtime.join("monocode-host");
+        let host = runtime.join(super::super::host_release::HOST_PACKAGE_NAME);
         std::fs::write(
             &host,
             format!("#!/bin/sh\necho \"old $@\" >> \"$HOME/calls.log\"\nenv >> \"$HOME/env.log\"\ncase \"$1\" in --version) echo '{version}' ;; connection-info) if [ -f \"$HOME/flaky\" ]; then n=$(cat \"$HOME/flaky\"); if [ \"$n\" -gt 0 ]; then echo $((n - 1)) > \"$HOME/flaky\"; exit 1; fi; fi; echo '{{\"port\":3774}}' ;; service) [ \"$2\" != install ] || [ ! -f \"$HOME/fail-old\" ] || exit 1 ;; esac\nexit 0\n"),
@@ -2332,10 +2320,10 @@ mod tests {
             format!("{}\n", runtime.display()),
         )
         .unwrap();
-        let launcher = base.join("bin/monocode-host");
+        let launcher = base.join("bin/zptah-host");
         std::fs::write(
             &launcher,
-            "#!/bin/sh\nset -eu\nBASE=$(CDPATH= cd -- \"$(dirname -- \"$0\")/..\" && pwd)\nRUNTIME=$(cat \"$BASE/runtime-path\")\nexec \"$RUNTIME/monocode-host\" \"$@\"\n",
+            "#!/bin/sh\nset -eu\nBASE=$(CDPATH= cd -- \"$(dirname -- \"$0\")/..\" && pwd)\nRUNTIME=$(cat \"$BASE/runtime-path\")\nexec \"$RUNTIME/PACKAGE\" \"$@\"\n".replace("PACKAGE", super::super::host_release::HOST_PACKAGE_NAME),
         )
         .unwrap();
         std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -2401,14 +2389,14 @@ mod tests {
     }
     #[cfg(unix)]
     fn runtime_path(home: &std::path::Path) -> String {
-        std::fs::read_to_string(home.join(".monocode-host/runtime-path"))
+        std::fs::read_to_string(home.join(".zptah-host/runtime-path"))
             .unwrap()
             .trim()
             .to_string()
     }
     #[cfg(unix)]
     fn swap_status(home: &std::path::Path) -> String {
-        std::fs::read_to_string(home.join(".monocode-host/swap-status"))
+        std::fs::read_to_string(home.join(".zptah-host/swap-status"))
             .unwrap_or_default()
             .lines()
             .next()
@@ -2419,7 +2407,7 @@ mod tests {
     /// The second line of the status file: the nonce of the swap that wrote it.
     #[cfg(unix)]
     fn status_nonce(home: &std::path::Path) -> String {
-        std::fs::read_to_string(home.join(".monocode-host/swap-status"))
+        std::fs::read_to_string(home.join(".zptah-host/swap-status"))
             .unwrap_or_default()
             .lines()
             .nth(1)
@@ -2584,7 +2572,7 @@ mod tests {
             );
             assert!(ok, "{installed}: {stderr}");
             assert_eq!(urls.len(), 2, "{installed}: {urls:?}");
-            let base = home.path().join(".monocode-host");
+            let base = home.path().join(".zptah-host");
             // The old runtime and launcher are exactly as they were, and the Host was not stopped.
             assert!(
                 runtime_path(home.path()).ends_with("runtime/old"),
@@ -2596,7 +2584,7 @@ mod tests {
             // A verified package waits in a staging directory.
             let staged = std::fs::read_to_string(base.join("staged-runtime")).unwrap();
             assert!(std::path::Path::new(staged.trim())
-                .join("monocode-host")
+                .join(super::super::host_release::HOST_PACKAGE_NAME)
                 .is_file());
         }
         for installed in [super::super::host_release::HOST_VERSION, "99.0.0+zptah"] {
@@ -2609,7 +2597,7 @@ mod tests {
             );
             assert!(ok, "{installed}: {stderr}");
             assert!(urls.is_empty(), "{installed}: {urls:?}");
-            assert!(!home.path().join(".monocode-host/staged-runtime").exists());
+            assert!(!home.path().join(".zptah-host/staged-runtime").exists());
         }
         // Without the flag an installed Host is never replaced: the plain connect rule.
         let (ok, _, urls, home) = run_bootstrap_on(
@@ -2647,7 +2635,7 @@ mod tests {
             assert!(stderr.contains(message), "{stderr}");
             assert!(!host_calls(&home).contains("service"));
             assert!(runtime_path(home.path()).ends_with("runtime/old"));
-            assert!(!home.path().join(".monocode-host/staged-runtime").exists());
+            assert!(!home.path().join(".zptah-host/staged-runtime").exists());
         }
     }
 
@@ -2656,7 +2644,7 @@ mod tests {
     fn the_swap_installs_the_staged_package_and_keeps_the_previous_host_as_prev() {
         let (home, api) = staged_host(IDLE);
         assert_eq!(run_worker(home.path(), &api, false), Some(0));
-        let base = home.path().join(".monocode-host");
+        let base = home.path().join(".zptah-host");
         assert_eq!(swap_status(home.path()), "done");
         assert!(std::fs::read_to_string(base.join("swap-info"))
             .unwrap()
@@ -2666,7 +2654,7 @@ mod tests {
             .unwrap()
             .trim()
             .ends_with("runtime/old"));
-        assert!(base.join("bin/monocode-host.prev").is_file());
+        assert!(base.join("bin/zptah-host.prev").is_file());
         assert!(!base.join("staged-runtime").exists());
         assert!(host_calls(&home).contains("new service install"));
         // A swap with nothing staged is refused and changes nothing.
@@ -2694,7 +2682,7 @@ mod tests {
                 calls.matches("service").count(),
                 before.matches("service").count()
             );
-            assert!(home.path().join(".monocode-host/staged-runtime").exists());
+            assert!(home.path().join(".zptah-host/staged-runtime").exists());
         }
         // The same staged package goes in once the Host is idle.
         let (home, api) = staged_host(RUNNING);
@@ -2735,11 +2723,11 @@ mod tests {
     fn a_swap_without_a_way_back_is_refused_and_the_host_is_left_alone() {
         let (home, api) = staged_host(IDLE);
         // The launcher is there but nothing says which runtime it runs: no rollback possible.
-        let base = home.path().join(".monocode-host");
+        let base = home.path().join(".zptah-host");
         std::fs::remove_file(base.join("runtime-path")).unwrap();
         assert_eq!(run_worker(home.path(), &api, false), Some(78));
         assert_eq!(swap_status(home.path()), "refused 78");
-        assert!(base.join("bin/monocode-host").is_file());
+        assert!(base.join("bin/zptah-host").is_file());
         assert!(!host_calls(&home).contains("service uninstall"));
         assert!(base.join("staged-runtime").exists());
     }
@@ -2754,7 +2742,7 @@ mod tests {
         // The old runtime and launcher are back and the old Host was started again.
         assert!(runtime_path(home.path()).ends_with("runtime/old"));
         assert!(host_calls(&home).contains("old service install"));
-        let launcher = home.path().join(".monocode-host/bin/monocode-host");
+        let launcher = home.path().join(".zptah-host/bin/zptah-host");
         let output = Command::new(launcher)
             .arg("connection-info")
             .env("HOME", home.path())
@@ -2805,7 +2793,7 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
         let path = format!("{}:/usr/bin:/bin", stubs.path().display());
-        let claude_flags = "MONOCODE_HOST_TRACK_TOKEN=1\nMONOCODE_HOST_INSTALL_CLAUDE=1\n";
+        let claude_flags = "ZPTAH_HOST_TRACK_TOKEN=1\nZPTAH_HOST_INSTALL_CLAUDE=1\n";
         // Control: a plain connect bootstrap does install Claude when it is missing.
         let (ok, stderr, _, home) = run_bootstrap_on(
             true,
@@ -2847,11 +2835,11 @@ mod tests {
     #[cfg(unix)]
     fn died_mid_swap(current: &str) -> tempfile::TempDir {
         let (home, _api) = staged_host(IDLE);
-        let base = home.path().join(".monocode-host");
+        let base = home.path().join(".zptah-host");
         std::fs::copy(base.join("runtime-path"), base.join("runtime-path.prev")).unwrap();
         std::fs::copy(
-            base.join("bin/monocode-host"),
-            base.join("bin/monocode-host.prev"),
+            base.join("bin/zptah-host"),
+            base.join("bin/zptah-host.prev"),
         )
         .unwrap();
         if current == "staged" {
@@ -2877,7 +2865,7 @@ mod tests {
     #[test]
     fn status_reports_a_live_worker_and_one_that_never_got_to_touch_anything() {
         let (home, _api) = staged_host(IDLE);
-        let base = home.path().join(".monocode-host");
+        let base = home.path().join(".zptah-host");
         assert_eq!(status_of(home.path(), "nonce-1"), "{\"swap\":\"none\"}");
         // A live worker is left alone: its command line is the worker's (Linux), or its
         // heartbeat is fresh (elsewhere).
@@ -2898,7 +2886,7 @@ mod tests {
     #[test]
     fn a_reused_pid_is_not_taken_for_the_worker() {
         let home = died_mid_swap("old");
-        let base = home.path().join(".monocode-host");
+        let base = home.path().join(".zptah-host");
         // The pid belongs to a live process now, but it is not the worker: not its command
         // line, and no heartbeat.
         let _ = std::fs::remove_file(base.join("swap-heartbeat"));
@@ -2987,7 +2975,7 @@ mod tests {
         assert!(!present(&home), "{}", env_log(&home));
         // A refusal before the look.
         let (home, api) = staged_host(IDLE);
-        std::fs::remove_file(home.path().join(".monocode-host/runtime-path")).unwrap();
+        std::fs::remove_file(home.path().join(".zptah-host/runtime-path")).unwrap();
         assert_eq!(run_worker(home.path(), &api, false), Some(78));
         assert!(!present(&home), "{}", env_log(&home));
     }
@@ -3012,7 +3000,7 @@ mod tests {
     #[test]
     fn a_second_launcher_cannot_start_while_a_worker_is_alive() {
         let (home, api) = staged_host(IDLE);
-        let base = home.path().join(".monocode-host");
+        let base = home.path().join(".zptah-host");
         let check = SwapCheck {
             device_token: API_TOKEN,
             environment_id: "env-1",
@@ -3048,7 +3036,7 @@ mod tests {
     #[test]
     fn the_launcher_runs_the_worker_detached_and_keeps_every_credential_off_the_disk() {
         let (home, api) = staged_host(IDLE);
-        let base = home.path().join(".monocode-host");
+        let base = home.path().join(".zptah-host");
         let check = SwapCheck {
             device_token: API_TOKEN,
             environment_id: "env-1",
@@ -3077,7 +3065,7 @@ mod tests {
         for text in [&worker, &log] {
             assert!(!text.contains(API_TOKEN), "a credential reached the disk");
         }
-        assert!(worker.contains("MONOCODE_HOST_UPGRADE_PHASE=swapnow"));
+        assert!(worker.contains("ZPTAH_HOST_UPGRADE_PHASE=swapnow"));
     }
 
     #[cfg(unix)]
@@ -3091,7 +3079,7 @@ mod tests {
             upgrade_step(UpgradePhase::Stage),
         );
         assert!(ok, "{stderr}");
-        let base = home.path().join(".monocode-host");
+        let base = home.path().join(".zptah-host");
         let staged = std::fs::read_to_string(base.join("staged-runtime")).unwrap();
         let (code, stderr, _) = run_in_home(home.path(), &upgrade_step(UpgradePhase::Discard));
         assert_eq!(code, Some(0), "{stderr}");
@@ -3113,7 +3101,7 @@ mod tests {
             UpgradePhase::Status,
         ] {
             let flags = format!(
-                "MONOCODE_HOST_UPGRADE_IF_OLDER=1\nMONOCODE_HOST_UPGRADE_PHASE={}\nMONOCODE_HOST_PORT=3790\n",
+                "ZPTAH_HOST_UPGRADE_IF_OLDER=1\nZPTAH_HOST_UPGRADE_PHASE={}\nZPTAH_HOST_PORT=3790\n",
                 phase.word()
             );
             let sandbox = sandbox_upgrade_script(Some(prelude), 3790, phase, None);
@@ -3128,8 +3116,9 @@ mod tests {
             assert!(!sandbox_upgrade_script(None, 3774, phase, None).contains("sk-test"));
             assert!(!sandbox.contains("device-token-xyz"));
             let codespace = codespace_upgrade_script(3774, phase, None);
+            // A saved monocode-host port (3774) is replaced: the zptah Host never binds it.
             assert!(codespace.starts_with(&format!(
-                "MONOCODE_HOST_UPGRADE_IF_OLDER=1\nMONOCODE_HOST_UPGRADE_PHASE={}\nMONOCODE_HOST_PORT=3774\n",
+                "ZPTAH_HOST_UPGRADE_IF_OLDER=1\nZPTAH_HOST_UPGRADE_PHASE={}\nZPTAH_HOST_PORT=3784\n",
                 phase.word()
             )));
             assert!(codespace.ends_with(&codespace_bootstrap_script()));
@@ -3141,7 +3130,7 @@ mod tests {
         assert!(swap.contains("export MONOCODE_CHECK_TOKEN='device-token-xyz'\n"));
         assert!(swap.contains("export MONOCODE_CHECK_ENV='env-9'\n"));
         assert!(swap.contains(
-            "MONOCODE_HOST_UPGRADE_PHASE=swapnow\nMONOCODE_HOST_PORT=3790\nMONOCODE_SWAP_NONCE='nonce-9'\n"
+            "ZPTAH_HOST_UPGRADE_PHASE=swapnow\nZPTAH_HOST_PORT=3790\nMONOCODE_SWAP_NONCE='nonce-9'\n"
         ));
         // The status script asks for the same swap.
         assert!(
@@ -3163,7 +3152,7 @@ mod tests {
         assert!(codespace.contains("export MONOCODE_CHECK_TOKEN='device-token-xyz'\n"));
         // The user's explicit Upgrade is untouched: it forces the install.
         assert!(
-            upgrade_script(HostPlatform::Unix, 3774).starts_with("MONOCODE_HOST_FORCE_UPGRADE=1\n")
+            upgrade_script(HostPlatform::Unix, 3774).starts_with("ZPTAH_HOST_FORCE_UPGRADE=1\n")
         );
     }
     #[cfg(unix)]
@@ -3977,7 +3966,7 @@ mod tests {
     fn a_codespace_script_with_a_prelude_starts_with_it_and_without_one_is_unchanged() {
         const PRELUDE: &str = "unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN\nexport CLAUDE_CODE_OAUTH_TOKEN='sk-ant-oat01-x'\n";
         let plain = format!(
-            "MONOCODE_HOST_TRACK_TOKEN=1\nMONOCODE_HOST_INSTALL_CLAUDE=1\n{}",
+            "ZPTAH_HOST_TRACK_TOKEN=1\nZPTAH_HOST_INSTALL_CLAUDE=1\n{}",
             bootstrap_script(HostPlatform::Unix)
         );
         // Byte for byte what it was before accounts existed.
@@ -4014,7 +4003,7 @@ mod tests {
     #[test]
     fn detached_flag_and_helpers_exist_only_in_the_sandbox_bootstrap() {
         let sandbox = sandbox_bootstrap_script(None);
-        assert!(sandbox.contains("MONOCODE_HOST_DETACHED=1\n"));
+        assert!(sandbox.contains("ZPTAH_HOST_DETACHED=1\n"));
         assert!(sandbox.contains("ensure_detached_host\n\"$ENTRY\" service install"));
         assert!(!sandbox.contains("restart_detached_host"));
         assert_eq!(
@@ -4052,9 +4041,9 @@ mod tests {
         fn new() -> Self {
             use std::os::unix::fs::PermissionsExt;
             let home = tempfile::tempdir().unwrap();
-            let base = home.path().join(".monocode-host");
+            let base = home.path().join(".zptah-host");
             std::fs::create_dir_all(base.join("bin")).unwrap();
-            let entry = base.join("bin/monocode-host");
+            let entry = base.join("bin/zptah-host");
             std::fs::write(
                 &entry,
                 format!(
@@ -4085,7 +4074,7 @@ esac
             Self { home }
         }
         fn up(&self) -> std::path::PathBuf {
-            self.home.path().join(".monocode-host/up")
+            self.home.path().join(".zptah-host/up")
         }
         fn calls(&self) -> Vec<String> {
             std::fs::read_to_string(self.home.path().join("calls.log"))
@@ -4108,10 +4097,8 @@ esac
         }
         fn run(&self, token: Option<&str>) {
             use std::io::Write;
-            let script = sandbox_bootstrap_script(None).replace(
-                "MONOCODE_HOST_INSTALL_CLAUDE=1",
-                "MONOCODE_HOST_INSTALL_CLAUDE=0",
-            );
+            let script = sandbox_bootstrap_script(None)
+                .replace("ZPTAH_HOST_INSTALL_CLAUDE=1", "ZPTAH_HOST_INSTALL_CLAUDE=0");
             let mut command = Command::new("sh");
             command
                 .arg("-s")
@@ -4155,15 +4142,15 @@ esac
         let fake = DetachedRun::new();
         fake.run(None);
         let calls = fake.calls();
-        let base = fake.home.path().join(".monocode-host");
+        let base = fake.home.path().join(".zptah-host");
         assert!(
-            calls.contains(&format!("serve --data-dir {} --port 3774", base.display())),
+            calls.contains(&format!("serve --data-dir {} --port 3784", base.display())),
             "{calls:?}"
         );
         // `service install` ran once the Host answered, so the real one returns early.
         let install = calls
             .iter()
-            .position(|c| c == "service install --port 3774");
+            .position(|c| c == "service install --port 3784");
         let serve = calls.iter().position(|c| c.starts_with("serve "));
         assert!(install.is_some() && serve < install, "{calls:?}");
         assert!(fake.pid().is_some());
@@ -4224,9 +4211,9 @@ esac
     fn sandbox_bootstrap_has_the_codespace_flags_and_an_optional_prelude() {
         let plain = sandbox_bootstrap_script(None);
         assert_ne!(plain, codespace_bootstrap_script());
-        assert!(plain.starts_with("MONOCODE_HOST_TRACK_TOKEN=1\nMONOCODE_HOST_INSTALL_CLAUDE=1\n"));
+        assert!(plain.starts_with("ZPTAH_HOST_TRACK_TOKEN=1\nZPTAH_HOST_INSTALL_CLAUDE=1\n"));
         let with = sandbox_bootstrap_script(Some("export X=1"));
-        assert!(with.starts_with("export X=1\nMONOCODE_HOST_TRACK_TOKEN=1\n"));
+        assert!(with.starts_with("export X=1\nZPTAH_HOST_TRACK_TOKEN=1\n"));
     }
     #[test]
     fn sandbox_platform_is_unix_without_probing() {

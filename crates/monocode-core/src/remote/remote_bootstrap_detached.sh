@@ -6,7 +6,7 @@
 # detached Host (the CLI runs a lifecycle stop and waits for running.json to vanish; the
 # systemctl calls are ignored on a fake-systemd container), and this start brings it back with
 # the new environment.
-MONOCODE_HOST_DETACHED=1
+ZPTAH_HOST_DETACHED=1
 host_answering() {
   "$ENTRY" connection-info >/dev/null 2>&1
 }
@@ -26,7 +26,7 @@ start_detached_host() {
   )
 }
 ensure_detached_host() {
-  [ "${MONOCODE_HOST_DETACHED:-0}" = 1 ] || return 0
+  [ "${ZPTAH_HOST_DETACHED:-0}" = 1 ] || return 0
   host_answering && return 0
   start_detached_host
   DETACHED_WAIT=0

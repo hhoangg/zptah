@@ -66,7 +66,7 @@ They are identifiers, not branding. Changing them breaks working installs:
 |---|---|
 | `monocode.*` localStorage key prefix | Renaming loses every saved preference on existing installs |
 | npm package `monocode-desktop` (root `package.json` name) | `scripts/check-web-isolation.mjs` flags any import of that package name from `web/` |
-| `monocode-host` CLI name, its data dir, `com.monocode.host` launchd label | The remote host protocol depends on them |
+| `zptah-host` CLI name, its data dir `~/.zptah-host`, `app.zptah.host` launchd label, `zptah-host.service`, the `zptah Host-<SID>` Windows task, default port 3784 | Installed remote Hosts, the release asset names (`zptah-host-<target>`) and the app's bootstrap depend on them. They are distinct from Monoptah's `monocode-host`, `~/.monocode-host`, `com.monocode.host` and port 3774 on purpose: both Hosts run side by side on one machine and share nothing. Never stop, upgrade, uninstall or delete `monocode-host` or `~/.monocode-host` from this app: it may belong to the installed Monoptah |
 | `INTERRUPT_MESSAGE` in `src/features/sessions/model/inFlight.ts` | Compared with `===` against text already stored in saved sessions; changing it makes old interrupt notices unrecognised and duplicated |
 
 ## Verifying
@@ -183,7 +183,7 @@ sources that use them.)
 
 The fork publishes its own remote Host (`host/`), separately from both apps. Its version lives
 in `host/VERSION` as `X.Y.Z+zptah` (semver build metadata marks the fork flavor); the root
-`package.json` version is not used. `monocode-host --version` prints it and
+`package.json` version is not used. `zptah-host --version` prints it and
 `environment.describe` reports `host: {flavor: "zptah", version: "X.Y.Z"}`.
 
 1. `npm run host:release -- X.Y.Z` (plain `X.Y.Z`): needs a clean tree, writes `host/VERSION`,
@@ -194,8 +194,8 @@ in `host/VERSION` as `X.Y.Z+zptah` (semver build metadata marks the fork flavor)
    with the version already recorded it only tags HEAD. Push only the tag, not HEAD.
 2. Pushing the tag starts `.github/workflows/host-release-monoptah.yml`. It checks the tag
    against `host/VERSION`, refuses when the release already exists, builds every target of
-   `npm run host:package -- --all` (Linux and macOS `.tar.gz`, Windows `.zip`, asset names keep
-   `monocode-host`), and publishes release `host-vX.Y.Z` with `--latest=false` (never "latest":
+   `npm run host:package -- --all` (Linux and macOS `.tar.gz`, Windows `.zip`, asset names are
+   `zptah-host-<target>`), and publishes release `host-vX.Y.Z` with `--latest=false` (never "latest":
    the installed Tauri app's updater reads `releases/latest`). It uploads each package with its `.sha256` and
    `host-release.json` (`{version, assets: {target: sha256}}`, also a workflow artifact with a
    build-provenance attestation).
@@ -203,7 +203,9 @@ in `host/VERSION` as `X.Y.Z+zptah` (semver build metadata marks the fork flavor)
    bump the version.
 4. The app pins the Host version, URL base and hashes (H2a, `host_release.rs`, written by
    `scripts/pin-host-release.mjs` from the run's `host-release.json`). Release the Host before
-   the app that pins it.
+   the app that pins it. The pin also carries `HOST_PACKAGE_NAME` (the asset prefix). The
+   1.2.1 pin still says `monocode-host`; do not ship an app with that pin to users, because that
+   package installs under the old names. Re-pin to the first `zptah-host` release (1.4.0) first.
 
 ### Releasing the native app
 

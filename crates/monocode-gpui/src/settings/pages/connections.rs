@@ -26,6 +26,13 @@ const PORT: &str = "SSH port";
 const URL: &str = "Host URL";
 const TOKEN: &str = "Host token";
 const ANSWER: &str = "SSH password or passphrase";
+/// Default URL of a manually added zptah Host (its default port, never the one of monocode-host).
+fn default_host_url() -> String {
+    format!(
+        "http://127.0.0.1:{}",
+        monocode_core::remote::host_names::DEFAULT_HOST_PORT
+    )
+}
 
 #[derive(Default)]
 pub(in crate::settings) struct ConnectionsState {
@@ -128,7 +135,7 @@ fn paragraph(text: impl Into<SharedString>) -> Div {
 fn remove_machine(remote: &Connections, machine: Machine, revoke: bool) -> Result<Machine, String> {
     if revoke {
         remote.request(&machine.id, "devices.revokeSelf", json!({})).map_err(|reason| format!(
-            "Could not revoke access, so {} was not removed: {reason}. Reconnect and try again, or remove it from this desktop only and revoke it on the host with monocode-host devices and monocode-host revoke <device-id>.", machine.name
+            "Could not revoke access, so {} was not removed: {reason}. Reconnect and try again, or remove it from this desktop only and revoke it on the host with zptah-host devices and zptah-host revoke <device-id>.", machine.name
         ))?;
     }
     remote.disconnect(&machine.id)?;
@@ -141,11 +148,12 @@ impl SettingsView {
             return;
         }
         self.connections.initialized = true;
+        let default_url = default_host_url();
         for (key, placeholder, secret) in [
             (TARGET, "user@my-mac-mini or an SSH alias", false),
             (NAME, "Optional, e.g. Home Mac mini", false),
             (PORT, "From SSH config", false),
-            (URL, "http://127.0.0.1:3774", false),
+            (URL, default_url.as_str(), false),
             (TOKEN, "Device token", true),
             (ANSWER, "Password or passphrase", true),
         ] {
@@ -154,7 +162,7 @@ impl SettingsView {
                 input.set_font_size(13.);
                 input.set_secret(secret);
                 if key == URL {
-                    input.set_text("http://127.0.0.1:3774".into(), cx);
+                    input.set_text(default_url.clone(), cx);
                 }
                 input
             });
@@ -950,7 +958,7 @@ impl SettingsView {
             .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(format!("Remove {} from this desktop?", machine.name)))
             .child(paragraph("This closes this desktop’s connection to the machine. It does not stop the host, and its sessions keep running and stay on that machine. You can add it again later."))
             .child(paragraph("Removing alone leaves this desktop’s credential valid on the host. Revoke access to invalidate it first; the machine must be reachable."))
-            .child(paragraph("To stop the host and turn off its background service, run ~/.monocode-host/bin/monocode-host service uninstall on that machine (%USERPROFILE%\\.monocode-host\\bin\\monocode-host.cmd service uninstall on Windows). Its sessions and history are kept."))
+            .child(paragraph("To stop the host and turn off its background service, run ~/.zptah-host/bin/zptah-host service uninstall on that machine (%USERPROFILE%\\.zptah-host\\bin\\zptah-host.cmd service uninstall on Windows). Its sessions and history are kept."))
             .child(div().flex().flex_wrap().gap_2()
                 .child(secondary_button("revoke-remove-machine", "Revoke access and remove", true, disabled).child("Revoke access and remove")
                     .on_click(cx.listener(move |this, _, _, cx| this.remove_connection(revoke_machine.clone(), true, cx))))
@@ -963,6 +971,11 @@ impl SettingsView {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_default_manual_url_uses_the_zptah_host_port() {
+        assert_eq!(super::default_host_url(), "http://127.0.0.1:3784");
+    }
+
     use super::*;
     use std::io::{BufRead, Read, Write};
 

@@ -834,7 +834,7 @@ describe("host uploads over the API", () => {
     expect((await s.call("kit.apply", { uploadId, hash: "xyz" })).status).toBe(400);
     const applied = await s.call("kit.apply", { uploadId, hash });
     expect(applied.value.result).toMatchObject({ hash, skills: ["demo"], skipped: [] });
-    expect(readFileSync(join(s.directory, "kit-home", ".monoptah-kit", hash, "skills", "demo", "SKILL.md"), "utf8")).toBe("# demo");
+    expect(readFileSync(join(s.directory, "kit-home", ".zptah-kit", hash, "skills", "demo", "SKILL.md"), "utf8")).toBe("# demo");
     expect((await s.call("kit.probe", { commands: ["node"] })).value.result.present).toContain("node");
     const secret = "rpc-secret-value-4242";
     expect((await s.call("kit.secrets", { values: { MONOPTAH_KIT_A: secret } })).value.result.count).toBe(1);

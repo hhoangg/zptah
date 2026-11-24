@@ -1,20 +1,20 @@
 set -eu
 umask 077
-BASE="$HOME/.monocode-host"
-ENTRY="$BASE/bin/monocode-host"
+BASE="$HOME/.zptah-host"
+ENTRY="$BASE/bin/zptah-host"
 VERSION=@@VERSION@@
 RELEASE=@@RELEASE@@
 EXISTED=0
 [ -x "$ENTRY" ] && EXISTED=1
-FORCE_UPGRADE=${MONOCODE_HOST_FORCE_UPGRADE:-0}
-HOST_PORT=${MONOCODE_HOST_PORT:-3774}
+FORCE_UPGRADE=${ZPTAH_HOST_FORCE_UPGRADE:-0}
+HOST_PORT=${ZPTAH_HOST_PORT:-3784}
 
 # True (0) when the installed Host must be replaced by the pinned one: it lacks the
 # "+zptah" flavor marker (an upstream Host, whatever its number; "+zptah.N" counts as
 # the marker) or it is lower than the pin. The legacy "+monoptah" marker (Hosts 1.2.x) also
 # counts as foreign, except while the pin itself is a "+monoptah" build (before the re-pin). A pre-release ("1.1.0-rc.1") is lower than its
 # release. Other build metadata is ignored in the comparison. Not used by the install rule
-# below unless MONOCODE_HOST_UPGRADE_IF_OLDER=1 (the two-phase cloud upgrade, which the app
+# below unless ZPTAH_HOST_UPGRADE_IF_OLDER=1 (the two-phase cloud upgrade, which the app
 # only starts after it saw the Host idle); the plain install rule stays "missing or
 # FORCE_UPGRADE".
 is_older_or_foreign() {
@@ -48,10 +48,10 @@ EOF_PIN
   [ "$_b_pre" -eq 0 ] || [ "$_installed" != "$_pin" ]
 }
 
-# The two-phase cloud upgrade (MONOCODE_HOST_UPGRADE_IF_OLDER=1) replaces an older or foreign
+# The two-phase cloud upgrade (ZPTAH_HOST_UPGRADE_IF_OLDER=1) replaces an older or foreign
 # Host and leaves a current one alone (another connect may have upgraded it in the meantime).
 # A launcher that cannot print its version counts as foreign. The app drives it in steps
-# through MONOCODE_HOST_UPGRADE_PHASE so a turn is never cut off:
+# through ZPTAH_HOST_UPGRADE_PHASE so a turn is never cut off:
 #   stage    download and verify the package into a staging directory; the running Host and
 #            its launcher are not touched. Prints {"staged":true} or {"staged":false} (current).
 #   swapnow  the worker of the swap. The app has seen the Host idle and holds its own sends
@@ -64,7 +64,7 @@ EOF_PIN
 #   status   print the state of the last swap; a worker that died mid-swap is finished or
 #            rolled back first.
 #   discard  drop the staged package.
-PHASE=${MONOCODE_HOST_UPGRADE_PHASE:-}
+PHASE=${ZPTAH_HOST_UPGRADE_PHASE:-}
 STAGED_FILE="$BASE/staged-runtime"
 STATUS_FILE="$BASE/swap-status"
 # Names one swap: the app only believes a status that carries its own.
@@ -111,9 +111,9 @@ rpc_call() {
 # Puts the previous runtime and launcher back and starts the old Host. 0 when it answers.
 rollback_swap() {
   set +e
-  [ -f "$BASE/runtime-path.prev" ] && [ -f "$BASE/bin/monocode-host.prev" ] || return 1
+  [ -f "$BASE/runtime-path.prev" ] && [ -f "$BASE/bin/zptah-host.prev" ] || return 1
   cp -p "$BASE/runtime-path.prev" "$BASE/runtime-path" || return 1
-  cp -p "$BASE/bin/monocode-host.prev" "$ENTRY" || return 1
+  cp -p "$BASE/bin/zptah-host.prev" "$ENTRY" || return 1
   "$ENTRY" service uninstall >/dev/null 2>&1
   (
     if command -v before_service_install >/dev/null 2>&1; then before_service_install || exit 1; fi
@@ -224,7 +224,7 @@ if [ "$PHASE" = discard ]; then
   echo '{"staged":false}'
   exit 0
 fi
-if [ "$FORCE_UPGRADE" != 1 ] && [ "$EXISTED" = 1 ] && [ "${MONOCODE_HOST_UPGRADE_IF_OLDER:-0}" = 1 ] && [ "$PHASE" != swapnow ]; then
+if [ "$FORCE_UPGRADE" != 1 ] && [ "$EXISTED" = 1 ] && [ "${ZPTAH_HOST_UPGRADE_IF_OLDER:-0}" = 1 ] && [ "$PHASE" != swapnow ]; then
   INSTALLED=$("$ENTRY" --version 2>/dev/null || true)
   if is_older_or_foreign "$INSTALLED" "$VERSION"; then
     FORCE_UPGRADE=1
@@ -243,7 +243,7 @@ if [ "$PHASE" = swapnow ]; then
   FORCE_UPGRADE=1
   # The Host is restarted around the install and Claude was installed by the connect. Nothing
   # slow may run after the Host is stopped.
-  MONOCODE_HOST_INSTALL_CLAUDE=0
+  ZPTAH_HOST_INSTALL_CLAUDE=0
   trap on_exit EXIT
   trap '' HUP PIPE
   set_status "checking $$"
@@ -297,14 +297,14 @@ if [ ! -x "$ENTRY" ] || [ "$FORCE_UPGRADE" = 1 ]; then
         esac ;;
     esac
   fi
-  FILE="monocode-host-$OS-$ARCH.tar.gz"
+  FILE="@@PACKAGE@@-$OS-$ARCH.tar.gz"
   # Runs the packaged Host's --version and compares it with the pinned version. A runtime
   # that cannot execute (wrong libc, missing loader) is reported as that, not as a version
   # mismatch. On any failure the directory is removed, so nothing half-installed is left
   # behind or selected: runtime-path is only written after this passes.
   check_runtime() {
     _rc=0
-    _printed=$("$1/monocode-host" --version 2>"$TMP/runtime.err") || _rc=$?
+    _printed=$("$1/@@PACKAGE@@" --version 2>"$TMP/runtime.err") || _rc=$?
     if [ "$_rc" -ne 0 ]; then
       {
         echo 'The zptah Host runtime cannot run on this machine:'
@@ -364,11 +364,11 @@ if [ ! -x "$ENTRY" ] || [ "$FORCE_UPGRADE" = 1 ]; then
   if [ "$PHASE" = swapnow ]; then
     DEST=$(cat "$STAGED_FILE" 2>/dev/null || true)
     case "$DEST" in "$BASE"/runtime/staged-*) ;; *) echo 'No staged zptah Host package.'; exit 3 ;; esac
-    [ "$("$DEST/monocode-host" --version 2>/dev/null)" = "$VERSION" ] || { echo 'The staged zptah Host package is not usable.'; exit 3; }
+    [ "$("$DEST/@@PACKAGE@@" --version 2>/dev/null)" = "$VERSION" ] || { echo 'The staged zptah Host package is not usable.'; exit 3; }
     # Keep what is running now, so a Host that fails to start can be put back. Without a
     # previous runtime and launcher there is no way back: the Host is left alone.
     if [ "$EXISTED" = 1 ]; then
-      if [ -f "$BASE/runtime-path" ] && cp -p "$BASE/runtime-path" "$BASE/runtime-path.prev" && cp -p "$ENTRY" "$BASE/bin/monocode-host.prev"; then
+      if [ -f "$BASE/runtime-path" ] && cp -p "$BASE/runtime-path" "$BASE/runtime-path.prev" && cp -p "$ENTRY" "$BASE/bin/zptah-host.prev"; then
         :
       else
         echo 'There is no previous zptah Host to roll back to.'
@@ -399,7 +399,7 @@ if [ ! -x "$ENTRY" ] || [ "$FORCE_UPGRADE" = 1 ]; then
 set -eu
 BASE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 RUNTIME=$(cat "$BASE/runtime-path")
-exec "$RUNTIME/monocode-host" "$@"
+exec "$RUNTIME/@@PACKAGE@@" "$@"
 SH
   chmod 700 "$TMP/launcher"
   mv "$TMP/launcher" "$ENTRY"
@@ -411,12 +411,12 @@ fi
 TOKEN_MARKER="$BASE/host-token.sha256"
 TOKEN_HASH=
 # A sandbox, or a codespace whose project chooses an app Claude account, may track an API key
-# instead (MONOCODE_HOST_TOKEN_VAR, set by the stdin prelude).
-case "${MONOCODE_HOST_TOKEN_VAR:-}" in
+# instead (ZPTAH_HOST_TOKEN_VAR, set by the stdin prelude).
+case "${ZPTAH_HOST_TOKEN_VAR:-}" in
   ANTHROPIC_API_KEY) TOKEN_VALUE=${ANTHROPIC_API_KEY:-} ;;
   *) TOKEN_VALUE=${CLAUDE_CODE_OAUTH_TOKEN:-} ;;
 esac
-if [ "${MONOCODE_HOST_TRACK_TOKEN:-0}" = 1 ] && [ -n "$TOKEN_VALUE" ]; then
+if [ "${ZPTAH_HOST_TRACK_TOKEN:-0}" = 1 ] && [ -n "$TOKEN_VALUE" ]; then
   if command -v sha256sum >/dev/null 2>&1; then
     TOKEN_HASH=$(printf '%s' "$TOKEN_VALUE" | sha256sum | awk '{print $1}')
   elif command -v shasum >/dev/null 2>&1; then
@@ -434,7 +434,7 @@ fi
 # before it was available, since the host discovers providers only at startup.
 CLAUDE_MARKER="$BASE/host-claude-path"
 CLAUDE_PATH=
-if [ "${MONOCODE_HOST_INSTALL_CLAUDE:-0}" = 1 ]; then
+if [ "${ZPTAH_HOST_INSTALL_CLAUDE:-0}" = 1 ]; then
   if ! command -v claude >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/claude" ]; then
     echo 'Installing Claude Code on this host...' >&2
     if command -v curl >/dev/null 2>&1; then

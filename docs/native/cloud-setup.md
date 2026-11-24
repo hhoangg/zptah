@@ -388,7 +388,7 @@ Changing the Project settings dialog; GitLab or `glab`; Host changes.
    account). Stop the codespace, wake it, and confirm the account is still used.
 10. Switch the project back to "Codespaces secret"; reconnect; confirm the secret is used.
 11. Confirm no token appears in `~/Library/Logs` / the app log, in session archives, or in
-   the codespace or sandbox file system (`grep -r dckr_pat_ ~/.monocode-host` and so on).
+   the codespace or sandbox file system (`grep -r dckr_pat_ ~/.zptah-host` and so on).
 12. In the composer, start a sandbox session in project A with the panel's Docker account
    changed to account 2 for this session only. Confirm the sandbox is created under account
    2, and that stop, reconnect and delete of that session keep using account 2 after

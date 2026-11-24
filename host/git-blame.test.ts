@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 function repo(initial = true) {
-  const cwd = mkdtempSync(join(tmpdir(), "monocode-host-blame-"));
+  const cwd = mkdtempSync(join(tmpdir(), "zptah-host-blame-"));
   dirs.push(cwd);
   const git = (...args: string[]) =>
     execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -134,7 +134,7 @@ it("treats untracked files as empty under a non-English locale", async () => {
 });
 
 it("rejects a directory that is not a git work tree and surfaces git errors", async () => {
-  const plain = mkdtempSync(join(tmpdir(), "monocode-host-blame-plain-"));
+  const plain = mkdtempSync(join(tmpdir(), "zptah-host-blame-plain-"));
   dirs.push(plain);
   await expect(hostGitBlame(plain, "a.txt", 1024)).rejects.toThrow("Not a git repository");
   const { cwd } = repo();

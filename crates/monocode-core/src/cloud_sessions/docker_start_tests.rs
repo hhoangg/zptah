@@ -250,7 +250,7 @@ impl ShellCall {
             "relay".into()
         } else if text.contains("WANT_CRED='") {
             "gitconfig".into()
-        } else if text.contains("MONOCODE_HOST_TRACK_TOKEN=1") {
+        } else if text.contains("ZPTAH_HOST_TRACK_TOKEN=1") {
             "bootstrap".into()
         } else if text.contains("monoptah-evidence") {
             "evidence".into()
@@ -793,7 +793,7 @@ fn the_prelude_unsets_every_claude_variable_and_exports_exactly_one() {
     assert!(
         key.starts_with("unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN\n")
     );
-    assert!(key.contains("MONOCODE_HOST_TOKEN_VAR=ANTHROPIC_API_KEY\n"));
+    assert!(key.contains("ZPTAH_HOST_TOKEN_VAR=ANTHROPIC_API_KEY\n"));
     assert!(key.contains("export ANTHROPIC_API_KEY='sk-ant-api03-x'\\''y'\n"));
     assert_eq!(key.matches("export ").count(), 1);
     // The bootstrap text a codespace runs is exactly what it was.
@@ -1243,8 +1243,8 @@ fn the_provision_script_has_no_secret_and_the_credential_is_stdin_only() {
     // The bootstrap text after the prelude is the sandbox bootstrap, codespace flags included.
     assert!(bootstrap
         .stdin
-        .contains("MONOCODE_HOST_TRACK_TOKEN=1\nMONOCODE_HOST_INSTALL_CLAUDE=1\n"));
-    assert!(bootstrap.stdin.contains("MONOCODE_HOST_DETACHED=1\n"));
+        .contains("ZPTAH_HOST_TRACK_TOKEN=1\nZPTAH_HOST_INSTALL_CLAUDE=1\n"));
+    assert!(bootstrap.stdin.contains("ZPTAH_HOST_DETACHED=1\n"));
     assert!(bootstrap.stdin.contains("\nset -eu\n"));
 }
 
@@ -1277,7 +1277,7 @@ fn the_clone_and_up_scripts_carry_the_validated_settings() {
     assert!(relay.stdin.contains("HOST_PORT='3774'\n"));
     assert!(relay.stdin.contains("bind=127.0.0.1"));
     assert!(
-        relay.stdin.contains("monocode-host/runtime-path"),
+        relay.stdin.contains("zptah-host/runtime-path"),
         "the inner end is the Host's own Node"
     );
     assert!(
@@ -1342,7 +1342,7 @@ fn an_api_key_account_hashes_its_own_variable() {
     let (session, _) = fx.begin().unwrap();
     fx.run(session.id).0.unwrap();
     let stdin = fx.shell.call("bootstrap").stdin;
-    assert!(stdin.contains("MONOCODE_HOST_TOKEN_VAR=ANTHROPIC_API_KEY\n"));
+    assert!(stdin.contains("ZPTAH_HOST_TOKEN_VAR=ANTHROPIC_API_KEY\n"));
     assert!(stdin.contains("export ANTHROPIC_API_KEY='sk-ant-api03-KEYKEYKEY'"));
     assert!(!stdin.contains("export CLAUDE_CODE_OAUTH_TOKEN"));
 }
@@ -2033,7 +2033,7 @@ mod scripts {
         let inner = std::fs::read_to_string(run.join("relay-47200-inner.sh")).unwrap();
         assert!(inner
             .contains("docker exec -i -u vscode -e MONOPTAH_HOST_PORT=3774 aaaaaaaaaaaa sh -c"));
-        assert!(inner.contains("monocode-host/runtime-path"));
+        assert!(inner.contains("zptah-host/runtime-path"));
         let bridge = std::fs::read_to_string(run.join("relay-bridge.js")).unwrap();
         assert!(bridge.contains("127.0.0.1") && bridge.contains("process.stdin.pipe"));
         // Same container: left alone. Another container (rebuild): the old relay is replaced.

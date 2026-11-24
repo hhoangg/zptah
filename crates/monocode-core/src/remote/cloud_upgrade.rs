@@ -703,6 +703,7 @@ impl CloudUpgrade<'_> {
             .machine()?
             .ssh
             .ok_or("This connection does not use SSH")?;
+        super::host_names::ensure_host_available()?;
         let check = SwapCheck {
             device_token: &self.device_token,
             environment_id: &self.environment_id,

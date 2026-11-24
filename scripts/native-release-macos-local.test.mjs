@@ -8,6 +8,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   BINARY,
+  HOST_RELEASE_FILE,
+  pinnedHostPackage,
   FEED_URL,
   InterruptedError,
   NOTES_FILE,
@@ -159,6 +161,7 @@ const good = {
   remoteTagCheckFailed: null,
   ghAuthed: true,
   release: "absent",
+  hostPackage: "zptah-host",
 };
 
 test("preconditions pass for a clean, current main and do not look at CI", () => {
@@ -179,6 +182,8 @@ test("every precondition failure is reported with an actionable message", () => 
     [{ originUrl: "git@github.com:hhoangg/monoptah.git" }, /remote "origin" is "git@github.com:hhoangg\/monoptah.git", not hhoangg\/zptah/],
     [{ originUrl: "" }, /"origin" is missing, not hhoangg\/zptah/],
     [{ tauriCli: false }, /node_modules\/@tauri-apps\/cli is missing.*npm ci/],
+    [{ hostPackage: "monocode-host" }, /pins the Host package "monocode-host", not "zptah-host"/],
+    [{ hostPackage: null }, /\(unreadable\)/],
     [{ release: "exists" }, /release native-v0\.40\.5 already exists/],
     [{ release: "error", releaseError: "HTTP 500" }, /only HTTP 404 means absent\): HTTP 500/],
   ];
@@ -188,6 +193,15 @@ test("every precondition failure is reported with an actionable message", () => 
   }
   // Several problems are all listed.
   assert.equal(evaluatePreconditions({ ...good, branch: "x", ghAuthed: false }, V).length, 2);
+});
+
+test("a pin of the old monocode-host package blocks the release", () => {
+  assert.equal(pinnedHostPackage('pub const HOST_PACKAGE_NAME: &str = "monocode-host";'), "monocode-host");
+  assert.equal(pinnedHostPackage("nothing"), null);
+  const state = gatherState(fakeRun(), { version: V, hostRelease: 'pub const HOST_PACKAGE_NAME: &str = "monocode-host";' });
+  assert.ok(evaluatePreconditions(state, V).some((p) => /not "zptah-host"/.test(p)));
+  // The checked-in pin is read from the right file and is one of the two known packages.
+  assert.ok(["monocode-host", "zptah-host"].includes(pinnedHostPackage(readFileSync(HOST_RELEASE_FILE, "utf8"))));
 });
 
 test("origin must point at the release repository in any git URL form", () => {
@@ -245,10 +259,11 @@ function fakeRun(overrides = {}) {
     return { stdout: "", stderr: "", ...table[key] };
   };
 }
+const GOOD_PIN = 'pub const HOST_PACKAGE_NAME: &str = "zptah-host";\n';
 const docsNotes = `# zptah ${V}\n\nBody\n`;
 
 test("gatherState reads the repository state through the injected runner", () => {
-  const state = gatherState(fakeRun(), { version: V });
+  const state = gatherState(fakeRun(), { version: V, hostRelease: GOOD_PIN });
   assert.deepEqual(evaluatePreconditions(state, V), []);
   assert.equal(state.release, "absent");
 });
@@ -268,7 +283,7 @@ test("gatherState: tags are detected", () => {
       [`git rev-parse -q --verify refs/tags/native-v${V}`]: { status: 0, stdout: SHA },
       [`git ls-remote --tags origin refs/tags/native-v${V}`]: { status: 0, stdout: `${SHA}\trefs/tags/native-v${V}\n` },
     }),
-    { version: V },
+    { version: V, hostRelease: GOOD_PIN },
   );
   assert.equal(state.localTag, true);
   assert.equal(state.remoteTag, true);
@@ -511,7 +526,7 @@ function fakeIo({ files = true, headAfter = SHA, dirtyAfter = "", stamp = null, 
         throw new Error(`${key} failed (exit 1)`);
       }
     },
-    readText: (path) => (path === NOTES_FILE ? docs : read(path)),
+    readText: (path) => (path === NOTES_FILE ? docs : path === HOST_RELEASE_FILE ? GOOD_PIN : read(path)),
     exists: (path) => (path === STAMP_FILE ? stamp !== null : true),
     listDir: () => (files ? ["artifacts-macos-aarch64.json", names.updater, names.zip, names.sha256] : []),
     makeTempDir: () => "/tmp/out",
