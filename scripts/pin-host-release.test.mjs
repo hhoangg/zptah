@@ -93,7 +93,7 @@ test("cross-check accepts matching hashes and rejects a different one", () => {
 test("renders the Rust file with the version, base URL and every hash", () => {
   const text = renderHostRelease("host-v2.3.4", manifest);
   assert.match(text, /HOST_VERSION: &str = "2\.3\.4\+monoptah"/);
-  assert.match(text, /hhoangg\/monoptah\/releases\/download\/host-v2\.3\.4"/);
+  assert.match(text, /hhoangg\/zptah\/releases\/download\/host-v2\.3\.4"/);
   for (const t of TARGETS) assert.ok(text.includes(`"${t}",\n        "${assets[t]}"`));
 });
 
@@ -146,10 +146,10 @@ test("verifies the attestation against the signer workflow, tag and runner kind"
   try {
     await pinHostRelease("host-v2.3.4", { root: dir, gh });
     const verify = gh.calls.find((c) => c.startsWith("attestation verify"));
-    assert.match(verify, / -R hhoangg\/monoptah /);
+    assert.match(verify, / -R hhoangg\/zptah /);
     assert.ok(
       verify.includes(
-        "--signer-workflow hhoangg/monoptah/.github/workflows/host-release-monoptah.yml",
+        "--signer-workflow hhoangg/zptah/.github/workflows/host-release-monoptah.yml",
       ),
     );
     assert.ok(verify.includes("--source-ref refs/tags/host-v2.3.4"));

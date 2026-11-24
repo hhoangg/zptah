@@ -172,5 +172,5 @@ jobs:
             --verify-tag \
             --latest=false \
             --title "Monoptah Host $version" \
-            --notes "Monoptah Host $version (monocode-host $version+monoptah). Packages for every target, each with its sha256, and host-release.json." \
+            --notes "zptah Host $version (monocode-host $version+monoptah). Packages for every target, each with its sha256, and host-release.json." \
             dist/monocode-host-* dist/host-release.json
