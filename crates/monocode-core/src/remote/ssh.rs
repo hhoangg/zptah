@@ -2122,7 +2122,7 @@ mod tests {
         assert!(unix.contains(&format!("RELEASE={}\n", shell_quote(HOST_RELEASE_BASE))));
         assert!(unix.contains(&format!("VERSION={}\n", shell_quote(HOST_VERSION))));
         assert!(HOST_RELEASE_BASE
-            .starts_with("https://github.com/hhoangg/monoptah/releases/download/host-v"));
+            .starts_with("https://github.com/hhoangg/zptah/releases/download/host-v"));
         assert!(HOST_VERSION.ends_with("+monoptah"));
         assert!(!unix.contains("hardbeat920"));
         for (target, hash) in HOST_SHA256 {
@@ -2276,7 +2276,7 @@ mod tests {
         assert_eq!(urls.len(), 2, "{urls:?}");
         for url in &urls {
             assert!(
-                url.starts_with("https://github.com/hhoangg/monoptah/releases/download/host-v"),
+                url.starts_with("https://github.com/hhoangg/zptah/releases/download/host-v"),
                 "{url}"
             );
         }
