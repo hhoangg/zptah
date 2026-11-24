@@ -787,42 +787,78 @@ impl Rewrite {
         new_db: &str,
         development: Option<(&Path, &Path)>,
     ) -> Self {
-        let sep = std::path::MAIN_SEPARATOR;
-        let mut olds = vec![source_dir.to_string_lossy().into_owned()];
-        // The attachments folder is named from the canonical database path.
+        // The old folder as the app wrote it into its data: as given, and canonical (the
+        // attachments folder is named from the canonical database path).
+        let mut bases = vec![(
+            source_dir.to_string_lossy().into_owned(),
+            target_dir.to_string_lossy().into_owned(),
+        )];
         if let Ok(canonical) = source_dir.canonicalize() {
             let text = canonical.to_string_lossy().into_owned();
-            if !olds.contains(&text) {
-                olds.push(text);
+            if bases.iter().all(|(old, _)| *old != text) {
+                bases.push((text, target_dir.to_string_lossy().into_owned()));
             }
         }
-        let new = target_dir.to_string_lossy().into_owned();
-        let mut pairs = Vec::new();
-        for old in &olds {
-            pairs.push((
-                format!("{old}{sep}{old_db}.threads"),
-                format!("{new}{sep}{new_db}.threads"),
+        let mut development_bases = Vec::new();
+        if let Some((from, to)) = development {
+            development_bases.push((
+                from.to_string_lossy().into_owned(),
+                to.to_string_lossy().into_owned(),
             ));
         }
-        for old in &olds {
-            pairs.push((format!("{old}{sep}"), format!("{new}{sep}")));
+        // Paths turn up with `/`, with `\`, or mixed (a Windows folder followed by `/name`), so
+        // every folder is matched in each spelling and followed by either separator. The
+        // replacement keeps the separator it found.
+        let spellings = |(old, new): &(String, String)| {
+            let mut all: Vec<(String, String)> = Vec::new();
+            for (o, n) in [
+                (old.clone(), new.clone()),
+                (old.replace('\\', "/"), new.replace('\\', "/")),
+                (old.replace('/', "\\"), new.replace('/', "\\")),
+            ] {
+                if !all.iter().any(|(existing, _)| *existing == o) {
+                    all.push((o, n));
+                }
+            }
+            all
+        };
+        let mut pairs = Vec::new();
+        let mut folders = Vec::new();
+        for base in &bases {
+            for (old, new) in spellings(base) {
+                for sep in ['/', '\\'] {
+                    pairs.push((
+                        format!("{old}{sep}{old_db}.threads"),
+                        format!("{new}{sep}{new_db}.threads"),
+                    ));
+                }
+                folders.push((old, new));
+            }
         }
-        if let Some((from, to)) = development {
-            let (from, to) = (from.to_string_lossy(), to.to_string_lossy());
-            pairs.push((format!("{from}{sep}"), format!("{to}{sep}")));
-            olds.push(from.into_owned());
+        for base in &development_bases {
+            folders.extend(spellings(base));
         }
-        // The same paths inside JSON text on Windows, where a backslash is written twice.
+        let mut old_dirs = Vec::new();
+        for (old, new) in folders {
+            for sep in ['/', '\\'] {
+                pairs.push((format!("{old}{sep}"), format!("{new}{sep}")));
+            }
+            old_dirs.push(old);
+        }
+        // The same paths inside JSON text, where a backslash is written twice.
         let escaped: Vec<_> = pairs
             .iter()
             .filter(|(old, _)| old.contains('\\'))
             .map(|(old, new)| (old.replace('\\', "\\\\"), new.replace('\\', "\\\\")))
             .collect();
         pairs.extend(escaped);
-        Self {
-            pairs,
-            old_dirs: olds,
-        }
+        let escaped_dirs: Vec<_> = old_dirs
+            .iter()
+            .filter(|old| old.contains('\\'))
+            .map(|old| old.replace('\\', "\\\\"))
+            .collect();
+        old_dirs.extend(escaped_dirs);
+        Self { pairs, old_dirs }
     }
 
     fn apply(&self, text: &str) -> Option<String> {

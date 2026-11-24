@@ -19,6 +19,16 @@ fn quiet() -> Probe {
 
 const KEY: [u8; 32] = [7; 32];
 
+/// `base` followed by the `/`-separated `relative`, joined with the platform separator, the way
+/// the app writes a path it built with `Path::join`.
+fn at(base: &Path, relative: &str) -> String {
+    relative
+        .split('/')
+        .fold(base.to_path_buf(), |path, part| path.join(part))
+        .to_string_lossy()
+        .into_owned()
+}
+
 struct Fixture {
     _root: tempfile::TempDir,
     source: PathBuf,
@@ -72,8 +82,8 @@ fn fixture() -> Fixture {
         "INSERT INTO sessions(id,cwd,harness,model,runtime_mode,title,blocks_json,created_at,updated_at,\
          has_user_message,queued_messages_json) VALUES('s1','/work/app','claude','m','full','First',?1,1,2,1,?2)",
         params![
-            format!(r#"[{{"image":"{old}/monocode.db.threads/s1/attachments/a.png","other":"{old}.dev/keep"}}]"#),
-            format!(r#"[{{"attachments":["{old}/composer-messages/1/ab/0/b.png"]}}]"#),
+            format!(r#"[{{"image":"{img}","other":"{old}.dev/keep"}}]"#, img = at(&source, "monocode.db.threads/s1/attachments/a.png")),
+            format!(r#"[{{"attachments":["{p}"]}}]"#, p = at(&source, "composer-messages/1/ab/0/b.png")),
         ],
     )
     .unwrap();
@@ -118,7 +128,10 @@ fn fixture() -> Fixture {
         params![nonce, ct],
     )
     .unwrap();
-    for account in [format!("desktop:{old}/mobile-access.json"), "web:x".into()] {
+    for account in [
+        format!("desktop:{}", at(&source, "mobile-access.json")),
+        "web:x".into(),
+    ] {
         live.execute(
             "INSERT INTO mobile_identity VALUES(?1,x'00',x'00')",
             [account],
@@ -134,7 +147,8 @@ fn fixture() -> Fixture {
     gpui.execute(
         "INSERT INTO settings VALUES('follow-up:1',?1)",
         [format!(
-            r#"{{"attachments":["{old}/composer-messages/1/x.png"]}}"#
+            r#"{{"attachments":["{p}"]}}"#,
+            p = at(&source, "composer-messages/1/x.png")
         )],
     )
     .unwrap();
@@ -166,7 +180,7 @@ fn fixture() -> Fixture {
     write_private(&source.join("monos/m1/.DS_Store"), b"junk", 0o644);
     write_private(
         &source.join("remote-machines.json"),
-        format!(r#"{{"cache":"{old}/emoji"}}"#).as_bytes(),
+        format!(r#"{{"cache":"{}"}}"#, at(&source, "emoji")).as_bytes(),
         0o600,
     );
     write_private(&source.join("clickup-config.json"), b"{}", 0o600);
@@ -187,11 +201,11 @@ fn fixture() -> Fixture {
     // Text files of any kind get their paths rewritten; binary ones do not.
     write_private(
         &source.join("monos/m1/notes.toml"),
-        format!("dir = \"{old}/monos/m1\"\n").as_bytes(),
+        format!("dir = \"{}\"\n", at(&source, "monos/m1")).as_bytes(),
         0o644,
     );
     let mut binary = b"\0\0\0".to_vec();
-    binary.extend(format!("{old}/monos").as_bytes());
+    binary.extend(at(&source, "monos").as_bytes());
     write_private(&source.join("monos/m1/blob.bin"), &binary, 0o644);
     // The development folder, where logos and backgrounds live.
     let base = root.path().join("Application Support");
@@ -205,7 +219,7 @@ fn fixture() -> Fixture {
     let gpui = Connection::open(source.join("monocode.db.gpui.sqlite3")).unwrap();
     gpui.execute(
         "INSERT INTO settings VALUES('logo',?1)",
-        [format!("{}/project-images/p.png", dev_source.display())],
+        [at(&dev_source, "project-images/p.png")],
     )
     .unwrap();
     drop(gpui);
@@ -479,7 +493,7 @@ fn paths_into_the_old_data_folder_point_at_the_zptah_folder() {
     let blocks: String = copy
         .query_row("SELECT blocks_json FROM sessions", [], |r| r.get(0))
         .unwrap();
-    assert!(blocks.contains(&format!("{new}/zptah.db.threads/s1/attachments/a.png")));
+    assert!(blocks.contains(&at(&f.target, "zptah.db.threads/s1/attachments/a.png")));
     // A sibling folder that only shares the prefix is not ours to move.
     assert!(blocks.contains(&format!("{old}.dev/keep")));
     let queued: String = copy
@@ -487,14 +501,14 @@ fn paths_into_the_old_data_folder_point_at_the_zptah_folder() {
             r.get(0)
         })
         .unwrap();
-    assert!(queued.contains(&format!("{new}/composer-messages/1/ab/0/b.png")));
+    assert!(queued.contains(&at(&f.target, "composer-messages/1/ab/0/b.png")));
     let gpui = Connection::open(f.target.join("zptah.db.gpui.sqlite3")).unwrap();
     let value: String = gpui
         .query_row("SELECT value FROM settings", [], |r| r.get(0))
         .unwrap();
-    assert!(value.contains(&new) && !value.contains(&format!("{old}/")));
+    assert!(value.contains(&new) && !value.contains(&at(&f.source, "composer-messages")));
     let machines = fs::read_to_string(f.target.join("remote-machines.json")).unwrap();
-    assert!(machines.contains(&format!("{new}/emoji")));
+    assert!(machines.contains(&at(&f.target, "emoji")));
     // The source keeps its own paths.
     let source = Connection::open_with_flags(
         f.source.join("monocode.db"),
@@ -504,7 +518,7 @@ fn paths_into_the_old_data_folder_point_at_the_zptah_folder() {
     let blocks: String = source
         .query_row("SELECT blocks_json FROM sessions", [], |r| r.get(0))
         .unwrap();
-    assert!(blocks.contains(&format!("{old}/monocode.db.threads")));
+    assert!(blocks.contains(&at(&f.source, "monocode.db.threads")));
 }
 
 #[test]
@@ -719,9 +733,12 @@ fn an_item_that_cannot_be_moved_rolls_everything_back() {
     assert!(!f.target.join(STAGING).exists());
     assert!(!f.target.join("credentials.key").exists());
     assert!(!f.target.join("zptah.db.gpui.sqlite3").exists());
-    let own = Connection::open(&f.target_db).unwrap();
-    assert!(table_exists(&own, "own").unwrap());
-    assert!(!table_exists(&own, "sessions").unwrap());
+    {
+        // Closed again before the retry: SQLite on Windows blocks renaming an open database.
+        let own = Connection::open(&f.target_db).unwrap();
+        assert!(table_exists(&own, "own").unwrap());
+        assert!(!table_exists(&own, "sessions").unwrap());
+    }
     assert_eq!(
         fs::read(f.target.join("monos/own/SOUL.md")).unwrap(),
         b"mine"
@@ -751,10 +768,7 @@ fn logos_and_backgrounds_move_with_the_development_folder_and_their_paths() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(
-        logo,
-        format!("{}/project-images/p.png", f.dev_target.display())
-    );
+    assert_eq!(logo, at(&f.dev_target, "project-images/p.png"));
     // Monoptah's own folder is only read.
     assert!(f.dev_source.join("project-images/p.png").is_file());
 }
@@ -785,7 +799,7 @@ fn every_text_file_of_the_copied_folders_gets_its_paths_and_binaries_do_not() {
     let f = fixture();
     summary(run(&f).unwrap());
     let toml = fs::read_to_string(f.target.join("monos/m1/notes.toml")).unwrap();
-    assert_eq!(toml, format!("dir = \"{}/monos/m1\"\n", f.target.display()));
+    assert_eq!(toml, format!("dir = \"{}\"\n", at(&f.target, "monos/m1")));
     let blob = fs::read(f.target.join("monos/m1/blob.bin")).unwrap();
     assert_eq!(blob, fs::read(f.source.join("monos/m1/blob.bin")).unwrap());
 }
@@ -795,4 +809,41 @@ fn a_second_prepare_after_the_marker_is_not_a_new_import() {
     let f = fixture();
     summary(run(&f).unwrap());
     assert_eq!(prepare(&f).unwrap(), Outcome::AlreadyImported);
+}
+
+#[test]
+fn rewriting_matches_every_separator_spelling_of_the_old_folder() {
+    let f = fixture();
+    let rewrite = Rewrite::new(&f.source, &f.target, "monocode.db", "zptah.db", None);
+    let old = f.source.to_string_lossy().into_owned();
+    let new = f.target.to_string_lossy().into_owned();
+    let back = |text: &str| text.replace('/', "\\");
+    let forward = |text: &str| text.replace('\\', "/");
+    // The folder in the platform spelling, in `/`, in `\`, and mixed (a folder written with one
+    // separator and a name appended with the other); each keeps the separator it had.
+    for (old, new) in [
+        (old.clone(), new.clone()),
+        (forward(&old), forward(&new)),
+        (back(&old), back(&new)),
+    ] {
+        for sep in ["/", "\\"] {
+            let found = format!("{old}{sep}monos{sep}m1");
+            let expected = format!("{new}{sep}monos{sep}m1");
+            assert_eq!(rewrite.apply(&found), Some(expected), "{found}");
+        }
+        // The attachments folder is renamed with the database.
+        assert_eq!(
+            rewrite.apply(&format!("{old}/monocode.db.threads/s1")),
+            Some(format!("{new}/zptah.db.threads/s1"))
+        );
+    }
+    // JSON text writes a backslash twice.
+    let escaped = |text: &str| text.replace('\\', "\\\\");
+    let found = format!("{}\\\\monos", escaped(&back(&old)));
+    assert_eq!(
+        rewrite.apply(&found),
+        Some(format!("{}\\\\monos", escaped(&back(&new))))
+    );
+    // A sibling that only shares the prefix stays.
+    assert_eq!(rewrite.apply(&format!("{old}.dev/keep")), None);
 }
