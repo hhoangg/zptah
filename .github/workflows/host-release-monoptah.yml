@@ -61,8 +61,8 @@ jobs:
             exit 1
           fi
           version="$(tr -d '[:space:]' < host/VERSION)"
-          if [ "${TAG#host-v}+monoptah" != "$version" ]; then
-            echo "::error::Tag $TAG does not match host/VERSION ($version minus +monoptah)"
+          if [ "${TAG#host-v}+zptah" != "$version" ]; then
+            echo "::error::Tag $TAG does not match host/VERSION ($version minus +zptah)"
             exit 1
           fi
       - name: Refuse when the release already exists
@@ -172,5 +172,5 @@ jobs:
             --verify-tag \
             --latest=false \
             --title "Monoptah Host $version" \
-            --notes "zptah Host $version (monocode-host $version+monoptah). Packages for every target, each with its sha256, and host-release.json." \
+            --notes "zptah Host $version (monocode-host $version+zptah). Packages for every target, each with its sha256, and host-release.json." \
             dist/monocode-host-* dist/host-release.json

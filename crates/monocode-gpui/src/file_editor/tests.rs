@@ -694,7 +694,7 @@ mod cloud_conflicts {
             use serde_json::json;
             match method {
                 "environment.describe" => Ok(json!({
-                    "host": {"flavor": "monoptah", "version": "1.1.0"},
+                    "host": {"flavor": "zptah", "version": "1.1.0"},
                     "capabilities": ["files.readBytes", "files.write.hash"],
                 })),
                 "projects.list" => Ok(json!([{"id": "p1", "cwd": "/work/repo"}])),

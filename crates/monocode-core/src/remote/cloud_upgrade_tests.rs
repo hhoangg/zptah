@@ -305,7 +305,7 @@ fn happy(host_state: &Arc<Mutex<HostState>>) -> OnScript {
         // The launcher starts the worker; the machine swaps the Host on its own.
         "swapnow" => {
             let mut state = state.lock().unwrap();
-            state.flavor = "monoptah";
+            state.flavor = "zptah";
             state.version = host_upgrade::pinned_version();
             Ok("{\"swap\":\"started\"}".into())
         }
@@ -343,7 +343,7 @@ fn an_older_idle_host_is_staged_swapped_and_the_tunnel_reopened_with_sends_held_
                     connections.request(MACHINE, "sessions.list", json!({"projectId": "p1"})),
                 ));
                 let mut state = state.lock().unwrap();
-                state.flavor = "monoptah";
+                state.flavor = "zptah";
                 state.version = host_upgrade::pinned_version();
                 return Ok("{\"swap\":\"started\"}".into());
             }

@@ -19,7 +19,7 @@
 //!
 //! The decision lives in [`upgrade_if_needed`], over the [`UpgradeEnv`] seam, so it is tested
 //! with a fake Host and a fake ssh runner.
-use super::host_info::HostInfo;
+use super::host_info::{HostInfo, FLAVOR_LEGACY_MONOPTAH};
 use super::host_release::HOST_VERSION;
 
 /// Shown while the upgrade script runs.
@@ -67,8 +67,17 @@ pub enum Outcome {
 /// (whatever its number), has no version, or its `X.Y.Z` is lower than the pin's. A
 /// pre-release is lower than its release. The twin of `is_older_or_foreign` in
 /// `remote_bootstrap.sh`, which re-checks it on the machine.
+///
+/// The legacy `monoptah` flavor (Hosts 1.2.x, before the rename to `zptah`) is replaced like
+/// a foreign Host once the pin is a `zptah` build. While the pin is still a `+monoptah`
+/// build (until the new Host is released and re-pinned) it counts as current-flavor, so it is
+/// compared by number instead of being "upgraded" to the very same version on every connect.
 pub fn is_older_or_foreign(info: &HostInfo, pin: &str) -> bool {
-    if !info.is_monoptah() {
+    let pin_is_legacy = pin.split_once('+').is_some_and(|(_, marker)| {
+        marker == FLAVOR_LEGACY_MONOPTAH
+            || marker.starts_with(&format!("{FLAVOR_LEGACY_MONOPTAH}."))
+    });
+    if !(info.is_zptah() || (pin_is_legacy && info.is_legacy_monoptah())) {
         return true;
     }
     let Some(installed) = info.version.as_deref() else {
@@ -358,26 +367,45 @@ mod tests {
 
     #[test]
     fn older_foreign_and_unparsable_hosts_upgrade_current_and_newer_forks_do_not() {
-        let pin = "1.1.0+monoptah";
+        let pin = "1.1.0+zptah";
         assert!(is_older_or_foreign(&info("upstream", None), pin));
         // Foreign always upgrades, even at a higher number.
         assert!(is_older_or_foreign(&info("upstream", Some("9.9.9")), pin));
-        assert!(is_older_or_foreign(&info("monoptah", None), pin));
-        assert!(is_older_or_foreign(&info("monoptah", Some("1.0.9")), pin));
-        assert!(is_older_or_foreign(&info("monoptah", Some("0.9.0")), pin));
-        assert!(is_older_or_foreign(&info("monoptah", Some("garbage")), pin));
-        assert!(is_older_or_foreign(
-            &info("monoptah", Some("1.1.0-rc.1")),
-            pin
-        ));
-        assert!(!is_older_or_foreign(&info("monoptah", Some("1.1.0")), pin));
+        assert!(is_older_or_foreign(&info("zptah", None), pin));
+        assert!(is_older_or_foreign(&info("zptah", Some("1.0.9")), pin));
+        assert!(is_older_or_foreign(&info("zptah", Some("0.9.0")), pin));
+        assert!(is_older_or_foreign(&info("zptah", Some("garbage")), pin));
+        assert!(is_older_or_foreign(&info("zptah", Some("1.1.0-rc.1")), pin));
+        assert!(!is_older_or_foreign(&info("zptah", Some("1.1.0")), pin));
         assert!(!is_older_or_foreign(
-            &info("monoptah", Some("1.1.0+monoptah")),
+            &info("zptah", Some("1.1.0+zptah")),
             pin
         ));
-        assert!(!is_older_or_foreign(&info("monoptah", Some("1.1.1")), pin));
-        assert!(!is_older_or_foreign(&info("monoptah", Some("2.0.0")), pin));
-        assert!(!is_older_or_foreign(&info("monoptah", Some("1.10.0")), pin));
+        assert!(!is_older_or_foreign(&info("zptah", Some("1.1.1")), pin));
+        assert!(!is_older_or_foreign(&info("zptah", Some("2.0.0")), pin));
+        assert!(!is_older_or_foreign(&info("zptah", Some("1.10.0")), pin));
+        // Legacy flavor: replaced like a foreign Host once the pin is a zptah build, at any number.
+        assert!(is_older_or_foreign(&info("monoptah", Some("1.2.1")), pin));
+        assert!(is_older_or_foreign(&info("monoptah", Some("99.0.0")), pin));
+        assert!(is_older_or_foreign(&info("monoptah", None), pin));
+        // While the pin is still a monoptah build, a legacy Host is compared by number.
+        let legacy_pin = "1.2.1+monoptah";
+        assert!(!is_older_or_foreign(
+            &info("monoptah", Some("1.2.1")),
+            legacy_pin
+        ));
+        assert!(is_older_or_foreign(
+            &info("monoptah", Some("1.2.0")),
+            legacy_pin
+        ));
+        assert!(!is_older_or_foreign(
+            &info("zptah", Some("1.3.0")),
+            legacy_pin
+        ));
+        assert!(is_older_or_foreign(
+            &info("upstream", Some("9.9.9")),
+            legacy_pin
+        ));
     }
 
     /// A fake Host plus a fake ssh runner.
@@ -435,7 +463,7 @@ mod tests {
         }
     }
     fn info_pinned() -> HostInfo {
-        info("monoptah", Some(pinned_version()))
+        info("zptah", Some(pinned_version()))
     }
     impl UpgradeEnv for Fake {
         fn host_info(&self) -> Result<HostInfo, String> {
@@ -531,7 +559,7 @@ mod tests {
 
     #[test]
     fn a_turn_that_starts_while_the_package_downloads_aborts_the_swap_and_sets_the_flag() {
-        let fake = Fake::new(info("monoptah", Some("1.0.0")));
+        let fake = Fake::new(info("zptah", Some("1.0.0")));
         // Idle before the download, running after it.
         fake.busy_answers(vec![Ok(false), Ok(true)]);
         let (outcome, lines) = run(&fake);
@@ -554,7 +582,7 @@ mod tests {
 
     #[test]
     fn an_older_host_with_a_running_turn_is_deferred_before_anything_is_downloaded() {
-        let fake = Fake::new(info("monoptah", Some("1.0.0")));
+        let fake = Fake::new(info("zptah", Some("1.0.0")));
         fake.busy_answers(vec![Ok(true)]);
         let (outcome, lines) = run(&fake);
         assert_eq!(outcome, Outcome::Deferred);
@@ -581,13 +609,13 @@ mod tests {
 
     #[test]
     fn the_pinned_version_is_the_bare_number_of_the_pin() {
-        assert_eq!(format!("{}+monoptah", pinned_version()), HOST_VERSION);
+        assert!(HOST_VERSION.starts_with(&format!("{}+", pinned_version())));
         assert!(!deferred_message().contains('+'));
     }
 
     #[test]
     fn a_newer_fork_host_is_not_touched_and_a_stale_flag_is_cleared() {
-        let fake = Fake::new(info("monoptah", Some("99.0.0")));
+        let fake = Fake::new(info("zptah", Some("99.0.0")));
         fake.pending.set(true);
         let (outcome, lines) = run(&fake);
         assert_eq!(outcome, Outcome::Current);
@@ -647,11 +675,11 @@ mod tests {
 
     #[test]
     fn a_new_host_that_fails_to_start_is_rolled_back_and_the_old_one_is_reached_again() {
-        let mut fake = Fake::new(info("monoptah", Some("1.0.0")));
+        let mut fake = Fake::new(info("zptah", Some("1.0.0")));
         fake.swap_answers(vec![Err(SwapError::Restored(
             "The new Host did not start, so the previous Host was put back".into(),
         ))]);
-        fake.after = Ok(info("monoptah", Some("1.0.0")));
+        fake.after = Ok(info("zptah", Some("1.0.0")));
         let (outcome, lines) = run(&fake);
         let Outcome::Failed(warning) = outcome else {
             panic!("expected a warning");
@@ -669,7 +697,7 @@ mod tests {
 
     #[test]
     fn when_the_rollback_itself_failed_the_true_state_is_told() {
-        let mut fake = Fake::new(info("monoptah", Some("1.0.0")));
+        let mut fake = Fake::new(info("zptah", Some("1.0.0")));
         fake.swap_answers(vec![Err(SwapError::Failed(
             "The new Host did not start and the previous Host could not be put back".into(),
         ))]);
@@ -681,7 +709,7 @@ mod tests {
         assert!(!warning.contains("is kept"), "{warning}");
         assert!(warning.contains("may not be running"), "{warning}");
         // A restored Host that does not answer is not called kept either.
-        let mut fake = Fake::new(info("monoptah", Some("1.0.0")));
+        let mut fake = Fake::new(info("zptah", Some("1.0.0")));
         fake.swap_answers(vec![Err(SwapError::Restored("restored".into()))]);
         fake.after = Err("Machine is unreachable".into());
         let Outcome::Failed(warning) = run(&fake).0 else {
@@ -738,7 +766,7 @@ mod tests {
 
     #[test]
     fn a_session_found_by_the_last_look_on_the_host_defers_and_keeps_the_staged_package() {
-        let mut fake = Fake::new(info("monoptah", Some("1.0.0")));
+        let mut fake = Fake::new(info("zptah", Some("1.0.0")));
         fake.swap_answers(vec![Err(SwapError::Busy)]);
         let (outcome, lines) = run(&fake);
         assert_eq!(outcome, Outcome::Deferred);

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 export const REPO = "hhoangg/zptah";
 export const WORKFLOW = "host-release-monoptah.yml";
-export const FLAVOR = "monoptah";
+export const FLAVOR = "zptah";
 export const TARGETS = [
   "darwin-arm64",
   "darwin-x64",

@@ -182,14 +182,14 @@ sources that use them.)
 ### Releasing the Host
 
 The fork publishes its own remote Host (`host/`), separately from both apps. Its version lives
-in `host/VERSION` as `X.Y.Z+monoptah` (semver build metadata marks the fork flavor); the root
+in `host/VERSION` as `X.Y.Z+zptah` (semver build metadata marks the fork flavor); the root
 `package.json` version is not used. `monocode-host --version` prints it and
-`environment.describe` reports `host: {flavor: "monoptah", version: "X.Y.Z"}`.
+`environment.describe` reports `host: {flavor: "zptah", version: "X.Y.Z"}`.
 
 1. `npm run host:release -- X.Y.Z` (plain `X.Y.Z`): needs a clean tree, writes `host/VERSION`,
    commits "Release Monoptah Host X.Y.Z" and creates the tag `host-vX.Y.Z`. It never pushes; it
    prints the push commands for you to review and run. To keep the git conventions (no commits
-   to main, squash merges), set `host/VERSION` to `X.Y.Z+monoptah` in a PR titled
+   to main, squash merges), set `host/VERSION` to `X.Y.Z+zptah` in a PR titled
    `chore(release): Monoptah Host X.Y.Z` instead, then run the script on the up-to-date main:
    with the version already recorded it only tags HEAD. Push only the tag, not HEAD.
 2. Pushing the tag starts `.github/workflows/host-release-monoptah.yml`. It checks the tag

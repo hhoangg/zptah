@@ -105,7 +105,7 @@ it(
 
 it("prints the Host version from host/VERSION for --version", async () => {
   const expected = readFileSync(resolve("host/VERSION"), "utf8").trim();
-  expect(expected).toMatch(/\+monoptah$/);
+  expect(expected).toMatch(/\+zptah$/);
   const { stdout } = await exec(
     process.execPath,
     [resolve("build/host/monocode-host.mjs"), "--version"],

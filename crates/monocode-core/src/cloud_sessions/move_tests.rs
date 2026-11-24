@@ -207,7 +207,7 @@ impl super::Host for FakeHost {
         }
         match method {
             "environment.describe" => Ok(json!({
-                "host": {"flavor": "monoptah", "version": "1.1.0"},
+                "host": {"flavor": "zptah", "version": "1.1.0"},
                 "capabilities": *self.capabilities.lock().unwrap(),
             })),
             "projects.open" => Ok(json!({"id": "project-1", "cwd": params["cwd"]})),

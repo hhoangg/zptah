@@ -1775,7 +1775,7 @@ mod tests {
         let fork = json!({ "result": {
             "protocolVersion": 1,
             "environmentId": "env",
-            "host": { "flavor": "monoptah", "version": "1.1.0" },
+            "host": { "flavor": "zptah", "version": "1.1.0" },
             "capabilities": ["files.list", "files.readBytes"],
         }});
         let (url, _requests, server) = host_fixture(vec![upstream, fork]);
@@ -1790,7 +1790,7 @@ mod tests {
         assert!(!info.supports("files.readBytes"));
         // A fork describe replaces the entry.
         let info = connections.describe_host(&machine.id).unwrap();
-        assert!(info.is_monoptah());
+        assert!(info.is_own_flavor());
         assert_eq!(info.version.as_deref(), Some("1.1.0"));
         assert!(info.supports("files.readBytes"));
         assert_eq!(connections.host_info(&machine.id), Some(info));
@@ -1835,7 +1835,8 @@ mod tests {
             .host_info
             .record("old", &json!({"capabilities": ["stale"]}));
         // The job started under a provisional id and recorded nothing yet.
-        let fork = json!({"host": {"flavor": "monoptah", "version": "1.1.0"}, "capabilities": ["uploads"]});
+        let fork =
+            json!({"host": {"flavor": "zptah", "version": "1.1.0"}, "capabilities": ["uploads"]});
         connections.host_info.record("provisional", &fork);
         let machine = connections
             .commit_machine(
@@ -1846,7 +1847,7 @@ mod tests {
         assert_eq!(machine.id, "old");
         assert_eq!(connections.host_info.get("provisional"), None);
         let info = connections.host_info.get("old").unwrap();
-        assert!(info.is_monoptah());
+        assert!(info.is_own_flavor());
         assert!(info.supports("uploads") && !info.supports("stale"));
         assert_eq!(connections.list().unwrap().len(), 1);
     }
@@ -1985,7 +1986,7 @@ mod tests {
             return;
         };
         // A current fork Host, so the connect-time upgrade check leaves it alone.
-        let describe = json!({ "result": { "protocolVersion": 1, "environmentId": "env-cs", "name": "Host", "host": {"flavor": "monoptah", "version": host_upgrade::pinned_version()} }});
+        let describe = json!({ "result": { "protocolVersion": 1, "environmentId": "env-cs", "name": "Host", "host": {"flavor": "zptah", "version": host_upgrade::pinned_version()} }});
         let (url, _requests, server) = host_fixture(vec![
             describe.clone(),
             describe.clone(),

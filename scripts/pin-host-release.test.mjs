@@ -18,7 +18,7 @@ import {
 
 const hash = (n) => String(n).repeat(64).slice(0, 64);
 const assets = Object.fromEntries(TARGETS.map((t, i) => [t, hash(i + 1)]));
-const manifest = { version: "2.3.4+monoptah", assets };
+const manifest = { version: "2.3.4+zptah", assets };
 const ext = (t) => (t.startsWith("win32") ? "zip" : "tar.gz");
 const sums = (overrides = {}) =>
   Object.fromEntries(
@@ -67,7 +67,7 @@ const target = (dir) => join(dir, "crates/monocode-core/src/remote/host_release.
 
 test("parses the tag", () => {
   assert.equal(parseTag("host-v1.2.3"), "1.2.3");
-  for (const bad of ["v1.2.3", "host-v1.2", "host-v1.2.3+monoptah", "host-v1.2.3-rc.1", undefined])
+  for (const bad of ["v1.2.3", "host-v1.2", "host-v1.2.3+zptah", "host-v1.2.3-rc.1", undefined])
     assert.throws(() => parseTag(bad), /Invalid Host tag/);
 });
 
@@ -92,7 +92,7 @@ test("cross-check accepts matching hashes and rejects a different one", () => {
 
 test("renders the Rust file with the version, base URL and every hash", () => {
   const text = renderHostRelease("host-v2.3.4", manifest);
-  assert.match(text, /HOST_VERSION: &str = "2\.3\.4\+monoptah"/);
+  assert.match(text, /HOST_VERSION: &str = "2\.3\.4\+zptah"/);
   assert.match(text, /hhoangg\/zptah\/releases\/download\/host-v2\.3\.4"/);
   for (const t of TARGETS) assert.ok(text.includes(`"${t}",\n        "${assets[t]}"`));
 });
@@ -103,7 +103,7 @@ test("pins from the run artifact after verifying the attestation", async () => {
   try {
     const result = await pinHostRelease("host-v2.3.4", { root: dir, gh });
     assert.equal(result.source, "run 77");
-    assert.match(await readFile(target(dir), "utf8"), /2\.3\.4\+monoptah/);
+    assert.match(await readFile(target(dir), "utf8"), /2\.3\.4\+zptah/);
     const order = gh.calls.map((c) => c.split(" ").slice(0, 2).join(" "));
     assert.ok(order.indexOf("attestation verify") > order.indexOf("run download"));
     assert.ok(order.indexOf("attestation verify") < order.lastIndexOf("release download"));
@@ -166,7 +166,7 @@ test("refuses a downgrade, allows a re-pin and leaves no temporary file", async 
     assert.deepEqual(pinnedVersion(await readFile(target(dir), "utf8")), [2, 3, 4]);
     const before = await readFile(target(dir), "utf8");
     // A lower version is refused before any network call.
-    const gh = fakeGh({ manifestJson: { version: "2.3.3+monoptah", assets } });
+    const gh = fakeGh({ manifestJson: { version: "2.3.3+zptah", assets } });
     await assert.rejects(pinHostRelease("host-v2.3.3", { root: dir, gh }), /downgrade/);
     assert.deepEqual(gh.calls, []);
     assert.equal(await readFile(target(dir), "utf8"), before);
@@ -174,7 +174,7 @@ test("refuses a downgrade, allows a re-pin and leaves no temporary file", async 
     const again = await pinHostRelease("host-v2.3.4", { root: dir, gh: fakeGh() });
     assert.equal(again.repinned, true);
     // A higher one moves the pin.
-    const higher = { version: "2.4.0+monoptah", assets };
+    const higher = { version: "2.4.0+zptah", assets };
     const up = await pinHostRelease("host-v2.4.0", { root: dir, gh: fakeGh({ manifestJson: higher }) });
     assert.equal(up.repinned, false);
     assert.deepEqual(pinnedVersion(await readFile(target(dir), "utf8")), [2, 4, 0]);

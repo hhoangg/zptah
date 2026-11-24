@@ -232,7 +232,7 @@ impl KitHost {
         let id = || params["uploadId"].as_str().unwrap_or_default().to_string();
         Some(Ok(match method {
             "environment.describe" => {
-                json!({"host": {"flavor": "monoptah", "version": "1.1.0"}, "capabilities": self.capabilities})
+                json!({"host": {"flavor": "zptah", "version": "1.1.0"}, "capabilities": self.capabilities})
             }
             "kit.probe" => json!({"present": self.present}),
             "uploads.begin" => {

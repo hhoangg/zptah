@@ -26,7 +26,7 @@ const git = (cwd, ...args) => {
   return r.stdout.trim();
 };
 
-async function repo(initial = "1.0.0+monoptah") {
+async function repo(initial = "1.0.0+zptah") {
   const dir = await mkdtemp(join(tmpdir(), "host-release-test-"));
   git(dir, "init", "-q");
   git(dir, "config", "user.email", "t@example.com");
@@ -45,14 +45,14 @@ test("validates plain X.Y.Z only", () => {
     "",
     "1.2",
     "v1.2.3",
-    "1.2.3+monoptah",
+    "1.2.3+zptah",
     "1.2.3-rc.1",
     "01.2.3",
     undefined,
   ])
     assert.throws(() => validateVersion(bad), /Invalid Host version/);
   assert.equal(tagFor("1.2.3"), "host-v1.2.3");
-  assert.equal(hostVersion("1.2.3"), "1.2.3+monoptah");
+  assert.equal(hostVersion("1.2.3"), "1.2.3+zptah");
   assert.equal(commitMessage("1.2.3"), "Release Monoptah Host 1.2.3");
   assert.deepEqual(pushCommands("1.2.3"), [
     "git push origin HEAD",
@@ -62,8 +62,8 @@ test("validates plain X.Y.Z only", () => {
 
 test("compares versions numerically and ignores build metadata", () => {
   assert.equal(compareVersions("1.0.10", "1.0.9"), 1);
-  assert.equal(compareVersions("1.0.0", "1.0.0+monoptah"), 0);
-  assert.equal(compareVersions("0.9.9", "1.0.0+monoptah"), -1);
+  assert.equal(compareVersions("1.0.0", "1.0.0+zptah"), 0);
+  assert.equal(compareVersions("0.9.9", "1.0.0+zptah"), -1);
 });
 
 test("writes host/VERSION, commits and tags", async () => {
@@ -73,7 +73,7 @@ test("writes host/VERSION, commits and tags", async () => {
     assert.equal(result.tag, "host-v1.0.1");
     assert.equal(
       await readFile(join(dir, "host", "VERSION"), "utf8"),
-      "1.0.1+monoptah\n",
+      "1.0.1+zptah\n",
     );
     assert.equal(
       git(dir, "log", "-1", "--format=%s"),
@@ -130,7 +130,7 @@ test("refuses a dirty tree and leaves it untouched", async () => {
     );
     assert.equal(
       await readFile(join(dir, "host", "VERSION"), "utf8"),
-      "1.0.0+monoptah\n",
+      "1.0.0+zptah\n",
     );
     assert.equal(git(dir, "tag", "--list"), "");
   } finally {

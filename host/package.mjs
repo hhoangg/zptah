@@ -59,7 +59,7 @@ const output = resolve("build/host-packages");
 const cache = resolve("build/host-runtime-cache");
 await mkdir(output, { recursive: true });
 await mkdir(cache, { recursive: true });
-// The Host version is decoupled from the app: host/VERSION, e.g. 1.0.0+monoptah.
+// The Host version is decoupled from the app: host/VERSION, e.g. 1.0.0+zptah.
 const version = (await readFile("host/VERSION", "utf8")).trim();
 for (const target of targets) {
   if (!(target in runtimes))

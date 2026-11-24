@@ -1,5 +1,5 @@
 //! What the app knows about the Host on the other end of a connection: its flavor
-//! (`monoptah` or `upstream`), its version and its capability strings, read from
+//! (`zptah`, the legacy `monoptah`, or `upstream`), its version and its capability strings, read from
 //! `environment.describe`.
 //!
 //! Features gate on capability strings, never on version numbers (rule D3). The version
@@ -13,7 +13,11 @@ use std::sync::Mutex;
 /// Flavor reported by a Host that predates `describe.host`.
 pub const FLAVOR_UPSTREAM: &str = "upstream";
 /// Flavor of the Host this fork publishes.
-pub const FLAVOR_MONOPTAH: &str = "monoptah";
+pub const FLAVOR_ZPTAH: &str = "zptah";
+/// Flavor Hosts 1.2.x of this fork reported before the rename to `zptah`. Still our own Host
+/// (its describe output is read as usual), but not the current flavor: see
+/// `host_upgrade::is_older_or_foreign`.
+pub const FLAVOR_LEGACY_MONOPTAH: &str = "monoptah";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostInfo {
@@ -64,13 +68,25 @@ impl HostInfo {
         self.capabilities.contains(capability)
     }
 
-    pub fn is_monoptah(&self) -> bool {
-        self.flavor == FLAVOR_MONOPTAH
+    /// The current fork flavor.
+    pub fn is_zptah(&self) -> bool {
+        self.flavor == FLAVOR_ZPTAH
+    }
+
+    /// The pre-rename fork flavor (`monoptah`).
+    pub fn is_legacy_monoptah(&self) -> bool {
+        self.flavor == FLAVOR_LEGACY_MONOPTAH
+    }
+
+    /// A Host this fork published, under the current or the legacy flavor. Use this to gate
+    /// features (they depend on capabilities, and legacy Hosts have them).
+    pub fn is_own_flavor(&self) -> bool {
+        self.is_zptah() || self.is_legacy_monoptah()
     }
 
     /// One line for Settings, e.g. `zptah 1.1.0` or `Upstream (version unknown)`.
     pub fn summary(&self) -> String {
-        let flavor = if self.is_monoptah() {
+        let flavor = if self.is_zptah() {
             "zptah"
         } else if self.flavor == FLAVOR_UPSTREAM {
             "Upstream"
@@ -124,7 +140,7 @@ mod tests {
         }));
         assert_eq!(info.flavor, "upstream");
         assert_eq!(info.version, None);
-        assert!(!info.is_monoptah());
+        assert!(!info.is_own_flavor());
         assert!(info.supports("files.readBytes"));
         assert!(!info.supports("uploads"));
         assert_eq!(info.summary(), "Upstream (version unknown)");
@@ -142,14 +158,29 @@ mod tests {
     #[test]
     fn a_fork_describe_reports_flavor_version_and_capabilities() {
         let info = HostInfo::from_descriptor(&json!({
-            "host": {"flavor": "monoptah", "version": "1.1.0"},
+            "host": {"flavor": "zptah", "version": "1.1.0"},
             "capabilities": ["files.readBytes", "uploads", "workspace.watch", 7],
         }));
-        assert!(info.is_monoptah());
+        assert!(info.is_zptah());
+        assert!(info.is_own_flavor());
         assert_eq!(info.version.as_deref(), Some("1.1.0"));
         assert_eq!(info.capabilities.len(), 3);
         assert!(info.supports("workspace.watch"));
         assert_eq!(info.summary(), "zptah 1.1.0");
+    }
+
+    #[test]
+    fn a_legacy_monoptah_describe_is_read_and_is_our_own_but_not_current() {
+        let info = HostInfo::from_descriptor(&json!({
+            "host": {"flavor": "monoptah", "version": "1.2.1"},
+            "capabilities": ["uploads"],
+        }));
+        assert!(info.is_legacy_monoptah());
+        assert!(info.is_own_flavor());
+        assert!(!info.is_zptah());
+        assert_eq!(info.version.as_deref(), Some("1.2.1"));
+        assert!(info.supports("uploads"));
+        assert_eq!(info.summary(), "monoptah 1.2.1");
     }
 
     #[test]
@@ -159,14 +190,14 @@ mod tests {
         cache.record("m1", &json!({"capabilities": ["a"]}));
         cache.record(
             "m2",
-            &json!({"host": {"flavor": "monoptah", "version": "1.1.0"}, "capabilities": ["b"]}),
+            &json!({"host": {"flavor": "zptah", "version": "1.1.0"}, "capabilities": ["b"]}),
         );
-        assert!(!cache.get("m1").unwrap().is_monoptah());
+        assert!(!cache.get("m1").unwrap().is_own_flavor());
         assert!(cache.get("m2").unwrap().supports("b"));
         // A newer describe replaces the entry.
         cache.record(
             "m1",
-            &json!({"host": {"flavor": "monoptah", "version": "1.2.0"}}),
+            &json!({"host": {"flavor": "zptah", "version": "1.2.0"}}),
         );
         assert_eq!(cache.get("m1").unwrap().version.as_deref(), Some("1.2.0"));
         cache.drop_machine("m1");

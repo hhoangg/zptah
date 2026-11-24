@@ -10,14 +10,20 @@ FORCE_UPGRADE=${MONOCODE_HOST_FORCE_UPGRADE:-0}
 HOST_PORT=${MONOCODE_HOST_PORT:-3774}
 
 # True (0) when the installed Host must be replaced by the pinned one: it lacks the
-# "+monoptah" flavor marker (an upstream Host, whatever its number; "+monoptah.N" counts as
-# the marker) or it is lower than the pin. A pre-release ("1.1.0-rc.1") is lower than its
+# "+zptah" flavor marker (an upstream Host, whatever its number; "+zptah.N" counts as
+# the marker) or it is lower than the pin. The legacy "+monoptah" marker (Hosts 1.2.x) also
+# counts as foreign, except while the pin itself is a "+monoptah" build (before the re-pin). A pre-release ("1.1.0-rc.1") is lower than its
 # release. Other build metadata is ignored in the comparison. Not used by the install rule
 # below unless MONOCODE_HOST_UPGRADE_IF_OLDER=1 (the two-phase cloud upgrade, which the app
 # only starts after it saw the Host idle); the plain install rule stays "missing or
 # FORCE_UPGRADE".
 is_older_or_foreign() {
-  case "$1" in *+monoptah|*+monoptah.*) ;; *) return 0 ;; esac
+  case "$1" in
+    *+zptah|*+zptah.*) ;;
+    *+monoptah|*+monoptah.*)
+      case "$2" in *+monoptah|*+monoptah.*) ;; *) return 0 ;; esac ;;
+    *) return 0 ;;
+  esac
   _installed=${1%%+*}
   _pin=${2%%+*}
   _a_pre=0

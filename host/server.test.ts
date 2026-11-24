@@ -305,13 +305,13 @@ describe("remote host API", () => {
     ]);
     expect(modelProbe).toHaveBeenCalledTimes(2);
   });
-  it("identifies itself as the Monoptah flavor in describe.host", async () => {
+  it("identifies itself as the zptah flavor in describe.host", async () => {
     const s = await setup();
     const version = HOST_VERSION;
-    expect(version).toMatch(/^\d+\.\d+\.\d+\+monoptah$/);
+    expect(version).toMatch(/^\d+\.\d+\.\d+\+zptah$/);
     expect((await s.call("environment.describe")).value.result.host).toEqual({
-      flavor: "monoptah",
-      version: version.replace("+monoptah", ""),
+      flavor: "zptah",
+      version: version.replace("+zptah", ""),
     });
   });
   it("advertises the conditional write and git idle guard capabilities", async () => {

@@ -201,11 +201,11 @@ A cloud session's cwd is already such a path: `remote://<env>/workspaces/<repo>`
   - `bootstrap_script_from_template` uses these instead of `CARGO_PKG_VERSION` and the
     upstream URL.
   - The `scripts/check-fork-branding.sh` exception added in `c36ed8f6` is removed.
-- **Flavor marker.** `--version` prints `X.Y.Z+monoptah` (semver build metadata).
+- **Flavor marker.** `--version` prints `X.Y.Z+zptah` (semver build metadata).
   - The git tag and release name stay `host-vX.Y.Z`, without the `+`, which download URLs
     would have to percent-encode.
-  - `HOST_VERSION` in the app holds the full `X.Y.Z+monoptah`.
-  - The bootstrap treats any version **without** `+monoptah` as older than the pin, so an
+  - `HOST_VERSION` in the app holds the full `X.Y.Z+zptah`.
+  - The bootstrap treats any version **without** `+zptah` as older than the pin, so an
     upstream Host is always replaced, whatever its number.
   - Version comparison ignores the build metadata.
 - **Pinned checksums.** Today the checksum comes from the same release as the tarball, so
@@ -222,7 +222,7 @@ A cloud session's cwd is already such a path: `remote://<env>/workspaces/<repo>`
 
 **H2 - The app knows which Host it talks to, and upgrades cloud Hosts.**
 
-- `environment.describe` adds `host: {flavor: "monoptah", version: "X.Y.Z"}`.
+- `environment.describe` adds `host: {flavor: "zptah", version: "X.Y.Z"}`.
   - An upstream Host has no `host` field, so the app treats it as `{flavor: "upstream"}`.
   - The field is additive, so `protocolVersion` stays 1.
 - New `core/remote/host_info.rs`, a `HostInfo {flavor, version, capabilities}` cache keyed
@@ -240,7 +240,7 @@ A cloud session's cwd is already such a path: `remote://<env>/workspaces/<repo>`
   1. **Phase 1:** the normal bootstrap, unchanged: start the installed Host, whatever its
      version.
   2. Open the tunnel, then call `environment.describe` and `sessions.list`.
-  3. **Phase 2:** if the Host is older than the pin or not `+monoptah`, and no session on
+  3. **Phase 2:** if the Host is older than the pin or not `+zptah`, and no session on
      it is running, run the existing `upgrade_script` (`ssh.rs:767-775`) with the pinned
      version and hashes, then re-open the tunnel.
      - Codespaces: one extra `gh codespace ssh`, a few seconds.
@@ -343,7 +343,7 @@ step.** The fork ships its own Host precisely so that every cloud Host has
   installed build) connect to the same codespace. Each would "upgrade" to its own pin and
   flap.
   - Rule: upgrade only when the installed version is **older** than the pin (semver
-    compare, ignoring build metadata) **or** lacks the `+monoptah` marker.
+    compare, ignoring build metadata) **or** lacks the `+zptah` marker.
   - A newer fork Host is used as is. It is compatible because features gate on
     capabilities.
 - **Upgrade restart while the app is mid-request:** the app reconnects through the
@@ -1677,7 +1677,7 @@ each batch ends with an explicit release-and-pin ticket (HR1-HR3).
 | **F2-0** | **Hotfix.** Confirm in the running app that Files/Changes show the remote tree for cloud sessions. Correct the banner ("Cloud files - codespace X") and the `git_gate` comment. Add a test that creates the `Conversation` entity. Check `list_dir` caps and whether tunnel traffic resets idle timers; write the results into this doc. | S | - |
 | **F1-2** | Send the Host worktree `cwd` in `files.readBytes`/`files.read` | S | - |
 | **F1-3** | Editor: chunked `files.readBytes` for remote reads, with progress and cancel; falls back to `read_binary_file` | S-M | - |
-| **H1** | Fork Host release pipeline. Covers: `host/VERSION`; the `+monoptah` marker; `describe.host`; `host-release-monoptah.yml` (all targets incl. Windows `.zip`, `--latest=false`, refuses existing releases, `host-release.json` artifact + attestation); `npm run host:release`; the "Releasing the Host" section and after-merge checklist in CLAUDE.md | M | - |
+| **H1** | Fork Host release pipeline. Covers: `host/VERSION`; the `+zptah` marker; `describe.host`; `host-release-monoptah.yml` (all targets incl. Windows `.zip`, `--latest=false`, refuses existing releases, `host-release.json` artifact + attestation); `npm run host:release`; the "Releasing the Host" section and after-merge checklist in CLAUDE.md | M | - |
 | **F3-1** | `kit.rs` inventory and classification (skills/MCP/plugins, compat, secrets, sizes, account config dir) | M | - |
 | **F3-5a** | **DROPPED (D12).** ~~Spike, with the user present~~ (a Keychain prompt appears): where and how Claude Code stores MCP OAuth sign-ins on macOS (key names only) and on Linux; which servers rotate refresh tokens (§3.2.5) | S | - |
 | **F4-0** | Spike: `claude --resume <id>` on another machine, after the JSONL is installed with the cwd rewritten, keeps the id and appends to the same file; check the row-append path of the remote runtime | S | - |
@@ -1689,7 +1689,7 @@ each batch ends with an explicit release-and-pin ticket (HR1-HR3).
 
 | ID | Ticket | Size | Depends on |
 |---|---|---|---|
-| **HR1** | Cut tag `host-v1.0.0` (Host version `1.0.0+monoptah`), with only H1's changes | S | H1 |
+| **HR1** | Cut tag `host-v1.0.0` (Host version `1.0.0+zptah`), with only H1's changes | S | H1 |
 | **H2a** | App pins the fork Host. Covers: `host_release.rs` + `scripts/pin-host-release.mjs`; the bootstrap URL and pinned hashes; the flavor-aware version compare; the `HostInfo` cache; removing the `c36ed8f6` branding exception | M | HR1 |
 | **H2b** | Automatic two-phase cloud upgrade with no prompt. Covers: describe and `sessions.list` after phase 1; upgrade when idle; deferral only while a turn runs; the sandbox token prelude; corrected copy | M | H2a |
 | **F1-4** | Delete the copy workaround; large files stream and open automatically; queued open during a deferred upgrade; "blocked by network policy" card | S-M | H2b (same release or right after) |

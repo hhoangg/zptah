@@ -1,8 +1,8 @@
 // Fork-local (Monoptah). Prepares a Monoptah Host release:
 //   npm run host:release -- X.Y.Z
-// It requires a clean tree, writes host/VERSION (X.Y.Z+monoptah), commits
+// It requires a clean tree, writes host/VERSION (X.Y.Z+zptah), commits
 // "Release Monoptah Host X.Y.Z" and creates the tag host-vX.Y.Z. When host/VERSION
-// already is X.Y.Z+monoptah it only tags HEAD. It never pushes:
+// already is X.Y.Z+zptah it only tags HEAD. It never pushes:
 // it prints the push commands, and publishing stays an explicit step the user
 // approves. Pushing the tag starts .github/workflows/host-release-monoptah.yml.
 import { spawnSync } from "node:child_process";
@@ -10,7 +10,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const FLAVOR = "monoptah";
+export const FLAVOR = "zptah";
 const VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 // Plain X.Y.Z only: the tag, the release name and the pinned hashes assume a final
@@ -71,7 +71,7 @@ export async function prepareHostRelease(
     throw new Error(
       `Version ${version} must be newer than the current Host version ${current}`,
     );
-  // Same X.Y.Z already recorded as X.Y.Z+monoptah and not yet tagged: only tag HEAD.
+  // Same X.Y.Z already recorded as X.Y.Z+zptah and not yet tagged: only tag HEAD.
   if (cmp > 0) {
     await writeFile(file, `${hostVersion(version)}\n`);
     try {

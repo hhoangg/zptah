@@ -2123,7 +2123,8 @@ mod tests {
         assert!(unix.contains(&format!("VERSION={}\n", shell_quote(HOST_VERSION))));
         assert!(HOST_RELEASE_BASE
             .starts_with("https://github.com/hhoangg/zptah/releases/download/host-v"));
-        assert!(HOST_VERSION.ends_with("+monoptah"));
+        // The pin keeps its `+monoptah` flavor until the zptah Host is released and re-pinned.
+        assert!(HOST_VERSION.ends_with("+monoptah") || HOST_VERSION.ends_with("+zptah"));
         assert!(!unix.contains("hardbeat920"));
         for (target, hash) in HOST_SHA256 {
             assert_eq!(
@@ -2598,7 +2599,7 @@ mod tests {
                 .join("monocode-host")
                 .is_file());
         }
-        for installed in [super::super::host_release::HOST_VERSION, "99.0.0+monoptah"] {
+        for installed in [super::super::host_release::HOST_VERSION, "99.0.0+zptah"] {
             let (ok, stderr, urls, home) = run_bootstrap_on(
                 true,
                 None,
@@ -3183,31 +3184,39 @@ mod tests {
                 .unwrap()
                 .success()
         };
-        let pin = "1.1.0+monoptah";
+        let pin = "1.1.0+zptah";
         assert!(check("1.1.0", pin), "upstream, same number");
         assert!(check("2.0.0", pin), "upstream, higher number");
-        assert!(check("1.0.9+monoptah", pin));
-        assert!(check("0.33.0+monoptah", pin));
-        assert!(check("1.0.10+monoptah", "1.1.0+monoptah"));
-        assert!(check("garbage+monoptah", pin));
-        assert!(!check("1.1.0+monoptah", pin));
-        assert!(!check("1.1.1+monoptah", pin));
-        assert!(!check("1.2.0+monoptah", pin));
-        assert!(!check("10.0.0+monoptah", pin));
+        assert!(check("1.0.9+zptah", pin));
+        assert!(check("0.33.0+zptah", pin));
+        assert!(check("1.0.10+zptah", "1.1.0+zptah"));
+        assert!(check("garbage+zptah", pin));
+        assert!(!check("1.1.0+zptah", pin));
+        assert!(!check("1.1.1+zptah", pin));
+        assert!(!check("1.2.0+zptah", pin));
+        assert!(!check("10.0.0+zptah", pin));
         // Pre-releases are older than their release, build metadata is ignored.
-        assert!(check("1.1.0-rc.1+monoptah", pin));
-        assert!(check("1.1.0-rc.1+monoptah.3", pin));
-        assert!(!check("1.1.0+monoptah.3", pin));
-        assert!(!check("1.1.0+monoptah.3", "1.1.0+monoptah"));
-        assert!(check("1.1.0+monoptah.3", "1.1.1+monoptah"));
+        assert!(check("1.1.0-rc.1+zptah", pin));
+        assert!(check("1.1.0-rc.1+zptah.3", pin));
+        assert!(!check("1.1.0+zptah.3", pin));
+        assert!(!check("1.1.0+zptah.3", "1.1.0+zptah"));
+        assert!(check("1.1.0+zptah.3", "1.1.1+zptah"));
         assert!(
-            !check("1.1.1-rc.1+monoptah", pin),
+            !check("1.1.1-rc.1+zptah", pin),
             "a pre-release of a higher core"
         );
-        assert!(!check("1.1.0+monoptah", "1.1.0-rc.1+monoptah"));
-        assert!(!check("1.1.0-rc.1+monoptah", "1.1.0-rc.1+monoptah"));
-        assert!(check("1.1.0-rc.1+monoptah", "1.1.0-rc.2+monoptah"));
-        assert!(check("1.1.0+monoptahx", pin), "not the flavor marker");
+        assert!(!check("1.1.0+zptah", "1.1.0-rc.1+zptah"));
+        assert!(!check("1.1.0-rc.1+zptah", "1.1.0-rc.1+zptah"));
+        assert!(check("1.1.0-rc.1+zptah", "1.1.0-rc.2+zptah"));
+        assert!(check("1.1.0+zptahx", pin), "not the flavor marker");
+        // The legacy "+monoptah" marker counts as foreign once the pin is a zptah build...
+        assert!(check("1.2.1+monoptah", pin));
+        assert!(check("99.0.0+monoptah", pin));
+        assert!(check("1.2.1+monoptah.3", pin));
+        // ...but is compared by number while the pin is still a "+monoptah" build.
+        assert!(!check("1.2.1+monoptah", "1.2.1+monoptah"));
+        assert!(check("1.2.0+monoptah", "1.2.1+monoptah"));
+        assert!(!check("1.3.0+zptah", "1.2.1+monoptah"));
         assert!(check("1.1.0+other", pin));
     }
     #[test]

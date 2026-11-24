@@ -66,7 +66,7 @@ fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
 /// The Host verifiably checks the hash: it says so and it is a fork Host new enough.
 fn checks_hash(info: &crate::remote::host_info::HostInfo) -> bool {
     info.supports(HASH_CAPABILITY)
-        && info.is_monoptah()
+        && info.is_own_flavor()
         && info
             .version
             .as_deref()
@@ -266,7 +266,7 @@ mod tests {
                         json!(["files.readBytes"])
                     }});
                     if let Some(version) = self.version {
-                        described["host"] = json!({"flavor": "monoptah", "version": version});
+                        described["host"] = json!({"flavor": "zptah", "version": version});
                     }
                     Ok(described)
                 }

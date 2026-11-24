@@ -1050,7 +1050,7 @@ mod tests {
             label: "Connected · install a supported provider on the host".into(), needs_update: false,
             host: "Upstream (version unknown)".into()
         });
-        let fork = describe_health("host", &json!({"environmentId": "host", "providers": ["codex"], "host": {"flavor": "monoptah", "version": "1.1.0"}, "capabilities": ["workspace.run", "git.worktreeCreate"]})).unwrap();
+        let fork = describe_health("host", &json!({"environmentId": "host", "providers": ["codex"], "host": {"flavor": "zptah", "version": "1.1.0"}, "capabilities": ["workspace.run", "git.worktreeCreate"]})).unwrap();
         assert_eq!(fork.host, "zptah 1.1.0");
         assert_eq!(fork.label, "Connected");
     }
