@@ -37,7 +37,7 @@ pattern, because a checker that passes by looking away is worse than no checker.
 
 For each hit, decide:
 
-- **A link to upstream** → point it at this fork (`hhoangg/monoptah`), except the
+- **A link to upstream** → point it at this fork (`hhoangg/zptah`), except the
   Website menu item, which goes to `https://zptah.app`.
 - **Text a user can read** (dialog titles, tray tooltip, window title, button labels,
   "What's new in …", error copy) → say Monoptah.

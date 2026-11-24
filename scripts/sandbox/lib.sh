@@ -13,7 +13,7 @@
 : "${BOX_ON_TIMEOUT:=stop}"         # stop keeps the files; delete would lose the warm target dir
 : "${BOX_MAX_BOXES:=4}"             # warm.sh refuses to create more than this many cloud sandboxes
 # --- what to build ------------------------------------------------------------------------------
-: "${BOX_REPO_URL:=https://github.com/hhoangg/monoptah.git}"
+: "${BOX_REPO_URL:=https://github.com/hhoangg/zptah.git}"
 : "${BOX_REF:=main}"                # branch or commit of the repo the sandbox clones and refreshes to
 : "${BOX_MANIFEST:=crates/monocode-gpui/Cargo.toml}"
 # ONE combined package set, always. cargo rebuilds the workspace crates when the -p set changes,

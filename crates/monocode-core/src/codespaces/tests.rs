@@ -62,19 +62,19 @@ fn v(parts: &[&str]) -> Vec<String> {
 #[test]
 fn repo_from_remote_forms() {
     for url in [
-        "https://github.com/hhoangg/monoptah.git",
-        "https://github.com/hhoangg/monoptah",
-        "https://github.com/hhoangg/monoptah/",
-        "https://user:tok@github.com/hhoangg/monoptah.git",
-        "git@github.com:hhoangg/monoptah.git",
-        "git@github.com:hhoangg/monoptah",
-        "ssh://git@github.com/hhoangg/monoptah.git",
-        "ssh://git@github.com:22/hhoangg/monoptah.git",
-        "git://github.com/hhoangg/monoptah.git",
+        "https://github.com/hhoangg/zptah.git",
+        "https://github.com/hhoangg/zptah",
+        "https://github.com/hhoangg/zptah/",
+        "https://user:tok@github.com/hhoangg/zptah.git",
+        "git@github.com:hhoangg/zptah.git",
+        "git@github.com:hhoangg/zptah",
+        "ssh://git@github.com/hhoangg/zptah.git",
+        "ssh://git@github.com:22/hhoangg/zptah.git",
+        "git://github.com/hhoangg/zptah.git",
     ] {
         assert_eq!(
             repo_from_remote(url).as_deref(),
-            Some("hhoangg/monoptah"),
+            Some("hhoangg/zptah"),
             "{url}"
         );
     }
@@ -139,16 +139,16 @@ fn auth_status_prefers_github_com_block() {
 fn list_argv_and_parse() {
     let json = r#"[{"name":"cs-abc","displayName":"monoptah-main","state":"Available",
         "gitStatus":{"ahead":1,"behind":0,"hasUncommittedChanges":true,"hasUnpushedChanges":true,"ref":"main"},
-        "machineName":"basicLinux32gb","repository":"hhoangg/monoptah","lastUsedAt":"2026-11-01T10:00:00Z"}]"#;
+        "machineName":"basicLinux32gb","repository":"hhoangg/zptah","lastUsedAt":"2026-11-01T10:00:00Z"}]"#;
     let fake = Fake::new(vec![ok(json)]);
-    let items = list(&fake, "hhoangg/monoptah").unwrap();
+    let items = list(&fake, "hhoangg/zptah").unwrap();
     assert_eq!(
         fake.argv(0),
         v(&[
             "codespace",
             "list",
             "--repo",
-            "hhoangg/monoptah",
+            "hhoangg/zptah",
             "--json",
             "name,displayName,state,gitStatus,machineName,repository,lastUsedAt,createdAt"
         ])
@@ -251,7 +251,7 @@ fn create_argv_defaults_and_progress() {
     let lines = RefCell::new(Vec::new());
     let name = create(
         &fake,
-        "hhoangg/monoptah",
+        "hhoangg/zptah",
         "main",
         &CreateOptions::default(),
         None,
@@ -265,7 +265,7 @@ fn create_argv_defaults_and_progress() {
             "codespace",
             "create",
             "--repo",
-            "hhoangg/monoptah",
+            "hhoangg/zptah",
             "--branch",
             "main",
             "--machine",
@@ -435,10 +435,10 @@ fn list_machines_argv_and_parse() {
       {"name":"basicLinux32gb","display_name":"2 cores, 8 GB RAM, 32 GB storage","operating_system":"linux","storage_in_bytes":34359738368,"memory_in_bytes":8589934592,"cpus":2,"prebuild_availability":null},
       {"name":"standardLinux32gb","display_name":"4 cores","operating_system":"linux","storage_in_bytes":34359738368,"memory_in_bytes":17179869184,"cpus":4}]}"#;
     let fake = Fake::new(vec![ok(json)]);
-    let machines = list_machines(&fake, "hhoangg/monoptah").unwrap();
+    let machines = list_machines(&fake, "hhoangg/zptah").unwrap();
     assert_eq!(
         fake.argv(0),
-        v(&["api", "/repos/hhoangg/monoptah/codespaces/machines"])
+        v(&["api", "/repos/hhoangg/zptah/codespaces/machines"])
     );
     assert_eq!(machines.len(), 2);
     assert_eq!(machines[0].cpus, 2);
@@ -466,21 +466,21 @@ const ONLY_STANDARD: &str = r#"{"total_count":1,"machines":[
 #[test]
 fn list_machines_at_asks_for_the_branch() {
     let fake = Fake::new(vec![ok(ONLY_STANDARD), ok(ONLY_STANDARD)]);
-    let machines = list_machines_at(&fake, "hhoangg/monoptah", Some("feat/x y")).unwrap();
+    let machines = list_machines_at(&fake, "hhoangg/zptah", Some("feat/x y")).unwrap();
     assert_eq!(
         fake.argv(0),
         v(&[
             "api",
-            "/repos/hhoangg/monoptah/codespaces/machines?ref=feat%2Fx+y"
+            "/repos/hhoangg/zptah/codespaces/machines?ref=feat%2Fx+y"
         ])
     );
     assert_eq!(machines.len(), 1);
     assert_eq!(machines[0].name, "standardLinux32gb");
     // A blank branch is the default branch: no ref.
-    list_machines_at(&fake, "hhoangg/monoptah", Some("  ")).unwrap();
+    list_machines_at(&fake, "hhoangg/zptah", Some("  ")).unwrap();
     assert_eq!(
         fake.argv(1),
-        v(&["api", "/repos/hhoangg/monoptah/codespaces/machines"])
+        v(&["api", "/repos/hhoangg/zptah/codespaces/machines"])
     );
 }
 
@@ -642,11 +642,11 @@ fn devcontainer_secrets_none() {
 fn secrets_status_set_missing_not_for_repo() {
     let fake = Fake::new(vec![
         ok(r#"{"total_count":2,"secrets":[{"name":"CLAUDE_CODE_OAUTH_TOKEN"},{"name":"OTHER"}]}"#),
-        ok(r#"{"total_count":1,"repositories":[{"full_name":"HHoangg/Monoptah"}]}"#),
+        ok(r#"{"total_count":1,"repositories":[{"full_name":"HHoangg/Zptah"}]}"#),
         ok(r#"{"total_count":1,"repositories":[{"full_name":"x/y"}]}"#),
     ]);
     let keys = v(&["OTHER", "ABSENT", "CLAUDE_CODE_OAUTH_TOKEN"]);
-    let status = secrets_status(&fake, "hhoangg/monoptah", &keys).unwrap();
+    let status = secrets_status(&fake, "hhoangg/zptah", &keys).unwrap();
     assert_eq!(
         fake.argv(0),
         v(&[
@@ -708,7 +708,7 @@ fn set_secret_uses_stdin_only_and_keeps_existing_repos() {
         &fake,
         "CLAUDE_CODE_OAUTH_TOKEN",
         "sk-ant-oat01-SECRET",
-        "hhoangg/monoptah",
+        "hhoangg/zptah",
     )
     .unwrap();
     assert_eq!(
@@ -732,7 +732,7 @@ fn set_secret_uses_stdin_only_and_keeps_existing_repos() {
             "codespaces",
             "--user",
             "--repos",
-            "o/A,o/B,hhoangg/monoptah"
+            "o/A,o/B,hhoangg/zptah"
         ])
     );
     assert!(args.iter().all(|a| !a.contains("SECRET")));
@@ -757,8 +757,8 @@ fn set_secret_validation_and_error_redaction() {
 #[test]
 fn workspace_path_uses_repo_name() {
     assert_eq!(
-        workspace_path("hhoangg/monoptah").as_deref(),
-        Some("/workspaces/monoptah")
+        workspace_path("hhoangg/zptah").as_deref(),
+        Some("/workspaces/zptah")
     );
 }
 
@@ -1281,7 +1281,7 @@ fn create_started_uses_the_rest_api_and_returns_the_name() {
     let fake = Fake::new(vec![ok(STARTED)]);
     let started = create_started(
         &fake,
-        "hhoangg/monoptah",
+        "hhoangg/zptah",
         "main",
         &CreateOptions::default(),
         None,
@@ -1301,7 +1301,7 @@ fn create_started_uses_the_rest_api_and_returns_the_name() {
             "api",
             "--method",
             "POST",
-            "repos/hhoangg/monoptah/codespaces",
+            "repos/hhoangg/zptah/codespaces",
             "-f",
             "ref=main",
             "-f",

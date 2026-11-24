@@ -175,12 +175,12 @@ describe("external link confirm sheet (security.md 8, rule 2)", () => {
   it("shows the real host, the full address and the link text before opening, and opens only on confirm", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     const user = userEvent.setup();
-    render(<Markdown text="[https://github.com/hhoangg/monoptah](https://evil.example/login?x=1)" />);
+    render(<Markdown text="[https://github.com/hhoangg/zptah](https://evil.example/login?x=1)" />);
     await user.click(screen.getByRole("link"));
     expect(open).not.toHaveBeenCalled();
     expect(screen.getByTestId("external-link-host")).toHaveTextContent("evil.example");
     expect(screen.getByTestId("external-link-url")).toHaveTextContent("https://evil.example/login?x=1");
-    expect(screen.getByTestId("external-link-label")).toHaveTextContent("https://github.com/hhoangg/monoptah");
+    expect(screen.getByTestId("external-link-label")).toHaveTextContent("https://github.com/hhoangg/zptah");
     await user.click(screen.getByRole("button", { name: "Open link" }));
     expect(open).toHaveBeenCalledWith("https://evil.example/login?x=1", "_blank", "noopener,noreferrer");
     open.mockRestore();

@@ -18,7 +18,7 @@ actions!(application, [Hide, HideOthers, ShowAll]);
 #[action(namespace = application, no_json)]
 pub(crate) struct OpenUrl(pub &'static str);
 
-const REPO: &str = "https://github.com/hhoangg/monoptah";
+const REPO: &str = "https://github.com/hhoangg/zptah";
 
 pub(crate) fn bind(cx: &mut App) {
     cx.on_action(|_: &Hide, cx| cx.hide());
@@ -151,14 +151,14 @@ pub(crate) fn install(prefs: &crate::settings::Preferences, cx: &mut App) {
             MenuItem::action(
                 "Report a Bug…",
                 OpenUrl(concat!(
-                    "https://github.com/hhoangg/monoptah",
+                    "https://github.com/hhoangg/zptah",
                     "/issues/new?template=bug_report.yml"
                 )),
             ),
             MenuItem::action(
                 "Request a Feature…",
                 OpenUrl(concat!(
-                    "https://github.com/hhoangg/monoptah",
+                    "https://github.com/hhoangg/zptah",
                     "/issues/new?template=feature_request.yml"
                 )),
             ),

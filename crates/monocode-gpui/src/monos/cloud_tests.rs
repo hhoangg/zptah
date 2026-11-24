@@ -1013,7 +1013,7 @@ fn a_mono_pulls_evidence_of_a_sandbox_session_through_the_core(cx: &mut TestAppC
     assert_eq!(gh.calls.lock().unwrap().len(), calls, "no gh call was made");
 }
 
-/// LIVE: creates a real codespace of hhoangg/monoptah through the same Mono `sessions.start` path the
+/// LIVE: creates a real codespace of hhoangg/zptah through the same Mono `sessions.start` path the
 /// app uses (real gh, real Connections) and watches the first prompt. Run by hand only:
 /// `cargo test live_cloud_start -- --ignored --nocapture --test-threads=1`. The codespace is kept;
 /// the caller deletes it.
@@ -1028,7 +1028,7 @@ fn live_cloud_start(cx: &mut TestAppContext) {
             "remote",
             "add",
             "origin",
-            "https://github.com/hhoangg/monoptah",
+            "https://github.com/hhoangg/zptah",
         ],
     ] {
         assert!(

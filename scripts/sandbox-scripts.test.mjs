@@ -97,7 +97,7 @@ test("clean.sh with nothing recorded removes nothing", { skip }, async (t) => {
 });
 
 // --- check.sh: base choice, untracked files, quoting ----------------------------------------------
-const MAINTAINER_FORK = "https://github.com/hhoangg/monoptah.git";
+const MAINTAINER_FORK = "https://github.com/hhoangg/zptah.git";
 const UPSTREAM_PROJECT = "https://github.com/hardbeat920/monocode.git";
 
 function git(cwd, ...args) {
@@ -139,9 +139,9 @@ for (const [title, remotes, args, vars, chosen, inPatch] of [
   ["maintainer layout: origin is the repo the box clones, upstream is the original project",
     { origin: [MAINTAINER_FORK, "mid"], upstream: [UPSTREAM_PROJECT, "root"] }, [], {}, "origin/main", false],
   ["this Mac's layout: origin is a fork, upstream (ssh URL) is the repo the box clones",
-    { origin: ["https://github.com/someone/monoptah.git", "root"], upstream: ["git@github.com:hhoangg/monoptah.git", "mid"] }, [], {}, "upstream/main", false],
+    { origin: ["https://github.com/someone/monoptah.git", "root"], upstream: ["git@github.com:hhoangg/zptah.git", "mid"] }, [], {}, "upstream/main", false],
   ["URL match ignores a missing .git, a trailing slash and case",
-    { fork: ["https://GitHub.com/HHoangg/Monoptah/", "mid"], origin: ["https://github.com/someone/else.git", "root"] }, [], {}, "fork/main", false],
+    { fork: ["https://GitHub.com/HHoangg/Zptah/", "mid"], origin: ["https://github.com/someone/else.git", "root"] }, [], {}, "fork/main", false],
   ["no matching remote falls back to origin/main",
     { origin: ["https://github.com/someone/else.git", "root"], upstream: [UPSTREAM_PROJECT, "mid"] }, [], {}, "origin/main", true],
   ["--base overrides the match",

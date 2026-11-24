@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn the_first_link_keeps_the_text_around_it() {
-        let text = "hey lets review this pr\n\nhttps://github.com/hhoangg/monoptah/pull/1142 its for the native one";
+        let text = "hey lets review this pr\n\nhttps://github.com/hhoangg/zptah/pull/1142 its for the native one";
         let found = parse_user_message_link(text).unwrap();
         assert_eq!(&text[..found.range.start], "hey lets review this pr\n\n");
         assert_eq!(&text[found.range.end..], " its for the native one");
@@ -271,7 +271,7 @@ mod tests {
             found.link.github_work_item,
             Some(GithubWorkItemLink {
                 kind: "pr",
-                repo: "hhoangg/monoptah".into(),
+                repo: "hhoangg/zptah".into(),
                 number: 1142,
             })
         );

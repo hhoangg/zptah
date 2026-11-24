@@ -1,8 +1,8 @@
 //! Whether the active GitHub CLI account has starred zptah, and starring it.
 use std::path::PathBuf;
 
-pub const REPOSITORY_URL: &str = "https://github.com/hhoangg/monoptah";
-const STAR_ENDPOINT: &str = "/user/starred/hhoangg/monoptah";
+pub const REPOSITORY_URL: &str = "https://github.com/hhoangg/zptah";
+const STAR_ENDPOINT: &str = "/user/starred/hhoangg/zptah";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StarStatus {

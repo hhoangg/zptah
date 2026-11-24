@@ -1,5 +1,5 @@
 //! Real GitHub Codespaces end-to-end check. Opt-in: needs `gh` logged in with the `codespace`
-//! scope and an existing codespace of hhoangg/monoptah named in `MONOCODE_TEST_CODESPACE`.
+//! scope and an existing codespace of hhoangg/zptah named in `MONOCODE_TEST_CODESPACE`.
 //!
 //! ```text
 //! MONOCODE_TEST_CODESPACE=<name> cargo test --manifest-path crates/monocode-core/Cargo.toml \
@@ -22,7 +22,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const REPO: &str = "hhoangg/monoptah";
+const REPO: &str = "hhoangg/zptah";
 
 fn step(text: &str) {
     println!(
@@ -72,7 +72,7 @@ fn codespace_end_to_end() {
             "remote",
             "add",
             "origin",
-            "https://github.com/hhoangg/monoptah",
+            "https://github.com/hhoangg/zptah",
         ],
     ] {
         assert!(Command::new("git")
@@ -304,7 +304,7 @@ fn snapshot_failed(snapshot: &Value) -> bool {
 
 /// Evidence pull against a real codespace: writes a file over `gh codespace ssh`, then copies
 /// it back with `codespaces::copy_from` and with `CloudSessions::pull_evidence`. Needs the same
-/// `MONOCODE_TEST_CODESPACE` (a codespace of hhoangg/monoptah) and never creates or deletes one.
+/// `MONOCODE_TEST_CODESPACE` (a codespace of hhoangg/zptah) and never creates or deletes one.
 #[test]
 #[ignore = "needs real gh and MONOCODE_TEST_CODESPACE"]
 fn codespace_evidence_pull() {
@@ -389,7 +389,7 @@ fn codespace_evidence_pull() {
 }
 
 /// T7 live check: converts a real cloud session into an archived local copy, then restores the
-/// code. Needs `MONOCODE_TEST_CODESPACE` (a codespace of hhoangg/monoptah) and
+/// code. Needs `MONOCODE_TEST_CODESPACE` (a codespace of hhoangg/zptah) and
 /// `MONOCODE_T7_PROJECT` (a scratch clone of the fork; NOT a real checkout). Deletes the
 /// codespace as part of the Delete choice. Writes one Claude JSONL into the real
 /// `~/.claude/projects/<encoded project>/` which the caller removes afterwards.

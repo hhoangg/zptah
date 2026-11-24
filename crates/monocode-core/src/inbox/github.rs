@@ -1389,26 +1389,26 @@ mod tests {
 
     #[test]
     fn parse_github_repositories_reads_a_repo_of_its_own() {
-        let json = r#"{ "nameWithOwner": "hhoangg/monoptah" }"#;
+        let json = r#"{ "nameWithOwner": "hhoangg/zptah" }"#;
         assert_eq!(
             parse_github_repositories(json).unwrap(),
-            vec!["hhoangg/monoptah"]
+            vec!["hhoangg/zptah"]
         );
     }
 
     #[test]
     fn remote_url_names_the_repo_with_its_host() {
         for url in [
-            "https://github.com/hhoangg/monoptah.git",
-            "https://github.com/hhoangg/monoptah",
-            "https://user@github.com/hhoangg/monoptah.git",
-            "git@github.com:hhoangg/monoptah.git",
-            "ssh://git@github.com/hhoangg/monoptah.git",
-            "  https://github.com/hhoangg/monoptah.git/  ",
+            "https://github.com/hhoangg/zptah.git",
+            "https://github.com/hhoangg/zptah",
+            "https://user@github.com/hhoangg/zptah.git",
+            "git@github.com:hhoangg/zptah.git",
+            "ssh://git@github.com/hhoangg/zptah.git",
+            "  https://github.com/hhoangg/zptah.git/  ",
         ] {
             assert_eq!(
                 git_remote_repo_target(url).as_deref(),
-                Some("github.com/hhoangg/monoptah"),
+                Some("github.com/hhoangg/zptah"),
                 "{url}"
             );
         }

@@ -177,7 +177,7 @@ Every setting is an environment variable with a Monoptah default (see the top of
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `BOX_REPO_URL` | `https://github.com/hhoangg/monoptah.git` | Public repo to clone (no credentials in the URL). |
+| `BOX_REPO_URL` | `https://github.com/hhoangg/zptah.git` | Public repo to clone (no credentials in the URL). |
 | `BOX_REF` | `main` | Branch or commit to clone and refresh to. |
 | `BOX_PACKAGES` | `monocode-core monocode-gpui` | The one combined cargo package set. |
 | `BOX_MANIFEST` | `crates/monocode-gpui/Cargo.toml` | `--manifest-path` of the workspace. |
