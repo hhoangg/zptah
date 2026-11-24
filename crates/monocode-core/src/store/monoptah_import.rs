@@ -186,6 +186,8 @@ impl Locations {
     /// The real folders of this machine.
     pub fn system() -> Self {
         let base = platform_data_base();
+        // Only macOS and Windows fill in more folders below.
+        #[cfg_attr(not(any(target_os = "macos", windows)), allow(unused_mut))]
         let mut locations = Self {
             development: Some((
                 base.join(crate::brand::MONOPTAH_DEV_DATA_DIR),
