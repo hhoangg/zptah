@@ -4,7 +4,7 @@ import { isApiError } from "./api";
 
 export const INVITE_ERROR = "This invite is not valid. Ask the person who invited you for a new link.";
 export const GENERIC_ERROR = "Something went wrong. Try again.";
-export const NETWORK_ERROR = "Cannot reach Monoptah. Check your connection and try again.";
+export const NETWORK_ERROR = "Cannot reach zptah. Check your connection and try again.";
 export const RECOVER_ERROR = "That handle or recovery code is not valid.";
 export const UNSUPPORTED_ERROR = "This browser cannot use passkeys. Try a recent version of Safari, Chrome, Edge or Firefox.";
 

@@ -1,6 +1,6 @@
-# Monoptah web
+# zptah web
 
-The browser client for Monoptah: a React SPA served by a Cloudflare Worker, with a Durable Object relay
+The browser client for zptah: a React SPA served by a Cloudflare Worker, with a Durable Object relay
 and D1 storage, talking to the user's desktop app over an end-to-end encrypted channel.
 The spec is in [`docs/README.md`](docs/README.md) (architecture, security, design system, workstreams, roadmap).
 

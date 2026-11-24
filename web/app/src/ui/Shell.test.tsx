@@ -64,7 +64,7 @@ describe("app shell frame and navigation", () => {
     mountApp(url);
     await screen.findByRole("navigation", { name: "Settings" });
     expect(screen.queryByTestId("app-header")).toBeNull();
-    expect(screen.queryByRole("link", { name: "Monoptah" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "zptah" })).toBeNull();
     expect(screen.queryByRole("navigation", { name: "Main" })).toBeNull();
   });
 
@@ -108,7 +108,7 @@ describe("app shell frame and navigation", () => {
   it.each(["/install", "/pair/c0de", "/desktops/dk1/verify", "/login"])("keeps the app header on %s", async (url) => {
     mountApp(url);
     expect(await screen.findByTestId("app-header")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Monoptah" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "zptah" })).toBeInTheDocument();
     expect(screen.getByRole("main")).not.toHaveClass("pt-[env(safe-area-inset-top)]");
     expect(screen.getByTestId("connection-banner").className).toContain("top-[calc(env(safe-area-inset-top)+2.75rem)]");
   });
@@ -130,7 +130,7 @@ describe("app shell frame and navigation", () => {
       const nav = screen.getByRole("navigation", { name: "Main" });
       // The app header (brand link and nav) is not drawn; a page of the desktop may have its own <header>.
       expect(screen.queryByTestId("app-header")).toBeNull();
-      expect(screen.queryByRole("link", { name: "Monoptah" })).toBeNull();
+      expect(screen.queryByRole("link", { name: "zptah" })).toBeNull();
       // One row: the switcher and the nav share the same parent, nav last.
       const row = nav.parentElement as HTMLElement;
       expect(row).toContainElement(switcher);

@@ -3,7 +3,7 @@
 import { KNOWN_CAPABILITIES, type KnownCapability } from "@monoptah/protocol";
 import { useLinkState } from "@/link/LinkProvider";
 
-/** The user-facing feature name of every capability, used in "Update Monoptah on your desktop to use <feature>". */
+/** The user-facing feature name of every capability, used in "Update zptah on your desktop to use <feature>". */
 export const FEATURES: Readonly<Record<KnownCapability, string>> = {
   approvals: "Approvals",
   cloud: "Cloud sessions",

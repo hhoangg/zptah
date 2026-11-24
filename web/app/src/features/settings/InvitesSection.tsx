@@ -120,7 +120,7 @@ function InviteList({ data }: { data: ReturnType<typeof InvitesResponse.parse> }
       {created ? (
         <div className="flex flex-col gap-3 rounded-row bg-fill p-3.5" data-testid="new-invite">
           <p className="text-body font-semibold text-content">Your new invite</p>
-          <p className="text-small text-muted-text">Copy this link now and send it to the person you invite. Monoptah cannot show it again.</p>
+          <p className="text-small text-muted-text">Copy this link now and send it to the person you invite. zptah cannot show it again.</p>
           <p className="rounded-row border border-stroke bg-background p-3 font-mono text-small break-all text-content select-all">{inviteLink(created.code)}</p>
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" onClick={() => void onCopy(created.code)}>

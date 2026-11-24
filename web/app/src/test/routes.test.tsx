@@ -138,7 +138,7 @@ function installAccount(url: string) {
 
 // Routes whose stub was replaced by a real screen (W-02, W-11): they render one h1 instead of the stub.
 const SCREENS: Record<string, string> = {
-  "/login": "Sign in to Monoptah",
+  "/login": "Sign in to zptah",
   "/register": "Create your account",
   "/recover": "Recover your account",
   "/settings": "Profile",
@@ -151,7 +151,7 @@ const SCREENS: Record<string, string> = {
   "/settings/desktops": "All desktops",
   "/settings/desktops/dk1": "Desktop not found",
   "/settings/desktops/:id": "Desktop not found",
-  "/install": "Install Monoptah",
+  "/install": "Install zptah",
   // An unknown code (the mock knows only its own pairing codes) shows the expired screen.
   "/pair": "Pair a desktop",
   "/pair/c0de": "Code expired",
@@ -286,8 +286,8 @@ describe("route stubs", () => {
 
   it("keeps the brand a link home everywhere, and /install offers a way back into the app", async () => {
     await renderAt("/install");
-    expect(screen.getByRole("link", { name: "Monoptah" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: /Back to Monoptah/ })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "zptah" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: /Back to zptah/ })).toHaveAttribute("href", "/");
   });
 
   it("shows who is signed in on /login and continues to the redirect target on request", async () => {

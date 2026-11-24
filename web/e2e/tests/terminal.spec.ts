@@ -82,7 +82,7 @@ test.describe("web terminal", () => {
     await page.getByTestId("terminal-project").selectOption({ label: project });
     await page.getByTestId("terminal-open").click();
     await expect.poll(() => desktop.terminals.liveIds().length, { timeout: 30_000 }).toBe(before + 1);
-    await expect(rows()).toContainText(`Monoptah mock shell in ${project}`, { timeout: 30_000 });
+    await expect(rows()).toContainText(`zptah mock shell in ${project}`, { timeout: 30_000 });
   }
 
   async function type(text: string): Promise<void> {
@@ -218,7 +218,7 @@ test.describe("web terminal", () => {
     await page.getByTestId("terminal-open").click();
     // The virtual authenticator answers the passkey prompt; the browser gets a ticket and the desktop spends it.
     await expect.poll(() => desktop.terminals.liveIds().length, { timeout: 30_000 }).toBe(1);
-    await expect(rows()).toContainText(`Monoptah mock shell in ${PROJECT}`, { timeout: 30_000 });
+    await expect(rows()).toContainText(`zptah mock shell in ${PROJECT}`, { timeout: 30_000 });
     expect(tickets).toHaveLength(1);
     expect(desktop.terminals.ticketVerifications()).toBe(1);
     expect(verdicts).toEqual([{ ticket: tickets[0], projectId: "proj-alpha", ok: true }]);
@@ -357,7 +357,7 @@ test.describe("web terminal", () => {
     await expect(page.getByTestId("tabbed-chat")).toHaveAttribute("data-panes", "2");
     await expect(page.getByRole("tab", { selected: true })).toHaveCount(2);
     await expect(terminalTabs()).toHaveCount(1);
-    await expect(rows()).toContainText(`Monoptah mock shell in ${PROJECT}`);
+    await expect(rows()).toContainText(`zptah mock shell in ${PROJECT}`);
     await type("echo in-split");
     await expect(rows()).toContainText("in-split");
     await shot("desktop-split");
@@ -380,7 +380,7 @@ test.describe("web terminal", () => {
     await expect(page.getByTestId("terminal-chooser")).toBeVisible();
     await page.getByTestId("terminal-project").selectOption({ label: PROJECT });
     await page.getByTestId("terminal-open").click();
-    await expect(rows()).toContainText(`Monoptah mock shell in ${PROJECT}`, { timeout: 30_000 });
+    await expect(rows()).toContainText(`zptah mock shell in ${PROJECT}`, { timeout: 30_000 });
     await expect(page.getByTestId("terminal-drawer-title")).toContainText(PROJECT);
     await expect(drawer).toHaveAttribute("data-fullscreen", "false");
     const keys = page.getByTestId("terminal-keys");

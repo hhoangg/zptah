@@ -15,7 +15,7 @@ export function recoveryCodesFileName(handle: string): string {
 /** Text of the download and of Copy: the handle, a short warning, then one code per line. */
 export function recoveryCodesText(handle: string, codes: readonly string[]): string {
   return [
-    "Monoptah recovery codes",
+    "zptah recovery codes",
     `Account: ${handle}`,
     "",
     "Each code works once. Keep this file somewhere safe and private.",

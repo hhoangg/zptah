@@ -39,7 +39,7 @@ describe("LinkBlockedScreen in the desktop layout", () => {
     act(() => getLinkStore("b1").setState({ blocked: "web_outdated", status: "closed" }));
     const screen_ = await screen.findByTestId("link-blocked-screen");
     expect(screen_).toHaveTextContent("Reload to update the web app");
-    expect(screen_.textContent).toMatch(/Monoptah/);
+    expect(screen_.textContent).toMatch(/zptah/);
     expect(screen_.textContent).not.toMatch(/monocode/i);
     expect(screen.queryByTestId("route-stub")).toBeNull();
 
@@ -56,7 +56,7 @@ describe("LinkBlockedScreen in the desktop layout", () => {
     await screen.findByTestId("route-stub");
     act(() => getLinkStore("b2").setState({ blocked: "desktop_outdated", status: "closed" }));
     const blocked = await screen.findByTestId("link-blocked-screen");
-    expect(blocked).toHaveTextContent("Update Monoptah on your desktop");
+    expect(blocked).toHaveTextContent("Update zptah on your desktop");
     expect(blocked.textContent).not.toMatch(/monocode/i);
     expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
   });

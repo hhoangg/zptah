@@ -168,7 +168,7 @@ describe("instance rows", () => {
 
   it("shows the update notice when the desktop has no cloud capability", async () => {
     mount({ capabilities: ["approvals"] });
-    expect(await screen.findByTestId("capability-notice")).toHaveTextContent("Update Monoptah on your desktop to use Cloud sessions");
+    expect(await screen.findByTestId("capability-notice")).toHaveTextContent("Update zptah on your desktop to use Cloud sessions");
     expect(screen.queryByTestId("cloud-instance")).toBeNull();
   });
 });

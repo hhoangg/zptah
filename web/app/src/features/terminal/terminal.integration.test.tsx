@@ -139,7 +139,7 @@ async function startOpen() {
 async function openShell(options: Parameters<typeof mount>[0] = {}) {
   const view = mount(options);
   await startOpen();
-  await waitFor(() => expect(xterm?.text()).toContain("Monoptah mock shell"), { timeout: 10_000 });
+  await waitFor(() => expect(xterm?.text()).toContain("zptah mock shell"), { timeout: 10_000 });
   return view;
 }
 

@@ -78,7 +78,7 @@ function issueChallenge(state: MockState, challenge: Omit<MockChallenge, "expire
 
 function creationOptions(challenge: string, user: { handle: string; displayName: string }) {
   return {
-    rp: { id: rpId(), name: "Monoptah" },
+    rp: { id: rpId(), name: "zptah" },
     user: { id: base64url(randomBytes(16)), name: user.handle, displayName: user.displayName },
     challenge,
     pubKeyCredParams: [

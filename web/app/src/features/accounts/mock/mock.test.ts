@@ -200,7 +200,7 @@ describe("mock server: sessions, recovery, gates", () => {
     setup({ signedIn: false });
     const { options } = await apiFetch(endpoints.registerOptions, { body: { invite: SEED_INVITE_CODE, handle: "opts-user", displayName: "Opts" } });
     expect(options).toMatchObject({
-      rp: { id: location.hostname, name: "Monoptah" },
+      rp: { id: location.hostname, name: "zptah" },
       pubKeyCredParams: [{ alg: -7 }, { alg: -257 }],
       authenticatorSelection: { residentKey: "required", userVerification: "required" },
     });

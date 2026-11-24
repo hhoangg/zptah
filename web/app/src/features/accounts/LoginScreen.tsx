@@ -83,7 +83,7 @@ export function LoginScreen({ redirect }: { redirect?: string }) {
 
   return (
     <AuthLayout>
-      <PageHeader size="display" title="Sign in to Monoptah" description="Use the passkey saved on this device." />
+      <PageHeader size="display" title="Sign in to zptah" description="Use the passkey saved on this device." />
       {recovered ? <Notice variant="success">{RECOVERED_NOTICE}</Notice> : null}
       {!supported ? <Notice variant="error">{UNSUPPORTED_ERROR}</Notice> : null}
       {error ? <Notice variant="error">{error}</Notice> : null}
@@ -104,7 +104,7 @@ export function LoginScreen({ redirect }: { redirect?: string }) {
       </div>
       <SettingsCard>
         <SettingsRow icon="key" title="Lost your passkey?" description="Use a recovery code" to="/recover" />
-        <SettingsRow icon="download" title="Install the app" description="Add Monoptah to your home screen" to="/install" />
+        <SettingsRow icon="download" title="Install the app" description="Add zptah to your home screen" to="/install" />
       </SettingsCard>
     </AuthLayout>
   );

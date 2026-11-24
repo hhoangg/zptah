@@ -49,14 +49,14 @@ export function endedText({ reason, code, idleMinutes }: EndedText): string {
 const OPEN_FAILED: Readonly<Record<string, string>> = {
   read_only: "This device can only read on this desktop. Ask for control access to use a terminal.",
   forbidden: "This device is not allowed to open a terminal.",
-  disabled: "Turn on Allow web terminal for this device in Monoptah on your desktop.",
+  disabled: "Turn on Allow web terminal for this device in zptah on your desktop.",
   not_selected: "This project is not shared with this device. Choose it in the desktop's Web app settings.",
   busy: "The desktop has too many terminals open. Close one and try again.",
   fresh_required: "The desktop refused the passkey check. Try again.",
   ticket_refused: "The desktop refused the passkey check. Try again.",
   not_found: "That project or folder could not be found on your desktop.",
   path_denied: "That folder is not allowed. Use a folder inside the project.",
-  unsupported: "Update Monoptah on your desktop to use the terminal.",
+  unsupported: "Update zptah on your desktop to use the terminal.",
   revoked: "This device was removed from the desktop.",
   not_ready: "The desktop is not connected right now. Try again when it is back.",
   session_ended: "The connection dropped. Try again.",
@@ -79,7 +79,7 @@ export function ticketFailedText(error: unknown): string {
 
 /** The passkey prompt was closed before it finished: nothing was opened. */
 export const PASSKEY_CANCELLED_NOTICE = "Passkey confirmation was cancelled. No terminal was opened.";
-export const NOT_ALLOWED_NOTICE = "Turn on Allow web terminal for this device in Monoptah on your desktop";
+export const NOT_ALLOWED_NOTICE = "Turn on Allow web terminal for this device in zptah on your desktop";
 
 export const INPUT_DROPPED_NOTICE = "Too much input waiting: some of it was dropped.";
 export const INPUT_LOST_NOTICE = "The connection dropped: the last keys may not have reached the shell.";

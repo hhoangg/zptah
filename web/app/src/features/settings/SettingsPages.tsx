@@ -65,7 +65,7 @@ export function SecurityPage() {
 
 export function InvitesPage() {
   return (
-    <SettingsPage title="Invites" description="Invite people to Monoptah.">
+    <SettingsPage title="Invites" description="Invite people to zptah.">
       <InvitesSection />
     </SettingsPage>
   );
@@ -96,7 +96,7 @@ export function NotificationsPage() {
 
 export function InstallPage() {
   return (
-    <SettingsPage title="Install app" description="Open Monoptah like any other app, full screen and one tap away." browserOnly>
+    <SettingsPage title="Install app" description="Open zptah like any other app, full screen and one tap away." browserOnly>
       <InstallGuideContent id="install" />
     </SettingsPage>
   );

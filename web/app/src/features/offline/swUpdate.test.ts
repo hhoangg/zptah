@@ -46,7 +46,7 @@ describe("update toast", () => {
     showUpdateToast(apply);
     const options = shown();
     expect(UPDATE_TOAST_TITLE).toBe("Update available");
-    expect(options.description).toBe("A new version of Monoptah is ready.");
+    expect(options.description).toBe("A new version of zptah is ready.");
     expect(options).toMatchObject({ id: UPDATE_TOAST_ID, duration: Infinity });
     expect(options.action?.label).toBe("Reload");
     expect(apply).not.toHaveBeenCalled();

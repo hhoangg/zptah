@@ -46,7 +46,7 @@ describe("notificationFor", () => {
 
   it("shows a generic notice for an invalid payload", () => {
     expect(notificationFor(null)).toEqual({ title: GENERIC_TITLE, options: { body: GENERIC_BODY, icon: NOTIFICATION_ICON, badge: NOTIFICATION_BADGE, data: { url: "/" } } });
-    expect(GENERIC_TITLE).toBe("Monoptah");
+    expect(GENERIC_TITLE).toBe("zptah");
   });
 
   it("keeps the notice but drops a hostile URL", () => {

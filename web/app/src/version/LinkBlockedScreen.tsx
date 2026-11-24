@@ -15,11 +15,11 @@ export function LinkBlockedScreen({ reason }: { reason: VersionBlockedReason }) 
   return (
     <div role="alert" data-testid="link-blocked-screen" data-reason={reason} className="mx-auto flex w-full max-w-[480px] flex-col gap-4 px-5 py-10">
       <Card className="flex flex-col gap-3 p-5">
-        <CardTitle>{newer ? "Reload to update the web app" : "Update Monoptah on your desktop"}</CardTitle>
+        <CardTitle>{newer ? "Reload to update the web app" : "Update zptah on your desktop"}</CardTitle>
         <CardDescription>
           {newer
-            ? "Your desktop runs a newer version of Monoptah than this web app. Reload to get the latest web app."
-            : "Your desktop runs an older version of Monoptah than this web app supports. Update Monoptah on your desktop, then try again."}
+            ? "Your desktop runs a newer version of zptah than this web app. Reload to get the latest web app."
+            : "Your desktop runs an older version of zptah than this web app supports. Update zptah on your desktop, then try again."}
         </CardDescription>
         {newer ? (
           // W-12's service worker update prompt replaces this reload later.

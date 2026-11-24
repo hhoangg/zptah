@@ -165,7 +165,7 @@ describe("login", () => {
   it("does not promise cross-device sign-in", async () => {
     install({ signedIn: false });
     mount("/login");
-    await screen.findByRole("heading", { level: 1, name: "Sign in to Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Sign in to zptah" });
     expect(screen.getByText(/If your browser offers it/)).toBeInTheDocument();
     expect(screen.queryByText(/another device/)).toBeNull();
   });
@@ -175,7 +175,7 @@ describe("login", () => {
     lib.startAuthentication.mockRejectedValue(Object.assign(new Error("x"), { name: "NotAllowedError" }));
     const user = userEvent.setup();
     mount("/login");
-    await screen.findByRole("heading", { level: 1, name: "Sign in to Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Sign in to zptah" });
     await user.click(screen.getByRole("button", { name: /Sign in with passkey/ }));
     const notice = await screen.findByText(/Sign-in was cancelled/);
     expect(notice.closest("[data-variant]")).toHaveAttribute("data-variant", "info");
@@ -185,7 +185,7 @@ describe("login", () => {
   it("stays on the sign-in screen for a recovery-only session so the new passkey can be used", async () => {
     install({ signedIn: true, recoveryOnly: true });
     mount("/login");
-    await screen.findByRole("heading", { level: 1, name: "Sign in to Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Sign in to zptah" });
   });
 
   it("keeps the signed-in panel and shows an error when sign-out fails", async () => {
@@ -207,7 +207,7 @@ describe("login", () => {
     install({ signedIn: false });
     const user = userEvent.setup();
     const { router } = mount("/login?redirect=%2Fdesktops");
-    await screen.findByRole("heading", { level: 1, name: "Sign in to Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Sign in to zptah" });
     expect(screen.getByRole("link", { name: /Lost your passkey/ })).toHaveAttribute("href", "/recover");
     expect(screen.getByRole("link", { name: /Install the app/ })).toHaveAttribute("href", "/install");
     await user.click(screen.getByRole("button", { name: /Sign in with passkey/ }));
@@ -250,7 +250,7 @@ describe("recover", () => {
     await user.type(screen.getByLabelText("Recovery code"), code);
     await user.click(screen.getByRole("button", { name: "Recover account" }));
     await user.click(await screen.findByRole("button", { name: "Add a passkey" }));
-    await screen.findByRole("heading", { level: 1, name: "Sign in to Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Sign in to zptah" });
     expect(router.state.location.pathname).toBe("/login");
     expect(state.signedIn).toBe(false);
   });
@@ -263,7 +263,7 @@ describe("recover", () => {
     await user.click(await screen.findByRole("button", { name: "Add a passkey" }));
     await screen.findByText(/prompt was closed/);
     await user.click(screen.getByRole("button", { name: "Cancel and sign out" }));
-    await screen.findByRole("heading", { level: 1, name: "Sign in to Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Sign in to zptah" });
     expect(state.signedIn).toBe(false);
   });
 
@@ -278,7 +278,7 @@ describe("recover", () => {
     await user.type(screen.getByLabelText("Recovery code"), batch[0]!);
     await user.click(screen.getByRole("button", { name: "Recover account" }));
     await user.click(await screen.findByRole("button", { name: "Add a passkey" }));
-    await screen.findByRole("heading", { level: 1, name: "Sign in to Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Sign in to zptah" });
     // Not a secret: just a boolean.
     expect(sessionStorage.getItem("monoptah.lowCodes")).toBe("dev-user");
     state.recoveryOnly = false;

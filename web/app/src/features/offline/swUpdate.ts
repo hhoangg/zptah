@@ -5,7 +5,7 @@ import { toast } from "@/ui/sonner";
 
 export const UPDATE_TOAST_ID = "sw-update";
 export const UPDATE_TOAST_TITLE = "Update available";
-export const UPDATE_READY_COPY = "A new version of Monoptah is ready.";
+export const UPDATE_READY_COPY = "A new version of zptah is ready.";
 export const UPDATE_WAITING_COPY = "Reloading as soon as the message is sent.";
 /** How often a pending reload looks again at the send check. */
 export const SEND_POLL_MS = 500;

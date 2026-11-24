@@ -280,7 +280,7 @@ describe("hkdf (spec 4.3)", () => {
   });
 });
 
-describe("Monoptah helpers", () => {
+describe("zptah helpers", () => {
   const desktop = "00112233-4455-4677-8899-aabbccddeeff";
   const device = "ffeeddcc-bbaa-4988-8776-655443322110";
 

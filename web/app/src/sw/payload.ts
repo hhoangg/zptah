@@ -21,11 +21,11 @@ export function parsePushPayload(raw: unknown): ParsedPushPayload | null {
   return { v: 1, t, b, url, tag };
 }
 
-export const GENERIC_TITLE = "Monoptah";
+export const GENERIC_TITLE = "zptah";
 /** Same-origin precached images: the app icon and a monochrome badge for the Android status bar. */
 export const NOTIFICATION_ICON = "/icons/icon-192.png";
 export const NOTIFICATION_BADGE = "/icons/badge-96.png";
-export const GENERIC_BODY = "Open Monoptah to see what happened.";
+export const GENERIC_BODY = "Open zptah to see what happened.";
 /** The `data` of every notification: only the click target. */
 export interface NotificationData {
   url: string;

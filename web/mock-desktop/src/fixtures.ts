@@ -376,7 +376,7 @@ export class MockWorld {
     const rows: [string, string, string, boolean, string | undefined][] = [
       ["draft", "Draft", "Save this message without starting the agent", true, record?.busy ? "Wait for the current turn to finish" : state?.draft ? "A draft is already saved" : undefined],
       ["orchestrator", "Orchestrator", "Plan and coordinate agent work", true, undefined],
-      ["operator", "Operator", "Give this thread access to Monoptah", true, existing ? undefined : "Start the session first, then turn on Operator"],
+      ["operator", "Operator", "Give this thread access to zptah", true, existing ? undefined : "Start the session first, then turn on Operator"],
       ["plan", "Plan mode", "Review a plan before building", true, undefined],
       ["btw", "Side question", "Ask a read-only side question about the current turn", false, sent ? undefined : "Finish a conversation turn before asking a side question"],
       ["compact", "Compact context", "Summarize older conversation context to free space", false, !existing ? "Available once the session has a finished turn" : record?.busy ? "Wait for the current turn and queued messages to finish" : sent ? undefined : "Send a message before compacting this session"],

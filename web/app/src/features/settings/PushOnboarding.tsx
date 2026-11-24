@@ -11,16 +11,16 @@ import { usePushOnboarding } from "./usePushOnboarding";
 
 /** How to turn notifications back on after "Block". No deep links: a web page cannot open system settings. */
 export function deniedHelp(platform = detectPlatform()): string {
-  if (platform === "ios") return "Open the Settings app, choose Notifications, find Monoptah and turn on Allow Notifications. Then come back here.";
-  if (platform === "android") return "Open Android Settings, choose Apps, then Monoptah, then Notifications, and turn them on. Then come back here.";
-  return "Open your browser or system settings, find the site permissions or app notifications for Monoptah and set Notifications to Allow. Then come back here.";
+  if (platform === "ios") return "Open the Settings app, choose Notifications, find zptah and turn on Allow Notifications. Then come back here.";
+  if (platform === "android") return "Open Android Settings, choose Apps, then zptah, then Notifications, and turn them on. Then come back here.";
+  return "Open your browser or system settings, find the site permissions or app notifications for zptah and set Notifications to Allow. Then come back here.";
 }
 
 export const CATEGORY_EXPLAINERS = (["agentInput", "agentFinished", "monoMessages"] as const).map((key) => CATEGORY_LABELS[key]);
 
 /**
  * The enable/disable control of push (P-05), shared by /settings and /install. `Notification.requestPermission()`
- * runs only from the button click inside `usePushOnboarding().enable`. `installTo` is where "Install Monoptah" leads: the public
+ * runs only from the button click inside `usePushOnboarding().enable`. `installTo` is where "Install zptah" leads: the public
  * /install page by default, /settings/install inside the settings shell.
  */
 export function PushOnboarding({ id, installTo = "/install" }: { id?: string; installTo?: LinkProps["to"] } = {}) {
@@ -32,7 +32,7 @@ export function PushOnboarding({ id, installTo = "/install" }: { id?: string; in
       {state === "not-installed" ? (
         <SettingsRow
           icon="download"
-          title="Install Monoptah to get notifications"
+          title="Install zptah to get notifications"
           description="Notifications work from the installed app. On iPhone and iPad this is required."
           to={installTo}
         />

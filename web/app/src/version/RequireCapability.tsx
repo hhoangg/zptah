@@ -15,7 +15,7 @@ export function RequireCapability({ name, fallback, children }: RequireCapabilit
   if (fallback === "hide") return null;
   return (
     <p data-testid="capability-notice" data-capability={name} className="text-small text-muted-text">
-      Update Monoptah on your desktop to use {FEATURES[name]}
+      Update zptah on your desktop to use {FEATURES[name]}
     </p>
   );
 }

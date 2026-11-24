@@ -30,7 +30,7 @@ const GUIDES: Guide[] = [
     steps: [
       { icon: "share", text: "Tap the Share button in the Safari toolbar." },
       { icon: "addSquare", text: "Scroll down and choose Add to Home Screen." },
-      { icon: "check", text: "Tap Add. Open Monoptah from your home screen." },
+      { icon: "check", text: "Tap Add. Open zptah from your home screen." },
     ],
     footnote: "On iOS the app can only be installed from Safari, and notifications work only from the installed app.",
   },
@@ -41,7 +41,7 @@ const GUIDES: Guide[] = [
     steps: [
       { icon: "moreVertical", text: "Open the browser menu with the three dots." },
       { icon: "download", text: "Choose Install app (or Add to Home screen)." },
-      { icon: "check", text: "Confirm. Open Monoptah from your app list." },
+      { icon: "check", text: "Confirm. Open zptah from your app list." },
     ],
   },
   {
@@ -51,7 +51,7 @@ const GUIDES: Guide[] = [
     steps: [
       { icon: "download", text: "Click the install icon at the right end of the address bar." },
       { icon: "check", text: "Choose Install in the prompt that opens." },
-      { icon: "computer", text: "Open Monoptah from your applications or the taskbar." },
+      { icon: "computer", text: "Open zptah from your applications or the taskbar." },
     ],
     footnote: "Safari on a Mac: File > Add to Dock. Firefox does not install web apps.",
   },
@@ -94,7 +94,7 @@ export function InstallGuideContent({ id }: { id?: string }) {
     <div id={id} className={cn("flex flex-col gap-6", SETTINGS_ANCHOR)}>
       {standalone ? (
         <Notice variant="info" title="Installed">
-          You are using Monoptah as an installed app. You can turn on notifications below.
+          You are using zptah as an installed app. You can turn on notifications below.
         </Notice>
       ) : (
         guides.map((guide) => <GuideCard key={guide.platform} guide={guide} current={guide.platform === detected} />)
@@ -112,11 +112,11 @@ export function InstallGuideContent({ id }: { id?: string }) {
 export function InstallGuide() {
   return (
     <SettingsLayout>
-      <PageHeader title="Install Monoptah" description="Open Monoptah like any other app, full screen and one tap away." />
+      <PageHeader title="Install zptah" description="Open zptah like any other app, full screen and one tap away." />
       <InstallGuideContent />
       {/* An installed app has no browser Back button: always offer a way into the app. */}
       <SettingsCard>
-        <SettingsRow icon="computer" title="Back to Monoptah" to="/" />
+        <SettingsRow icon="computer" title="Back to zptah" to="/" />
       </SettingsCard>
     </SettingsLayout>
   );

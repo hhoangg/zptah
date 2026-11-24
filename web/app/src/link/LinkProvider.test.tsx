@@ -136,7 +136,7 @@ describe("/d/$desktopId route guards", () => {
     act(() => getLinkStore("dk3").setState({ blocked: "web_outdated", status: "closed" }));
     expect(await screen.findByText("Reload to update the web app")).toBeInTheDocument();
     act(() => getLinkStore("dk3").setState({ blocked: "desktop_outdated" }));
-    expect(await screen.findByText("Update Monoptah on your desktop")).toBeInTheDocument();
+    expect(await screen.findByText("Update zptah on your desktop")).toBeInTheDocument();
     expect(screen.getByTestId("link-blocked-screen")).toHaveAttribute("data-reason", "desktop_outdated");
   });
 

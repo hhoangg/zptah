@@ -70,7 +70,7 @@ export type LinkEndReason =
   | "protocol_error"
   /** The desktop `proto` is higher than this build knows (architecture.md 5.6): show "Reload to update the web app". */
   | "unsupported_proto"
-  /** The desktop `proto` (HS2 payload) is lower than this build speaks: show "Update Monoptah on your desktop". */
+  /** The desktop `proto` (HS2 payload) is lower than this build speaks: show "Update zptah on your desktop". */
   | "desktop_proto_older"
   /** The relay socket closed; `detail.closeCode` and `closeReason` say how. */
   | "relay_closed"

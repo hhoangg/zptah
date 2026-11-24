@@ -441,7 +441,7 @@ describe("/install", () => {
     install({ signedIn: false });
     stubMedia(false);
     mount("/install");
-    await screen.findByRole("heading", { level: 1, name: "Install Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Install zptah" });
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.getByText(/Add to Home Screen/)).toBeInTheDocument();
     expect(screen.getByText(/Install app/)).toBeInTheDocument();
@@ -450,7 +450,7 @@ describe("/install", () => {
     // A-9: the header probes /api/me only to pick brand or nav. The page never redirects and the visitor gets the brand alone.
     await waitFor(() => expect(calls.filter((c) => c.url === "/api/me").length).toBeGreaterThan(0));
     await waitFor(() => expect(screen.queryByRole("navigation", { name: "Main" })).toBeNull());
-    expect(screen.getByRole("link", { name: "Monoptah" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "zptah" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Account" })).toBeNull();
     expect(screen.queryByRole("heading", { name: /sign in/i })).toBeNull();
   });
@@ -459,7 +459,7 @@ describe("/install", () => {
     install({ signedIn: true });
     stubMedia(false);
     mount("/install");
-    await screen.findByRole("heading", { level: 1, name: "Install Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Install zptah" });
     const nav = await screen.findByRole("navigation", { name: "Main" });
     expect(within(nav).getByRole("button", { name: "Account" })).toBeInTheDocument();
     expect(within(nav).queryByRole("link", { name: "Desktops" })).toBeNull();
@@ -493,7 +493,7 @@ describe("/install", () => {
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(document.getElementById("install")).not.toBeNull();
     expect(screen.getByText(/Add to Home Screen/)).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Back to Monoptah/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: /Back to zptah/ })).toBeNull();
     expect(within(pageHeader()).getByText("Only on this browser")).toBeInTheDocument();
   });
 
@@ -508,7 +508,7 @@ describe("/install", () => {
     install({ signedIn: false });
     stubMedia(false);
     mount("/install");
-    await screen.findByRole("heading", { level: 1, name: "Install Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Install zptah" });
     expect(screen.queryByRole("button")).toBeNull();
   });
 

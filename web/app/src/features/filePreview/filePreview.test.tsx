@@ -326,7 +326,7 @@ describe("mentions in a session chat", () => {
   });
 
   it.each([
-    [".env", "path_denied", "This file is hidden by Monoptah"],
+    [".env", "path_denied", "This file is hidden by zptah"],
     ["big.log", "too_large", "This file is too large to preview"],
     ["missing.txt", "not_found", "This file could not be found"],
     ["private/unmentioned-by-desktop.txt", "forbidden", "This file is outside this conversation"],
@@ -344,7 +344,7 @@ describe("mentions in a session chat", () => {
     mount(`/s/${SESSION}`);
     await user.click(await mentionChip(".env"));
     expect(await within(await dialog()).findByTestId("file-preview-error")).toHaveAttribute("data-problem", "denied");
-    expect(await dialog()).toHaveTextContent("This file is hidden by Monoptah");
+    expect(await dialog()).toHaveTextContent("This file is hidden by zptah");
   });
 
   it("waits on a busy desktop instead of failing, says so, and shows the file when it works again", async () => {
@@ -389,7 +389,7 @@ describe("mentions in a session chat", () => {
     await user.click(await mentionChip("private/unmentioned-by-desktop.txt"));
     const problem = await within(await dialog()).findByTestId("file-preview-error");
     expect(problem).toHaveAttribute("data-problem", "update_desktop");
-    expect(problem).toHaveTextContent("Update Monoptah on your desktop");
+    expect(problem).toHaveTextContent("Update zptah on your desktop");
     expect(within(problem).queryByRole("button", { name: "Try again" })).toBeNull();
   });
 
@@ -398,7 +398,7 @@ describe("mentions in a session chat", () => {
     mount(`/s/${SESSION}`, { capabilities: ["approvals", "cloud"] });
     await user.click(await mentionChip("~/Documents/x/notes.py"));
     const hint = await within(await dialog()).findByTestId("capability-notice");
-    expect(hint).toHaveTextContent("Update Monoptah on your desktop to use File previews");
+    expect(hint).toHaveTextContent("Update zptah on your desktop to use File previews");
     expect(requests).toEqual([]);
   });
 

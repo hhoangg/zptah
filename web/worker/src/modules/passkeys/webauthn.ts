@@ -14,7 +14,7 @@ import {
 } from "@simplewebauthn/server";
 import type { Env } from "../../env.ts";
 
-export const RP_NAME = "Monoptah";
+export const RP_NAME = "zptah";
 
 type WebAuthnEnv = Pick<Env, "RP_ID" | "RP_ORIGIN">;
 

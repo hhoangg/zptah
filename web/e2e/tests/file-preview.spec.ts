@@ -426,7 +426,7 @@ test.describe("file mention previews on the web app", () => {
     const error = page.getByTestId("file-preview-error");
     await expect(error).toBeVisible();
     await expect(error).toHaveAttribute("data-problem", "denied");
-    await expect(error).toContainText("This file is hidden by Monoptah");
+    await expect(error).toContainText("This file is hidden by zptah");
     await expect(page.getByText("FAKE=not-a-secret")).toHaveCount(0);
     await shot("web-denied");
   });
@@ -447,7 +447,7 @@ test.describe("file mention previews on the web app", () => {
       const error = page.getByTestId("file-preview-error");
       await expect(error).toBeVisible();
       await expect(error).toHaveAttribute("data-problem", "update_desktop");
-      await expect(error).toContainText("Update Monoptah on your desktop");
+      await expect(error).toContainText("Update zptah on your desktop");
     } finally {
       rmSync(legacyFlag, { force: true });
     }
@@ -571,7 +571,7 @@ test.describe("file mention previews on the web app", () => {
     const error = page.getByTestId("file-preview-error");
     await expect(error).toBeVisible();
     await expect(error).toHaveAttribute("data-problem", "update_desktop");
-    await expect(error).toContainText("Update Monoptah on your desktop");
+    await expect(error).toContainText("Update zptah on your desktop");
     // The desktop answered with the same `forbidden` an unmentioned file gets: only the missing capability tells.
     await expect(page.getByText("outside this conversation")).toHaveCount(0);
   });

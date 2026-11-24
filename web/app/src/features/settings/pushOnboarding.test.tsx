@@ -111,10 +111,10 @@ describe("push onboarding (P-05)", () => {
   it("hides the button when the app is not installed and points to the install page of the settings shell", async () => {
     stubEnvironment({ standalone: false, permission: "default" });
     mount("/settings/notifications");
-    expect(await screen.findByText("Install Monoptah to get notifications")).toBeInTheDocument();
+    expect(await screen.findByText("Install zptah to get notifications")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Enable notifications" })).toBeNull();
     // Inside the settings shell the link stays in the shell, not the public /install page.
-    expect(screen.getByRole("link", { name: /Install Monoptah to get notifications/ })).toHaveAttribute("href", "/settings/install");
+    expect(screen.getByRole("link", { name: /Install zptah to get notifications/ })).toHaveAttribute("href", "/settings/install");
   });
 
   it("hides the button without PushManager", async () => {

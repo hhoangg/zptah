@@ -32,7 +32,7 @@ describe("registration options", () => {
     expect(options.authenticatorSelection?.userVerification).toBe("required");
     expect(options.authenticatorSelection?.authenticatorAttachment).toBeUndefined();
     expect(options.attestation).toBe("none");
-    expect(options.rp).toEqual({ name: "Monoptah", id: env.RP_ID });
+    expect(options.rp).toEqual({ name: "zptah", id: env.RP_ID });
   });
 });
 

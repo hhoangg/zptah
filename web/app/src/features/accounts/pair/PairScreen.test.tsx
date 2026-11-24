@@ -172,7 +172,7 @@ describe("pairing page: approve and deny", () => {
     expect(screen.getByRole("radio", { name: "A new desktop" })).toBeChecked();
     await user.click(screen.getByRole("button", { name: /Approve/ }));
     await screen.findByRole("heading", { level: 1, name: "Desktop approved" });
-    expect(screen.getByText(/Go back to Monoptah on your desktop to finish/)).toBeInTheDocument();
+    expect(screen.getByText(/Go back to zptah on your desktop to finish/)).toBeInTheDocument();
 
     // The first approve is refused as not fresh, the passkey ceremony runs, then the approve is retried.
     const calls = urlsOf(sent.filter((call) => call.url.includes("/pair/") || call.url.includes("/reauth/")));
@@ -287,7 +287,7 @@ describe("pairing page: codes that cannot be used", () => {
     restore?.();
     restore = setApiTransport((url) => (url.startsWith("/api/pair/") ? Promise.reject(new TypeError("offline")) : createMockServer({ signedIn: true }).transport(url, {})));
     mount(`/pair/${MOCK_PAIR_CODE}${MATCH}`);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Cannot reach Monoptah");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Cannot reach zptah");
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Go to my desktops" })).toBeInTheDocument();
     expect(screen.queryByText(PAIR_EXPIRED_MESSAGE)).toBeNull();
@@ -299,7 +299,7 @@ describe("pairing page: signed-out round trip", () => {
     install({ signedIn: false });
     const user = userEvent.setup();
     const { router } = mount(`/pair/${MOCK_PAIR_CODE}${MATCH}`);
-    await screen.findByRole("heading", { level: 1, name: "Sign in to Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Sign in to zptah" });
     expect(router.state.location.pathname).toBe("/login");
     expect(router.state.location.search).toMatchObject({ redirect: `/pair/${MOCK_PAIR_CODE}` });
     // The fragment is not in the redirect query; it is parked in sessionStorage.
@@ -320,7 +320,7 @@ describe("pairing page: signed-out round trip", () => {
     install({ signedIn: false });
     const user = userEvent.setup();
     mount(`/pair/${MOCK_PAIR_CODE}#fp=not-hex-at-all`);
-    await screen.findByRole("heading", { level: 1, name: "Sign in to Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Sign in to zptah" });
     expect(window.sessionStorage.getItem("monoptah.fp")).not.toContain("not-hex");
     await user.click(screen.getByRole("button", { name: /Sign in with passkey/ }));
     await screen.findByRole("heading", { level: 1, name: "Do not approve this desktop" });
@@ -331,7 +331,7 @@ describe("pairing page: signed-out round trip", () => {
     install({ signedIn: false });
     const user = userEvent.setup();
     mount(`/pair/${MOCK_PAIR_CODE}${OTHER}`);
-    await screen.findByRole("heading", { level: 1, name: "Sign in to Monoptah" });
+    await screen.findByRole("heading", { level: 1, name: "Sign in to zptah" });
     await user.click(screen.getByRole("button", { name: /Sign in with passkey/ }));
     await screen.findByRole("heading", { level: 1, name: "Do not approve this desktop" });
     expect(screen.queryByRole("button", { name: /Approve/ })).toBeNull();

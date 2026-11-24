@@ -67,7 +67,7 @@ describe.each(KNOWN_CAPABILITIES)("capability %s", (name: KnownCapability) => {
     expect(screen.getByText("feature body")).toBeInTheDocument();
   });
 
-  it("the notice names the feature and says Monoptah", () => {
+  it("the notice names the feature and says zptah", () => {
     render(
       <RequireCapability name={name} fallback="notice">
         <p>feature body</p>
@@ -75,7 +75,7 @@ describe.each(KNOWN_CAPABILITIES)("capability %s", (name: KnownCapability) => {
       { wrapper: wrapper(`notice-${name}`) },
     );
     const notice = screen.getByTestId("capability-notice");
-    expect(notice).toHaveTextContent(`Update Monoptah on your desktop to use ${feature}`);
+    expect(notice).toHaveTextContent(`Update zptah on your desktop to use ${feature}`);
     expect(notice.textContent).not.toMatch(/monocode/i);
     expect(screen.queryByText("feature body")).toBeNull();
     setCapabilities(`notice-${name}`, [name]);

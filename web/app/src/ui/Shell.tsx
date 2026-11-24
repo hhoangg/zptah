@@ -48,12 +48,12 @@ export function Shell() {
         <header data-testid="app-header" className="sticky top-0 z-10 flex min-h-11 shrink-0 items-center gap-2 pt-[env(safe-area-inset-top)] pr-[max(0.5rem,env(safe-area-inset-right))] pl-[max(0.5rem,env(safe-area-inset-left))] min-[24rem]:pr-[max(1.25rem,env(safe-area-inset-right))] min-[24rem]:pl-[max(1.25rem,env(safe-area-inset-left))]">
           {publicPage ? (
             <Link to="/" className="rounded-pill px-3 py-2 text-small font-semibold">
-              Monoptah
+              zptah
             </Link>
           ) : (
             <Glass className="flex min-h-11 min-w-0 flex-1 flex-wrap items-center gap-1 px-2">
               <Link to="/" className="rounded-pill px-3 py-2 text-small font-semibold">
-                Monoptah
+                zptah
               </Link>
               <AppNav className="ml-auto" />
             </Glass>

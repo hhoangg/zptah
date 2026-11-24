@@ -467,7 +467,7 @@ describe("messages", () => {
   });
 
   it("maps each desktop code to its message", () => {
-    expect(previewProblem({ code: "path_denied" }).title).toBe("This file is hidden by Monoptah");
+    expect(previewProblem({ code: "path_denied" }).title).toBe("This file is hidden by zptah");
     expect(previewProblem({ code: "forbidden" })).toMatchObject({ kind: "not_mentioned", title: "This file is outside this conversation" });
     expect(previewProblem({ code: "too_large" }).title).toBe("This file is too large to preview");
     expect(previewProblem({ code: "not_found" }).title).toBe("This file could not be found");
@@ -478,7 +478,7 @@ describe("messages", () => {
   });
 
   it("tells an old desktop's refusal from a real one: forbidden without mentionedFiles2 means update", () => {
-    const update = { kind: "update_desktop", title: "Update Monoptah on your desktop", retry: false };
+    const update = { kind: "update_desktop", title: "Update zptah on your desktop", retry: false };
     // A desktop that does not advertise `mentionedFiles2` refuses a file made by a command with the same `forbidden`.
     expect(previewProblem({ code: "forbidden" }, { desktopCurrent: false })).toMatchObject(update);
     expect(previewProblem({ code: "forbidden" }, { desktopCurrent: true })).toMatchObject({ kind: "not_mentioned" });

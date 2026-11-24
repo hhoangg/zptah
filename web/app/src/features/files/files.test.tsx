@@ -292,7 +292,7 @@ describe("file viewer (F-60)", () => {
 
   it("shows the hidden message for a denied file", async () => {
     mount(".env");
-    expect(await screen.findByText("This file is hidden by Monoptah")).toBeInTheDocument();
+    expect(await screen.findByText("This file is hidden by zptah")).toBeInTheDocument();
     expect(screen.queryByTestId("file-lines")).toBeNull();
   });
 
@@ -300,7 +300,7 @@ describe("file viewer (F-60)", () => {
     mount("src/gone.ts");
     expect(await screen.findByText("This file could not be opened")).toBeInTheDocument();
     expect(screen.getByTestId("file-problem").querySelector("svg")).not.toBeNull();
-    expect(screen.queryByText("This file is hidden by Monoptah")).toBeNull();
+    expect(screen.queryByText("This file is hidden by zptah")).toBeNull();
   });
 
   it("previews markdown through the safe renderer", async () => {

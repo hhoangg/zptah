@@ -38,7 +38,7 @@ export async function runPushTest(env: Env, userId: string, deviceId: string, de
       logAttempt("push.test", { deviceId, outcome: "vapid_unusable" }, undefined, rows.length);
       return { ok: false, status: 503 };
     }
-    const payload = encoder.encode(JSON.stringify(PushPayloadSchema.parse({ v: 1, t: "Monoptah", b: "Test notification", url: "/settings", tag: TEST_TAG })));
+    const payload = encoder.encode(JSON.stringify(PushPayloadSchema.parse({ v: 1, t: "zptah", b: "Test notification", url: "/settings", tag: TEST_TAG })));
     report = await deliver(env, { rows, payload, urgency: "high", topic: await topicFor(TEST_TAG), vapid, honorBackoff: false }, deps, nowMs);
   }
   const counts = { sent: report?.sent ?? 0, gone: report?.gone ?? 0, failed: report?.failed ?? 0, backoff: report?.backoff ?? 0 };

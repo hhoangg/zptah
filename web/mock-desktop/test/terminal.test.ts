@@ -138,7 +138,7 @@ describe("terminal read, write, resize, close", () => {
     const id = await start();
     const first = await terminals.read(DEVICE, { terminalId: id, from: 0, waitMs: 0 });
     expect(first).toMatchObject({ from: 0, exited: null });
-    expect(text(first.data)).toBe("Monoptah mock shell in Alpha\r\n$ ");
+    expect(text(first.data)).toBe("zptah mock shell in Alpha\r\n$ ");
     expect(first.next).toBe(first.data === "" ? 0 : text(first.data).length);
     terminals.write(DEVICE, { terminalId: id, data: b64("echo hi\r") });
     const second = await terminals.read(DEVICE, { terminalId: id, from: first.next, waitMs: 0 });

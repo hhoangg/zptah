@@ -12,7 +12,7 @@ export function NotAvailable() {
   return (
     <SettingsPage title="Not available" description={NOT_AVAILABLE}>
       <Button asChild variant="outline" className="self-start">
-        <Link to="/">Go to Monoptah</Link>
+        <Link to="/">Go to zptah</Link>
       </Button>
     </SettingsPage>
   );

@@ -44,10 +44,10 @@ export function RecoveryCodes({ handle, codes, onContinue, continueLabel = "Cont
   return (
     <div className="flex flex-col gap-4" data-testid="recovery-codes">
       <Notice variant="info" title="Shown only once">
-        Each code signs you in once if you lose your passkeys. Save them now; Monoptah cannot show them again.
+        Each code signs you in once if you lose your passkeys. Save them now; zptah cannot show them again.
       </Notice>
       <div data-print-area className="flex flex-col gap-2">
-        <p className="hidden text-body font-semibold print:block">{`Monoptah recovery codes for ${handle}`}</p>
+        <p className="hidden text-body font-semibold print:block">{`zptah recovery codes for ${handle}`}</p>
         {/* One column: a code is 19 characters and must never wrap in the middle. */}
         <ol aria-label="Recovery codes" className="grid list-none grid-cols-1 gap-2 overflow-x-auto rounded-row bg-fill p-3">
           {codes.map((code, index) => (

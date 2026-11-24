@@ -2,7 +2,7 @@
 //
 // Both roles: initiator (the device) and responder (the desktop). The module holds
 // no application code: it knows the Noise objects (CipherState, SymmetricState,
-// HandshakeState), the IK pattern, and two helpers that define the Monoptah
+// HandshakeState), the IK pattern, and two helpers that define the zptah
 // identities (`prologue`, `fingerprint`). Primitives are @noble only:
 //   - x25519 (DH, 32-byte keys)        @noble/curves
 //   - ChaCha20-Poly1305 (IETF AEAD)    @noble/ciphers
@@ -431,7 +431,7 @@ export class HandshakeState {
   }
 }
 
-// --- Monoptah identities (architecture.md 5.3) ---
+// --- zptah identities (architecture.md 5.3) ---
 
 type Id16 = string | Uint8Array;
 

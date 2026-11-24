@@ -110,8 +110,8 @@ export function PairScreen({ code }: { code: string }) {
           title="Desktop approved"
           description={
             outcome.replaced
-              ? `${safeLabel(outcome.name)} now uses the new desktop key. Go back to Monoptah on your desktop to finish.`
-              : "Go back to Monoptah on your desktop to finish. It connects within a few seconds."
+              ? `${safeLabel(outcome.name)} now uses the new desktop key. Go back to zptah on your desktop to finish.`
+              : "Go back to zptah on your desktop to finish. It connects within a few seconds."
           }
         />
         <Notice>
@@ -232,18 +232,18 @@ export function PairScreen({ code }: { code: string }) {
     <AuthLayout>
       <PageHeader
         title={check === "mismatch" ? "Do not approve this desktop" : "Approve this desktop?"}
-        description="Compare the confirmation code and fingerprint with the Monoptah window on your desktop."
+        description="Compare the confirmation code and fingerprint with the zptah window on your desktop."
       />
 
       {check === "mismatch" ? (
         <Notice variant="error" title="The fingerprint does not match">
-          The link you opened carries a different fingerprint than the one Monoptah received for this request. The link may have been changed, or it belongs to another
+          The link you opened carries a different fingerprint than the one zptah received for this request. The link may have been changed, or it belongs to another
           desktop. Do not approve it. Deny the request, then choose Pair on your desktop to make a new code.
         </Notice>
       ) : null}
       {check === "missing" ? (
         <Notice variant="error" title="This link has no fingerprint">
-          Monoptah cannot check the desktop key for you. Before you approve, make sure the confirmation code and the fingerprint below are exactly what your desktop shows. If
+          zptah cannot check the desktop key for you. Before you approve, make sure the confirmation code and the fingerprint below are exactly what your desktop shows. If
           anything differs, deny.
         </Notice>
       ) : null}

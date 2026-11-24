@@ -53,7 +53,7 @@ function Form({ error, onOpen }: { error: string | null; onOpen: (target: Chosen
   }
   return (
     <form data-testid="terminal-chooser" onSubmit={submit} className="flex w-full max-w-md flex-col gap-4 p-4">
-      <p className="text-small text-muted-text">Opens a real shell on your desktop, as the user who runs Monoptah. Every open asks for your passkey first.</p>
+      <p className="text-small text-muted-text">Opens a real shell on your desktop, as the user who runs zptah. Every open asks for your passkey first.</p>
       {error ? <Notice variant="error">{error}</Notice> : null}
       <div className="flex flex-col gap-1.5">
         <label htmlFor="terminal-project" className="text-label font-medium">

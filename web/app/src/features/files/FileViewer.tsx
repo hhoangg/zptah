@@ -1,7 +1,7 @@
 // F-60: the file viewer. Virtualized lines (@tanstack/react-virtual), wrap toggle (monoptah.files.wrap),
 // markdown preview through the safe renderer, a truncation notice and client-side shiki highlighting
 // through the markdown highlight worker. The desktop's `highlighted` palette and `project.fileHighlight`
-// are not used. A hidden file (`path_denied`) shows "This file is hidden by Monoptah".
+// are not used. A hidden file (`path_denied`) shows "This file is hidden by zptah".
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLinkQuery } from "@/data";
@@ -126,7 +126,7 @@ export function FileViewer({ projectId, path, onOpenPath, line }: FileViewerProp
   if (file.isError) {
     body =
       problemOf(file.error) === "denied" ? (
-        <FileProblem title={HIDDEN_FILE_MESSAGE}>Monoptah keeps this kind of file (for example secrets) off your devices.</FileProblem>
+        <FileProblem title={HIDDEN_FILE_MESSAGE}>zptah keeps this kind of file (for example secrets) off your devices.</FileProblem>
       ) : (
         <FileProblem
           title="This file could not be opened"

@@ -241,7 +241,7 @@ export class MockTerminals {
     if (this.#liveCount(device) >= this.#maxTerminals) throw new FixtureError("Too many terminals", "busy");
     const cwd = params.subdir ? `${projectName}/${params.subdir}` : projectName;
     const terminal = new MockTerminal(randomId("term"), device, cwd, params.cols, params.rows);
-    terminal.emit(`Monoptah mock shell in ${cwd}\r\n$ `);
+    terminal.emit(`zptah mock shell in ${cwd}\r\n$ `);
     this.#terminals.set(terminal.id, terminal);
     this.#armIdle(terminal);
     terminal.maxTimer = this.#clock.setTimeout(() => this.#end(terminal, "max"), this.#maxMs);

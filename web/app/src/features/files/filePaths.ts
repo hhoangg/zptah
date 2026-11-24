@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { leafName } from "@/lib/fileKind";
 
-export const HIDDEN_FILE_MESSAGE = "This file is hidden by Monoptah";
+export const HIDDEN_FILE_MESSAGE = "This file is hidden by zptah";
 export const SEARCH_DEBOUNCE_MS = 150;
 
 /** The route splat as a clean relative path ("" for the root). */

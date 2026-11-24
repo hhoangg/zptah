@@ -99,7 +99,7 @@ describe("lazy grant request", () => {
     expect(dialog).toHaveTextContent(/forget this device/i);
     expect(dialog).toHaveTextContent(/on every desktop/);
     expect(dialog).toHaveTextContent(/compare the fingerprints on the confirmation screen with the ones in the dialog on your desktop/i);
-    expect(dialog).toHaveTextContent("Monoptah");
+    expect(dialog).toHaveTextContent("zptah");
     expect(dialog).not.toHaveTextContent(/My desktops/);
     expect(screen.getByRole("link", { name: "Go to desktops" })).toHaveAttribute("href", "/settings/desktops");
     expect(screen.queryByRole("button", { name: /try again|reconnect|retry/i })).toBeNull();

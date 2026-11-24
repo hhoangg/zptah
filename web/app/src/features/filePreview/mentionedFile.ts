@@ -469,10 +469,10 @@ export interface PreviewProblem {
   retry: boolean;
 }
 
-export const HIDDEN_PREVIEW_MESSAGE = "This file is hidden by Monoptah";
+export const HIDDEN_PREVIEW_MESSAGE = "This file is hidden by zptah";
 
 function updateDesktop(): PreviewProblem {
-  return { kind: "update_desktop", title: "Update Monoptah on your desktop", detail: "Your desktop is too old to open this file from the web. Update it, then try again.", retry: false };
+  return { kind: "update_desktop", title: "Update zptah on your desktop", detail: "Your desktop is too old to open this file from the web. Update it, then try again.", retry: false };
 }
 
 export interface PreviewProblemOptions {
@@ -511,7 +511,7 @@ export function previewProblem(error: unknown, options: PreviewProblemOptions = 
   const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: unknown }).code : undefined;
   switch (code) {
     case "path_denied":
-      return { kind: "denied", title: HIDDEN_PREVIEW_MESSAGE, detail: "Monoptah keeps this kind of file (for example secrets) off your devices.", retry: false };
+      return { kind: "denied", title: HIDDEN_PREVIEW_MESSAGE, detail: "zptah keeps this kind of file (for example secrets) off your devices.", retry: false };
     case "forbidden":
       if (options.desktopCurrent === false) return updateDesktop();
       if (options.fileTransfer) {

@@ -138,7 +138,7 @@ describe("open flow", () => {
     ["read_only", "only read"],
     ["not_selected", "not shared"],
     ["busy", "too many"],
-    ["unsupported", "Update Monoptah"],
+    ["unsupported", "Update zptah"],
   ])("a refused open (%s) fails with a message that says what to do", async (code, text) => {
     const r = rig();
     void r.controller.begin({ projectId: "p1" });

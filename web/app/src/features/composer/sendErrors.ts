@@ -16,7 +16,7 @@ const MESSAGES: Readonly<Record<string, string>> = {
   revoked: "This device was removed from the desktop.",
   disabled: "Sending from the web is turned off on the desktop.",
   too_large: "The message is too large to send.",
-  unsupported: "Update Monoptah on your desktop to send this.",
+  unsupported: "Update zptah on your desktop to send this.",
   unsupported_target: "This session cannot be sent to from the web.",
   not_pending: "This request is no longer waiting.",
   needs_desktop: "Answer this one on the desktop. It cannot be allowed once from here.",

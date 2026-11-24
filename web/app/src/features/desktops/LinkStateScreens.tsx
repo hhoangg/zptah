@@ -78,7 +78,7 @@ function BlockingLayer({ screen, desktopId, onRetryGrant }: { screen: BlockingSc
           <Notice>
             <span className="flex items-center gap-2">
               <Icon name="spinner" size={16} className="shrink-0 animate-spin motion-reduce:animate-none" />
-              <span>Waiting for confirmation on {name}. Keep Monoptah open on the desktop.</span>
+              <span>Waiting for confirmation on {name}. Keep zptah open on the desktop.</span>
             </span>
           </Notice>
         </>
@@ -100,7 +100,7 @@ function BlockingLayer({ screen, desktopId, onRetryGrant }: { screen: BlockingSc
       break;
     case "account_blocked":
       title = "This account is blocked";
-      body = <p>This account cannot use Monoptah right now. Ask the person who runs this Monoptah server to unblock it.</p>;
+      body = <p>This account cannot use zptah right now. Ask the person who runs this zptah server to unblock it.</p>;
       break;
     case "key_changed":
       title = "Desktop key changed";
@@ -162,7 +162,7 @@ function BlockingLayer({ screen, desktopId, onRetryGrant }: { screen: BlockingSc
       >
         {/* The same column and card as the sign-in and pair screens that lead here (AuthLayout). */}
         <AuthLayout>
-          <p className="text-label font-semibold text-content">Monoptah</p>
+          <p className="text-label font-semibold text-content">zptah</p>
           <DialogTitle className="text-headline font-semibold wrap-anywhere">{title}</DialogTitle>
           <DialogDescription asChild>
             <div className="flex flex-col gap-4 text-body text-muted-text">{body}</div>

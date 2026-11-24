@@ -1,4 +1,4 @@
-// The Monoptah web Worker: one Hono app (architecture.md 4.1) plus the DesktopRoom Durable Object.
+// The zptah web Worker: one Hono app (architecture.md 4.1) plus the DesktopRoom Durable Object.
 import { Hono } from "hono";
 import type { Env } from "./env.ts";
 import { apiError, type AppEnv } from "./http.ts";

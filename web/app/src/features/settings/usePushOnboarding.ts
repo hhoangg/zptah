@@ -41,7 +41,7 @@ function hasPushManager(): boolean {
 
 function describe(error: unknown): string {
   if (isApiError(error, "network")) return settingsErrorMessage(error);
-  if (error instanceof PushUnavailableError) return error.reason === "permission" ? "Notifications are not allowed for Monoptah in this browser." : "This browser cannot receive push notifications.";
+  if (error instanceof PushUnavailableError) return error.reason === "permission" ? "Notifications are not allowed for zptah in this browser." : "This browser cannot receive push notifications.";
   if (typeof error === "object" && error !== null && "status" in error && error.status === 401) return SIGN_IN_FIRST;
   return settingsErrorMessage(error);
 }

@@ -134,7 +134,7 @@ export function RegisterScreen() {
 
   return (
     <AuthLayout>
-      <PageHeader title="Create your account" description="Monoptah is invite only. You sign in with a passkey, no password." />
+      <PageHeader title="Create your account" description="zptah is invite only. You sign in with a passkey, no password." />
       <form noValidate onSubmit={(event) => void submit(event)} className="flex flex-col gap-4">
         <Field
           label="Invite code"

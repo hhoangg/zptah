@@ -14,7 +14,7 @@ export const LINK_BLOCKED_REASONS = [
   "policy",
   /** The desktop speaks a newer protocol, or refused an older web prologue: "Reload to update the web app". */
   "web_outdated",
-  /** The desktop speaks an older protocol than this web app: "Update Monoptah on your desktop". */
+  /** The desktop speaks an older protocol than this web app: "Update zptah on your desktop". */
   "desktop_outdated",
   /** BYE before any `state`: unauthenticated, so not proof of a revocation. Copy for WS-M: "This desktop did not accept this device". */
   "desktop_refused",

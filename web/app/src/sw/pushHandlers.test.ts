@@ -69,10 +69,10 @@ describe("push", () => {
 
   it("shows the test notification of Settings with its tag and the /settings click target", async () => {
     const { handlers, shown } = setup();
-    const { event, settle } = pushEvent({ v: 1, t: "Monoptah", b: "Test notification", url: "/settings", tag: "monoptah-test" });
+    const { event, settle } = pushEvent({ v: 1, t: "zptah", b: "Test notification", url: "/settings", tag: "monoptah-test" });
     handlers.push(event);
     await settle();
-    expect(shown).toEqual([{ title: "Monoptah", options: { body: "Test notification", icon: "/icons/icon-192.png", badge: "/icons/badge-96.png", tag: "monoptah-test", data: { url: "/settings" } } }]);
+    expect(shown).toEqual([{ title: "zptah", options: { body: "Test notification", icon: "/icons/icon-192.png", badge: "/icons/badge-96.png", tag: "monoptah-test", data: { url: "/settings" } } }]);
   });
 
   it("keeps the mono:<id> tag of a Mono chat notification", async () => {
@@ -95,7 +95,7 @@ describe("push", () => {
     handlers.push(event);
     await settle();
     expect(shown).toHaveLength(1);
-    expect(shown[0]?.title).toBe("Monoptah");
+    expect(shown[0]?.title).toBe("zptah");
     expect(shown[0]?.options.body).toBeTruthy();
   });
 
@@ -117,7 +117,7 @@ describe("push", () => {
     handlers.push(event);
     await settle();
     expect(shown).toHaveLength(1);
-    expect(shown[0]?.title).toBe("Monoptah");
+    expect(shown[0]?.title).toBe("zptah");
     expect(shown[0]?.options.data).toEqual({ url: "/" });
   });
 
@@ -131,7 +131,7 @@ describe("push", () => {
     const waits: Array<Promise<unknown>> = [];
     handlers.push({ data: null, waitUntil: (p) => void waits.push(p) });
     await Promise.all(waits);
-    expect(shown.map((item) => item.title)).toEqual(["Monoptah", "Monoptah"]);
+    expect(shown.map((item) => item.title)).toEqual(["zptah", "zptah"]);
   });
 
   it("does not look at which windows are visible: a focused app still gets the notification", async () => {

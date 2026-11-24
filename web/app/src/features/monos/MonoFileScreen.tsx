@@ -37,7 +37,7 @@ function MindViewer({ desktopId, monoId, file }: { desktopId: string; monoId: st
   return (
     <MonoPage testId="mono-file" title={title} back={<Back desktopId={desktopId} monoId={monoId} />}>
       {unavailable ? (
-        <Notice>This desktop does not share the Mono's {title.toLowerCase()}. Update the Monoptah app on it.</Notice>
+        <Notice>This desktop does not share the Mono's {title.toLowerCase()}. Update the zptah app on it.</Notice>
       ) : query.isError ? (
         <Notice variant="error">{query.error.message || `Could not load the ${title.toLowerCase()}.`}</Notice>
       ) : !query.data ? (

@@ -322,7 +322,7 @@ describe("POST /api/push/test", () => {
       { outcome: "skipped_key", status: 0 },
     ]);
     const sentToOk = requests.find((r) => r.url === okEndpoint)!;
-    expect(JSON.parse(new TextDecoder().decode(await subscriber.decrypt(sentToOk.body)))).toEqual({ v: 1, t: "Monoptah", b: "Test notification", url: "/settings", tag: "monoptah-test" });
+    expect(JSON.parse(new TextDecoder().decode(await subscriber.decrypt(sentToOk.body)))).toEqual({ v: 1, t: "zptah", b: "Test notification", url: "/settings", tag: "monoptah-test" });
     expect(sentToOk.headers.get("urgency")).toBe("high");
     expect(sentToOk.headers.get("topic")).toBe(await topicFor("monoptah-test"));
     expect((await subscriptionRow(ok))?.last_success_at).not.toBeNull();
