@@ -8,15 +8,60 @@ zptah is a native desktop app (Rust + GPUI) for macOS, Linux and Windows. It doe
 
 ## Features
 
-- Run several agent sessions as tabs, and split panes to work with sessions side by side.
-- Keep conversations organized by project.
-- Use separate Git worktrees for parallel tasks.
-- Edit files and review changes in the app.
-- Start a message with `/operator` to let an agent open sessions and manage worktrees and notes. See [agent access](docs/agent-access.md).
-- Monos: experimental agents that work across your projects, keep a memory and run scheduled tasks you set up with them.
-- Remote sessions (experimental) and answering questions from Telegram. See [remote access](docs/remote-access.md) and [Telegram](docs/telegram.md).
-
 Install and sign in to at least one supported agent first. See [provider setup](docs/providers.md).
+
+### Sessions and providers
+
+- Run many sessions as tabs, split panes side by side, group sessions in folders and pin tabs.
+- Supported agents: Claude Code, Codex, Cursor, Grok Build, OpenCode, Antigravity, Pi, omp, fx, Hermes Agent and Devin. Missing CLIs are detected at startup and disabled with an install hint.
+- Several accounts per provider (Claude, Codex, Devin), usage and remaining-limit footer, and a resource pressure view to stop heavy agents.
+- Per provider, open sessions as an app chat or in the provider's own terminal UI. See [terminal sessions](docs/tui-sessions.md).
+- Attach files and images, queue follow-ups, answer agent questions, rewind turns, and use slash commands and skills.
+- MCP servers and skills managed in Settings.
+- Start a message with `/operator` to let an agent open sessions, split panes and manage worktrees and notes. See [agent access](docs/agent-access.md).
+- Orchestration: a lead agent plans work and dispatches worker sessions.
+
+### Projects, worktrees and code
+
+- Projects in a rail with quick open, project search and per-project settings and themes.
+- Git worktrees for parallel tasks, a worktree switcher and worktree management in Settings.
+- Built-in file editor with syntax highlighting, file explorer, Markdown preview and Mermaid diagrams ([Mermaid](docs/native/mermaid.md)).
+- Diff view, per-turn change recordings and session review, git status, git graph and branch picker, and git credential management.
+- Embedded terminal.
+- Contributors page per project: stats, leaderboard and identity merging.
+
+### Inbox
+
+- GitHub, GitLab, Linear, Jira, ClickUp and Azure DevOps sources, connected in Settings > Inbox. See [Jira](docs/jira.md) and [ClickUp](docs/clickup.md).
+- Browse issues and tasks with comments, ask an agent about a ticket, or start work on it in a local project.
+- Automations that run an agent on a schedule or when an inbox item appears.
+- Ticket Contributors with AI ticket scoring for ClickUp.
+
+### Monos
+
+- Agents that work across your projects with a memory, a personality, a chosen provider and their own sessions.
+- Habits: scheduled tasks (hourly, daily, weekdays, weekly, every N hours), shareable as YAML.
+- Workflows: graphs of session, shell, ask-a-Mono, condition, for-each and loop steps, drawn as live run graphs, exported as YAML, and an imported file is reviewed before it runs.
+- Browser: a Mono can drive your real Chrome profile through Playwright MCP, with a prompt-injection gate.
+- Dashboard, overview, notifications, Today view and notes.
+
+### Visuals
+
+- Agents publish interactive charts, diagrams and calculators into the conversation, rendered natively. Use `/visualize`. See [session visuals](docs/native/visuals.md).
+
+### Cloud sessions
+
+- Run a session in a GitHub Codespace or a Docker Sandbox and move it between your computer and the cloud with Continue in cloud and Continue locally.
+- Setup kits for the cloud workspace, auto-stop, and a footer chip and drawer to stop or delete workspaces. See [cloud workspaces](docs/native/cloud-workspaces.md) and [cloud dev environment](docs/native/cloud-dev-environment.md).
+
+### Remote machines
+
+- Run sessions on another Windows, Linux or macOS machine over SSH with `zptah-host`, installed and paired from Settings > Connections. Host sessions keep running when you close the desktop. See [remote access](docs/remote-access.md).
+- Pair phones in Settings > Connections.
+
+### App
+
+- Auto-update with signed updates, notifications and sounds, themes and keybindings, a quick composer, and Settings > Archive.
 
 ## Install
 
@@ -36,9 +81,13 @@ Download the AppImage, `.deb` or `.rpm` from [GitHub Releases](https://github.co
 
 Download and run the installer (`.exe`) from [GitHub Releases](https://github.com/hhoangg/zptah/releases).
 
+## Coming from Monoptah?
+
+Open Settings > Import from Monoptah to copy your conversations, settings, saved sign-ins, Monos and files into zptah. Monoptah keeps its own copy and is not changed. Quit Monoptah first.
+
 ## Web companion
 
-The browser client at [zptah.app](https://zptah.app) lets you reach your sessions from a browser, including on a phone. See [web/README.md](web/README.md) for how it is built and run.
+The browser client at [zptah.app](https://zptah.app) lets you reach your sessions from a browser, including on a phone, over an end-to-end encrypted channel after pairing. Remote push in Git, cloud start and tool approvals are separate opt-in permissions. See [web/README.md](web/README.md) for how it is built and run.
 
 ## Build from source
 
