@@ -6,10 +6,9 @@ Please don’t open PRs that add a new provider right now. The existing harnesse
 
 ## PR policy during the GPUI preview
 
-The Rust + GPUI preview is developed on `main` alongside the production React/Tauri app. Development is focused on the native preview while the production app remains supported.
+The Rust + GPUI app is developed on `main`. The React/Tauri app was removed from this repository.
 
-- Bug fixes, security fixes, documentation improvements, and changes useful to both apps are still welcome on `main`.
-- Larger Tauri-specific features and refactors are temporarily deferred during the migration.
+- Bug fixes, security fixes and documentation improvements are welcome on `main`.
 - Target GPUI contributions at `main`. See [the native guide](docs/native/README.md) for setup and checks.
 
 Before starting a larger change, open an issue so we can agree on the scope and target branch and avoid duplicated work. Existing PRs will be reviewed individually.
@@ -22,47 +21,28 @@ macOS, Linux, and Windows are supported targets. See [building from source](docs
 
 ```bash
 npm install
-npm run tauri dev
+npm run native:dev
 ```
 
 ## Where things live
 
-- `src/app/` - application composition, startup behavior, window shell, and release/update UI
-- `src/features/` - product behavior grouped by feature, with UI, model, data access, hooks, and tests kept together
-- `src/integrations/harness/` - the provider-independent harness core and one folder per provider adapter
-- `src/platform/tauri/` - browser-to-Tauri adapters for filesystem, PTY, clipboard, and platform behavior
-- `src/shared/` - reusable UI, hooks, and small utilities that contain no feature behavior
-- `src-tauri/src/` - the Rust side: PTYs, filesystem and git, session storage, native window
+- `crates/monocode-core/` - the app logic shared by the native app: providers, sessions, storage, git, remote
+- `crates/monocode-gpui/` - the GPUI app
+- `crates/mobile-link/` - the pairing and link protocol (used by `crates/monocode-core` and the web link protocol)
+- `host/` - the remote Host (TypeScript), packaged with `npm run host:package`
+- `src/` - pruned to what `host/`, the `scripts/native-editor` and `scripts/native-settings` generators and the `crates/monocode-core` provider/kind.rs tests use, plus code kept alongside it (harness sources are in `src/integrations/harness/`). It is not an app any more and not yet the exact import closure; a follow-up should prune it and decouple `host/`.
+- `web/` - the web app, Worker and relay protocol
+- `assets/native/` - icons, entitlements and the updater public key used to package the native app
 
-`src/integrations/harness/` is the most useful place to start if you want to fix something real. Each folder under `providers/` has an adapter (`claudeAdapter.ts`) that implements the shared `HarnessAdapter` lifecycle from `core/registry.ts`, and a protocol module (`claudeProtocol.ts`) that translates the CLI’s output into MonoCode’s own event types. The protocol modules are pure functions with unit tests beside them, so you can fix a Codex parsing bug with only Claude Code installed. That’s for the providers we already ship - please don’t add a new one yet.
-
-## Experimental GPUI work
-
-The production React/Tauri app continues to use the commands above. GPUI work
-lives in `crates/monocode-core` and `crates/monocode-gpui`, with an independent
-Cargo workspace and lockfile. Use `npm run native:dev` to develop,
-`npm run native:build` to package an optimized build, and
-`npm run native:check` for its checks (CI runs most of them; `npm run native:check:mac` is the
-local macOS-only remainder). Keep production UI behavior, dependencies,
-CI and release/update distribution intact while the native port is tested.
-See the [native guide](docs/native/README.md) and [architecture](docs/native/migration.md).
+`src/integrations/harness/` holds the provider protocol modules (for example `claudeProtocol.ts`). They are pure functions with unit tests beside them (`npm run test:harness`). Please don’t add a new provider yet.
 
 ## Before you push
 
 ```bash
-npm run check
+npm run native:check
 ```
 
-That runs what CI runs: vitest, `tsc --noEmit`, `cargo fmt`, `cargo clippy`, and `cargo test`. If it’s green locally it should be green on GitHub. `npm run check:web` and `npm run check:rust` run the two halves separately when you only touched one side.
-
-For transcript layout and scrolling changes, also run the real-browser tests:
-
-```bash
-npx playwright install chromium webkit
-npm run test:browser
-```
-
-These render the actual transcript and stylesheet in Chromium and WebKit, checking scroll geometry that the DOM-mocked unit tests cannot exercise. They start an isolated Vite server on port 1435 and need no provider or Tauri app.
+That runs the node script tests, `cargo fmt`, `cargo clippy` and the native test suites; CI runs most of them (see [the native guide](docs/native/README.md)). If you touched `host/` or `src/`, also run `npm run host:build`, `npm run test:host` and `npm run test:harness`.
 
 ## New providers
 

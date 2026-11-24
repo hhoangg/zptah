@@ -1,9 +1,9 @@
 name: web-guard
 
-# Fork-local (Monoptah). W-20: web/ must not reference the old Tauri app (src/,
-# src-tauri/) or reintroduce upstream identity. The guard script is the fast check;
-# the isolated build deletes src/ and src-tauri/ and is the real backstop for paths
-# the script cannot see.
+# Fork-local (Monoptah). W-20: web/ must not reference the retained harness sources
+# (src/, kept only for the remote host and the native asset generators) or reintroduce
+# upstream identity. The guard script is the fast check; the isolated build deletes
+# src/ and is the real backstop for paths the script cannot see.
 on:
   push:
     branches: [main, feat/web-app-impl]
@@ -49,7 +49,7 @@ jobs:
         run: node --test scripts/check-web-isolation.test.mjs
 
   isolated-build:
-    name: Web build without src/ and src-tauri/
+    name: Web build without src/
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -61,8 +61,8 @@ jobs:
         run: |
           npm install --global corepack@latest
           corepack enable
-      - name: Delete the Tauri app sources
-        run: rm -rf src src-tauri
+      - name: Delete the retained harness sources
+        run: rm -rf src
       - name: pnpm store path
         id: pnpm-store
         working-directory: web

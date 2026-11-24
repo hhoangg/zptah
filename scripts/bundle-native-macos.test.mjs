@@ -253,5 +253,5 @@ test("without the mode, ad-hoc and Developer ID signing are unchanged", { skip: 
   assert.equal(f.run("release", { MONOCODE_NATIVE_SIGNING_IDENTITY: "Developer ID Application: X" }).status, 0);
   const [adhoc, dev] = await f.signLines();
   assert.match(adhoc, /^--force --sign - .*Monoptah Native\.app$/);
-  assert.match(dev, /^--force --sign Developer ID Application: X --options runtime --timestamp --entitlements src-tauri\/Entitlements\.plist /);
+  assert.match(dev, /^--force --sign Developer ID Application: X --options runtime --timestamp --entitlements assets\/native\/Entitlements\.plist /);
 });

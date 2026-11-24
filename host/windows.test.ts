@@ -4,7 +4,6 @@ import {
   mkdirSync,
   writeFileSync,
   rmSync,
-  readFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -158,24 +157,4 @@ try {
   // Three sequential PowerShell calls each have their own 30s process timeout.
   // Leave room for all three to settle before test teardown removes their files.
   100_000,
-);
-
-it.skipIf(process.platform !== "win32")(
-  "parses the Windows bootstrap with Windows PowerShell",
-  () => {
-    const script = readFileSync("src-tauri/src/remote_bootstrap.ps1", "utf8")
-      .replace("@@VERSION@@", "'test'")
-      .replace("@@RELEASE@@", "'https://example.invalid'")
-      .replace("@@ACL@@", readFileSync("host/windows-acl.ps1", "utf8"));
-    const file = join(temporary(), "bootstrap.ps1");
-    writeFileSync(file, script);
-    const result = execFileSync(
-      powershell(),
-      powershellArgs(
-        `$tokens = $null; $errors = $null; $null = [Management.Automation.Language.Parser]::ParseFile(${psQuote(file)}, [ref] $tokens, [ref] $errors); if ($errors.Count) { $errors | Out-String | Write-Output; exit 1 }`,
-      ),
-      { encoding: "utf8", env: powershellEnvironment() },
-    );
-    expect(result).toBe("");
-  },
 );

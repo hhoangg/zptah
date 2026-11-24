@@ -49,21 +49,19 @@ MonoCode is still early. If something breaks, [report a bug](https://github.com/
 
 ## Build from source
 
-You’ll need Node.js 20+ and a stable Rust toolchain. See [build setup](docs/building.md) for platform dependencies and packaging.
-
-The mobile app is a separate Expo project in [`mobile/`](mobile/README.md). Run it with `cd mobile && npm install && npm start`.
+You’ll need Node.js 22+ and a stable Rust toolchain. See [build setup](docs/building.md) for platform dependencies and packaging.
 
 ```bash
 npm install
-npm run tauri dev
+npm run native:dev
 ```
 
 Small, focused contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## Monocode Native preview
 
-The Rust + GPUI app is an experimental preview. React/Tauri remains the
-production app.
+The Rust + GPUI app is an experimental preview. The React/Tauri app was removed
+from this repository; installed copies keep working but receive no updates.
 
 Download a packaged preview for macOS, Linux or Windows from the
 [releases page](https://github.com/hardbeat920/monocode/releases). See

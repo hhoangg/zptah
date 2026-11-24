@@ -2,6 +2,8 @@
 
 Status: specification, researched 2026-11-17 at commit `32738239`. Paths are relative to the repo root. LOC = `wc -l`. Ticket IDs are in [roadmap.md](roadmap.md), feature IDs in [features.md](features.md).
 
+Update: the Tauri app (`src-tauri/`, most of `src/`) and the Expo app (`mobile/`) were removed from the repository. Every `src/...`, `src-tauri/...` and `mobile/...` path in this document, and in the provenance comments in `web/`, names a file as it was at the commit above (read it with `git show 32738239:<path>`). The rules below still hold: `web/` never references `src/`, which now only holds the harness sources of the remote Host.
+
 ## 1. Rule (decided)
 
 The old Tauri React app (`src/`, with `src-tauri/`) may be reused, but its source will be deleted later. Therefore:

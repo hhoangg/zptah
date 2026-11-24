@@ -1,7 +1,7 @@
 # Monoptah Native preview
 
-Monoptah Native is the experimental Rust + GPUI app. The production app still
-uses React/Tauri. Native builds have their own Cargo workspace and lockfile.
+Monoptah Native is the Rust + GPUI app. The React/Tauri app was removed from this
+repository. Native builds have their own Cargo workspace and lockfile.
 
 ## Requirements
 

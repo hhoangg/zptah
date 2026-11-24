@@ -67,8 +67,7 @@ jobs:
               - '**/Cargo.lock'
               - '**/rust-toolchain*'
               - '**/.cargo/**'
-              - 'src-tauri/**'
-              - 'src/app/App.tsx'
+              - 'assets/native/**'
               - 'src/integrations/harness/core/register.ts'
               - 'src/integrations/harness/core/availability.ts'
               - 'web/protocol/**'
@@ -76,7 +75,6 @@ jobs:
               - 'CHANGELOG.md'
               - 'LICENSE'
               - 'NOTICE'
-              - 'public/monocode.png'
               - '.gitattributes'
               - 'scripts/*native*'
               - 'scripts/native-editor/**'
@@ -133,8 +131,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libdbus-1-dev pkg-config
-      # ci.yml, the other npm ci, is paused; the native release needs a good lock.
-      # It also installs @tauri-apps/cli, without which the signing tests in
+      # The native release needs a good lock. This also installs @tauri-apps/cli, the
+      # updater signer (`tauri signer sign`), without which the signing tests in
       # native:test:dev are skipped.
       - run: npm ci
       - run: npm run native:test:dev

@@ -1,5 +1,14 @@
 use super::*;
 
+/// The `mono_transcripts` table of the original desktop app (everything after `CREATE TABLE IF
+/// NOT EXISTS mono_transcripts (`), kept as it was written so these tests can prove the shared
+/// store reads and writes that layout unchanged.
+const LEGACY_MONO_TRANSCRIPTS_SCHEMA: &str =
+    include_str!("../../../tests/fixtures/legacy-desktop/mono_transcripts_schema.sql");
+/// The first schema migration of the original desktop app's session store.
+const LEGACY_SESSION_STORE_MIGRATION_V1: &str =
+    include_str!("../../../tests/fixtures/legacy-desktop/session_store_migration_v1.sql");
+
 #[test]
 fn desktop_operator_access_restores_only_from_submitted_user_messages() {
     for (block, enabled) in [
@@ -54,14 +63,7 @@ fn saved_turn_metrics_reload_with_the_same_revision() {
 #[test]
 fn streamed_indexed_mono_load_preserves_projection_and_revision_guards() {
     let mut store = Store::open_monocode(Path::new(":memory:")).unwrap();
-    let legacy = include_str!("../../../../../src-tauri/src/mono_transcript.rs");
-    let schema = legacy
-        .split("CREATE TABLE IF NOT EXISTS mono_transcripts (")
-        .nth(1)
-        .unwrap()
-        .split("\",")
-        .next()
-        .unwrap();
+    let schema = LEGACY_MONO_TRANSCRIPTS_SCHEMA;
     store
         .conn
         .execute_batch(&format!(
@@ -120,14 +122,7 @@ fn indexed_mono(store: &mut Store, turns: usize) -> (i64, String, Vec<Value>) {
 
 /// A long indexed Mono holding `blocks`, as a newly opened store sees it.
 fn indexed_blocks(store: &mut Store, blocks: &[Value]) -> (i64, String) {
-    let legacy = include_str!("../../../../../src-tauri/src/mono_transcript.rs");
-    let schema = legacy
-        .split("CREATE TABLE IF NOT EXISTS mono_transcripts (")
-        .nth(1)
-        .unwrap()
-        .split("\",")
-        .next()
-        .unwrap();
+    let schema = LEGACY_MONO_TRANSCRIPTS_SCHEMA;
     store
         .conn
         .execute_batch(&format!(
@@ -372,14 +367,7 @@ fn search_connections_share_the_same_read_only_preference_snapshot() {
 fn original_desktop_schema_opens_without_schema_or_history_migration() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("monocode.db");
-    let source = include_str!("../../../../../src-tauri/src/session_store.rs");
-    let schema = source
-        .split("const MIGRATION_V1: &str = r#\"")
-        .nth(1)
-        .unwrap()
-        .split("\"#;")
-        .next()
-        .unwrap();
+    let schema = LEGACY_SESSION_STORE_MIGRATION_V1;
     let conn = Connection::open(&path).unwrap();
     conn.execute_batch(schema).unwrap();
     conn.execute("INSERT INTO sessions VALUES('old-string-id','/project','codex','codex:old','{}','supervised','Old title','thread','[{\"id\":\"u\",\"role\":\"user\",\"text\":\"Old history\"}]',1,2)",[]).unwrap();
@@ -407,14 +395,7 @@ fn original_desktop_schema_opens_without_schema_or_history_migration() {
 fn indexed_mono_history_stays_in_its_desktop_tables_with_block_ids_intact() {
     let store = Store::open_monocode(Path::new(":memory:")).unwrap();
     let (id, source) = saved(&store, json!([]));
-    let legacy = include_str!("../../../../../src-tauri/src/mono_transcript.rs");
-    let schema = legacy
-        .split("CREATE TABLE IF NOT EXISTS mono_transcripts (")
-        .nth(1)
-        .unwrap()
-        .split("\",")
-        .next()
-        .unwrap();
+    let schema = LEGACY_MONO_TRANSCRIPTS_SCHEMA;
     store
         .conn
         .execute_batch(&format!(
@@ -1225,14 +1206,7 @@ fn fresh_native_turn_receipts_persist_source_fields_without_changing_saved_prove
 fn indexed_mono_turn_receipts_restore_and_save_in_the_original_block_table() {
     let mut store = Store::open_monocode(Path::new(":memory:")).unwrap();
     let (id, original) = saved(&store, json!([]));
-    let legacy = include_str!("../../../../../src-tauri/src/mono_transcript.rs");
-    let schema = legacy
-        .split("CREATE TABLE IF NOT EXISTS mono_transcripts (")
-        .nth(1)
-        .unwrap()
-        .split("\",")
-        .next()
-        .unwrap();
+    let schema = LEGACY_MONO_TRANSCRIPTS_SCHEMA;
     store
         .conn
         .execute_batch(&format!(
@@ -1762,14 +1736,7 @@ mod transcript_index {
     #[test]
     fn mono_blocks_changes_are_detected_without_a_timestamp_change() {
         let (_dir, store) = file_store();
-        let legacy = include_str!("../../../../../src-tauri/src/mono_transcript.rs");
-        let schema = legacy
-            .split("CREATE TABLE IF NOT EXISTS mono_transcripts (")
-            .nth(1)
-            .unwrap()
-            .split("\",")
-            .next()
-            .unwrap();
+        let schema = LEGACY_MONO_TRANSCRIPTS_SCHEMA;
         store
             .conn
             .execute_batch(&format!(

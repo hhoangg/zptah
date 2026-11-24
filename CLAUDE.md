@@ -44,9 +44,14 @@ For each hit, decide:
 - **A test asserting old copy** → update the assertion. A test that still passes only
   because it asserts "MonoCode" is a failure, not coverage.
 
-Also confirm `src-tauri/tauri.conf.json` still has `productName: "Monoptah"`,
-`identifier: "com.monoptah.desktop"`, and the updater `pubkey` and fork `endpoints` —
-an upstream change to that file is the one most likely to hand the app back to MonoCode.
+The Tauri app (`src-tauri/`, most of `src/`, `mobile/`, root `index.html`, `vite.config.ts`
+and the Tauri workflows) was removed from this fork. When a merge reports a modify/delete
+conflict on one of those paths, keep the deletion. `src/` was pruned to what `host/`, the
+generators in `scripts/native-editor` and `scripts/native-settings`, and the
+`crates/monocode-core` provider/kind.rs tests use, plus code kept alongside it. It is not
+the exact import closure; a follow-up should prune it to that closure and decouple `host/`. Native assets that used to live in `src-tauri/` now live in
+`assets/native/` (icons, `Entitlements.plist`, `Assets.car`, `updater.pub`); confirm that
+`assets/native/updater.pub` still holds the fork's updater public key after a merge.
 
 If upstream changed `host/`, bump `host/VERSION` and cut a Host release (see "Releasing the
 Host"). Give any new upstream Host workflow job the
@@ -59,37 +64,21 @@ They are identifiers, not branding. Changing them breaks working installs:
 | Identifier | Why it stays |
 |---|---|
 | `monocode.*` localStorage key prefix | Renaming loses every saved preference on existing installs |
+| npm package `monocode-desktop` (root `package.json` name) | `scripts/check-web-isolation.mjs` flags any import of that package name from `web/` |
 | `monocode-host` CLI name, its data dir, `com.monocode.host` launchd label | The remote host protocol depends on them |
-| npm package `monocode-desktop`, crate `monocode`, lib `monocode_lib` | `scripts/bump-version.mjs` matches on them, and release artifacts are named from them |
 | `INTERRUPT_MESSAGE` in `src/features/sessions/model/inFlight.ts` | Compared with `===` against text already stored in saved sessions; changing it makes old interrupt notices unrecognised and duplicated |
 
 ## Verifying
 
-`npm run check` runs the full suite: vitest, `tsc --noEmit`, `cargo fmt --check`,
-`cargo clippy -D warnings`, `cargo test`.
+For the remote Host: `npm run host:build` (typecheck and bundle) and `npm run test:host`. For the
+harness sources the Host imports: `npm run test:harness`. The native app is verified with
+`npm run native:check` (see "Developing the native app").
 
-Read its exit status directly — never through a pipe. `npm run check | tail` reports
+Read the exit status directly - never through a pipe. `npm run native:check | tail` reports
 `tail`'s status, which is always 0, so a failing suite looks green. Use
-`npm run check > log 2>&1; echo $?` or `${PIPESTATUS[0]}`.
+`npm run native:check > log 2>&1; echo $?` or `${PIPESTATUS[0]}`.
 
 ## Seeing a change live
-
-After changing code, run the dev build from source:
-
-```bash
-npm run tauri:dev
-```
-
-It uses `src-tauri/tauri.dev.conf.json` to give the app the identifier
-`com.monoptah.desktop.dev` and the name "Monoptah Dev", so it keeps its own data
-(`~/Library/Application Support/com.monoptah.desktop.dev` and
-`~/Library/WebKit/com.monoptah.desktop.dev`). The installed Monoptah, with its
-sessions, settings and ClickUp token, is not touched. Never run plain
-`npm run tauri dev`: it uses the production identifier and shares that data.
-
-On macOS the dev bundle reads the same overlay through `TAURI_CONFIG` in
-`src-tauri/src/macos.rs`. Without that, the bundle would keep the production
-identifier and share WebKit storage (localStorage) with the installed app.
 
 For the native app, run Native Dev from a clean worktree that matches origin, so what you
 see is what was pushed:
@@ -117,7 +106,7 @@ relinks the large `monocode-gpui` test binary (median 1.4 min, p90 4.1 min).
 - **Seed the build cache in a new worktree.** Before the first cargo command, clone an
   existing target dir from the main checkout (or another worktree that has one) so crates
   are not rebuilt from scratch. The native workspace (`monocode-gpui` and `monocode-core`)
-  builds into `crates/monocode-gpui/target`; the root workspace (`src-tauri`,
+  builds into `crates/monocode-gpui/target`; the root workspace (only
   `crates/mobile-link`) builds into `target`. On macOS `cp -c -R` makes an APFS clone,
   which is instant and takes no extra space:
 
@@ -173,28 +162,15 @@ rest stays, then run it without `--dry-run` to delete (it asks first; non-TTY ne
 
 ## Releasing
 
-Releases are native only for now, see "Releasing the native app". The Tauri workflows
-`.github/workflows/ci.yml` and `release.yml` are paused: they have only `workflow_dispatch`,
-so pushes, pull requests and `v*` tags start nothing. Keep that when merging from upstream.
-
-To cut a Tauri release anyway: `npm run set-version -- X.Y.Z`, add a `CHANGELOG.md` section,
-merge that through a PR titled `chore(release): vX.Y.Z`, tag the merged commit `vX.Y.Z` and push
-the tag, then run `gh workflow run release.yml --ref vX.Y.Z`.
-That workflow builds macOS, Linux and Windows, signs the updater bundles with the
-`TAURI_SIGNING_PRIVATE_KEY` secret, and publishes a GitHub Release with `latest.json`.
-
-The same run also bumps the Homebrew cask in `hhoangg/homebrew-monoptah` (the `homebrew`
-job) when the `HOMEBREW_TAP_TOKEN` secret is set. Pre-release tags (containing `-`) are
-skipped, and the script never lowers the cask version, so re-running an old tag is safe.
-If the secret is missing the job only prints a notice, so bump `Casks/monoptah.rb` by hand
-with `scripts/update-homebrew-cask.sh <cask-file> <version> <sha256>`, taking the sha from
-the release's `Monoptah_<version>_aarch64.zip.sha256` asset. The token is a fine-grained PAT
-and expires: if the job fails at the tap checkout, the likely cause is an expired
-`HOMEBREW_TAP_TOKEN`, so create a new one and update the secret.
-
-The updater private key lives at `~/.config/monoptah/updater.key` and is **not** in this
-repo. Losing it means no further updates can be published to installed apps — they only
-trust that one key, so a replacement key would strand them.
+Releases are native only, see "Releasing the native app". The Tauri app and its release
+workflow were removed. The updater signing key (minisign, used by `tauri signer sign` from the
+`@tauri-apps/cli` devDependency) lives at `~/.config/monoptah/updater.key` and is **not** in this
+repo; its public half is `assets/native/updater.pub`. Losing the private key means no further
+updates can be published to installed apps, because they only trust that one key, so a
+replacement key would strand them. `@tauri-apps/cli` stays in `package.json` only as that signer: the native feed signing and the
+signing tests in `native:test:dev` need it, so keep it until the signer is replaced.
+(`@tauri-apps/api` and `plugin-dialog` stay too, only because the Host imports the harness
+sources that use them.)
 
 ### Releasing the Host
 
@@ -213,7 +189,7 @@ in `host/VERSION` as `X.Y.Z+monoptah` (semver build metadata marks the fork flav
    against `host/VERSION`, refuses when the release already exists, builds every target of
    `npm run host:package -- --all` (Linux and macOS `.tar.gz`, Windows `.zip`, asset names keep
    `monocode-host`), and publishes release `host-vX.Y.Z` with `--latest=false` (never "latest":
-   Tauri's updater reads `releases/latest`). It uploads each package with its `.sha256` and
+   the installed Tauri app's updater reads `releases/latest`). It uploads each package with its `.sha256` and
    `host-release.json` (`{version, assets: {target: sha256}}`, also a workflow artifact with a
    build-provenance attestation).
 3. Never re-upload a version: the app pins the sha256 of every asset. To redo a failed release,
@@ -222,15 +198,10 @@ in `host/VERSION` as `X.Y.Z+monoptah` (semver build metadata marks the fork flav
    `scripts/pin-host-release.mjs` from the run's `host-release.json`). Release the Host before
    the app that pins it.
 
-Note: the paused Tauri `release.yml` still packages the Host, but those packages now report
-`X.Y.Z+monoptah` while the Tauri app's bootstrap expects its own version. A Tauri release cut
-after H1 would fail to install the Host until the Tauri bootstrap is handled (H2a covers the
-native app only).
-
 ### Releasing the native app
 
 Monoptah Native (GPUI) ships for macOS arm64 (signed with a stable self-signed certificate, not notarized), Linux x86_64 and
-Windows x86_64 (unsigned installer). It releases separately from the Tauri app. No macOS job
+Windows x86_64 (unsigned installer). It has its own release flow. No macOS job
 runs on GitHub Actions (hosted macOS runners are not being acquired): the macOS app is checked,
 built and packaged on the maintainer's Mac, everything else is on CI.
 
@@ -315,9 +286,10 @@ The release script removes the built `Monoptah Native.app` from `target/.../rele
 
 Things to keep true after merging from upstream or changing repo settings:
 
-- Upstream's `native-release.yml` is gated with `if: github.repository == 'hardbeat920/monocode'`
-  on each job. Any job upstream adds there runs ungated on this fork (and fails without Apple
-  and R2 secrets), so give it the same `if:`.
+- Upstream's `native-release.yml` (and `scripts/native-release.mjs`) and the Tauri `ci.yml` and
+  `release.yml` are deleted in this fork. If a merge brings one back (modify/delete conflict),
+  keep the deletion: a restored workflow would run ungated here and fail without Apple and R2
+  secrets.
 - The rolling feed is replaced with `gh release upload --clobber`. Do not enable GitHub
   immutable releases for this repository, or the feed can never be updated and CI cannot upload
   to the release the local script created.

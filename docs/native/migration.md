@@ -1,8 +1,9 @@
 # Native architecture
 
-The GPUI app is an experimental preview alongside the production React/Tauri
-app. The existing implementation in `src/` and `src-tauri/` is the behavior
-reference. Production builds, CI, releases and updater feeds continue to use Tauri.
+The GPUI app is the shipping app. The React/Tauri app (`src-tauri/` and the old React
+frontend) was removed from this repository. Its history stays in git as the behavior
+reference. What survives of `src/` is only what the remote Host imports and what
+`scripts/native-editor` and `scripts/native-settings` bundle.
 
 ## Code layout
 
@@ -34,7 +35,7 @@ preserve the reader's position. Cancellation must remain responsive under load.
 
 The editor embeds generated analysis and formatting bundles. After changing their
 source services or dependencies, run `npm ci` and `npm run build` inside
-`scripts/native-editor/`. Generated bundles and their license notices belong
+`scripts/native-editor/` (its sources import `src/features/files/editor/`). Generated bundles and their license notices belong
 in the repository.
 
 ## Framework patches
@@ -47,5 +48,4 @@ The vendored framework/platform crates remove the unused `zed-scap` dependency.
 The native build rejects lockfiles that reintroduce it, and the `screen-capture`
 feature remains disabled. Preserve these guards and the licenses in [NOTICE](../../NOTICE).
 
-See [preview limitations](parity.md) for current release work. Tauri remains the
-production app until an explicit cutover.
+See [preview limitations](parity.md) for current release work.

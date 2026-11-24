@@ -85,9 +85,11 @@ test("the compiled-in feed URL and public key equal the release workflow's", () 
   const value = (name) => new RegExp(`^  ${name}: (\\S+)$`, "m").exec(workflow)?.[1];
   assert.ok(value("NATIVE_FEED_URL"));
   assert.equal(FEED_URL, value("NATIVE_FEED_URL"));
-  const pubkey = readUpdaterPubkey(read("src-tauri/tauri.conf.json"));
+  const pubkey = readUpdaterPubkey(read("assets/native/updater.pub"));
   assert.equal(pubkey, value("NATIVE_UPDATER_PUBKEY"));
-  assert.throws(() => readUpdaterPubkey("{}"), /no plugins.updater.pubkey/);
+  assert.throws(() => readUpdaterPubkey("\n"), /does not hold one updater public key/);
+  assert.throws(() => readUpdaterPubkey("two words"), /does not hold one updater public key/);
+  assert.equal(readUpdaterPubkey(" KEY\n"), "KEY");
 });
 
 test("the build environment carries the release settings and never the signing key", () => {

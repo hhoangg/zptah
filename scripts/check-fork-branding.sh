@@ -25,18 +25,14 @@ PATTERN='(hardbeat920/monocode|usemono\.dev|MonoCode Host|Monocode Native|Monoco
 read -r -d '' ALLOW <<'EOF' || true
 src/features/sessions/model/inFlight.ts
 src/integrations/harness/providers/hermes/hermes.ts
-src-tauri/src/macos.rs
-src-tauri/src/skills.rs
-src-tauri/src/control_cli.rs
-src-tauri/src/quick_composer.rs
 host/windows.ts
 EOF
 
 allow_re=$(printf '%s' "$ALLOW" | paste -sd'|' -)
 
 hits=$(grep -rnE "$PATTERN" \
-  src/ src-tauri/src/ host/ index.html crates/monocode-core/src/ crates/monocode-gpui/src/ \
-  --include="*.ts" --include="*.tsx" --include="*.rs" --include="*.html" 2>/dev/null \
+  src/ host/ crates/monocode-core/src/ crates/monocode-gpui/src/ \
+  --include="*.ts" --include="*.tsx" --include="*.rs" 2>/dev/null \
   | grep -v '\.test\.' \
   | grep -vE "^[^:]+: *(//|///|//!|\*)" \
   | grep -vE "^($allow_re):")
@@ -58,19 +54,13 @@ web_hits=$(grep -rnE "$PATTERN" web/ \
   | grep -vE "^($allow_re):")
 hits=$(printf '%s\n%s\n' "$hits" "$web_hits")
 
-# Test fixtures inside src-tauri/src/fs.rs (its `mod tests`). They feed the GitHub repo
-# parsers (parse_github_repositories, github_pr_head_filter, split_github_repo) sample
-# `owner/repo` slugs and assert the parsed result, so the upstream name is data, not
-# branding. Matched by exact line content rather than line number so they survive upstream
-# merges shifting the file, and so a real hit sitting nearby is not hidden.
-hits=$(printf '%s\n' "$hits" | grep -vE '^src-tauri/src/fs\.rs:[0-9]+: *("nameWithOwner": "hardbeat920/monocode",|vec!\["hardbeat920/monocode"\]|github_pr_head_filter\("hardbeat920/monocode", "main"\)\.as_deref\(\),|vec!\["EricRasputin/monocode-eric", "hardbeat920/monocode"\]|split_github_repo\(" hardbeat920/monocode "\)\.unwrap\(\),)$' || true)
-
 # Deliberate keeps inside the native crates (crates/monocode-core, crates/monocode-gpui),
-# matched by exact line content for the same reason as the fs.rs fixtures above.
+# matched by exact line content, not line number, so they survive upstream merges shifting
+# the file and a real hit sitting nearby is not hidden.
 #  - remote/protocol.rs doc line: names the MonoCode Host wire protocol, which is the
 #    protocol's own identity (`monocode-host`), not product copy.
 #  - skills.rs fixture: a sample SKILL.md description fed to the skill parser and asserted
-#    back, so "MonoCode ship" is data, as in src-tauri/src/skills.rs.
+#    back, so "MonoCode ship" is data.
 #  - provider/acp.rs handoff marker: the Hermes background handoff message keeps its
 #    "[MonoCode internal background handoff]" prefix exactly as the Tauri adapter
 #    (src/integrations/harness/providers/hermes/hermes.ts, also listed above) sends it, so

@@ -50,7 +50,7 @@ impl Status {
         let item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.);
         if let Some(button) = item.button(mtm) {
             let data = NSData::with_bytes(include_bytes!(
-                "../../../../src-tauri/macos/AppIcon.icon/Assets/icon.png"
+                "../../../../assets/native/macos/AppIcon.icon/Assets/icon.png"
             ));
             if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
                 image.setSize(NSSize::new(18., 18.));

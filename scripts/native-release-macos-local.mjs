@@ -108,11 +108,10 @@ export function parseArgs(argv) {
   return { version: releaseVersion(version), dryRun, recheck, since, notesFile, ciTimeoutMinutes };
 }
 
-// The updater public key is the one the Tauri app trusts, from tauri.conf.json.
-export function readUpdaterPubkey(confText) {
-  const key = JSON.parse(confText)?.plugins?.updater?.pubkey;
-  if (typeof key !== "string" || !key)
-    throw new Error("src-tauri/tauri.conf.json has no plugins.updater.pubkey");
+// The updater public key is the plain text in assets/native/updater.pub (one line).
+export function readUpdaterPubkey(text) {
+  const key = typeof text === "string" ? text.trim() : "";
+  if (!key || /\s/.test(key)) throw new Error("assets/native/updater.pub does not hold one updater public key");
   return key;
 }
 
@@ -664,7 +663,7 @@ export async function runRelease(argv, io) {
       "This builds the macOS arm64 app and must run on an Apple silicon Mac, not " + io.platform + "/" + io.arch + ".",
     );
   const tag = tagFor(version);
-  const pubkey = readUpdaterPubkey(io.readText("src-tauri/tauri.conf.json"));
+  const pubkey = readUpdaterPubkey(io.readText("assets/native/updater.pub"));
   const env = buildEnv(version, pubkey, io.env);
 
   io.log("Checking preconditions for " + tag + "...");

@@ -33,7 +33,7 @@ gets `NOPRUNE` and is left alone. Only paths inside a worktree of this repo, nev
 
 - `crates/monocode-gpui/target/debug`: the unused `dev` profile (the native workspace uses
   `native-dev`). Not touched in the main checkout or in a worktree named `release-main`, which seed
-  other worktrees' build caches. The root workspace's `target/debug` (src-tauri) is never removed.
+  other worktrees' build caches. The root workspace's `target/debug` (`crates/mobile-link`) is never removed.
 - Incremental data under any `<target>/<profile>/incremental/` (also in `release-main` and the main
   checkout): a `<crate>-<hash>` dir with nothing written for 14 days is removed whole; in the other
   dirs every `s-*` session older than 1 day except the newest is removed with its `.lock`.

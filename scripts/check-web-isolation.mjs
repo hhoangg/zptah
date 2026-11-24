@@ -13,7 +13,7 @@
 // Known limit (M4): a path assembled from pieces at run time (`path.join(root, name)` with `name`
 // computed) cannot be seen. Only `join|resolve(<base>, "a", "b", ...)` with a base of `__dirname`,
 // `import.meta.dirname` or `repoRoot` and string-literal pieces is resolved for real (legit paths
-// inside web/ pass). The isolated build in the CI workflow (src/ and src-tauri/ deleted) is the
+// inside web/ pass). The isolated build in the CI workflow (src/ deleted) is the
 // real backstop for everything else.
 //
 // Usage: node scripts/check-web-isolation.mjs [repoRoot]   (default: the repo this file is in)

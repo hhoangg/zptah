@@ -20,7 +20,7 @@ const LOG_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const NATIVE_TARGET = join("crates", "monocode-gpui", "target");
 const ROOT_TARGET = "target";
 // The only profile the native workspace uses is native-dev, so its plain `debug` dir is leftover.
-// Only removed from the native target: the root workspace (src-tauri) legitimately builds into debug.
+// Only removed from the native target: the root workspace (crates/mobile-link) legitimately builds into debug.
 const UNUSED_NATIVE_PROFILE = "debug";
 // Permanent worktrees, matched by directory name. They hold the build cache that new worktrees clone
 // and the release checkout, so this tool (1) never removes them, even when named explicitly, and

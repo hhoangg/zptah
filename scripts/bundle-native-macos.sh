@@ -62,9 +62,9 @@ mkdir -p "$native_bundle/Contents/MacOS" "$native_bundle/Contents/Resources"
 # Replace the inode atomically so macOS does not reuse an older signature cache.
 cp "$native_binary" "$native_bundle/Contents/MacOS/monocode-gpui.next"
 mv -f "$native_bundle/Contents/MacOS/monocode-gpui.next" "$native_bundle/Contents/MacOS/monocode-gpui"
-cp src-tauri/icons/icon.icns "$native_bundle/Contents/Resources/monocode.icns"
+cp assets/native/icons/icon.icns "$native_bundle/Contents/Resources/monocode.icns"
 # macOS 26 draws the Liquid Glass icon from Assets.car; the .icns covers older releases.
-cp src-tauri/macos/Assets.car "$native_bundle/Contents/Resources/Assets.car"
+cp assets/native/macos/Assets.car "$native_bundle/Contents/Resources/Assets.car"
 # Ship the app's attribution and the license texts for GPUI and embedded assets.
 # Add these before signing so the signature covers the notices too.
 native_licenses="$native_bundle/Contents/Resources/licenses"
@@ -125,7 +125,7 @@ elif [ "$native_identity" = - ]; then
   codesign --force --sign - "$native_bundle"
 else
   codesign --force --sign "$native_identity" --options runtime --timestamp \
-    --entitlements src-tauri/Entitlements.plist "$native_bundle"
+    --entitlements assets/native/Entitlements.plist "$native_bundle"
 fi
 if [ "$native_profile" != release ]; then
   codesign --verify --deep --strict "$native_bundle"

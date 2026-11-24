@@ -31,7 +31,7 @@ require a separately distributed companion update.
 The mobile build profiles now pin the Xcode 27.1 image; the iOS source build requires
 Xcode 27.1 and its SDK for hinge observation. Native transcript and hinge-observer
 changes require a new native companion build rather than only an EAS Update.
-See the [mobile source guide](../../mobile/README.md).
+See the mobile source guide (`mobile/README.md`, removed from this repo).
 
 ## Shared React/Tauri changes in the same range
 

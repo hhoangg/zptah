@@ -1,6 +1,11 @@
 # Plan: retire the archived Tauri app
 
-Status: plan only. Nothing is deleted, renamed or reconfigured by this document.
+Status: Option 1 steps 1 to 7 were carried out (assets moved to `assets/native/`, Tauri app,
+Expo app and Tauri workflows removed). Deviations: `src/` was not deleted whole: it was pruned to what `host/`,
+the `scripts/native-editor` and `scripts/native-settings` generators and the
+`crates/monocode-core` provider/kind.rs tests use, plus code kept alongside it. It is not the
+exact import closure; a follow-up should prune it to that closure and decouple `host/`;
+`@tauri-apps/cli` stays as the updater signer; the Tauri-only host bootstrap tests were deleted.
 
 ## Facts found (2026-11-21)
 

@@ -153,7 +153,7 @@ concurrency:
 env:
   RELEASE_TAG: ${{ inputs.tag }}
   # The update feed the app polls, and the key it verifies the feed with.
-  # The key is the public updater key from src-tauri/tauri.conf.json.
+  # The key is the public updater key in assets/native/updater.pub (a test keeps them equal).
   NATIVE_FEED_URL: https://github.com/hhoangg/monoptah/releases/download/native-latest/latest.json
   NATIVE_UPDATER_PUBKEY: dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdDMjg4MkQ0N0E3MDA1QUYKUldTdkJYQjYxSUlvZks0RGFSU2dkQU91NnBZQitHMC9yVFNwb2swamVLbnpHU2kvVS9yNWRBZkIK
 
