@@ -5,7 +5,7 @@
 //! The gate adds what only it knows: the user's messages of the task, the task domains and the
 //! page it is on ([`TaskContext`]).
 
-use super::lexicon::{lexicon, ControlInput, ControlKind, LinkContext};
+use super::lexicon::{lexicon, Classification, ControlInput, ControlKind, LinkContext};
 use super::normalize::normalize;
 use super::Category;
 use regex::Regex;
@@ -85,6 +85,10 @@ pub struct ElementSignals {
     pub dialog_text: Option<String>,
     /// The dialog has a primary button besides this element (the extension computes it).
     pub dialog_has_primary: bool,
+    /// Names of the dialog's other primary buttons.
+    pub dialog_primary_names: Vec<String>,
+    /// Ids and classes of the dialog (consent-manager detection).
+    pub dialog_markers: Option<String>,
     /// Inside `nav`, `footer` or `role=menu` (the extension computes it).
     pub in_landmark_menu: bool,
     pub nearby_text: String,
@@ -412,16 +416,18 @@ pub fn recipient_named(recipient: &str, user_messages: &[String]) -> bool {
 // ---------------------------------------------------------------------------------------------
 
 fn is_write_click(el: &ElementSignals) -> bool {
-    el.href.is_none() || el.is_submit
+    !is_real_link(el)
 }
 
-fn control_input(el: &ElementSignals, task: &TaskContext) -> ControlInput {
-    let name = if el.name.trim().is_empty() {
-        &el.text
-    } else {
-        &el.name
-    };
-    let kind = if el.href.is_some() && !el.is_submit {
+/// A real link: it has a non-empty `href` and is not exposed as a button.
+fn is_real_link(el: &ElementSignals) -> bool {
+    el.href.as_deref().is_some_and(|h| !h.trim().is_empty())
+        && !el.is_submit
+        && !el.role.eq_ignore_ascii_case("button")
+}
+
+fn control_input(el: &ElementSignals, name: &str, task: &TaskContext) -> ControlInput {
+    let kind = if is_real_link(el) {
         ControlKind::Link
     } else if el.is_submit {
         ControlKind::Submit
@@ -429,12 +435,15 @@ fn control_input(el: &ElementSignals, task: &TaskContext) -> ControlInput {
         ControlKind::Button
     };
     ControlInput {
-        name: name.clone(),
+        name: name.to_owned(),
         kind,
         page_vi: task.page_vi,
         in_dialog: el.in_dialog,
         dialog_text: el.dialog_text.clone().unwrap_or_default(),
         dialog_has_primary: el.dialog_has_primary,
+        dialog_primary_names: el.dialog_primary_names.clone(),
+        dialog_markers: el.dialog_markers.clone().unwrap_or_default(),
+        role: el.role.clone(),
         nearby_text: el.nearby_text.clone(),
         page_heading: task.page_heading.clone(),
         page_title: task.page_title.clone(),
@@ -444,6 +453,31 @@ fn control_input(el: &ElementSignals, task: &TaskContext) -> ControlInput {
             in_nav_footer_menu: el.in_landmark_menu,
         }),
     }
+}
+
+/// Classifies the accessible name and the visible text separately (an `aria-label` can say
+/// something harmless over a button that shows "Pay now") and unions the results.
+fn classify_element(el: &ElementSignals, task: &TaskContext) -> (ControlInput, Classification) {
+    let lex = lexicon();
+    let first = if el.name.trim().is_empty() {
+        &el.text
+    } else {
+        &el.name
+    };
+    let input = control_input(el, first, task);
+    let mut class = lex.classify_control(&input);
+    let text = el.text.trim();
+    if !el.name.trim().is_empty() && !text.is_empty() && text != el.name.trim() {
+        let second = lex.classify_control(&control_input(el, text, task));
+        class.categories.extend(second.categories);
+        class.send |= second.send;
+        class.post |= second.post;
+        class.consent &= second.consent;
+        class.dismiss &= second.dismiss;
+        class.not_risky &= second.not_risky;
+        class.informational &= second.informational;
+    }
+    (input, class)
 }
 
 fn send_is_unnamed(form: &FormSignals, task: &TaskContext) -> bool {
@@ -492,8 +526,7 @@ pub fn gate_categories(
             cats.insert(Category::Upload);
         }
         ActionKind::Click | ActionKind::Select => {
-            let input = control_input(el, task);
-            let class = lex.classify_control(&input);
+            let (input, class) = classify_element(el, task);
             cats.extend(class.categories.iter().copied());
             let submit_like = el.is_submit || input.kind == ControlKind::Button;
             let has_money_field = form.fields.iter().any(|f| {

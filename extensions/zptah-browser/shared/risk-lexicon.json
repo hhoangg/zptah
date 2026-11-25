@@ -56,6 +56,26 @@
   "who can view",
   "who can edit"
  ],
+ "signup_prefixes": [
+  "Đăng ký",
+  "Sign up",
+  "Register"
+ ],
+ "period_words": [
+  "tháng",
+  "năm",
+  "tuần",
+  "month",
+  "monthly",
+  "year",
+  "yearly",
+  "annual",
+  "annually",
+  "week",
+  "weekly",
+  "mo",
+  "yr"
+ ],
  "entries": [
   {
    "phrase": "Thanh toán",
@@ -2038,6 +2058,107 @@
    "phrase": "แชร์",
    "class": "sharing",
    "lang": "th"
+  },
+  {
+   "phrase": "book now",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "withdraw",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "submit payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "complete payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "make payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "confirm purchase",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "submit order",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "reserve",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "confirm and pay",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "Đặt ngay",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hoàn tất thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hoàn tất đặt hàng",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xác nhận mua hàng",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Thực hiện thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Giữ chỗ",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Trở về trang chủ",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tìm hiểu ngay",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "ok",
+   "class": "context",
+   "lang": "en"
+  },
+  {
+   "phrase": "okay",
+   "class": "context",
+   "lang": "en"
+  },
+  {
+   "phrase": "register",
+   "class": "not_risky",
+   "lang": "en",
+   "prefix": true
   }
  ]
 }

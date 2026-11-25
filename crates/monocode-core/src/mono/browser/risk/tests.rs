@@ -619,6 +619,7 @@ fn writes_on_sensitive_or_read_only_sites() {
     let mut link = button("Tin tức");
     link.href = Some("/news".into());
     link.tag = "a".into();
+    link.role = "link".into();
     assert!(!cats(ActionKind::Click, &link, &f, &bank).contains(&Category::SensitiveSite));
     let mut linked = task("https://other.example/page");
     linked.read_only_domains = ["other.example".to_owned()].into();
@@ -757,4 +758,81 @@ fn categories_serialize_in_snake_case() {
             format!("\"{}\"", c.as_str())
         );
     }
+}
+
+// ---- review fixes ---------------------------------------------------------------------------
+
+#[test]
+fn aria_name_and_visible_text_are_both_classified() {
+    // I1: an aria-label that sounds harmless over a button that says "Pay now".
+    let t = task("https://example.com/");
+    let mut el = button("Continue");
+    el.text = "Pay now".into();
+    assert!(cats(ActionKind::Click, &el, &FormSignals::default(), &t).contains(&Category::Payment));
+    let mut el = button("Delete account");
+    el.text = "OK".into();
+    assert!(
+        cats(ActionKind::Click, &el, &FormSignals::default(), &t).contains(&Category::Destructive)
+    );
+    // The same text twice is not double counted, and harmless on both sides stays harmless.
+    let mut el = button("Add to cart");
+    el.text = "Add to cart".into();
+    assert!(cats(ActionKind::Click, &el, &FormSignals::default(), &t).is_empty());
+}
+
+#[test]
+fn a_link_exposed_as_a_button_or_without_href_is_not_exempt() {
+    // I4 at the element level.
+    let t = task("https://shop.example.vn/");
+    let mut el = button("Thanh toán");
+    el.tag = "a".into();
+    el.href = Some("/info".into());
+    el.in_landmark_menu = true;
+    // A real nav link is exempt.
+    el.role = "link".into();
+    assert!(cats(ActionKind::Click, &el, &FormSignals::default(), &t).is_empty());
+    el.role = "button".into();
+    assert!(cats(ActionKind::Click, &el, &FormSignals::default(), &t).contains(&Category::Payment));
+    el.role = "link".into();
+    el.href = Some("#".into());
+    assert!(cats(ActionKind::Click, &el, &FormSignals::default(), &t).contains(&Category::Payment));
+}
+
+#[test]
+fn consent_in_a_dialog_needs_a_confirmed_banner() {
+    // I3 at the element level.
+    let t = task("https://example.com/");
+    let mut el = button("Accept all");
+    el.in_dialog = true;
+    el.dialog_text = Some("Delete your account? This cannot be undone.".into());
+    assert!(
+        cats(ActionKind::Click, &el, &FormSignals::default(), &t).contains(&Category::Destructive)
+    );
+    el.dialog_text = Some("We use cookies".into());
+    assert!(cats(ActionKind::Click, &el, &FormSignals::default(), &t).is_empty());
+}
+
+#[test]
+fn new_payment_labels_are_payment() {
+    for name in [
+        "Book now",
+        "Withdraw",
+        "Submit payment",
+        "Complete payment",
+        "Make payment",
+        "Confirm purchase",
+        "Submit order",
+        "Reserve",
+        "Confirm and pay",
+        "Đặt ngay",
+        "Hoàn tất thanh toán",
+        "Giữ chỗ",
+    ] {
+        assert!(
+            classify(name).categories.contains(&Category::Payment),
+            "{name}"
+        );
+    }
+    assert!(classify("Trở về trang chủ").not_risky);
+    assert!(classify("Tìm hiểu ngay").not_risky);
 }

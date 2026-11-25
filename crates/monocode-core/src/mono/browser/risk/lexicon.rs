@@ -3,8 +3,8 @@
 //! The data is `extensions/zptah-browser/shared/risk-lexicon.json`, embedded with `include_str!`
 //! so the extension and the gate match the same words. Matching rules, in the order they apply:
 //!
-//! 1. Text and phrases are normalized by [`normalize`](super::normalize). A text with Vietnamese
-//!    diacritics is compared with diacritics; a text without any is compared stripped.
+//! 1. Text and phrases are normalized by [`normalize`](super::normalize). A segment with
+//!    Vietnamese diacritics is compared with diacritics; one without any is compared stripped.
 //! 2. A phrase matches as a whole-word sequence inside one punctuation segment.
 //! 3. A single-word phrase (`pay`, `xoa`, `gui`) matches only as the whole name or as the first
 //!    word of a short name (6 words, `Mua`, `Gửi` and `Đăng` 3 words).
@@ -14,6 +14,16 @@
 //!    sign-in and sign-up entries also win when they start the name).
 //! 6. Buttons are matched in the first words of each segment; links and landmark text that are
 //!    long or start with `Chính sách`, `Hướng dẫn`, ... are informational; some links are exempt.
+//!
+//! Residual risks (known, accepted):
+//!
+//! * Chinese, Japanese, Korean and Thai have no spaces, so their entries match only a whole
+//!   name, not a phrase inside a longer name.
+//! * An ambiguous stripped word (`go`, `moi`, `dang`, `dong`, `co`) in an unaccented name on a
+//!   Vietnamese page counts as the Vietnamese word, so an English "Go" there is read as `Gỡ`.
+//! * Matching is by words; a button whose meaning comes only from an icon or from script
+//!   behavior is judged by its accessible name and visible text, so a misleading name can hide
+//!   the action. The decision keeps the declared, extension, soul and taint sources for that.
 
 use super::normalize::{normalize, Norm, Word};
 use super::signals::{sites, FieldKind};
@@ -84,6 +94,8 @@ struct RawLexicon {
     short_word_max_words: usize,
     button_window_words: usize,
     informational_max_words: usize,
+    signup_prefixes: Vec<String>,
+    period_words: Vec<String>,
     ambiguous_stripped: Vec<String>,
     informational_prefixes: Vec<String>,
     consent_container_words: Vec<String>,
@@ -131,6 +143,29 @@ struct Hit {
     start: usize,
     len: usize,
     entry: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Informational {
+    Long,
+    Prefix,
+}
+
+/// Whether a normalized text starts with the words of a phrase (compared stripped when the
+/// first segment has no diacritics).
+fn starts_with_phrase(norm: &Norm, phrase: &Norm) -> bool {
+    let (Some(first), Some(pw)) = (norm.segments.first(), phrase.segments.first()) else {
+        return false;
+    };
+    let plain = first.iter().all(|w| w.acc == w.plain);
+    first.len() >= pw.len()
+        && pw.iter().zip(first).all(|(a, b)| {
+            if plain {
+                a.plain == b.plain
+            } else {
+                a.acc == b.acc
+            }
+        })
 }
 
 /// What a control name means to the gate before signals are added.
@@ -192,6 +227,12 @@ pub struct ControlInput {
     pub dialog_text: String,
     /// The dialog has a primary (confirm) button besides the control.
     pub dialog_has_primary: bool,
+    /// Names of the dialog's other primary buttons (empty when unknown).
+    pub dialog_primary_names: Vec<String>,
+    /// Ids and classes of the dialog, for consent-manager detection.
+    pub dialog_markers: String,
+    /// ARIA role of the control (`button` on an `<a>` makes it a button).
+    pub role: String,
     pub nearby_text: String,
     pub page_heading: String,
     pub page_title: String,
@@ -203,6 +244,8 @@ pub struct Lexicon {
     entries: Vec<Entry>,
     window: usize,
     info_max: usize,
+    signup_prefixes: Vec<Norm>,
+    period_words: Vec<Norm>,
     ambiguous: HashSet<String>,
     info_prefixes: Vec<Norm>,
     consent_words: Vec<Norm>,
@@ -259,6 +302,8 @@ impl Lexicon {
             entries,
             window: raw.button_window_words,
             info_max: raw.informational_max_words,
+            signup_prefixes: norms(&raw.signup_prefixes),
+            period_words: norms(&raw.period_words),
             ambiguous: raw.ambiguous_stripped.into_iter().collect(),
             info_prefixes: norms(&raw.informational_prefixes),
             consent_words: norms(&raw.consent_container_words),
@@ -291,10 +336,12 @@ impl Lexicon {
     }
 
     fn find(&self, norm: &Norm, page_vi: bool, mode: Mode) -> Vec<Hit> {
-        let plain = !norm.has_diacritics;
         let total = norm.word_count();
         let mut hits = Vec::new();
         for (si, seg) in norm.segments.iter().enumerate() {
+            // A segment without Vietnamese diacritics is compared stripped, even when another
+            // segment of the same name has them.
+            let plain = seg.iter().all(|w| w.acc == w.plain);
             for start in 0..seg.len() {
                 for (ei, e) in self.entries.iter().enumerate() {
                     if (mode == Mode::Field) != e.class.is_field() {
@@ -385,11 +432,36 @@ impl Lexicon {
         if norm.is_empty() {
             return (out, false, false);
         }
-        if matches!(kind, ControlKind::Link | ControlKind::Text) && self.is_informational(norm) {
-            out.informational = true;
-            return (out, false, false);
-        }
         let mut hits = self.find(norm, page_vi, Mode::Name);
+        if matches!(kind, ControlKind::Link | ControlKind::Text) {
+            if let Some(reason) = self.informational_reason(norm) {
+                // A long or policy-like link only feeds nearby text, but a multi-word destructive
+                // or account-security phrase near its start still counts, and so does a payment
+                // phrase in a long name ("Help: delete account" must not hide). A payment phrase
+                // after a policy prefix ("Chính sách thanh toán") stays informational (F8).
+                let kept: Vec<Hit> = self
+                    .longest(hits)
+                    .into_iter()
+                    .filter(|h| {
+                        let e = &self.entries[h.entry];
+                        h.start < self.window
+                            && e.words.len() >= 2
+                            && match e.class {
+                                Class::Category(
+                                    Category::Destructive | Category::AccountSecurity,
+                                ) => true,
+                                Class::Category(Category::Payment) => reason == Informational::Long,
+                                _ => false,
+                            }
+                    })
+                    .collect();
+                if kept.is_empty() {
+                    out.informational = true;
+                    return (out, false, false);
+                }
+                hits = kept;
+            }
+        }
         if matches!(kind, ControlKind::Button | ControlKind::Submit) {
             hits.retain(|h| h.start < self.window);
         }
@@ -415,27 +487,14 @@ impl Lexicon {
         (out, context, ctx_dismiss)
     }
 
-    fn is_informational(&self, norm: &Norm) -> bool {
+    fn informational_reason(&self, norm: &Norm) -> Option<Informational> {
         if norm.word_count() > self.info_max {
-            return true;
+            return Some(Informational::Long);
         }
-        let plain = !norm.has_diacritics;
-        let Some(first) = norm.segments.first() else {
-            return false;
-        };
-        self.info_prefixes.iter().any(|p| {
-            let Some(pw) = p.segments.first() else {
-                return false;
-            };
-            first.len() >= pw.len()
-                && pw.iter().zip(first).all(|(a, b)| {
-                    if plain {
-                        a.plain == b.plain
-                    } else {
-                        a.acc == b.acc
-                    }
-                })
-        })
+        self.info_prefixes
+            .iter()
+            .any(|p| starts_with_phrase(norm, p))
+            .then_some(Informational::Prefix)
     }
 
     /// The categories a text implies (page heading, nearby text, dialog text).
@@ -483,6 +542,12 @@ impl Lexicon {
                 // category of the page.
                 out.dismiss = false;
                 out.categories.extend(self.context_categories(input));
+            } else if ctx_dismiss && self.dialog_cancel_is_the_risky_one(input) {
+                // The dialog asks a destructive question and no other primary button carries it,
+                // so this Cancel is the control that does the destructive thing.
+                out.dismiss = false;
+                out.categories.insert(Category::Destructive);
+                return out;
             } else {
                 // Dismissing is never risky, whatever the dialog says.
                 out.categories.clear();
@@ -492,9 +557,25 @@ impl Lexicon {
         if context {
             out.categories.extend(self.context_categories(input));
         }
-        if input.in_dialog && !out.consent {
-            out.categories
-                .extend(self.text_categories(&input.dialog_text, input.page_vi, true));
+        if out.not_risky && self.signup_with_price(input, &norm) {
+            // A sign-up with a price or a billing period creates a paid subscription (7b).
+            out.not_risky = false;
+            out.categories.insert(Category::Payment);
+        }
+        if input.in_dialog {
+            // A consent-looking name skips the dialog text only inside a confirmed cookie banner.
+            let in_banner = out.consent
+                && self.looks_like_consent_container(&input.dialog_text, &input.dialog_markers);
+            if in_banner {
+                // keep the consent flag
+            } else {
+                out.consent = false;
+                out.categories.extend(self.text_categories(
+                    &input.dialog_text,
+                    input.page_vi,
+                    true,
+                ));
+            }
         }
         if input.kind == ControlKind::Link && self.link_exempt(input, &out) {
             out.categories.clear();
@@ -504,12 +585,49 @@ impl Lexicon {
         out
     }
 
+    /// M2: Cancel in a destructive dialog whose other primary buttons do not carry the
+    /// destructive meaning (their names are known and none is destructive).
+    fn dialog_cancel_is_the_risky_one(&self, input: &ControlInput) -> bool {
+        if input.dialog_primary_names.is_empty()
+            || !self
+                .text_categories(&input.dialog_text, input.page_vi, true)
+                .contains(&Category::Destructive)
+        {
+            return false;
+        }
+        // A primary button carries the meaning when its own name is destructive or is a bare
+        // confirm word (Yes, OK, Confirm) that takes the dialog's meaning.
+        !input.dialog_primary_names.iter().any(|name| {
+            let (class, context, _) =
+                self.classify_norm(&normalize(name), ControlKind::Button, input.page_vi);
+            context || class.categories.contains(&Category::Destructive)
+        })
+    }
+
+    /// I5: a sign-up phrase next to an amount or a billing period.
+    fn signup_with_price(&self, input: &ControlInput, name: &Norm) -> bool {
+        if !self
+            .signup_prefixes
+            .iter()
+            .any(|p| starts_with_phrase(name, p))
+        {
+            return false;
+        }
+        let text = format!("{} {}", input.name, input.nearby_text);
+        !super::signals::extract_amounts(&text).is_empty()
+            || contains_any(&normalize(&text), &self.period_words)
+    }
+
     /// The footer and menu link exemption of F8 (spec 7.3).
     fn link_exempt(&self, input: &ControlInput, class: &Classification) -> bool {
         let Some(link) = &input.link else {
             return false;
         };
+        let href = link.href.trim();
         if !link.in_nav_footer_menu
+            || href.is_empty()
+            || href.starts_with('#')
+            || input.role.eq_ignore_ascii_case("button")
             || input.in_dialog
             || class.categories.contains(&Category::Destructive)
             || class.categories.contains(&Category::AccountSecurity)
@@ -595,8 +713,8 @@ fn contains_any(hay: &Norm, needles: &[Norm]) -> bool {
         hay.segments.iter().any(|seg| {
             seg.windows(nw.len()).any(|win| {
                 let acc = win.iter().zip(nw).all(|(a, b)| a.acc == b.acc);
-                let plain =
-                    !hay.has_diacritics && win.iter().zip(nw).all(|(a, b)| a.plain == b.plain);
+                let plain = seg.iter().all(|w| w.acc == w.plain)
+                    && win.iter().zip(nw).all(|(a, b)| a.plain == b.plain);
                 acc || plain
             })
         })
