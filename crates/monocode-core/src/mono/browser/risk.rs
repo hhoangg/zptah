@@ -1,0 +1,62 @@
+//! The risk lexicon, site data and classifier of the Browser gate (spec 7.2 to 7.4 and 7.6,
+//! Appendix A).
+//!
+//! The words and sites are JSON files in `extensions/zptah-browser/shared/`, embedded with
+//! `include_str!`, so the extension and the gate share one source of truth:
+//!
+//! * [`normalize`]: diacritic-aware text normalization.
+//! * [`lexicon`]: the phrase lexicon and the control-name classifier.
+//! * [`signals`]: the element and form signals of 7.2, field kinds, site data, and the table that
+//!   turns signals into categories.
+//! * [`decide`]: the decision function of 7.6.
+
+pub mod decide;
+pub mod lexicon;
+pub mod normalize;
+pub mod signals;
+
+use serde::{Deserialize, Serialize};
+
+/// A risk category (spec 7.3). Each maps to a prompt sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Category {
+    Payment,
+    Destructive,
+    AccountSecurity,
+    Sharing,
+    SendUnnamed,
+    PostPublic,
+    Upload,
+    CredentialEntry,
+    Terms,
+    UnrelatedDomain,
+    SensitiveSite,
+    SoulRule,
+    Tainted,
+    Injection,
+}
+
+impl Category {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Category::Payment => "payment",
+            Category::Destructive => "destructive",
+            Category::AccountSecurity => "account_security",
+            Category::Sharing => "sharing",
+            Category::SendUnnamed => "send_unnamed",
+            Category::PostPublic => "post_public",
+            Category::Upload => "upload",
+            Category::CredentialEntry => "credential_entry",
+            Category::Terms => "terms",
+            Category::UnrelatedDomain => "unrelated_domain",
+            Category::SensitiveSite => "sensitive_site",
+            Category::SoulRule => "soul_rule",
+            Category::Tainted => "tainted",
+            Category::Injection => "injection",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

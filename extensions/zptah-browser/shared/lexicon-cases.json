@@ -1,0 +1,7636 @@
+{
+ "version": 1,
+ "comment": "Name classifier cases shared by the Rust tests and the extension tests. Generated from the lexicon plus the F8 and decision 7a/7b cases.",
+ "cases": [
+  {
+   "name": "Thanh toán",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "THANH TOÁN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Thanh toan",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Thanh toán ngay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "THANH TOÁN NGAY",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Thanh toan ngay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Tiến hành thanh toán",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TIẾN HÀNH THANH TOÁN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Tien hanh thanh toan",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xác nhận thanh toán",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÁC NHẬN THANH TOÁN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xac nhan thanh toan",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Thanh toán hóa đơn",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "THANH TOÁN HÓA ĐƠN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Thanh toan hoa don",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đặt hàng",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐẶT HÀNG",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dat hang",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xác nhận đặt hàng",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÁC NHẬN ĐẶT HÀNG",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xac nhan dat hang",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Mua ngay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "MUA NGAY",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Mua hàng",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "MUA HÀNG",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Mua hang",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chọn mua",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHỌN MUA",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chon mua",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đặt mua",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐẶT MUA",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dat mua",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Mua lại",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "MUA LẠI",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Mua lai",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Trả góp",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TRẢ GÓP",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Tra gop",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Mua",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "MUA",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Trả tiền",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TRẢ TIỀN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Tra tien",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Nâng cấp gói",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "NÂNG CẤP GÓI",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Nang cap goi",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chuyển tiền",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHUYỂN TIỀN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chuyen tien",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chuyển khoản",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHUYỂN KHOẢN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chuyen khoan",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xác nhận chuyển tiền",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÁC NHẬN CHUYỂN TIỀN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xac nhan chuyen tien",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xác nhận giao dịch",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÁC NHẬN GIAO DỊCH",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xac nhan giao dich",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Nạp tiền",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "NẠP TIỀN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Nap tien",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Rút tiền",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "RÚT TIỀN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Rut tien",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đăng ký gói",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐĂNG KÝ GÓI",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dang ky goi",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Nâng cấp",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "NÂNG CẤP",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Nang cap",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Gia hạn",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "GIA HẠN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Gia han",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Ủng hộ",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ỦNG HỘ",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Ung ho",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Quyên góp",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "QUYÊN GÓP",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Quyen gop",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đóng tiền",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐÓNG TIỀN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dong tien",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Nạp thẻ",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "NẠP THẺ",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Nap the",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Nạp data",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "NẠP DATA",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Nap data",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Nạp điện thoại",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "NẠP ĐIỆN THOẠI",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Nap dien thoai",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đặt vé",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐẶT VÉ",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dat ve",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đặt phòng",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐẶT PHÒNG",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dat phong",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đặt chỗ",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐẶT CHỖ",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dat cho",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Vay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "VAY",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Vay nhanh",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "VAY NHANH",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Vay vốn",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "VAY VỐN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Vay von",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đăng ký vay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐĂNG KÝ VAY",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dang ky vay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Ví trả sau",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "VÍ TRẢ SAU",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Vi tra sau",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Mua trước trả sau",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "MUA TRƯỚC TRẢ SAU",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Mua truoc tra sau",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xóa",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÓA",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xoa",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xóa vĩnh viễn",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÓA VĨNH VIỄN",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xoa vinh vien",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chuyển vào thùng rác",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHUYỂN VÀO THÙNG RÁC",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chuyen vao thung rac",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Dọn sạch thùng rác",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "DỌN SẠCH THÙNG RÁC",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Don sach thung rac",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xóa tin nhắn",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÓA TIN NHẮN",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xoa tin nhan",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Thu hồi",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "THU HỒI",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Thu hoi",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xóa cuộc trò chuyện",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÓA CUỘC TRÒ CHUYỆN",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xoa cuoc tro chuyen",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Rời nhóm",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "RỜI NHÓM",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Roi nhom",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Giải tán nhóm",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "GIẢI TÁN NHÓM",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Giai tan nhom",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xóa bạn",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÓA BẠN",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xoa ban",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Hủy kết bạn",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "HỦY KẾT BẠN",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Huy ket ban",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chặn",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHẶN",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chan",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Hủy đơn hàng",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "HỦY ĐƠN HÀNG",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Huy don hang",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Hủy đơn",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "HỦY ĐƠN",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Huy don",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Hủy đăng ký",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "HỦY ĐĂNG KÝ",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Huy dang ky",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Hủy gói",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "HỦY GÓI",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Huy goi",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Tắt tự động gia hạn",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TẮT TỰ ĐỘNG GIA HẠN",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Tat tu dong gia han",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Hủy đặt chỗ",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "HỦY ĐẶT CHỖ",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Huy dat cho",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Hủy vé",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "HỦY VÉ",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Huy ve",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Gỡ",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "GỠ",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Go",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "ambiguous stripped word off a Vietnamese page"
+  },
+  {
+   "name": "Go",
+   "page_vi": true,
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "ambiguous stripped word on a Vietnamese page"
+  },
+  {
+   "name": "Gỡ bỏ",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "GỠ BỎ",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Go bo",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Bỏ theo dõi",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BỎ THEO DÕI",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Bo theo doi",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Ngừng theo dõi",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "NGỪNG THEO DÕI",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Ngung theo doi",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xóa bài viết",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÓA BÀI VIẾT",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xoa bai viet",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xóa tài khoản",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÓA TÀI KHOẢN",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xoa tai khoan",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đóng tài khoản",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐÓNG TÀI KHOẢN",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dong tai khoan",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Hủy liên kết",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "HỦY LIÊN KẾT",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Huy lien ket",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Vô hiệu hóa",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "VÔ HIỆU HÓA",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Vo hieu hoa",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Dọn thùng rác",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "DỌN THÙNG RÁC",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Don thung rac",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đổi mật khẩu",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐỔI MẬT KHẨU",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Doi mat khau",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Thay đổi mật khẩu",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "THAY ĐỔI MẬT KHẨU",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Thay doi mat khau",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đặt lại mật khẩu",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐẶT LẠI MẬT KHẨU",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dat lai mat khau",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xác minh 2 bước",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÁC MINH 2 BƯỚC",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xac minh 2 buoc",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Tắt xác minh 2 bước",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TẮT XÁC MINH 2 BƯỚC",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Tat xac minh 2 buoc",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xác thực hai yếu tố",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÁC THỰC HAI YẾU TỐ",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xac thuc hai yeu to",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Smart OTP",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SMART OTP",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Kích hoạt Smart OTP",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "KÍCH HOẠT SMART OTP",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Kich hoat Smart OTP",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xác thực sinh trắc học",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÁC THỰC SINH TRẮC HỌC",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xac thuc sinh trac hoc",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Khóa truy cập",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "KHÓA TRUY CẬP",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Khoa truy cap",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Mã dự phòng",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "MÃ DỰ PHÒNG",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Ma du phong",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Email khôi phục",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "EMAIL KHÔI PHỤC",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Email khoi phuc",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Số điện thoại khôi phục",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SỐ ĐIỆN THOẠI KHÔI PHỤC",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "So dien thoai khoi phuc",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đổi email",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐỔI EMAIL",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Doi email",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đổi số điện thoại",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐỔI SỐ ĐIỆN THOẠI",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Doi so dien thoai",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đăng xuất khỏi tất cả thiết bị",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐĂNG XUẤT KHỎI TẤT CẢ THIẾT BỊ",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dang xuat khoi tat ca thiet bi",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Khóa thẻ",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "KHÓA THẺ",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Khoa the",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Mở khóa thẻ",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "MỞ KHÓA THẺ",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Mo khoa the",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đổi mã PIN",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐỔI MÃ PIN",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Doi ma PIN",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Thay đổi hạn mức",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "THAY ĐỔI HẠN MỨC",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Thay doi han muc",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Liên kết ngân hàng",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "LIÊN KẾT NGÂN HÀNG",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Lien ket ngan hang",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Ứng dụng xác thực",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ỨNG DỤNG XÁC THỰC",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Ung dung xac thuc",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Khóa bảo mật",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "KHÓA BẢO MẬT",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Khoa bao mat",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chia sẻ",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHIA SẺ",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chia se",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chia sẻ ngay",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHIA SẺ NGAY",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chia se ngay",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Mời",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "MỜI",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Moi",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "ambiguous stripped word off a Vietnamese page"
+  },
+  {
+   "name": "Moi",
+   "page_vi": true,
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "ambiguous stripped word on a Vietnamese page"
+  },
+  {
+   "name": "Thêm thành viên",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "THÊM THÀNH VIÊN",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Them thanh vien",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Bất kỳ ai có đường liên kết",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BẤT KỲ AI CÓ ĐƯỜNG LIÊN KẾT",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Bat ky ai co duong lien ket",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Công khai",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CÔNG KHAI",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Cong khai",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Mọi người",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "MỌI NGƯỜI",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Moi nguoi",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Người chỉnh sửa",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "NGƯỜI CHỈNH SỬA",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Nguoi chinh sua",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Cấp quyền",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CẤP QUYỀN",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Cap quyen",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chuyển quyền sở hữu",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHUYỂN QUYỀN SỞ HỮU",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chuyen quyen so huu",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chế độ hiển thị",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHẾ ĐỘ HIỂN THỊ",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Che do hien thi",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Quyền riêng tư",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "QUYỀN RIÊNG TƯ",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Quyen rieng tu",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đổi quyền",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐỔI QUYỀN",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Doi quyen",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Gửi",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "GỬI",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Gui",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Gửi ngay",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "GỬI NGAY",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Gui ngay",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Trả lời tất cả",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TRẢ LỜI TẤT CẢ",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Tra loi tat ca",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chuyển tiếp",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHUYỂN TIẾP",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chuyen tiep",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đăng",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐĂNG",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dang",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "ambiguous stripped word off a Vietnamese page"
+  },
+  {
+   "name": "Dang",
+   "page_vi": true,
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "ambiguous stripped word on a Vietnamese page"
+  },
+  {
+   "name": "Đăng bài",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐĂNG BÀI",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dang bai",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đăng tin",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐĂNG TIN",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dang tin",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đăng ngay",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐĂNG NGAY",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dang ngay",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Bình luận",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BÌNH LUẬN",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Binh luan",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Phản hồi",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PHẢN HỒI",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Phan hoi",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Gửi đánh giá",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "GỬI ĐÁNH GIÁ",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Gui danh gia",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đánh giá",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐÁNH GIÁ",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Danh gia",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Phát trực tiếp",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PHÁT TRỰC TIẾP",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Phat truc tiep",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Phát hành",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PHÁT HÀNH",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Phat hanh",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Tôi đồng ý",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TÔI ĐỒNG Ý",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Toi dong y",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đồng ý và tiếp tục",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐỒNG Ý VÀ TIẾP TỤC",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dong y va tiep tuc",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Tôi đã đọc và đồng ý",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TÔI ĐÃ ĐỌC VÀ ĐỒNG Ý",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Toi da doc va dong y",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chấp nhận điều khoản",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHẤP NHẬN ĐIỀU KHOẢN",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chap nhan dieu khoan",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đồng ý với điều khoản",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐỒNG Ý VỚI ĐIỀU KHOẢN",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dong y voi dieu khoan",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Ký hợp đồng",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "KÝ HỢP ĐỒNG",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Ky hop dong",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chấp nhận và tiếp tục",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHẤP NHẬN VÀ TIẾP TỤC",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chap nhan va tiep tuc",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xác nhận và ký",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XÁC NHẬN VÀ KÝ",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xac nhan va ky",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chấp nhận tất cả",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHẤP NHẬN TẤT CẢ",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chap nhan tat ca",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đồng ý tất cả",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐỒNG Ý TẤT CẢ",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dong y tat ca",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Chấp nhận cookie",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHẤP NHẬN COOKIE",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Chap nhan cookie",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Cho phép tất cả cookie",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHO PHÉP TẤT CẢ COOKIE",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Cho phep tat ca cookie",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Hủy bỏ",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "HỦY BỎ",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Huy bo",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đóng",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐÓNG",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dong",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "ambiguous stripped word off a Vietnamese page"
+  },
+  {
+   "name": "Dong",
+   "page_vi": true,
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "ambiguous stripped word on a Vietnamese page"
+  },
+  {
+   "name": "Để sau",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐỂ SAU",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "De sau",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Bỏ qua",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BỎ QUA",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Bo qua",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Không",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "KHÔNG",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Khong",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Quay lại",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "QUAY LẠI",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Quay lai",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Thêm vào giỏ hàng",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "THÊM VÀO GIỎ HÀNG",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Them vao gio hang",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xem giỏ hàng",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XEM GIỎ HÀNG",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xem gio hang",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Tiếp tục mua sắm",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TIẾP TỤC MUA SẮM",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Tiep tuc mua sam",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Phương thức thanh toán",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PHƯƠNG THỨC THANH TOÁN",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Phuong thuc thanh toan",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Lịch sử giao dịch",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "LỊCH SỬ GIAO DỊCH",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Lich su giao dich",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đăng nhập",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐĂNG NHẬP",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dang nhap",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đăng ký",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐĂNG KÝ",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dang ky",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Đăng xuất",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐĂNG XUẤT",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dang xuat",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Mua sắm",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "MUA SẮM",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Mua sam",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xem thêm",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XEM THÊM",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xem them",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xem chi tiết",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XEM CHI TIẾT",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xem chi tiet",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xem tất cả",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XEM TẤT CẢ",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Xem tat ca",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Xem ngay",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "XEM NGAY",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Tìm hiểu thêm",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TÌM HIỂU THÊM",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Tim hieu them",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Tải ngay",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TẢI NGAY",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Tai ngay",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Tải ứng dụng",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TẢI ỨNG DỤNG",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Tai ung dung",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Thêm vào giỏ",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "THÊM VÀO GIỎ",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Them vao gio",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Trang chủ",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TRANG CHỦ",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Trang chu",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Liên hệ",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "LIÊN HỆ",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Lien he",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Hỗ trợ",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "HỖ TRỢ",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Ho tro",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Tìm kiếm",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TÌM KIẾM",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Tim kiem",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "pay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PAY",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "pay now",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PAY NOW",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "buy",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BUY",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "buy now",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BUY NOW",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "place order",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PLACE ORDER",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "confirm order",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CONFIRM ORDER",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "checkout",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHECKOUT",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "check out",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHECK OUT",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "complete purchase",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "COMPLETE PURCHASE",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "confirm payment",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CONFIRM PAYMENT",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "subscribe",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SUBSCRIBE",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "upgrade plan",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "UPGRADE PLAN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "top up",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TOP UP",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "transfer",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TRANSFER",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "send money",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SEND MONEY",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "donate",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "DONATE",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "book and pay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BOOK AND PAY",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "rent now",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "RENT NOW",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "purchase",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PURCHASE",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "pay with card",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PAY WITH CARD",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "proceed to payment",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PROCEED TO PAYMENT",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "proceed to checkout",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PROCEED TO CHECKOUT",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "agree and pay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "AGREE AND PAY",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "complete order",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "COMPLETE ORDER",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "order now",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ORDER NOW",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "buy with",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BUY WITH",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "get started and pay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "GET STARTED AND PAY",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "delete",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "DELETE",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "delete permanently",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "DELETE PERMANENTLY",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "remove",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "REMOVE",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "cancel order",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CANCEL ORDER",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "cancel subscription",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CANCEL SUBSCRIPTION",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "cancel booking",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CANCEL BOOKING",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "unsubscribe",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "UNSUBSCRIBE",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "deactivate",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "DEACTIVATE",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "close account",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CLOSE ACCOUNT",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "delete account",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "DELETE ACCOUNT",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "empty trash",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "EMPTY TRASH",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "discard",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "DISCARD",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "erase",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ERASE",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "revoke",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "REVOKE",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "leave group",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "LEAVE GROUP",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "unfollow",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "UNFOLLOW",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "block",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BLOCK",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "cancel your subscription",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CANCEL YOUR SUBSCRIPTION",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "cancel your order",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CANCEL YOUR ORDER",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "cancel your booking",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CANCEL YOUR BOOKING",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "cancel my subscription",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CANCEL MY SUBSCRIPTION",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "delete your account",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "DELETE YOUR ACCOUNT",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "delete my account",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "DELETE MY ACCOUNT",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "close your account",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CLOSE YOUR ACCOUNT",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "change password",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHANGE PASSWORD",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "reset password",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "RESET PASSWORD",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "two-factor",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TWO-FACTOR",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "2-step verification",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "2-STEP VERIFICATION",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "authenticator",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "AUTHENTICATOR",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "security key",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SECURITY KEY",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "passkey",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PASSKEY",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "recovery email",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "RECOVERY EMAIL",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "recovery phone",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "RECOVERY PHONE",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "change email",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHANGE EMAIL",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "sign out of all devices",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SIGN OUT OF ALL DEVICES",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "app password",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "APP PASSWORD",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "turn off 2-step verification",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TURN OFF 2-STEP VERIFICATION",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "share",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SHARE",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "invite",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "INVITE",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "add member",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ADD MEMBER",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "give access",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "GIVE ACCESS",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "change permissions",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHANGE PERMISSIONS",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "anyone with the link",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ANYONE WITH THE LINK",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "make public",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "MAKE PUBLIC",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "change visibility",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CHANGE VISIBILITY",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "transfer ownership",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TRANSFER OWNERSHIP",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "send",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SEND",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "send now",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SEND NOW",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "reply all",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "REPLY ALL",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "forward",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "FORWARD",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "post",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "POST",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "publish",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PUBLISH",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "tweet",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TWEET",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "comment",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "COMMENT",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "submit review",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SUBMIT REVIEW",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "share post",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SHARE POST",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "reply",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "REPLY",
+   "expect": {
+    "categories": [],
+    "post": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "i agree",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "I AGREE",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "agree and continue",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "AGREE AND CONTINUE",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "accept terms",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ACCEPT TERMS",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "accept and continue",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ACCEPT AND CONTINUE",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "i accept",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "I ACCEPT",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "sign agreement",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SIGN AGREEMENT",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "i agree to the terms",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "I AGREE TO THE TERMS",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "accept all",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ACCEPT ALL",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "accept all cookies",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ACCEPT ALL COOKIES",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "allow all",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ALLOW ALL",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "allow all cookies",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ALLOW ALL COOKIES",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "agree to all",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "AGREE TO ALL",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "close",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CLOSE",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "no",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "NO",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "not now",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "NOT NOW",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "skip",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SKIP",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "back",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BACK",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "later",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "LATER",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "add to cart",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ADD TO CART",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "view more",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "VIEW MORE",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "view all",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "VIEW ALL",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "see more",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SEE MORE",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "learn more",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "LEARN MORE",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "home",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "HOME",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "search",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SEARCH",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "contact us",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "CONTACT US",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "support",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SUPPORT",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "log in",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "LOG IN",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "login",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "LOGIN",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "sign in",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SIGN IN",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "sign up",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SIGN UP",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Đồng ý và thanh toán",
+   "expect": {
+    "categories": [
+     "payment",
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ĐỒNG Ý VÀ THANH TOÁN",
+   "expect": {
+    "categories": [
+     "payment",
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Dong y va thanh toan",
+   "expect": {
+    "categories": [
+     "payment",
+     "terms"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "Tôi đồng ý và thanh toán",
+   "expect": {
+    "categories": [
+     "payment",
+     "terms"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TÔI ĐỒNG Ý VÀ THANH TOÁN",
+   "expect": {
+    "categories": [
+     "payment",
+     "terms"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "Toi dong y va thanh toan",
+   "expect": {
+    "categories": [
+     "payment",
+     "terms"
+    ]
+   },
+   "note": "without diacritics"
+  },
+  {
+   "name": "pagar",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PAGAR",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "comprar",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "COMPRAR",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "pagar ahora",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PAGAR AHORA",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "eliminar",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ELIMINAR",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "borrar",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BORRAR",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "enviar",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ENVIAR",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "compartir",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "COMPARTIR",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "payer",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PAYER",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "acheter",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ACHETER",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "commander",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "COMMANDER",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "supprimer",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SUPPRIMER",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "envoyer",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ENVOYER",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "partager",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "PARTAGER",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "bezahlen",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BEZAHLEN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "kaufen",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "KAUFEN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "jetzt kaufen",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "JETZT KAUFEN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "löschen",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "LÖSCHEN",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "entfernen",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ENTFERNEN",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "senden",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "SENDEN",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "teilen",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "TEILEN",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "finalizar compra",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "FINALIZAR COMPRA",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "excluir",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "EXCLUIR",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "apagar",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "APAGAR",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "compartilhar",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "COMPARTILHAR",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "bayar",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BAYAR",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "beli",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BELI",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "beli sekarang",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BELI SEKARANG",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "hapus",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "HAPUS",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "kirim",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "KIRIM",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "bagikan",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "BAGIKAN",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "upper case"
+  },
+  {
+   "name": "支付",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "购买",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "立即购买",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "删除",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "发送",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "分享",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "支払う",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "購入",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "購入する",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "削除",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "送信",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "共有",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "결제",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "구매",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "삭제",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "보내기",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "공유",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ชำระเงิน",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ซื้อ",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ลบ",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "ส่ง",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "display form"
+  },
+  {
+   "name": "แชร์",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   },
+   "note": "display form"
+  },
+  {
+   "name": "Đăng nhập",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "F8: login is not post"
+  },
+  {
+   "name": "Đăng nhập eMB",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "F8: login prefix beats the short word Đăng"
+  },
+  {
+   "name": "Đăng ký",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "decision 7b"
+  },
+  {
+   "name": "Đăng ký gói",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "decision 7b: paid subscription"
+  },
+  {
+   "name": "Đăng ký vay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "decision 7a"
+  },
+  {
+   "name": "Vay nhanh",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "decision 7a"
+  },
+  {
+   "name": "Ví trả sau",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "decision 7a"
+  },
+  {
+   "name": "Mua trước trả sau",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "decision 7a"
+  },
+  {
+   "name": "Đang xử lý",
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: Đang is not Đăng"
+  },
+  {
+   "name": "Đang",
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: Đang is not Đăng"
+  },
+  {
+   "name": "Dang",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "ambiguous stripped word off a Vietnamese page"
+  },
+  {
+   "name": "Dang nhap",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "stripped login"
+  },
+  {
+   "name": "Đăng",
+   "expect": {
+    "categories": [],
+    "post": true
+   }
+  },
+  {
+   "name": "Đăng bài",
+   "expect": {
+    "categories": [],
+    "post": true
+   }
+  },
+  {
+   "name": "Mua vé xem phim",
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: menu tile, 4 words"
+  },
+  {
+   "name": "Mua vé xem phim",
+   "kind": "link",
+   "link": {
+    "href": "/ve",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": []
+   },
+   "note": "F8"
+  },
+  {
+   "name": "MUA SẮM TOÀN BỘ SẢN PHẨM",
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: 5 words"
+  },
+  {
+   "name": "Mua sắm",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   }
+  },
+  {
+   "name": "Chính sách thanh toán",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   },
+   "note": "F8: policy link"
+  },
+  {
+   "name": "Chính sách bảo mật thanh toán",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   }
+  },
+  {
+   "name": "Chính sách quyền riêng tư",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   }
+  },
+  {
+   "name": "Hướng dẫn đặt hàng",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   }
+  },
+  {
+   "name": "Hướng dẫn trả góp",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   }
+  },
+  {
+   "name": "Terms of service",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   }
+  },
+  {
+   "name": "Gửi yêu cầu hỗ trợ",
+   "expect": {
+    "categories": []
+   },
+   "note": "Gửi is a short word, 4 words"
+  },
+  {
+   "name": "Gửi",
+   "expect": {
+    "categories": [],
+    "send": true
+   }
+  },
+  {
+   "name": "Gửi tin nhắn",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "unlisted phrase: Gửi starts a name of at most 3 words"
+  },
+  {
+   "name": "Gỡ",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "GO TO STORE",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: Go is not Gỡ"
+  },
+  {
+   "name": "Go",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: Go is not Gỡ"
+  },
+  {
+   "name": "Đóng",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "dismiss, not destructive"
+  },
+  {
+   "name": "Đóng tiền",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "M0.10"
+  },
+  {
+   "name": "Đóng tài khoản",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Điều khoản: Đồng ý và thanh toán",
+   "expect": {
+    "categories": [
+     "payment",
+     "terms"
+    ]
+   },
+   "note": "F8: buttons match inside segments"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "/pay",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": false
+   },
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "not in nav"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "/thanh-toan-hoa-don",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: nav tab to a non-checkout path"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "/checkout",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "checkout path is never exempt"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "/info?x=1",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "query string is never exempt"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "https://other.example/info",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "other origin is never exempt"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "/info",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "in_dialog": true,
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "in a dialog"
+  },
+  {
+   "name": "Xóa tài khoản",
+   "kind": "link",
+   "link": {
+    "href": "/account",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "destructive is never exempt"
+  },
+  {
+   "name": "Chuyển tiền - Thanh toán",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Sim số - Thẻ cào - Thẻ game",
+   "expect": {
+    "categories": []
+   }
+  },
+  {
+   "name": "thanh-toán",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "THANH TOAN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Thanh toán hoá đơn",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "old tone placement"
+  },
+  {
+   "name": "Thanh toán hóa đơn",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "new tone placement"
+  },
+  {
+   "name": "Xoá",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Xóa",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Chấp nhận tất cả",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "cookie consent is not terms"
+  },
+  {
+   "name": "Accept all",
+   "expect": {
+    "categories": [],
+    "consent": true
+   }
+  },
+  {
+   "name": "Tôi đồng ý",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   }
+  },
+  {
+   "name": "Buy now",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Buyer reviews",
+   "expect": {
+    "categories": []
+   },
+   "note": "short word buy is not buyer"
+  },
+  {
+   "name": "Payment methods help",
+   "expect": {
+    "categories": []
+   },
+   "note": "short word pay is not payment"
+  },
+  {
+   "name": "Add to cart",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   }
+  },
+  {
+   "name": "Log in",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   }
+  },
+  {
+   "name": "Sign in with Google",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   }
+  },
+  {
+   "name": "Delete",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Delete account",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Send",
+   "expect": {
+    "categories": [],
+    "send": true
+   }
+  },
+  {
+   "name": "Post",
+   "expect": {
+    "categories": [],
+    "post": true
+   }
+  },
+  {
+   "name": "Share",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   }
+  },
+  {
+   "name": "Mời",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   }
+  },
+  {
+   "name": "Mới",
+   "expect": {
+    "categories": []
+   },
+   "note": "Mới is not Mời"
+  },
+  {
+   "name": "Moi",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "ambiguous stripped word off a Vietnamese page"
+  },
+  {
+   "name": "Moi",
+   "page_vi": true,
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   }
+  },
+  {
+   "name": "Tiếp tục",
+   "expect": {
+    "categories": []
+   },
+   "note": "context word alone"
+  },
+  {
+   "name": "Cancel",
+   "in_dialog": true,
+   "dialog_has_primary": true,
+   "dialog_text": "Cancel your subscription?",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "dismiss is never risky"
+  },
+  {
+   "name": "Hủy",
+   "in_dialog": true,
+   "dialog_has_primary": true,
+   "dialog_text": "Bạn có chắc muốn xóa tài khoản?",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   }
+  },
+  {
+   "name": "Confirm",
+   "in_dialog": true,
+   "dialog_has_primary": true,
+   "dialog_text": "Cancel your subscription?",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "the primary button takes the dialog category"
+  },
+  {
+   "name": "Yes",
+   "in_dialog": true,
+   "dialog_has_primary": true,
+   "dialog_text": "Are you sure you want to delete this file?",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Xác nhận",
+   "in_dialog": true,
+   "dialog_text": "Bạn có chắc chắn muốn xóa tài khoản không?",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Xác nhận",
+   "page_title": "Thanh toán đơn hàng",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Continue",
+   "page_heading": "Checkout and pay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Continue",
+   "expect": {
+    "categories": []
+   },
+   "note": "no context"
+  },
+  {
+   "name": "Cancel",
+   "page_heading": "Cancel subscription",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "bare cancel takes the page context"
+  },
+  {
+   "name": "Hủy",
+   "page_heading": "Hủy gói",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Cancel",
+   "expect": {
+    "categories": []
+   },
+   "note": "bare cancel without context"
+  },
+  {
+   "name": "Có",
+   "page_vi": true,
+   "in_dialog": true,
+   "dialog_text": "Xóa vĩnh viễn?",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Co",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "ambiguous stripped word"
+  },
+  {
+   "name": "Close",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   }
+  },
+  {
+   "name": "OK",
+   "in_dialog": true,
+   "dialog_text": "Xóa vĩnh viễn?",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "OK is not a lexicon word; the dialog text still marks it"
+  }
+ ]
+}
