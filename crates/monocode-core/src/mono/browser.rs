@@ -23,6 +23,7 @@ pub mod defense;
 pub mod gate;
 pub mod host_mode;
 pub mod link;
+pub(crate) mod links;
 pub mod output;
 pub(crate) mod peer;
 pub mod recipe;
