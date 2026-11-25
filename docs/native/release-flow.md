@@ -189,8 +189,16 @@ every update looked like a new app to macOS TCC and dropped grants such as Full 
 With the certificate the DR is `identifier "app.zptah.desktop" and certificate leaf = H"<sha1>"`
 and stays the same across rebuilds, so grants survive updates. The certificate is not trusted
 and does not need to be: `codesign` signs with it anyway (`security find-identity` shows it as
-`CSSMERR_TP_NOT_TRUSTED`). The app is still not notarized. Signing uses no hardened runtime, no
-entitlements and no timestamp, exactly like the ad-hoc signature did.
+`CSSMERR_TP_NOT_TRUSTED`). The app is still not notarized. Signing uses the hardened runtime (`--options runtime`) with
+`assets/native/Entitlements.plist` (`allow-jit` and `allow-unsigned-executable-memory` only) and no
+timestamp, because a self-signed certificate has no timestamp authority. The runtime flag does not
+change the designated requirement. Entitlements audit: the app loads only system frameworks (no `dlopen`
+of plugins or vendor dylibs, so no `disable-library-validation`), reads no `DYLD_*` variables (no
+`allow-dyld-environment-variables`), and uses no microphone, camera, screen capture or Apple Events
+target. It does use the Keychain through the `keyring` crate (the legacy login keychain, items trusted
+by the designated requirement), which needs no entitlement. So no further entitlement or usage string
+is needed. WKWebView runs its JIT work in system processes. Adding any of these later needs a new audit and an
+update of `REQUIRED_ENTITLEMENTS` in `scripts/native-signing.mjs`.
 
 The leaf SHA-1 is pinned in `crates/monocode-core/src/app_update/install.rs`
 (`PINNED_LEAF_CERTIFICATE_SHA1`): the updater skips Gatekeeper only for a download that satisfies the pinned
@@ -239,7 +247,8 @@ an SSH or locked session makes codesign fail or prompt).
 `--dry-run`, which signs too) that `MONOPTAH_NATIVE_SIGNING_IDENTITY` is set and listed by
 `security find-identity -p codesigning`. `package-native-monoptah.mjs` then signs with
 `MONOCODE_NATIVE_SIGNING_MODE=selfsigned`, runs `codesign --verify --deep --strict --verbose=2`,
-prints `codesign -d -r-` and fails unless the DR is exactly `identifier "app.zptah.desktop" and certificate leaf = H"<sha1 of the configured identity>"`
+prints `codesign -d -r-` and fails unless the code directory flags are `0x10000(runtime)`, the signed
+entitlements are exactly `REQUIRED_ENTITLEMENTS` and the DR is exactly `identifier "app.zptah.desktop" and certificate leaf = H"<sha1 of the configured identity>"`
 (no other hash, no extra clauses) and the signature is not ad-hoc. A common name that matches more than
 one certificate is refused: use the SHA-1. There is no silent fallback to ad-hoc signing.
 

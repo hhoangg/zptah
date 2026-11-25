@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "zptah Browser",
+  "description": "Lets your zptah Monos read and work in your browser tabs. Talks only to the zptah app on this computer.",
+  "version": "1.0.0",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "nativeMessaging",
+    "tabs",
+    "tabGroups",
+    "scripting",
+    "storage",
+    "alarms",
+    "webNavigation"
+  ],
+  "optional_permissions": ["debugger"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/worker/main.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Stop all Monos"
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
