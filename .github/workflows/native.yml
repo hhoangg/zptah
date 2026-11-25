@@ -31,6 +31,8 @@ concurrency:
 # Job graph:
 #   changes -> core, desktop-lint, desktop, desktop-test-build -> desktop-test (shards),
 #              core-windows-build -> core-windows-test (shards)
+#   extension (zptah Browser extension: node tests, tsc, build; runs on every run, no path
+#              filter, so it can never stay pending)
 #   release-cache, release-cache-rpm (push to main only, never blocking)
 #   ci-passed waits for every job above and is the one check to require for merging.
 #
@@ -492,6 +494,23 @@ jobs:
       - if: steps.cache.outputs.cache-hit != 'true'
         run: cargo build --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-gpui --release
 
+  # The zptah Browser extension (extensions/zptah-browser): node tests, type check and the
+  # build with its forbidden-API scan. Cheap, so it has no path filter and `ci-passed`
+  # always gets a result from it.
+  extension:
+    name: Extension (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - run: npm run ext:test
+      - run: npm run ext:check
+      - run: npm run ext:build
+
   # The one check to require for merging. It runs on every pull request and push
   # (the workflow has no path filter), also when jobs failed or were skipped.
   ci-passed:
@@ -499,6 +518,7 @@ jobs:
     if: always()
     needs:
       - changes
+      - extension
       - core
       - desktop-lint
       - desktop
@@ -520,7 +540,7 @@ jobs:
           changes_result="$(jq -r '.changes.result' <<<"$NEEDS")"
           failed=0
           printf '%-24s %-10s %s\n' JOB RESULT VERDICT
-          for job in changes core core-windows-build core-windows-test desktop-lint desktop desktop-test-build desktop-test release-cache release-cache-rpm; do
+          for job in changes extension core core-windows-build core-windows-test desktop-lint desktop desktop-test-build desktop-test release-cache release-cache-rpm; do
             result="$(jq -r --arg job "$job" '.[$job].result' <<<"$NEEDS")"
             reason=""
             case "$result" in
@@ -529,6 +549,7 @@ jobs:
                 case "$job" in
                   release-cache|release-cache-rpm) ;; # main pushes only
                   changes) reason="the change detection must run" ;;
+                  extension) reason="the extension job always runs" ;;
                   *)
                     if [ "$changes_result" != success ]; then
                       reason="skipped but change detection did not succeed"

@@ -4,7 +4,7 @@
 import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { scanSource, scanTree } from "./scan.mjs";
+import { scanTree } from "./scan.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -41,6 +41,7 @@ function buildVariant(variant, outDir) {
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
   cpSync(join(ROOT, "src/worker"), join(outDir, "src/worker"), { recursive: true });
+  cpSync(join(ROOT, "src/pair"), join(outDir, "src/pair"), { recursive: true });
   cpSync(join(ROOT, "src/options"), join(outDir, "src/options"), { recursive: true });
   mkdirSync(join(outDir, "src/content"), { recursive: true });
   writeFileSync(join(outDir, "src/content/index.js"), bundleContent(join(ROOT, "src/content")));
@@ -81,5 +82,3 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.exit(1);
   }
 }
-
-export { scanSource };

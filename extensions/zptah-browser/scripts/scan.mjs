@@ -16,6 +16,7 @@ const JS_RULES = [
   { id: "sendBeacon", re: /\bsendBeacon\b/, why: "telemetry channel" },
   { id: "userScripts", re: /\bchrome\s*\.\s*userScripts\b/, why: "user scripts run arbitrary code" },
   { id: "registerContentScripts", re: /\bregisterContentScripts\b/, why: "persistent injection" },
+  { id: "requestUpdateCheck", re: /\brequestUpdateCheck\b/, why: "contacts the update server" },
   { id: "setUninstallURL", re: /\bsetUninstallURL\b/, why: "telemetry channel" },
   {
     id: "tabs-update-active",
