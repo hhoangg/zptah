@@ -256,4 +256,50 @@ describe("DiagramViewer", () => {
     await user.click(screen.getByRole("button", { name: "Fullscreen" }));
     expect(screen.getByTestId("diagram-placeholder").style.height).toBe("333px");
   });
+
+  it("leaves focus alone inside a portalled dialog or menu, and skips disabled and tabindex -1 stops", async () => {
+    const user = userEvent.setup();
+    view();
+    await user.click(screen.getByRole("button", { name: "Fullscreen" }));
+    const dialog = screen.getByRole("dialog", { name: "Approval" });
+    const toast = document.createElement("div");
+    toast.setAttribute("role", "dialog");
+    const inner = document.createElement("button");
+    toast.append(inner);
+    document.body.append(toast);
+    inner.focus();
+    expect(inner).toHaveFocus();
+    toast.remove();
+    // A disabled button and a tabindex -1 button are not stops of the Tab cycle.
+    const off = document.createElement("button");
+    off.disabled = true;
+    const skip = document.createElement("button");
+    skip.tabIndex = -1;
+    const board = within(dialog).getByTestId("diagram-board");
+    board.after(off, skip);
+    board.focus();
+    await user.tab();
+    expect(within(dialog).getByRole("button", { name: "Zoom out" })).toHaveFocus();
+  });
+
+  it("restores the page scroll once the last of several fullscreen viewers closes, in any order", async () => {
+    const user = userEvent.setup();
+    document.body.style.overflow = "auto";
+    render(
+      <>
+        <DiagramViewer title="One" ariaLabel="one" width={600} height={200}><rect width={1} height={1} /></DiagramViewer>
+        <DiagramViewer title="Two" ariaLabel="two" width={600} height={200}><rect width={1} height={1} /></DiagramViewer>
+      </>,
+    );
+    const [one, two] = screen.getAllByRole("button", { name: "Fullscreen" });
+    await user.click(one!);
+    await user.click(within(screen.getByRole("group", { name: "Two" })).getByRole("button", { name: "Fullscreen" }));
+    expect(document.body.style.overflow).toBe("hidden");
+    void two;
+    await user.click(within(screen.getByRole("dialog", { name: "One" })).getByRole("button", { name: "Exit fullscreen" }));
+    expect(document.body.style.overflow).toBe("hidden");
+    await user.click(within(screen.getByRole("dialog", { name: "Two" })).getByRole("button", { name: "Exit fullscreen" }));
+    expect(document.body.style.overflow).toBe("auto");
+    document.body.style.overflow = "";
+  });
 });

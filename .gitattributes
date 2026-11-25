@@ -7,3 +7,6 @@ crates/monocode-core/src/app_update/fixtures/package.txt text eol=lf
 # Mono workflow fixtures are compared byte for byte with what the TS store and
 # YAML export wrote, so a CRLF checkout on Windows must not rewrite them.
 crates/monocode-core/src/mono/workflows/fixtures/** text eol=lf
+
+# Golden layouts shared by the Rust diagram test and the web tests are compared as text.
+web/app/src/features/diagram/fixtures/** text eol=lf

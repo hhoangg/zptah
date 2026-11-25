@@ -84,6 +84,7 @@ jobs:
               - 'scripts/*native*'
               - 'scripts/native-editor/**'
               - 'scripts/native-settings/**'
+              - 'web/app/src/features/diagram/fixtures/**'
               - 'scripts/pin-host-release*'
               - 'scripts/sandbox-scripts*'
               - 'scripts/sandbox/**'

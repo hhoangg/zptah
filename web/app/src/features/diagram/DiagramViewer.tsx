@@ -30,6 +30,25 @@ export interface DiagramViewerProps {
   testId?: string;
 }
 
+// Page scroll lock shared by every fullscreen viewer, so they restore the page in any order.
+let scrollLocks = 0;
+let scrollBefore = "";
+function lockScroll(): () => void {
+  if (scrollLocks === 0) scrollBefore = document.body.style.overflow;
+  scrollLocks += 1;
+  document.body.style.overflow = "hidden";
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    scrollLocks -= 1;
+    if (scrollLocks === 0) document.body.style.overflow = scrollBefore;
+  };
+}
+
+const OTHER_OWNERS = "[role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox'], [aria-live]";
+const FOCUSABLE = "button:not([disabled]):not([tabindex='-1']), [href]:not([tabindex='-1']), input:not([disabled]):not([tabindex='-1']), textarea:not([disabled]):not([tabindex='-1']), select:not([disabled]):not([tabindex='-1']), [tabindex]:not([tabindex='-1']):not([disabled])";
+
 const TAP_MS = 350;
 const TAP_SLOP = 24;
 const DRAG_SLOP = 6;
@@ -150,15 +169,19 @@ export function DiagramViewer(props: DiagramViewerProps) {
   // A modal: the page behind does not scroll, focus stays inside, and it returns to the Full button on exit.
   useEffect(() => {
     if (!fullscreen) return undefined;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const unlock = lockScroll();
     const onFocusIn = (event: FocusEvent) => {
       const panel = panelRef.current;
-      if (panel && event.target instanceof Node && !panel.contains(event.target)) panel.focus();
+      const target = event.target;
+      if (!panel || !(target instanceof Element) || panel.contains(target)) return;
+      // Another dialog, menu or live region (a toast) outside the panel owns its own focus.
+      const owner = target.closest(OTHER_OWNERS);
+      if (owner && !panel.contains(owner)) return;
+      panel.focus();
     };
     document.addEventListener("focusin", onFocusIn);
     return () => {
-      document.body.style.overflow = previous;
+      unlock();
       document.removeEventListener("focusin", onFocusIn);
     };
   }, [fullscreen]);
@@ -362,7 +385,7 @@ export function DiagramViewer(props: DiagramViewerProps) {
     if (event.key !== "Tab") return;
     const panel = panelRef.current;
     if (!panel) return;
-    const items = [...panel.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])")];
+    const items = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)];
     const first = items[0];
     const last = items.at(-1);
     if (!first || !last) return;
