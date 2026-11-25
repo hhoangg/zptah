@@ -1,0 +1,102 @@
+# Fork-local release workflow (zptah Browser extension, spec 13.6). Pushing a tag ext-vX.Y.Z
+# (X is the protocol major) rebuilds dist/store from the tagged source, runs the extension tests,
+# checks the version against the tag, the protocol major and the app's known-builds list,
+# zips the build and writes extension-release.json ({version, protocol, file, sha256, package_sha256})
+# with a build-provenance attestation.
+#
+# Nothing is published by the build job. The publish job runs in the protected environment
+# `chrome-web-store` (required reviewer; the CWS_* secrets exist only there), so a human approves
+# every upload. It uploads the zip the build job made (never a committed zip) and submits it with
+# STAGED_PUBLISH: after review it stays staged until the maintainer publishes it, which happens only
+# after the app release that lists this build is out (known_builds.rs, docs/native/release-flow.md).
+#
+# Run workflow_dispatch with --ref ext-vX.Y.Z (a tag), never a branch.
+name: Extension Release
+
+on:
+  push:
+    tags:
+      - "ext-v*"
+  workflow_dispatch:
+
+concurrency:
+  group: extension-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and verify
+    if: github.repository == 'hhoangg/zptah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Require a tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "::error::Run this workflow on a tag (ext-vX.Y.Z), not on a branch"
+            exit 1
+          fi
+          printf '%s' "$TAG" | grep -Eq '^ext-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+      - run: npm ci --ignore-scripts
+      - run: npm run ext:test
+      - run: npm run ext:check
+      - run: npm run ext:build
+      - name: Check the tag, the protocol major and the known builds, then zip
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node extensions/zptah-browser/scripts/release.mjs --tag "$TAG" --out release-out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension-release
+          path: release-out/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release-out/*.zip
+            release-out/extension-release.json
+
+  publish:
+    name: Upload to the Chrome Web Store
+    needs: build
+    if: github.repository == 'hhoangg/zptah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Protected environment with a required reviewer: the job waits for a human.
+    environment: chrome-web-store
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-release
+          path: release-out
+      - name: Upload and submit for review (staged)
+        env:
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+          CWS_ITEM_ID: ${{ secrets.CWS_ITEM_ID }}
+          CWS_SERVICE_ACCOUNT_KEY: ${{ secrets.CWS_SERVICE_ACCOUNT_KEY }}
+        run: |
+          set -euo pipefail
+          zip_file="$(ls release-out/zptah-browser-*.zip)"
+          node extensions/zptah-browser/scripts/cws.mjs release --zip "$zip_file" --publish-type STAGED_PUBLISH --execute
