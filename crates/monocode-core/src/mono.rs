@@ -334,8 +334,9 @@ pub struct Roster {
 }
 impl Roster {
     pub fn load(store: &Store) -> Result<Self, String> {
-        let mut roster: Self = store
-            .setting("mono-roster")?
+        let text = store.setting("mono-roster")?;
+        let text = browser::migration::run(store, text, &browser::migration::Options::current());
+        let mut roster: Self = text
             .map(|text| {
                 serde_json::from_str(&text).map_err(|e| format!("Cannot read Mono roster: {e}"))
             })
