@@ -18,6 +18,7 @@
 
 use super::super::super::copy::{self, ActionDesc, CardFacts};
 use super::super::super::link::protocol::{Action, Envelope, Event, FillField, Method};
+use super::super::super::ownership;
 use super::super::super::risk::signals::{
     classify_field, registrable_domain_of, site_category, ActionKind, ElementSignals, FieldAttrs,
     FieldKind, FormSignals,
@@ -38,6 +39,8 @@ use super::*;
 use crate::mono::browser::risk::decide::Decision;
 use std::collections::BTreeSet;
 use std::sync::Weak;
+
+mod own_tabs;
 
 /// How often the prepared action is kept alive while a card is open (a prepare lives 30 s).
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
@@ -153,6 +156,27 @@ pub fn upstream_for(mono_id: &str) -> Option<Arc<ExtensionUpstream>> {
 pub(crate) fn dispatch_event(instance_id: &str, envelope: &Envelope) {
     let all: Vec<Arc<ExtensionUpstream>> =
         lock(upstreams()).iter().filter_map(Weak::upgrade).collect();
+    // Ownership changes are the link's, not one Mono's: the mirror follows them, and the Mono the
+    // user took a tab back from stops relying on what it was allowed there.
+    if envelope.method.as_deref() == Some(Event::TabOwnership.as_str()) {
+        let params = envelope.params.clone().unwrap_or(Value::Null);
+        let change = ownership::with_table(instance_id, |table| {
+            table.apply_event(&params, crate::time::now_ms())
+        });
+        // A tab the user took back, or dragged into another Mono's group, is no longer the old
+        // Mono's: what it was allowed on that site ends.
+        if let Some(change) =
+            change.filter(|c| c.taken_back || (c.from.is_some() && c.to != c.from))
+        {
+            for upstream in all.iter().filter(|u| {
+                change.from.as_deref() == Some(u.mono_id.as_str())
+                    && (u.link)().is_some_and(|l| l.instance_id() == instance_id)
+            }) {
+                upstream.tab_taken_back(change.tab);
+            }
+        }
+        return;
+    }
     for upstream in all {
         let on_link = (upstream.link)().is_some_and(|l| l.instance_id() == instance_id);
         let for_mono = envelope
@@ -1541,10 +1565,10 @@ impl ExtensionUpstream {
         let action_text = s(args, "action").ok_or("Describe the action in `action`.")?;
         s(args, "category")
             .ok_or("Give a category: payment, send_message, post_publish or other.")?;
-        let selected = self
-            .state()
-            .selected
-            .and_then(|id| self.state().known.get(&id).cloned());
+        let selected = {
+            let state = self.state();
+            state.selected.and_then(|id| state.known.get(&id).cloned())
+        };
         let url = s(args, "url")
             .map(str::to_owned)
             .or_else(|| selected.as_ref().map(|t| t.url.clone()))

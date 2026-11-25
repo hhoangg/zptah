@@ -1022,11 +1022,6 @@ fn the_group_is_named_after_the_mono_and_colored_like_it() {
     assert_eq!(session_color(0xd93025), "red");
     assert_eq!(session_color(0x2060f0), "blue");
     assert_eq!(session_color(0x20b030), "green");
-    for (_, rgb) in GROUP_COLORS {
-        assert!(GROUP_COLORS
-            .iter()
-            .any(|(name, _)| *name == session_color(rgb)));
-    }
     let b = browser("Default");
     let spec = ServerSpec::new(&b, Path::new("/o"), None).with_session("Fin Ops", "red");
     let at = |flag: &str| spec.args.iter().position(|a| a == flag).unwrap();

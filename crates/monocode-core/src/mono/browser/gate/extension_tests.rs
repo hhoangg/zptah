@@ -182,6 +182,12 @@ fn report() -> PeerReport {
 }
 
 fn start(browser: Browser) -> Rig {
+    start_as(browser, INSTANCE)
+}
+
+/// [`start`] with the instance id of the link given, for tests that must not meet the links of
+/// other tests through the process-wide registries.
+fn start_as(browser: Browser, instance: &str) -> Rig {
     let (manager, events) = LinkManager::new(
         ManagerConfig::new(Flavor::Release, "9.9.9-test"),
         Deps::new(
@@ -191,7 +197,7 @@ fn start(browser: Browser) -> Rig {
     );
     manager.start_pairing_with(ProfileChoice::new("Profile 1", "Work").unwrap(), NONCE);
     let serve = |fake_key: PairingKey| {
-        let (conn, fake) = socket_pair(INSTANCE, fake_key);
+        let (conn, fake) = socket_pair(instance, fake_key);
         let m = manager.clone();
         let handle = std::thread::spawn(move || m.serve(conn, &report()));
         (fake, handle)
@@ -223,7 +229,8 @@ fn start(browser: Browser) -> Rig {
     }
 
     let m = manager.clone();
-    let upstream = ExtensionUpstream::new(MONO, Arc::new(move || m.handle(INSTANCE)));
+    let link_id = instance.to_owned();
+    let upstream = ExtensionUpstream::new(MONO, Arc::new(move || m.handle(&link_id)));
     Rig {
         upstream,
         browser,
@@ -261,7 +268,7 @@ fn script(
         if let Err(e) = validate(&root, &spec["params"], request.params.as_ref().unwrap()) {
             note("params", e);
         }
-        if request.mono.as_deref() != Some(MONO) {
+        if !matches!(request.mono.as_deref(), Some(MONO) | Some(OTHER_MONO)) {
             note("mono", format!("{:?}", request.mono));
         }
         requests.lock().unwrap().push(request.clone());
@@ -465,23 +472,11 @@ fn select_marks_the_tab_current_and_moves_the_gate_s_page_without_touching_the_b
 }
 
 #[test]
-fn opening_and_closing_tabs_is_not_available_yet_and_says_so() {
+fn tools_the_extension_does_not_implement_yet_answer_with_an_error() {
     let rig = start(three_tabs());
     let gate = rig.gate(BrowserTrust::AskRisky);
     gate.exempt_from_taint(SHARED_ROUTE);
-    for action in ["new", "close"] {
-        let result = call(
-            &gate,
-            "browser_tabs",
-            json!({"action": action, "url": NEWS}),
-        );
-        assert!(is_error(&result), "{action}");
-        assert!(text_of(&result).contains("not available"), "{action}");
-    }
-    // The gate lists the tabs before it opens one; nothing else is sent.
-    assert!(rig.requests("tab.open").is_empty() && rig.requests("tab.close").is_empty());
-    assert!(rig.requests("tabs.list").len() <= 2);
-    // Tools the extension does not implement yet answer with an error too, never with success.
+    // Never a silent success.
     let console = call(&gate, "browser_console_messages", json!({}));
     assert!(is_error(&console));
     assert!(text_of(&console).contains("not available"), "{console}");
@@ -1231,3 +1226,4 @@ fn no_result_carries_structured_content_and_an_injection_in_a_find_match_is_fenc
 }
 
 mod act_tests;
+mod owner_tests;

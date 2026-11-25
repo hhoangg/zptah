@@ -115,14 +115,14 @@ fn install(browser: &mut Browser, act: &Arc<Mutex<Act>>) {
 }
 
 /// A front end that answers each card with the next answer of its script.
-struct FrontEnd {
+pub(super) struct FrontEnd {
     seen: Arc<Mutex<Vec<PendingApproval>>>,
     stop: Arc<AtomicBool>,
     _subscription: Subscription,
 }
 
 impl FrontEnd {
-    fn start(queue: &Arc<ApprovalQueue>, answers: Vec<UserAnswer>) -> FrontEnd {
+    pub(super) fn start(queue: &Arc<ApprovalQueue>, answers: Vec<UserAnswer>) -> FrontEnd {
         let subscription = queue.subscribe(|| {});
         let seen: Arc<Mutex<Vec<PendingApproval>>> = Arc::default();
         let stop = Arc::new(AtomicBool::new(false));
@@ -148,7 +148,7 @@ impl FrontEnd {
             _subscription: subscription,
         }
     }
-    fn cards(&self) -> Vec<PendingApproval> {
+    pub(super) fn cards(&self) -> Vec<PendingApproval> {
         self.seen.lock().unwrap().clone()
     }
 }

@@ -20,6 +20,27 @@ pub(super) const SUBTITLE: &str =
     "Let this Mono add an emoji from the packs you choose to a reply when it fits the mood.";
 pub(super) const SWITCH_HELP: &str =
     "Off by default. Never in code, commit messages, PR text or reports.";
+pub(super) const BADGE_HELP: &str =
+    "Marks this Mono on its browser tab group, cursor and overlay. Default: its mascot's emoji.";
+/// The emoji offered as a Mono's badge: the mascots' own, then a few more animals.
+const BADGES: [(&str, &str); 16] = [
+    ("\u{1F47E}", "Invader"),
+    ("\u{1F47B}", "Ghost"),
+    ("\u{1F916}", "Robot"),
+    ("\u{1F431}", "Cat"),
+    ("\u{1F480}", "Skull"),
+    ("\u{1F980}", "Crab"),
+    ("\u{1F344}", "Mushroom"),
+    ("\u{1F680}", "Rocket"),
+    ("\u{1F996}", "Dino"),
+    ("\u{1F438}", "Frog"),
+    ("\u{1F436}", "Dog"),
+    ("\u{1F98A}", "Fox"),
+    ("\u{1F43C}", "Panda"),
+    ("\u{1F984}", "Unicorn"),
+    ("\u{1F419}", "Octopus"),
+    ("\u{1F989}", "Owl"),
+];
 pub(super) const NEW_PACKS: &str = "New packs are not turned on for this Mono automatically.";
 const SELECT_PRIORITY: usize = 90;
 
@@ -27,6 +48,9 @@ const SELECT_PRIORITY: usize = 90;
 pub(super) struct EmojiUi {
     select: Option<Choices<Frequency>>,
     frequency_anchor: AnchorSlot,
+    /// The badge list (spec 9.1) and where it opens from.
+    badge_select: Option<Choices<Option<String>>>,
+    badge_anchor: AnchorSlot,
     /// The render key of what was last handed to each Mono's chat.
     pushed: HashMap<String, u64>,
 }
@@ -41,6 +65,8 @@ impl EmojiUi {
         Self {
             select: None,
             frequency_anchor: AnchorSlot::default(),
+            badge_select: None,
+            badge_anchor: AnchorSlot::default(),
             pushed: HashMap::new(),
         }
     }
@@ -275,9 +301,101 @@ impl Monos {
         cx.notify();
     }
 
-    pub(super) fn emoji_select_popover(&self, cx: &App) -> Option<Popover> {
-        let open = self.emoji_ui.select.as_ref()?;
-        Some(open.popover(&self.emoji_ui.frequency_anchor, SELECT_PRIORITY, cx))
+    pub(super) fn emoji_select_popover(&self, cx: &App) -> Vec<Popover> {
+        let mut open = Vec::new();
+        if let Some(select) = self.emoji_ui.select.as_ref() {
+            open.push(select.popover(&self.emoji_ui.frequency_anchor, SELECT_PRIORITY, cx));
+        }
+        if let Some(select) = self.emoji_ui.badge_select.as_ref() {
+            open.push(select.popover(&self.emoji_ui.badge_anchor, SELECT_PRIORITY, cx));
+        }
+        open
+    }
+
+    /// Changes the open Mono's own fields (the badge), saves the roster. The browser extension
+    /// hears about it through the roster save.
+    fn mono_update(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Mono)) {
+        let Some(id) = self.active.clone() else {
+            return;
+        };
+        let Some(mono) = self.roster.get_mut(&id) else {
+            return;
+        };
+        change(mono);
+        mono.normalize();
+        self.save(cx);
+        cx.notify();
+    }
+
+    fn badge_open_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(open) = self.emoji_ui.badge_select.take() {
+            open.close(window, cx);
+            cx.notify();
+            return;
+        }
+        let Some(mono) = self.current() else {
+            return;
+        };
+        let current = mono.badge_emoji.clone();
+        let mascot = monocode_core::project_appearance::mascot_emoji(&mono.mascot);
+        let mut choices = vec![Choice {
+            value: None,
+            label: format!("{mascot}  Mascot (default)").into(),
+            checked: current.is_none(),
+        }];
+        choices.extend(BADGES.iter().map(|(emoji, name)| Choice {
+            value: Some((*emoji).to_owned()),
+            label: format!("{emoji}  {name}").into(),
+            checked: current.as_deref() == Some(*emoji),
+        }));
+        let width = self
+            .emoji_ui
+            .badge_anchor
+            .get()
+            .map_or(220., |b| b.size.width.as_f32().max(180.));
+        self.emoji_ui.badge_select = Some(Choices::open(
+            "Badge emoji",
+            choices,
+            width,
+            window,
+            cx,
+            |this, event, window, cx| {
+                if let Some(open) = this.emoji_ui.badge_select.take() {
+                    open.close(window, cx);
+                }
+                if let ChoiceEvent::Picked(badge) = event {
+                    this.mono_update(cx, |m| m.badge_emoji = badge);
+                }
+                cx.notify();
+            },
+        ));
+        cx.notify();
+    }
+
+    fn badge_select_trigger(&self, emoji: &str, cx: &mut Context<Self>) -> Stateful<Div> {
+        div()
+            .id("mono-badge-emoji")
+            .debug_selector(|| "mono-badge-emoji".into())
+            .role(Role::Button)
+            .aria_label(format!("Badge emoji {emoji}"))
+            .relative()
+            .h(px(28.))
+            .min_w(px(120.))
+            .px_2p5()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .rounded_md()
+            .border_1()
+            .border_color(content(0.1))
+            .text_size(px(14.))
+            .cursor_pointer()
+            .hover(|s| s.bg(content(0.06)))
+            .on_click(cx.listener(|this, _, window, cx| this.badge_open_select(window, cx)))
+            .child(self.emoji_ui.badge_anchor.probe())
+            .child(div().min_w_0().truncate().child(emoji.to_owned()))
+            .child(icon("chevron-down", 12.).text_color(content(0.5)))
     }
 
     fn emoji_select_trigger(&self, text: String, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -394,7 +512,11 @@ impl Monos {
             this.emoji_update(cx, |e| e.enabled = !e.enabled);
         }));
         let frequency = self.emoji_select_trigger(frequency_label(settings.frequency).into(), cx);
+        let badge = self.current().map(|m| m.badge()).unwrap_or_default();
+        let badge = self.badge_select_trigger(&badge, cx);
         card()
+            .child(setting("Badge", Some(BADGE_HELP), badge.into_any_element()))
+            .child(div().h(px(1.)).bg(content(0.05)))
             .child(switch_setting(
                 "Use emoji in replies",
                 SWITCH_HELP,

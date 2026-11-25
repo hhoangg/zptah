@@ -73,7 +73,7 @@ export function isChallengeFrame(url) {
   return CHALLENGE.some((re) => re.test(host));
 }
 
-/** @typedef {{ id: string, allowed_origins: string[], blocked_origins: string[], level?: string }} RosterEntry */
+/** @typedef {{ id: string, allowed_origins: string[], blocked_origins: string[], level?: string, name?: string, emoji?: string, color?: string, group_color?: string, cursor?: boolean }} RosterEntry */
 
 /**
  * "ok" when the page may be read, else why not.

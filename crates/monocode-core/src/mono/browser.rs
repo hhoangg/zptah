@@ -30,9 +30,11 @@ pub mod link;
 pub(crate) mod links;
 pub mod migration;
 pub mod output;
+pub mod ownership;
 pub(crate) mod peer;
 pub mod recipe;
 pub mod risk;
+pub mod roster;
 pub mod server;
 pub mod soul_rules;
 pub mod trust;
@@ -1089,32 +1091,10 @@ impl ServerSpec {
     }
 }
 
-/// The tab group colors the extension accepts, with the RGB each is closest to.
-const GROUP_COLORS: [(&str, u32); 8] = [
-    ("blue", 0x1a73e8),
-    ("red", 0xd93025),
-    ("yellow", 0xf9ab00),
-    ("green", 0x188038),
-    ("pink", 0xd01884),
-    ("purple", 0x9334e6),
-    ("cyan", 0x129eaf),
-    ("orange", 0xe8710a),
-];
-/// The tab group color nearest to a Mono's color, so the group looks like its Mono.
+/// The tab group color nearest to a Mono's color (OKLab, see [`roster::group_color`]), so the
+/// group looks like its Mono.
 pub fn session_color(rgb: u32) -> &'static str {
-    let distance = |a: u32, b: u32| -> i64 {
-        [16, 8, 0]
-            .iter()
-            .map(|shift| {
-                let d = i64::from((a >> shift) & 0xff) - i64::from((b >> shift) & 0xff);
-                d * d
-            })
-            .sum()
-    };
-    GROUP_COLORS
-        .iter()
-        .min_by_key(|(_, color)| distance(rgb, *color))
-        .map_or("blue", |(name, _)| name)
+    roster::group_color_name(roster::group_color(rgb))
 }
 
 /// A Mono's browser server, ready to add to a launch.
@@ -1424,6 +1404,13 @@ fn attach_extension_with(
     let _ = output::prepare(&dir);
     output::sweep_keeping(&dir, &store.audit_screenshots(&ctx.mono.id));
 
+    // The extension may have connected after the Monos were saved: make sure it knows this one.
+    roster::book().upsert(&ctx.mono);
+    // Before the first tool call: a link that is behind (a change that did not arrive) gets the
+    // roster now, with a short wait. A link that does not answer is retried in the background.
+    if !roster::book().publish_timeout(&manager, std::time::Duration::from_secs(3)) {
+        roster::book().publish_soon();
+    }
     let upstream = gate::upstream_for(&ctx.mono.id).unwrap_or_else(|| {
         gate::ExtensionUpstream::for_profile(&ctx.mono.id, manager, &browser.profile_dir)
     });
