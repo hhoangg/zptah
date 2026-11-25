@@ -194,9 +194,10 @@ and does not need to be: `codesign` signs with it anyway (`security find-identit
 timestamp, because a self-signed certificate has no timestamp authority. The runtime flag does not
 change the designated requirement. Entitlements audit: the app loads only system frameworks (no `dlopen`
 of plugins or vendor dylibs, so no `disable-library-validation`), reads no `DYLD_*` variables (no
-`allow-dyld-environment-variables`), and uses no microphone, camera, screen capture, Apple Events
-target or Keychain, so no further entitlement or usage string is needed. WKWebView and AVPlayer run
-their media and JIT work in system processes. Adding any of these later needs a new audit and an
+`allow-dyld-environment-variables`), and uses no microphone, camera, screen capture or Apple Events
+target. It does use the Keychain through the `keyring` crate (the legacy login keychain, items trusted
+by the designated requirement), which needs no entitlement. So no further entitlement or usage string
+is needed. WKWebView runs its JIT work in system processes. Adding any of these later needs a new audit and an
 update of `REQUIRED_ENTITLEMENTS` in `scripts/native-signing.mjs`.
 
 The leaf SHA-1 is pinned in `crates/monocode-core/src/app_update/install.rs`

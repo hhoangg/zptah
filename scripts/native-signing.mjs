@@ -64,8 +64,9 @@ export const signingIdentityProblem = (env, run) => resolveSigningIdentity(env, 
 
 // Entitlements the release signature must carry, exactly (assets/native/Entitlements.plist).
 // Audit: the app has no dlopen of plugins or vendor dylibs (system frameworks only), no
-// DYLD_* use, and no microphone, camera, screen capture, Apple Events target or Keychain
-// access, so only the two memory entitlements are needed. Adding one needs a new audit.
+// DYLD_* use, and no microphone, camera, screen capture or Apple Events target. Keychain use
+// (keyring crate, legacy login keychain trusted by the designated requirement) needs no
+// entitlement, so only the two memory entitlements are needed. Adding one needs a new audit.
 export const REQUIRED_ENTITLEMENTS = [
   "com.apple.security.cs.allow-jit",
   "com.apple.security.cs.allow-unsigned-executable-memory",
