@@ -1901,26 +1901,18 @@ M0.4 (Arc) moved out of v1 with answer 12. Results: section 19.
 | 15 | Existing deny lists | Kept unchanged; suggest switching to the new defaults | 15.3 |
 | new | In-tab overlay | Glow in the Mono's color and a "Stop <Mono>" button | 10a |
 
-### Remaining open questions
+### Decisions after M0 (user and orchestrator defaults, 2026-11-25)
 
-1. Appendix A needs one review by the user (wording and categories), after M0.10 adds what real
-   pages show.
-2. The app UI language setting (8.3) is new; is "system language, Vietnamese or English" the right
-   default?
-3. Answer 9 extended task grants to the whole conversation. The spec also lets task domains, user
-   references and the names behind `send_unnamed` last for the conversation (section 1, "Terms").
-   Confirm, or keep those per run.
-4. Debugger: the spec adds one detail to answer 14, detaching when a run ends and no new run of the
-   same conversation starts within 2 minutes, so a conversation left open for days does not keep
-   the infobar. Confirm.
-5. Hardened runtime (F11): sign the release app with `--options runtime` before the browser link
-   ships (proposed; needs a check of the entitlements the app needs), or drop the claim from 5.4?
-6. Pre-attaching the debugger before `destructive` and `payment` commits (6.3, F1) shows the infobar
-   in every window for the rest of the task whenever such an action happens. Accept, or prefer the
-   "ask the user to answer the dialog" path only?
-7. Appendix A.11 (loans and buy-now-pay-later): `payment`, a new `credit` category, or neither?
-   And `Đăng ký` (sign up) is listed as not risky in A.10 for now: confirm, or should it count as
-   `terms`?
+| # | Question | Answer | Where |
+|---|---|---|---|
+| 1 | Appendix A review | Still open: one manual review by the user before v1 ships (final checklist) | Appendix A |
+| 2 | App UI language default | System language, with Vietnamese and English as choices (orchestrator default) | 8.3 |
+| 3 | Conversation-long task domains, user references and `send_unnamed` names | Last for the conversation, like answer 9; payments never covered (orchestrator default) | 1, 7.6 |
+| 4 | Debugger detach | Detach when a run ends and no new run of the same conversation starts within 2 minutes (orchestrator default) | 6.3 |
+| 5 | Hardened runtime (F11) | User: turn on hardened runtime (`--options runtime`) for release builds, with the entitlements the app needs (JIT, webview, plugins); verify existing features still work | 5.4, release flow |
+| 6 | Pre-attaching the debugger before `destructive` and `payment` commits | User: accepted; the infobar shows for the rest of that task | 6.3 |
+| 7a | Loans and buy-now-pay-later (A.11) | User: count as `payment` | 7.3, Appendix A.11 |
+| 7b | `Đăng ký` (sign up, register) | User: not risky by itself; it asks only when it creates a paid subscription (then `payment`) | 7.3, Appendix A.10 |
 
 ## 19. M0 spike results (2026-11-25)
 
@@ -1940,7 +1932,7 @@ data). Findings that changed this spec:
 | F8 | Lexicon false positives come from matching rules (links, long names, punctuation, short words, per-control diacritics, tone placement) | 7.3, Appendix A |
 | F9 | Chrome for Testing 158 needs `--disable-features=DisableLoadExtensionCommandLineSwitch` with `--load-extension` | 16.3 |
 | F10 | Host manifest in `<user-data-dir>/NativeMessagingHosts/` works; host argv is `[path, origin]`, parent is the browser main process, the host inherits the browser's environment; an open port keeps the worker alive (over 400 s), without one it stops after about 31 s; the host gets EOF and exits on every disconnect | 16.3; confirms 5.4 and 4 |
-| F11 | `LOCAL_PEERPID` and `LOCAL_PEERTOKEN` work both ways; the installed release app has no hardened runtime | 5.4, open question 5 |
+| F11 | `LOCAL_PEERPID` and `LOCAL_PEERTOKEN` work both ways; the installed release app has no hardened runtime | 5.4, decision 5 (18) |
 | F12 | From the app's process tree the user's Chrome dir and `Local State` are readable (a read-only probe in this session; no evidence file) | 12.4 (read part of M0.2) |
 
 Still open from M0 (manual steps for the user, listed in the report): the write test in the real
@@ -2173,7 +2165,7 @@ of a short name). The English seed list is in 7.3.
 | Phương thức thanh toán | `phuong thuc thanh toan` | a heading, not an action |
 | Lịch sử giao dịch | `lich su giao dich` | banks, MoMo |
 | Đăng nhập | `dang nhap` | Shopee, MB Bank (M0.10) |
-| Đăng ký | `dang ky` | sign-up links (M0.10); see open question |
+| Đăng ký | `dang ky` | sign-up links (M0.10); asks only when it creates a paid subscription (decision 7b) |
 | Đăng xuất | `dang xuat` | account menus |
 | Mua sắm | `mua sam` | Lazada (M0.10) |
 | Xem thêm | `xem them` | all sites (M0.10) |
@@ -2189,7 +2181,7 @@ of a short name). The English seed list is in 7.3.
 | Hỗ trợ | `ho tro` | all sites (M0.10) |
 | Tìm kiếm | `tim kiem` | all sites (M0.10) |
 
-### A.11 Credit, low confidence (seen only as menu tiles in M0.10; the user decides: `payment` or a new `credit` category)
+### A.11 Credit and buy-now-pay-later (`payment`, decision 7a; seen only as menu tiles in M0.10)
 
 | Phrase | Without diacritics (normalized) | Typical on |
 |---|---|---|
