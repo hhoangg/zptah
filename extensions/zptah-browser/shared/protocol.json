@@ -10,6 +10,10 @@
     "Challenge": { "type": "string", "minLength": 44, "maxLength": 44, "pattern": "^[A-Za-z0-9+/]{43}=$" },
     "Mac": { "type": "string", "minLength": 44, "maxLength": 44, "pattern": "^[A-Za-z0-9+/]{43}=$" },
     "Empty": { "type": "object" },
+    "DeadlineMs": { "type": "integer", "minimum": 1, "maximum": 600000 },
+    "PageBytes": { "type": "integer", "minimum": 1, "maximum": 900000 },
+    "Offset": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "Visibility": { "enum": ["visible", "hidden"] },
     "ErrorCode": {
       "enum": [
         "E_PROTOCOL", "E_AUTH", "E_NOT_PAIRED", "E_UNKNOWN_MONO", "E_NOT_OWNER", "E_BUSY",
@@ -316,7 +320,7 @@
     },
     "stop.resume": { "params": { "$ref": "#/$defs/Empty" }, "result": { "$ref": "#/$defs/Empty" } },
     "tabs.list": {
-      "params": { "type": "object", "required": ["all"], "properties": { "all": { "type": "boolean" } } },
+      "params": { "type": "object", "required": ["all"], "properties": { "all": { "type": "boolean" }, "deadline_ms": { "$ref": "#/$defs/DeadlineMs" } } },
       "result": { "type": "object", "required": ["tabs"], "properties": { "tabs": { "type": "array", "items": { "$ref": "#/$defs/TabInfo" } } } }
     },
     "tab.open": {
@@ -338,8 +342,10 @@
           "mode": { "enum": ["full", "interactive"] },
           "scope_ref": { "$ref": "#/$defs/Ref" },
           "depth": { "type": "integer", "minimum": 0, "maximum": 1000 },
-          "max_bytes": { "type": "integer", "minimum": 1, "maximum": 16777216 },
-          "from": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          "max_bytes": { "$ref": "#/$defs/PageBytes" },
+          "from": { "$ref": "#/$defs/Offset" },
+          "generation": { "$ref": "#/$defs/Offset" },
+          "deadline_ms": { "$ref": "#/$defs/DeadlineMs" }
         }
       },
       "result": {
@@ -351,7 +357,11 @@
           "title": { "type": "string", "maxLength": 8192 },
           "generation": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
           "truncated": { "type": "boolean" },
-          "hidden_dropped": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          "hidden_dropped": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "total_bytes": { "$ref": "#/$defs/Offset" },
+          "next_from": { "$ref": "#/$defs/Offset" },
+          "visibility": { "$ref": "#/$defs/Visibility" },
+          "unrendered": { "type": "boolean" }
         }
       }
     },
@@ -361,8 +371,9 @@
         "required": ["tab"],
         "properties": {
           "tab": { "$ref": "#/$defs/TabId" },
-          "max_bytes": { "type": "integer", "minimum": 1, "maximum": 16777216 },
-          "from": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          "max_bytes": { "$ref": "#/$defs/PageBytes" },
+          "from": { "$ref": "#/$defs/Offset" },
+          "deadline_ms": { "$ref": "#/$defs/DeadlineMs" }
         }
       },
       "result": {
@@ -372,7 +383,11 @@
           "markdown": { "type": "string" },
           "url": { "type": "string", "maxLength": 8192 },
           "title": { "type": "string", "maxLength": 8192 },
-          "truncated": { "type": "boolean" }
+          "truncated": { "type": "boolean" },
+          "total_bytes": { "$ref": "#/$defs/Offset" },
+          "next_from": { "$ref": "#/$defs/Offset" },
+          "visibility": { "$ref": "#/$defs/Visibility" },
+          "unrendered": { "type": "boolean" }
         }
       }
     },
@@ -383,13 +398,17 @@
         "properties": {
           "tab": { "$ref": "#/$defs/TabId" },
           "query": { "type": "string", "minLength": 1, "maxLength": 1024 },
-          "max": { "type": "integer", "minimum": 1, "maximum": 1000 }
+          "max": { "type": "integer", "minimum": 1, "maximum": 1000 },
+          "deadline_ms": { "$ref": "#/$defs/DeadlineMs" }
         }
       },
       "result": {
         "type": "object",
-        "required": ["matches"],
+        "required": ["matches", "url", "title", "generation"],
         "properties": {
+          "url": { "type": "string", "maxLength": 8192 },
+          "title": { "type": "string", "maxLength": 8192 },
+          "generation": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
           "matches": {
             "type": "array",
             "items": {
@@ -413,7 +432,9 @@
         "properties": {
           "tab": { "$ref": "#/$defs/TabId" },
           "ref": { "$ref": "#/$defs/Ref" },
-          "full_page": { "type": "boolean" }
+          "full_page": { "type": "boolean" },
+          "max_bytes": { "$ref": "#/$defs/PageBytes" },
+          "deadline_ms": { "$ref": "#/$defs/DeadlineMs" }
         }
       },
       "result": {
@@ -423,7 +444,10 @@
           "png_b64": { "$ref": "#/$defs/B64Bytes" },
           "width": { "type": "integer", "minimum": 1, "maximum": 65535 },
           "height": { "type": "integer", "minimum": 1, "maximum": 65535 },
-          "method": { "enum": ["visible", "debugger"] }
+          "method": { "enum": ["visible", "debugger"] },
+          "scale_pct": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "url": { "type": "string", "maxLength": 8192 },
+          "title": { "type": "string", "maxLength": 8192 }
         }
       }
     },
@@ -437,13 +461,14 @@
           "text_gone": { "type": "string", "maxLength": 4096 },
           "ref": { "$ref": "#/$defs/Ref" },
           "load": { "type": "boolean" },
-          "time_ms": { "type": "integer", "minimum": 0, "maximum": 600000 }
+          "time_ms": { "type": "integer", "minimum": 0, "maximum": 600000 },
+          "deadline_ms": { "$ref": "#/$defs/DeadlineMs" }
         }
       },
       "result": {
         "type": "object",
         "required": ["met", "url"],
-        "properties": { "met": { "type": "boolean" }, "url": { "type": "string", "maxLength": 8192 } }
+        "properties": { "met": { "type": "boolean" }, "url": { "type": "string", "maxLength": 8192 }, "title": { "type": "string", "maxLength": 8192 } }
       }
     },
     "nav.go": {

@@ -1,0 +1,918 @@
+//! The gate's client for the zptah Browser extension: an [`Upstream`] that speaks MCP to the gate
+//! and the link protocol (spec 5.5) to the extension. It replaces the Playwright server for a
+//! Mono that uses the extension (spec 4.1, 7.1).
+//!
+//! This part is the read path: `browser_tabs` (list, select), `browser_snapshot`, `browser_read`,
+//! `browser_find`, `browser_take_screenshot` and `browser_wait_for`. Results use the text shape
+//! Playwright prints (`### Page`, `- Page URL: ...`, a fenced `yaml` snapshot, `- N: [Title](url)`
+//! tab lines), so the gate's `page_url_of`, the tab parser, the recipe snapshot parser and the
+//! defense layer keep working unchanged. A tool that is not implemented yet answers with a tool
+//! error, never with a silent success.
+//!
+//! Safety rules kept here (the extension enforces the same ones; this is the second line):
+//!
+//! * A tab is read only when its address passes the Mono's origin lists ([`Origins`]): checked
+//!   against the tab list before the request and again against the address the extension
+//!   reports, so a tab that navigated in between is withheld, not shown.
+//! * Browser pages (`chrome:`, the Web Store and the like) are never read.
+//! * Nothing here activates, focuses or changes a tab: `browser_tabs select` only changes which
+//!   tab the Mono's read tools use by default.
+//! * App to extension frames stay under 1 MiB (Chrome's native messaging limit): requests carry
+//!   only small fields, and every reply that can be large (snapshot, read, screenshot) is asked
+//!   for with a `max_bytes` budget the extension must respect (`PAGE_BYTES`, `SNAPSHOT_BYTES`,
+//!   `READ_BYTES`, `SCREENSHOT_BYTES`). A larger answer is refused, not shown.
+use super::super::link::protocol::{ErrorBody, ErrorCode, Method, TabInfo};
+use super::super::links::manager::{LinkHandle, LinkManager, RequestError};
+use super::guard::UNAVAILABLE_PREFIX;
+use super::{tabs, Upstream};
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
+
+/// The session id the gate sees: there is no real MCP session, the link is the session.
+const SESSION_ID: &str = "zptah-extension";
+/// Default and largest `max_bytes` asked of the extension for the text of a snapshot.
+pub const SNAPSHOT_BYTES: u64 = 60_000;
+/// Default `max_bytes` for `browser_read`.
+pub const READ_BYTES: u64 = 40_000;
+/// The largest `max_bytes` any page tool asks for. A reply is JSON with the text escaped and
+/// sealed, and must stay under Chrome's 1 MiB message limit, so this leaves room.
+pub const PAGE_BYTES: u64 = 900_000;
+/// `max_bytes` asked for a screenshot: the PNG the extension returns is at most this many bytes
+/// (it scales the picture down to fit), so its base64 text and the envelope stay under 1 MiB.
+pub const SCREENSHOT_BYTES: u64 = 700_000;
+/// How long a request may take before the extension must answer `E_TIMEOUT`.
+pub const DEFAULT_DEADLINE_MS: u64 = 30_000;
+/// The longest a `browser_wait_for` may wait (spec 5.2).
+pub const MAX_WAIT_MS: u64 = 600_000;
+/// Extra time the link waits beyond the deadline it gave the extension, so the extension's own
+/// `E_TIMEOUT` answer arrives before the app gives up.
+const LINK_GRACE: Duration = Duration::from_secs(5);
+/// Longest tab title shown in a list.
+const MAX_TITLE_CHARS: usize = 200;
+
+/// Where the live link of the Mono's profile comes from. `None`: the extension is not connected.
+pub(crate) type LinkSource = Arc<dyn Fn() -> Option<LinkHandle> + Send + Sync>;
+
+// ---- the Mono's origin rules ----
+
+/// Which pages a Mono may read: the Mono's blocked and allowed origin lists (spec 6.5 rule 2).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Origins {
+    allowed: Vec<String>,
+    blocked: Vec<String>,
+}
+
+/// Why a page is not read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadRefusal {
+    /// A browser page, a file or another address that is not http or https.
+    Restricted,
+    Blocked,
+    /// The Mono has an allowed list and the page is not on it.
+    NotAllowed,
+}
+
+impl Origins {
+    /// Lists as saved in the Mono's browser setting. Entries that are not origins are dropped.
+    pub fn new(allowed: &[String], blocked: &[String]) -> Self {
+        let clean = |list: &[String]| {
+            list.iter()
+                .filter_map(|o| super::super::normalize_origin(o).ok())
+                .collect()
+        };
+        Self {
+            allowed: clean(allowed),
+            blocked: clean(blocked),
+        }
+    }
+    /// `Ok` when the page at `url` may be read.
+    pub fn check(&self, url: &str) -> Result<(), ReadRefusal> {
+        let Some(origin) = tabs::origin_of(url) else {
+            // An empty page is harmless and a new tab starts as one; every other address that has
+            // no web origin is a browser page.
+            return if url == "about:blank" {
+                Ok(())
+            } else {
+                Err(ReadRefusal::Restricted)
+            };
+        };
+        if self.blocked.contains(&origin) {
+            return Err(ReadRefusal::Blocked);
+        }
+        if !self.allowed.is_empty() && !self.allowed.contains(&origin) {
+            return Err(ReadRefusal::NotAllowed);
+        }
+        Ok(())
+    }
+    /// Whether the page belongs in a tab list at all: a browser page is listed (without content),
+    /// a page of an origin this Mono may not use is left out.
+    fn listed(&self, url: &str) -> bool {
+        !matches!(
+            self.check(url),
+            Err(ReadRefusal::Blocked | ReadRefusal::NotAllowed)
+        )
+    }
+}
+
+fn refusal_text(refusal: ReadRefusal) -> &'static str {
+    match refusal {
+        ReadRefusal::Restricted => "This is a browser page (or a file): zptah Browser never reads it.",
+        ReadRefusal::Blocked => "This site is on this Mono's blocked list, so zptah Browser does not read it.",
+        ReadRefusal::NotAllowed => "This Mono may only use the sites on its allowed list, and this page is not one of them.",
+    }
+}
+
+// ---- the upstream ----
+
+#[derive(Default)]
+struct State {
+    /// The tab list the agent saw last (what `browser_tabs select` indexes into).
+    listed: Vec<TabInfo>,
+    /// Every tab seen in a list, by id, for the address check before a read.
+    known: HashMap<u64, TabInfo>,
+    /// The tab the read tools use when the agent names none.
+    selected: Option<u64>,
+}
+
+pub struct ExtensionUpstream {
+    mono_id: String,
+    link: LinkSource,
+    origins: Mutex<Origins>,
+    /// Where `filename` arguments may write (the gate's private output folder); none: ignored.
+    output_dir: Mutex<Option<PathBuf>>,
+    state: Mutex<State>,
+}
+
+impl ExtensionUpstream {
+    pub(crate) fn new(mono_id: impl Into<String>, link: LinkSource) -> Arc<Self> {
+        Arc::new(Self {
+            mono_id: mono_id.into(),
+            link,
+            origins: Mutex::new(Origins::default()),
+            output_dir: Mutex::new(None),
+            state: Mutex::new(State::default()),
+        })
+    }
+
+    /// The link of the paired profile `instance_id` in `manager`. The Mono wiring that calls it
+    /// lands with the approval and trust work (spec tickets T13, T15).
+    #[allow(dead_code)]
+    pub(crate) fn for_manager(
+        mono_id: impl Into<String>,
+        manager: LinkManager,
+        instance_id: impl Into<String>,
+    ) -> Arc<Self> {
+        let instance_id = instance_id.into();
+        Self::new(mono_id, Arc::new(move || manager.handle(&instance_id)))
+    }
+
+    /// Applies the Mono's origin lists to every call that follows.
+    pub fn set_origins(&self, origins: Origins) {
+        *lock(&self.origins) = origins;
+    }
+    /// Lets `filename` arguments of snapshot and screenshot write into `dir`.
+    pub fn set_output_dir(&self, dir: PathBuf) {
+        *lock(&self.output_dir) = Some(dir);
+    }
+
+    fn origins(&self) -> Origins {
+        lock(&self.origins).clone()
+    }
+
+    // ---- one request to the extension ----
+
+    fn ask(&self, method: Method, mut params: Value, deadline_ms: u64) -> Result<Value, String> {
+        let Some(link) = (self.link)().filter(LinkHandle::is_open) else {
+            return Err(not_connected());
+        };
+        if let Some(map) = params.as_object_mut() {
+            map.insert("deadline_ms".into(), json!(deadline_ms));
+        }
+        let wait = Duration::from_millis(deadline_ms) + LINK_GRACE;
+        link.request(method, Some(&self.mono_id), params, wait)
+            .map_err(|e| request_error_text(e, method))
+    }
+
+    // ---- tab bookkeeping ----
+
+    fn state(&self) -> MutexGuard<'_, State> {
+        lock(&self.state)
+    }
+
+    /// Reads the tab list, keeps it and returns the part this Mono may see.
+    fn refresh(&self, all: bool) -> Result<Vec<TabInfo>, String> {
+        let result = self.ask(Method::TabsList, json!({"all": all}), DEFAULT_DEADLINE_MS)?;
+        let tabs: Vec<TabInfo> = serde_json::from_value(result["tabs"].clone())
+            .map_err(|_| "The extension sent a tab list that could not be read.".to_owned())?;
+        let origins = self.origins();
+        let visible: Vec<TabInfo> = tabs
+            .into_iter()
+            .filter(|tab| origins.listed(&tab.url))
+            .collect();
+        let mut state = self.state();
+        if all {
+            state.known.clear();
+        }
+        for tab in &visible {
+            state.known.insert(tab.tab, tab.clone());
+        }
+        state.listed = visible.clone();
+        Ok(visible)
+    }
+
+    /// The tab a read tool works on: the one named in `args`, else the selected one. Its address
+    /// is checked against the Mono's origin lists.
+    fn resolve_tab(&self, args: &Value) -> Result<TabInfo, String> {
+        let id =
+            match args.get("tab") {
+                None | Some(Value::Null) => self.state().selected,
+                Some(value) => Some(value.as_u64().ok_or(
+                    "`tab` must be a tab id from browser_tabs list (the number after tab=).",
+                )?),
+            };
+        let Some(id) = id else {
+            return Err("No tab is selected. Call browser_tabs with action list (and all true to see the tabs the user has open), then browser_tabs with action select, or pass `tab`.".into());
+        };
+        let known = self.state().known.get(&id).cloned();
+        let info = match known {
+            Some(info) => info,
+            None => {
+                self.refresh(true)?;
+                self.state().known.get(&id).cloned().ok_or_else(|| {
+                    format!("No tab with id {id} is open (or this Mono may not use it). Call browser_tabs list with all true.")
+                })?
+            }
+        };
+        self.origins()
+            .check(&info.url)
+            .map_err(|r| refusal_text(r).to_owned())?;
+        Ok(info)
+    }
+
+    /// Checks the address a reply came from: the page may have moved since the list.
+    fn check_reply_url(&self, url: &str) -> Result<(), String> {
+        self.origins().check(url).map_err(|r| {
+            format!(
+                "{} (the tab is now on a page this Mono may not read; the content was withheld.)",
+                refusal_text(r)
+            )
+        })
+    }
+
+    // ---- tools ----
+
+    fn call_tool(&self, name: &str, args: &Value) -> Value {
+        let outcome = match name {
+            "browser_tabs" => self.tabs_tool(args),
+            "browser_snapshot" => self.snapshot_tool(args),
+            "browser_read" => self.read_tool(args),
+            "browser_find" => self.find_tool(args),
+            "browser_take_screenshot" => self.screenshot_tool(args),
+            "browser_wait_for" => self.wait_tool(args),
+            other => Err(format!(
+                "{other} is not available with the zptah Browser extension yet."
+            )),
+        };
+        match outcome {
+            Ok(result) => result,
+            Err(message) => error_result(message),
+        }
+    }
+
+    fn tabs_tool(&self, args: &Value) -> Result<Value, String> {
+        match args["action"].as_str().unwrap_or("list") {
+            "list" => {
+                let all = args["all"].as_bool().unwrap_or(false);
+                let listed = self.refresh(all)?;
+                Ok(self.list_result(&listed, all))
+            }
+            "select" => {
+                let index = args["index"]
+                    .as_u64()
+                    .ok_or("browser_tabs select needs `index`: the number at the start of a line of the last list.")?;
+                let tab = self
+                    .state()
+                    .listed
+                    .get(index as usize)
+                    .cloned()
+                    .ok_or_else(|| format!("There is no tab {index} in the last list. Call browser_tabs list first."))?;
+                self.state().selected = Some(tab.tab);
+                let listed = self.state().listed.clone();
+                Ok(self.list_result(&listed, true))
+            }
+            "new" | "close" | "adopt" | "release" => Err(format!(
+                "browser_tabs {} is not available with the zptah Browser extension yet: the read tools work on tabs that are already open (list, select).",
+                args["action"].as_str().unwrap_or("")
+            )),
+            other => Err(format!("Unknown browser_tabs action `{other}`.")),
+        }
+    }
+
+    /// `### Open tabs` and one `- N: [(current) ][Title](url) [tab=ID] [...]` line per tab, the
+    /// shape the gate's tab parser reads (a marker after the address starts with ` [`).
+    fn list_result(&self, listed: &[TabInfo], all: bool) -> Value {
+        let selected = self.state().selected;
+        let mut text = String::from("### Open tabs\n");
+        if listed.is_empty() {
+            text.push_str(if all {
+                "(no tabs)\n"
+            } else {
+                "(this Mono has no tabs yet; call browser_tabs list with all true to see the tabs the user has open)\n"
+            });
+        }
+        for (index, tab) in listed.iter().enumerate() {
+            let current = if Some(tab.tab) == selected {
+                "(current) "
+            } else {
+                ""
+            };
+            let owner = match &tab.owner {
+                None => "user",
+                Some(owner) if *owner == self.mono_id => "yours",
+                Some(_) => "another mono",
+            };
+            text.push_str(&format!(
+                "- {index}: {current}[{}]({}) [tab={}] [{owner}]\n",
+                clean_title(&tab.title),
+                tab.url,
+                tab.tab
+            ));
+        }
+        let tabs_json: Vec<Value> = listed
+            .iter()
+            .map(|t| json!({"tab": t.tab, "url": t.url, "title": t.title, "owner": t.owner}))
+            .collect();
+        let mut result = text_result(text);
+        result["structuredContent"] = json!({"tabs": tabs_json, "selected": selected});
+        result
+    }
+
+    fn snapshot_tool(&self, args: &Value) -> Result<Value, String> {
+        let tab = self.resolve_tab(args)?;
+        let mut params = json!({
+            "tab": tab.tab,
+            "mode": match args["mode"].as_str() {
+                None | Some("full") => "full",
+                Some("interactive") => "interactive",
+                Some(other) => return Err(format!("`mode` is full or interactive, not `{other}`.")),
+            },
+            "max_bytes": SNAPSHOT_BYTES,
+        });
+        if let Some(target) = non_empty(&args["target"]) {
+            if !is_ref(target) {
+                return Err(format!("`target` must be a ref from a snapshot, such as e12; this browser has no selectors (got `{target}`)."));
+            }
+            params["scope_ref"] = json!(target);
+        }
+        if let Some(depth) = args["depth"].as_u64() {
+            params["depth"] = json!(depth.min(1000));
+        }
+        if let Some(from) = args["from"].as_u64() {
+            params["from"] = json!(from);
+            // A later page of the same snapshot: the extension refuses it when the page changed.
+            if let Some(generation) = args["generation"].as_u64() {
+                params["generation"] = json!(generation);
+            }
+        }
+        let result = self.ask(Method::PageSnapshot, params, DEFAULT_DEADLINE_MS)?;
+        let page = PageText::parse(&result, "text")?;
+        self.check_reply_url(&page.url)?;
+        let generation = result["generation"].as_u64().unwrap_or(0);
+        let dropped = result["hidden_dropped"].as_u64().unwrap_or(0);
+
+        let mut text = page.header();
+        text.push_str("### Snapshot\n");
+        match self.save(args, "yml", page.body.as_bytes()) {
+            Some(name) => text.push_str(&format!("- [Snapshot]({name})\n")),
+            None => text.push_str(&format!("```yaml\n{}\n```\n", fence_safe(&page.body))),
+        }
+        let mut notes = page.visibility_notes();
+        if dropped > 0 {
+            notes.push(format!(
+                "{dropped} hidden, transparent or off-screen text items were left out of the snapshot."
+            ));
+        }
+        if page.truncated {
+            notes.push(page.more_hint("browser_snapshot", Some(generation)));
+        }
+        text.push_str(&notes_block(&notes));
+        let mut out = text_result(text);
+        out["structuredContent"] = json!({
+            "url": page.url, "tab": tab.tab, "generation": generation,
+            "truncated": page.truncated, "next_from": page.next_from,
+        });
+        Ok(out)
+    }
+
+    fn read_tool(&self, args: &Value) -> Result<Value, String> {
+        let tab = self.resolve_tab(args)?;
+        let mut params = json!({"tab": tab.tab, "max_bytes": READ_BYTES});
+        if let Some(from) = args["from"].as_u64() {
+            params["from"] = json!(from);
+        }
+        let result = self.ask(Method::PageRead, params, DEFAULT_DEADLINE_MS)?;
+        let page = PageText::parse(&result, "markdown")?;
+        self.check_reply_url(&page.url)?;
+        let mut text = page.header();
+        text.push_str("### Content\n");
+        text.push_str(&page.body);
+        text.push('\n');
+        let mut notes = page.visibility_notes();
+        if page.truncated {
+            notes.push(page.more_hint("browser_read", None));
+        }
+        text.push_str(&notes_block(&notes));
+        let mut out = text_result(text);
+        out["structuredContent"] = json!({
+            "url": page.url, "tab": tab.tab, "truncated": page.truncated, "next_from": page.next_from,
+        });
+        Ok(out)
+    }
+
+    fn find_tool(&self, args: &Value) -> Result<Value, String> {
+        let query = args["query"]
+            .as_str()
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+            .ok_or("browser_find needs `query`: the text or role to look for.")?;
+        let tab = self.resolve_tab(args)?;
+        let mut params =
+            json!({"tab": tab.tab, "query": query.chars().take(1024).collect::<String>()});
+        if let Some(max) = args["max"].as_u64() {
+            params["max"] = json!(max.clamp(1, 1000));
+        }
+        let result = self.ask(Method::PageFind, params, DEFAULT_DEADLINE_MS)?;
+        let url = str_field(&result, "url");
+        let title = str_field(&result, "title");
+        self.check_reply_url(&url)?;
+        let matches = result["matches"]
+            .as_array()
+            .ok_or("The extension sent a find result that could not be read.")?;
+        let generation = result["generation"].as_u64().unwrap_or(0);
+        let mut text = page_header(&url, &title);
+        text.push_str("### Matches\n");
+        if matches.is_empty() {
+            text.push_str("No match.\n");
+        }
+        for found in matches {
+            let one = |key: &str| str_field(found, key);
+            text.push_str(&format!(
+                "- {} {} [ref={}]: {}\n",
+                clean_line(&one("role")),
+                json_string(&one("name")),
+                clean_line(&one("ref")),
+                clean_line(&one("context")),
+            ));
+        }
+        let mut out = text_result(text);
+        out["structuredContent"] =
+            json!({"url": url, "tab": tab.tab, "generation": generation, "matches": matches});
+        Ok(out)
+    }
+
+    fn screenshot_tool(&self, args: &Value) -> Result<Value, String> {
+        let tab = self.resolve_tab(args)?;
+        let mut params = json!({"tab": tab.tab, "max_bytes": SCREENSHOT_BYTES});
+        if let Some(target) = non_empty(&args["target"]) {
+            if !is_ref(target) {
+                return Err(format!(
+                    "`target` must be a ref from a snapshot, such as e12 (got `{target}`)."
+                ));
+            }
+            params["ref"] = json!(target);
+        }
+        if let Some(full) = args["fullPage"].as_bool() {
+            params["full_page"] = json!(full);
+        }
+        let result = self.ask(Method::PageScreenshot, params, DEFAULT_DEADLINE_MS)?;
+        let b64 = result["png_b64"].as_str().unwrap_or("");
+        // Cheap bound before decoding: the extension was told the budget.
+        if b64.len() as u64 > SCREENSHOT_BYTES.div_ceil(3) * 4 + 4 {
+            return Err("The extension sent a screenshot larger than the size it was asked for; it was dropped.".into());
+        }
+        let png = B64
+            .decode(b64)
+            .map_err(|_| "The extension sent a screenshot that is not valid base64.".to_owned())?;
+        if png.len() as u64 > SCREENSHOT_BYTES {
+            return Err("The extension sent a screenshot larger than the size it was asked for; it was dropped.".into());
+        }
+        if !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return Err(
+                "The extension sent a screenshot that is not a PNG; it was dropped.".into(),
+            );
+        }
+        let url = result["url"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or(tab.url.clone());
+        let title = result["title"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or(tab.title.clone());
+        self.check_reply_url(&url)?;
+        let (width, height) = (
+            result["width"].as_u64().unwrap_or(0),
+            result["height"].as_u64().unwrap_or(0),
+        );
+        let method = result["method"].as_str().unwrap_or("visible");
+        let scale = result["scale_pct"].as_u64().filter(|s| *s < 100);
+        let mut text = page_header(&url, &title);
+        text.push_str("### Screenshot\n");
+        text.push_str(&format!(
+            "- {width}x{height} PNG of tab {} ({method} capture{})\n",
+            tab.tab,
+            scale
+                .map(|s| format!(", scaled to {s}%"))
+                .unwrap_or_default(),
+        ));
+        if let Some(name) = self.save(args, "png", &png) {
+            text.push_str(&format!("- [Screenshot]({name})\n"));
+        }
+        let mut out = text_result(text);
+        out["content"]
+            .as_array_mut()
+            .expect("content is an array")
+            .push(json!({"type": "image", "data": b64, "mimeType": "image/png"}));
+        out["structuredContent"] =
+            json!({"url": url, "tab": tab.tab, "width": width, "height": height, "method": method});
+        Ok(out)
+    }
+
+    fn wait_tool(&self, args: &Value) -> Result<Value, String> {
+        let tab = self.resolve_tab(args)?;
+        let mut params = json!({"tab": tab.tab});
+        let mut conditions = 0;
+        for (arg, field) in [("text", "text"), ("textGone", "text_gone")] {
+            if let Some(text) = non_empty(&args[arg]) {
+                params[field] = json!(text.chars().take(4096).collect::<String>());
+                conditions += 1;
+            }
+        }
+        let mut waits = 0;
+        if let Some(seconds) = args["time"].as_f64().filter(|s| s.is_finite() && *s >= 0.0) {
+            let ms = (seconds * 1000.0).round() as u64;
+            if ms > MAX_WAIT_MS {
+                return Err(format!("`time` is at most {} seconds.", MAX_WAIT_MS / 1000));
+            }
+            params["time_ms"] = json!(ms);
+            waits = ms;
+            conditions += 1;
+        }
+        if conditions == 0 {
+            return Err("browser_wait_for needs `text`, `textGone` or `time`.".into());
+        }
+        // A fixed wait is part of the request: the deadline must outlast it.
+        let deadline = (waits + DEFAULT_DEADLINE_MS).min(MAX_WAIT_MS);
+        let result = self.ask(Method::PageWait, params, deadline)?;
+        let url = str_field(&result, "url");
+        let title = result["title"].as_str().unwrap_or("").to_owned();
+        self.check_reply_url(&url)?;
+        let met = result["met"].as_bool().unwrap_or(false);
+        let mut text = page_header(&url, &title);
+        text.push_str(if met {
+            "### Result\nThe condition was met.\n"
+        } else {
+            "### Result\nTimed out: the condition was not met.\n"
+        });
+        let mut out = text_result(text);
+        out["isError"] = json!(!met);
+        out["structuredContent"] = json!({"url": url, "tab": tab.tab, "met": met});
+        Ok(out)
+    }
+
+    /// Writes `bytes` to the file `args.filename` names, when that is a plain file inside the
+    /// output folder (the gate already forced it there). Returns the file name for the link.
+    fn save(&self, args: &Value, extension: &str, bytes: &[u8]) -> Option<String> {
+        let dir = lock(&self.output_dir).clone()?;
+        let path = Path::new(args["filename"].as_str()?);
+        let name = path.file_name()?.to_str()?.to_owned();
+        if path.parent()? != dir || !name.ends_with(&format!(".{extension}")) {
+            return None;
+        }
+        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+            return None;
+        }
+        std::fs::create_dir_all(&dir).ok()?;
+        std::fs::write(path, bytes).ok()?;
+        Some(name)
+    }
+}
+
+impl Upstream for ExtensionUpstream {
+    fn post(
+        &self,
+        _url: &str,
+        _session: Option<&str>,
+        message: &Value,
+    ) -> Result<(Option<Value>, Option<String>), String> {
+        let Some(id) = message.get("id").filter(|id| !id.is_null()) else {
+            // A notification (`notifications/initialized`): nothing to answer.
+            return Ok((None, None));
+        };
+        let ok = |result: Value| json!({"jsonrpc": "2.0", "id": id, "result": result});
+        match message["method"].as_str().unwrap_or("") {
+            "initialize" => Ok((
+                Some(ok(json!({
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "zptah-browser-extension", "version": env!("CARGO_PKG_VERSION")},
+                }))),
+                Some(SESSION_ID.to_owned()),
+            )),
+            "ping" => Ok((Some(ok(json!({}))), None)),
+            "tools/list" => Ok((Some(ok(json!({"tools": tool_definitions()}))), None)),
+            "tools/call" => {
+                let params = &message["params"];
+                let name = params["name"].as_str().unwrap_or("");
+                let args = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                Ok((Some(ok(self.call_tool(name, &args))), None))
+            }
+            _ => Ok((
+                Some(
+                    json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "Method not found"}}),
+                ),
+                None,
+            )),
+        }
+    }
+
+    fn session_survives(&self, _error: &str) -> bool {
+        // There is no server session to lose: the link comes and goes by itself.
+        true
+    }
+}
+
+// ---- a page reply ----
+
+/// The common part of a snapshot or read reply.
+struct PageText {
+    url: String,
+    title: String,
+    body: String,
+    truncated: bool,
+    next_from: Option<u64>,
+    total_bytes: Option<u64>,
+    hidden: bool,
+    unrendered: bool,
+}
+impl PageText {
+    fn parse(result: &Value, body_field: &str) -> Result<Self, String> {
+        let bad = || "The extension sent a page result that could not be read.".to_owned();
+        let body = result[body_field].as_str().ok_or_else(bad)?.to_owned();
+        if body.len() as u64 > PAGE_BYTES {
+            return Err(
+                "The extension sent more text than it was asked for; it was dropped.".into(),
+            );
+        }
+        Ok(Self {
+            url: result["url"].as_str().ok_or_else(bad)?.to_owned(),
+            title: str_field(result, "title"),
+            body,
+            truncated: result["truncated"].as_bool().unwrap_or(false),
+            next_from: result["next_from"].as_u64(),
+            total_bytes: result["total_bytes"].as_u64(),
+            hidden: result["visibility"] == "hidden",
+            unrendered: result["unrendered"].as_bool().unwrap_or(false),
+        })
+    }
+    fn header(&self) -> String {
+        page_header(&self.url, &self.title)
+    }
+    /// The F7 hint: a hidden tab can render little or nothing (spec 6.4, "Background rendering").
+    fn visibility_notes(&self) -> Vec<String> {
+        if self.hidden && self.unrendered {
+            vec!["This tab is in the background and the page looks unrendered: sites often draw little or nothing until the tab is shown, so the page is probably not empty. Ask the user to show the tab, then read it again.".to_owned()]
+        } else if self.hidden {
+            vec!["This tab is in the background.".to_owned()]
+        } else {
+            Vec::new()
+        }
+    }
+    fn more_hint(&self, tool: &str, generation: Option<u64>) -> String {
+        let total = self
+            .total_bytes
+            .map(|t| format!(" of {t} bytes"))
+            .unwrap_or_default();
+        let from = self.next_from.unwrap_or(self.body.len() as u64);
+        let generation = generation
+            .map(|g| format!(" and generation={g}"))
+            .unwrap_or_default();
+        format!("The result is cut after {} bytes{total}. Call {tool} again with from={from}{generation} to read the rest.", self.body.len())
+    }
+}
+
+fn page_header(url: &str, title: &str) -> String {
+    format!(
+        "### Page\n- Page URL: {}\n- Page Title: {}\n",
+        clean_line(url),
+        clean_line(title)
+    )
+}
+
+fn notes_block(notes: &[String]) -> String {
+    if notes.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("### Notes\n");
+    for note in notes {
+        out.push_str(&format!("- {note}\n"));
+    }
+    out
+}
+
+// ---- small helpers ----
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn text_result(text: String) -> Value {
+    json!({"content": [{"type": "text", "text": text}], "isError": false})
+}
+
+fn error_result(message: String) -> Value {
+    json!({"content": [{"type": "text", "text": message}], "isError": true})
+}
+
+fn not_connected() -> String {
+    format!("{UNAVAILABLE_PREFIX} the zptah Browser extension is not connected. Ask the user to open Chrome with the zptah Browser extension and connect it in zptah.")
+}
+
+fn request_error_text(error: RequestError, method: Method) -> String {
+    match error {
+        RequestError::Closed => not_connected(),
+        RequestError::Timeout => format!(
+            "The zptah Browser extension did not answer {} in time.",
+            method.as_str()
+        ),
+        RequestError::TooLarge => "The request was too large for the browser link.".to_owned(),
+        RequestError::Invalid(e) => format!("The browser request was refused: {e}."),
+        RequestError::Remote(body) => remote_text(&body),
+    }
+}
+
+/// What an error code of the extension means for the agent.
+fn remote_text(body: &ErrorBody) -> String {
+    let hint = match body.code {
+        ErrorCode::TabGone => "That tab is closed. Call browser_tabs list again.",
+        ErrorCode::StaleRef => "That element reference is out of date. Take a new browser_snapshot.",
+        ErrorCode::RestrictedUrl => "That is a browser page; zptah Browser never reads it.",
+        ErrorCode::OriginBlocked => "That site is not allowed for this Mono.",
+        ErrorCode::Stopped => "The user stopped the browser with the Stop button. Do not try to continue; tell the user.",
+        ErrorCode::UnknownMono => "The browser does not know this Mono yet. Tell the user to reconnect the browser.",
+        ErrorCode::TooLarge => "The result was too large to send.",
+        ErrorCode::Timeout => "The page did not answer in time.",
+        ErrorCode::Unsupported => "That is not possible here.",
+        ErrorCode::Incognito => "Private windows are never used.",
+        _ => "",
+    };
+    let message = clean_line(&body.message);
+    if hint.is_empty() {
+        format!("The browser said {}: {message}", body.code.as_str())
+    } else {
+        format!("{hint} ({}: {message})", body.code.as_str())
+    }
+}
+
+fn non_empty(value: &Value) -> Option<&str> {
+    value.as_str().map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn str_field(value: &Value, key: &str) -> String {
+    value[key].as_str().unwrap_or("").to_owned()
+}
+
+/// A ref the snapshot prints: `e12`, or `f3e12` inside a frame.
+fn is_ref(text: &str) -> bool {
+    let rest = text
+        .strip_prefix('f')
+        .map_or(text, |r| r.trim_start_matches(|c: char| c.is_ascii_digit()));
+    rest.strip_prefix('e')
+        .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        && text.len() <= 64
+}
+
+/// One line of text: control characters (and so line breaks) become spaces.
+fn clean_line(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+/// A title for a tab line: brackets and parentheses would end the `[Title](url)` early.
+fn clean_title(title: &str) -> String {
+    let line = clean_line(title);
+    line.chars()
+        .map(|c| match c {
+            '[' => '(',
+            ']' => ')',
+            c => c,
+        })
+        .take(MAX_TITLE_CHARS)
+        .collect()
+}
+
+fn json_string(text: &str) -> String {
+    serde_json::to_string(&clean_line(text)).unwrap_or_else(|_| "\"\"".into())
+}
+
+/// Page text must not close the fence of the yaml block it sits in.
+fn fence_safe(text: &str) -> String {
+    text.replace("```", "``\u{200b}`")
+}
+
+// ---- tool definitions ----
+
+fn tab_property() -> Value {
+    json!({
+        "type": "integer",
+        "description": "The tab to use: the number after tab= in a browser_tabs list line. Default: the tab chosen with browser_tabs select.",
+    })
+}
+
+fn tool_definitions() -> Vec<Value> {
+    let object = |properties: Value, required: Value| json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false});
+    vec![
+        json!({
+            "name": "browser_tabs",
+            "title": "List or select browser tabs",
+            "description": "List the tabs, or choose the tab the other browser tools use. `list` shows this Mono's own tabs; with all true it shows every open tab of the user's browser profile that this Mono may use (the user's tabs are read only). `select` takes the index from the last list; it never brings a tab to the front.",
+            "inputSchema": object(json!({
+                "action": {"type": "string", "enum": ["list", "select"], "description": "list or select"},
+                "all": {"type": "boolean", "description": "With list: show all open tabs of the profile, not only this Mono's tabs."},
+                "index": {"type": "integer", "description": "With select: the number at the start of a line of the last list."},
+            }), json!(["action"])),
+            "annotations": {"readOnlyHint": true},
+        }),
+        json!({
+            "name": "browser_snapshot",
+            "title": "Page snapshot",
+            "description": "Capture the accessibility snapshot of a tab: roles, names and a [ref=eN] for each element. Better than a screenshot for reading and for later actions. A long page is cut; call again with from and generation to read the rest.",
+            "inputSchema": object(json!({
+                "tab": tab_property(),
+                "target": {"type": "string", "description": "A ref such as e12: snapshot only that element."},
+                "depth": {"type": "integer", "description": "How many levels below the target to show."},
+                "mode": {"type": "string", "enum": ["full", "interactive"], "description": "interactive shows only controls and links."},
+                "from": {"type": "integer", "description": "Continue a cut snapshot at this byte offset."},
+                "generation": {"type": "integer", "description": "With from: the generation the cut snapshot reported."},
+                "filename": {"type": "string", "description": "Save the snapshot to this file instead of returning it."},
+            }), json!([])),
+            "annotations": {"readOnlyHint": true},
+        }),
+        json!({
+            "name": "browser_read",
+            "title": "Read the page text",
+            "description": "Read the main text of a tab as Markdown. Cheaper than a snapshot for articles and documents. A long page is cut; call again with from to read the rest.",
+            "inputSchema": object(json!({
+                "tab": tab_property(),
+                "from": {"type": "integer", "description": "Continue a cut result at this byte offset."},
+            }), json!([])),
+            "annotations": {"readOnlyHint": true},
+        }),
+        json!({
+            "name": "browser_find",
+            "title": "Find on the page",
+            "description": "Search a tab for text or a role (for example `button Buy`) and return matching elements with their refs.",
+            "inputSchema": object(json!({
+                "query": {"type": "string", "description": "Text or role to look for."},
+                "tab": tab_property(),
+                "max": {"type": "integer", "description": "At most this many matches."},
+            }), json!(["query"])),
+            "annotations": {"readOnlyHint": true},
+        }),
+        json!({
+            "name": "browser_take_screenshot",
+            "title": "Take a screenshot",
+            "description": "Take a PNG screenshot of the visible part of a tab, or of one element. Only works for a tab that is showing; for a background tab use browser_snapshot, or ask the user to show the tab. Large pictures are scaled down.",
+            "inputSchema": object(json!({
+                "tab": tab_property(),
+                "target": {"type": "string", "description": "A ref such as e12: capture only that element."},
+                "fullPage": {"type": "boolean", "description": "Capture the whole page, not only the visible part."},
+                "filename": {"type": "string", "description": "Also save the picture to this file."},
+            }), json!([])),
+            "annotations": {"readOnlyHint": true},
+        }),
+        json!({
+            "name": "browser_wait_for",
+            "title": "Wait",
+            "description": "Wait for text to appear or disappear in a tab, or for some seconds.",
+            "inputSchema": object(json!({
+                "tab": tab_property(),
+                "text": {"type": "string", "description": "Wait until this text appears."},
+                "textGone": {"type": "string", "description": "Wait until this text disappears."},
+                "time": {"type": "number", "description": "Wait this many seconds."},
+            }), json!([])),
+            "annotations": {"readOnlyHint": true},
+        }),
+    ]
+}

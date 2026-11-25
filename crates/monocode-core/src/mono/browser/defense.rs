@@ -202,6 +202,7 @@ pub fn returns_content(tool: &str, text: &str) -> bool {
         tool,
         "browser_snapshot"
             | "browser_find"
+            | "browser_read"
             | "browser_tabs"
             | "browser_evaluate"
             | "browser_run_code_unsafe"
