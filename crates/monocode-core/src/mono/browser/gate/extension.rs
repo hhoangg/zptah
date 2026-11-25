@@ -18,9 +18,12 @@
 //! * Nothing here activates, focuses or changes a tab: `browser_tabs select` only changes which
 //!   tab the Mono's read tools use by default.
 //! * App to extension frames stay under 1 MiB (Chrome's native messaging limit): requests carry
-//!   only small fields, and every reply that can be large (snapshot, read, screenshot) is asked
-//!   for with a `max_bytes` budget the extension must respect (`PAGE_BYTES`, `SNAPSHOT_BYTES`,
-//!   `READ_BYTES`, `SCREENSHOT_BYTES`). A larger answer is refused, not shown.
+//!   only small fields. Replies come back over the socket (16 MiB frames), but a page reply that
+//!   can be large (snapshot, read, screenshot) is still asked for with a `max_bytes` budget the
+//!   extension must respect (`PAGE_BYTES`, `SNAPSHOT_BYTES`, `READ_BYTES`, `SCREENSHOT_BYTES`),
+//!   to keep what reaches the agent and its context small. A larger answer is refused, not shown.
+//! * Results carry no `structuredContent`: page data (titles, addresses, element names) must
+//!   reach the agent only as text inside the gate's untrusted-content fence.
 use super::super::link::protocol::{ErrorBody, ErrorCode, Method, TabInfo};
 use super::super::links::manager::{LinkHandle, LinkManager, RequestError};
 use super::guard::UNAVAILABLE_PREFIX;
@@ -39,11 +42,11 @@ const SESSION_ID: &str = "zptah-extension";
 pub const SNAPSHOT_BYTES: u64 = 60_000;
 /// Default `max_bytes` for `browser_read`.
 pub const READ_BYTES: u64 = 40_000;
-/// The largest `max_bytes` any page tool asks for. A reply is JSON with the text escaped and
-/// sealed, and must stay under Chrome's 1 MiB message limit, so this leaves room.
+/// The largest `max_bytes` any page tool may ask for (the schema maximum). Replies travel over
+/// the 16 MiB socket frame; this keeps one reply well inside it and inside the agent's context.
 pub const PAGE_BYTES: u64 = 900_000;
 /// `max_bytes` asked for a screenshot: the PNG the extension returns is at most this many bytes
-/// (it scales the picture down to fit), so its base64 text and the envelope stay under 1 MiB.
+/// (it scales the picture down to fit), so one picture stays small for the agent and the link.
 pub const SCREENSHOT_BYTES: u64 = 700_000;
 /// How long a request may take before the extension must answer `E_TIMEOUT`.
 pub const DEFAULT_DEADLINE_MS: u64 = 30_000;
@@ -101,6 +104,9 @@ impl Origins {
                 Err(ReadRefusal::Restricted)
             };
         };
+        if is_web_store(url) {
+            return Err(ReadRefusal::Restricted);
+        }
         if self.blocked.contains(&origin) {
             return Err(ReadRefusal::Blocked);
         }
@@ -117,6 +123,18 @@ impl Origins {
             Err(ReadRefusal::Blocked | ReadRefusal::NotAllowed)
         )
     }
+}
+
+/// The extension stores are never read (spec 6.1).
+fn is_web_store(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    let host = parsed.host_str().unwrap_or("");
+    let path = parsed.path();
+    host == "chromewebstore.google.com"
+        || (host == "chrome.google.com" && path.starts_with("/webstore"))
+        || (host == "microsoftedge.microsoft.com" && path.starts_with("/addons"))
 }
 
 fn refusal_text(refusal: ReadRefusal) -> &'static str {
@@ -343,13 +361,7 @@ impl ExtensionUpstream {
                 tab.tab
             ));
         }
-        let tabs_json: Vec<Value> = listed
-            .iter()
-            .map(|t| json!({"tab": t.tab, "url": t.url, "title": t.title, "owner": t.owner}))
-            .collect();
-        let mut result = text_result(text);
-        result["structuredContent"] = json!({"tabs": tabs_json, "selected": selected});
-        result
+        text_result(text)
     }
 
     fn snapshot_tool(&self, args: &Value) -> Result<Value, String> {
@@ -401,11 +413,7 @@ impl ExtensionUpstream {
             notes.push(page.more_hint("browser_snapshot", Some(generation)));
         }
         text.push_str(&notes_block(&notes));
-        let mut out = text_result(text);
-        out["structuredContent"] = json!({
-            "url": page.url, "tab": tab.tab, "generation": generation,
-            "truncated": page.truncated, "next_from": page.next_from,
-        });
+        let out = text_result(text);
         Ok(out)
     }
 
@@ -427,10 +435,7 @@ impl ExtensionUpstream {
             notes.push(page.more_hint("browser_read", None));
         }
         text.push_str(&notes_block(&notes));
-        let mut out = text_result(text);
-        out["structuredContent"] = json!({
-            "url": page.url, "tab": tab.tab, "truncated": page.truncated, "next_from": page.next_from,
-        });
+        let out = text_result(text);
         Ok(out)
     }
 
@@ -453,7 +458,6 @@ impl ExtensionUpstream {
         let matches = result["matches"]
             .as_array()
             .ok_or("The extension sent a find result that could not be read.")?;
-        let generation = result["generation"].as_u64().unwrap_or(0);
         let mut text = page_header(&url, &title);
         text.push_str("### Matches\n");
         if matches.is_empty() {
@@ -469,9 +473,7 @@ impl ExtensionUpstream {
                 clean_line(&one("context")),
             ));
         }
-        let mut out = text_result(text);
-        out["structuredContent"] =
-            json!({"url": url, "tab": tab.tab, "generation": generation, "matches": matches});
+        let out = text_result(text);
         Ok(out)
     }
 
@@ -509,7 +511,7 @@ impl ExtensionUpstream {
         let url = result["url"]
             .as_str()
             .map(str::to_owned)
-            .unwrap_or(tab.url.clone());
+            .ok_or("The extension sent a screenshot without the page address; it was dropped.")?;
         let title = result["title"]
             .as_str()
             .map(str::to_owned)
@@ -538,8 +540,6 @@ impl ExtensionUpstream {
             .as_array_mut()
             .expect("content is an array")
             .push(json!({"type": "image", "data": b64, "mimeType": "image/png"}));
-        out["structuredContent"] =
-            json!({"url": url, "tab": tab.tab, "width": width, "height": height, "method": method});
         Ok(out)
     }
 
@@ -580,8 +580,9 @@ impl ExtensionUpstream {
             "### Result\nTimed out: the condition was not met.\n"
         });
         let mut out = text_result(text);
+        // An unmet condition is a tool error on purpose (as in Playwright): the agent must not
+        // read "no error" as "the page is ready".
         out["isError"] = json!(!met);
-        out["structuredContent"] = json!({"url": url, "tab": tab.tab, "met": met});
         Ok(out)
     }
 
@@ -594,11 +595,17 @@ impl ExtensionUpstream {
         if path.parent()? != dir || !name.ends_with(&format!(".{extension}")) {
             return None;
         }
-        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-            return None;
-        }
         std::fs::create_dir_all(&dir).ok()?;
-        std::fs::write(path, bytes).ok()?;
+        // Never write through a link, and never over an existing file.
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut file = options.open(path).ok()?;
+        std::io::Write::write_all(&mut file, bytes).ok()?;
         Some(name)
     }
 }
