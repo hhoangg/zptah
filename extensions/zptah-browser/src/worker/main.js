@@ -1,7 +1,12 @@
 // Service worker entry: owns the link to the zptah app (see link.js). Tools and the Mono
 // dispatcher arrive in later tickets and register on `link.handlers`.
+import { registerActPath } from "./act.js";
 import { ALARM_NAME, HOST_NAME, PING_INTERVAL_MS } from "./config.js";
+import { createDebugger } from "./debugger.js";
+import { Lexicon } from "./lexicon.js";
+import { LEXICON_DATA } from "./lexicon-data.js";
 import { BrowserLink } from "./link.js";
+import { registerReadPath } from "./readpath.js";
 import { createStore, trustedArea } from "./store.js";
 
 /** Brand and version as the browser reports them; Chrome only exposes the major here. */
@@ -26,6 +31,21 @@ export const link = new BrowserLink({
   store: createStore(storageArea),
   extVersion: (manifest.version_name ?? manifest.version).slice(0, 32),
   browser: browserInfo(),
+});
+
+// One debugger wrapper (and CDP allowlist) for the screenshots of the read path and the act path.
+const dbg = createDebugger({
+  api: /** @type {any} */ (chrome),
+  now: Date.now,
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  emit: (method, params) => void link.sendEvent(method, params),
+  isStopped: () => link.stopped === true,
+});
+const read = registerReadPath(link, { dbg });
+const acts = registerActPath(link, {
+  read,
+  dbg,
+  lexicon: LEXICON_DATA ? new Lexicon(LEXICON_DATA.lexicon, LEXICON_DATA.sites) : null,
 });
 
 // Messages from our own pair page: the nonce to pair with, and a status poll. Anything else
@@ -59,6 +79,7 @@ chrome.runtime.onMessage.addListener(
 function keepAlive() {
   void storageArea.get("zptah.keepalive");
   void link.tick();
+  void acts.sweep();
 }
 setInterval(keepAlive, PING_INTERVAL_MS);
 chrome.alarms.create(ALARM_NAME, { periodInMinutes: 0.5 });

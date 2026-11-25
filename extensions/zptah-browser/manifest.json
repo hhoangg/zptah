@@ -13,6 +13,7 @@
     "alarms",
     "webNavigation"
   ],
+  "incognito": "not_allowed",
   "optional_permissions": ["debugger"],
   "host_permissions": ["<all_urls>"],
   "background": {

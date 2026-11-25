@@ -273,6 +273,97 @@
         "digest": { "type": "string", "minLength": 1, "maxLength": 128 }
       }
     },
+    "RiskCategory": {
+      "enum": [
+        "payment", "destructive", "account_security", "sharing", "send_unnamed", "post_public", "upload",
+        "credential_entry", "terms", "unrelated_domain", "sensitive_site", "soul_rule", "tainted", "injection"
+      ]
+    },
+    "FieldKind": {
+      "enum": [
+        "password", "otp", "card_number", "card_cvc", "card_expiry", "bank_account", "amount", "national_id",
+        "email", "file", "terms_checkbox", "other"
+      ]
+    },
+    "ElementSignals": {
+      "type": "object",
+      "description": "Matches ElementSignals in risk/signals.rs field for field. Optional strings are omitted when absent, never null.",
+      "required": [
+        "role", "name", "text", "tag", "is_submit", "in_dialog", "dialog_has_primary", "dialog_primary_names",
+        "in_landmark_menu", "nearby_text", "amounts"
+      ],
+      "properties": {
+        "role": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 200 },
+        "text": { "type": "string", "maxLength": 200 },
+        "tag": { "type": "string", "maxLength": 32 },
+        "type": { "type": "string", "maxLength": 64 },
+        "autocomplete": { "type": "string", "maxLength": 128 },
+        "input_name": { "type": "string", "maxLength": 200 },
+        "input_id": { "type": "string", "maxLength": 200 },
+        "placeholder": { "type": "string", "maxLength": 200 },
+        "label": { "type": "string", "maxLength": 200 },
+        "href": { "type": "string", "maxLength": 8192 },
+        "target": { "type": "string", "maxLength": 64 },
+        "form_action": { "type": "string", "maxLength": 8192 },
+        "form_method": { "type": "string", "maxLength": 16 },
+        "is_submit": { "type": "boolean" },
+        "in_dialog": { "type": "boolean" },
+        "dialog_text": { "type": "string", "maxLength": 400 },
+        "dialog_has_primary": { "type": "boolean" },
+        "dialog_primary_names": { "type": "array", "items": { "type": "string", "maxLength": 200 } },
+        "dialog_markers": { "type": "string", "maxLength": 400 },
+        "in_landmark_menu": { "type": "boolean" },
+        "nearby_text": { "type": "string", "maxLength": 400 },
+        "amounts": { "type": "array", "items": { "type": "string", "maxLength": 64 } }
+      }
+    },
+    "FormSignals": {
+      "type": "object",
+      "description": "Matches FormSignals in risk/signals.rs. Field values are never sent.",
+      "required": ["fields", "recipients"],
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "label", "filled"],
+            "properties": {
+              "kind": { "$ref": "#/$defs/FieldKind" },
+              "label": { "type": "string", "maxLength": 200 },
+              "filled": { "type": "boolean" }
+            }
+          }
+        },
+        "recipients": { "type": "array", "items": { "type": "string", "maxLength": 200 } },
+        "conversation_title": { "type": "string", "maxLength": 200 },
+        "visibility": { "type": "string", "maxLength": 200 }
+      }
+    },
+    "Effects": {
+      "type": "object",
+      "required": ["method", "dom_mutations", "url_changed", "focus_changed"],
+      "properties": {
+        "method": { "enum": ["content", "debugger"] },
+        "dom_mutations": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "url_changed": { "type": "boolean" },
+        "focus_changed": { "type": "boolean" },
+        "value_matches": { "type": "boolean" },
+        "submitted": { "type": "boolean" },
+        "ignored": { "type": "boolean" },
+        "hint": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "PreparedScreenshot": {
+      "type": "object",
+      "required": ["png_b64", "method"],
+      "properties": {
+        "png_b64": { "$ref": "#/$defs/B64Bytes" },
+        "method": { "enum": ["visible", "debugger"] },
+        "width": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
     "Prepared": {
       "type": "object",
       "required": ["prepare_id", "expires_ms", "digest", "url", "title", "frame_url", "element", "ext_risk"],
@@ -283,10 +374,11 @@
         "url": { "type": "string", "maxLength": 8192 },
         "title": { "type": "string", "maxLength": 8192 },
         "frame_url": { "type": "string", "maxLength": 8192 },
-        "element": { "type": "object" },
-        "form": { "type": "object" },
-        "ext_risk": { "type": "array", "items": { "type": "string", "maxLength": 64 } },
-        "screenshot": { "type": "object" }
+        "element": { "$ref": "#/$defs/ElementSignals" },
+        "form": { "$ref": "#/$defs/FormSignals" },
+        "ext_risk": { "type": "array", "items": { "$ref": "#/$defs/RiskCategory" } },
+        "screenshot": { "$ref": "#/$defs/PreparedScreenshot" },
+        "debugger_attached": { "type": "boolean" }
       }
     },
     "UrlTitle": {
@@ -472,15 +564,24 @@
       }
     },
     "nav.go": {
-      "params": { "type": "object", "required": ["tab", "url"], "properties": { "tab": { "$ref": "#/$defs/TabId" }, "url": { "type": "string", "minLength": 1, "maxLength": 8192 } } },
+      "params": { "type": "object", "required": ["tab", "url"], "properties": { "tab": { "$ref": "#/$defs/TabId" }, "url": { "type": "string", "minLength": 1, "maxLength": 8192 }, "deadline_ms": { "$ref": "#/$defs/DeadlineMs" } } },
       "result": { "$ref": "#/$defs/UrlTitle" }
     },
     "nav.history": {
-      "params": { "type": "object", "required": ["tab", "dir"], "properties": { "tab": { "$ref": "#/$defs/TabId" }, "dir": { "enum": ["back", "forward"] } } },
+      "params": { "type": "object", "required": ["tab", "dir"], "properties": { "tab": { "$ref": "#/$defs/TabId" }, "dir": { "enum": ["back", "forward"] }, "deadline_ms": { "$ref": "#/$defs/DeadlineMs" } } },
       "result": { "$ref": "#/$defs/UrlTitle" }
     },
     "act.prepare": {
-      "params": { "type": "object", "required": ["tab", "action"], "properties": { "tab": { "$ref": "#/$defs/TabId" }, "action": { "$ref": "#/$defs/Action" } } },
+      "params": {
+        "type": "object",
+        "required": ["tab", "action"],
+        "properties": {
+          "tab": { "$ref": "#/$defs/TabId" },
+          "action": { "$ref": "#/$defs/Action" },
+          "needs_screenshot": { "type": "boolean" },
+          "deadline_ms": { "$ref": "#/$defs/DeadlineMs" }
+        }
+      },
       "result": { "$ref": "#/$defs/Prepared" }
     },
     "act.commit": {
@@ -490,7 +591,8 @@
         "properties": {
           "prepare_id": { "type": "string", "minLength": 1, "maxLength": 64 },
           "approval": { "$ref": "#/$defs/ApprovalRef" },
-          "input": { "enum": ["auto", "trusted"] }
+          "input": { "enum": ["auto", "trusted"] },
+          "deadline_ms": { "$ref": "#/$defs/DeadlineMs" }
         }
       },
       "result": {
@@ -499,7 +601,7 @@
         "properties": {
           "url": { "type": "string", "maxLength": 8192 },
           "title": { "type": "string", "maxLength": 8192 },
-          "effects": { "type": "object" }
+          "effects": { "$ref": "#/$defs/Effects" }
         }
       }
     },
@@ -509,7 +611,8 @@
         "required": ["prepare_id", "until_ms"],
         "properties": {
           "prepare_id": { "type": "string", "minLength": 1, "maxLength": 64 },
-          "until_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          "until_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "deadline_ms": { "$ref": "#/$defs/DeadlineMs" }
         }
       },
       "result": {
@@ -519,7 +622,7 @@
       }
     },
     "act.cancel": {
-      "params": { "type": "object", "required": ["prepare_id"], "properties": { "prepare_id": { "type": "string", "minLength": 1, "maxLength": 64 } } },
+      "params": { "type": "object", "required": ["prepare_id"], "properties": { "prepare_id": { "type": "string", "minLength": 1, "maxLength": 64 }, "deadline_ms": { "$ref": "#/$defs/DeadlineMs" } } },
       "result": { "$ref": "#/$defs/Empty" }
     },
     "dialog.respond": {
@@ -529,7 +632,8 @@
         "properties": {
           "tab": { "$ref": "#/$defs/TabId" },
           "accept": { "type": "boolean" },
-          "prompt_text": { "type": "string", "maxLength": 65536 }
+          "prompt_text": { "type": "string", "maxLength": 65536 },
+          "deadline_ms": { "$ref": "#/$defs/DeadlineMs" }
         }
       },
       "result": { "$ref": "#/$defs/Empty" }
@@ -591,6 +695,22 @@
           "tab": { "$ref": "#/$defs/TabId" },
           "kind": { "type": "string", "maxLength": 32 },
           "message": { "type": "string", "maxLength": 65536 }
+        }
+      }
+    },
+    "act.late": {
+      "description": "The result of a commit that ended as E_DIALOG_SUSPECTED, sent when the page finally answers (spec 6.3, F1).",
+      "params": {
+        "type": "object",
+        "required": ["tab", "prepare_id", "ok"],
+        "properties": {
+          "tab": { "$ref": "#/$defs/TabId" },
+          "prepare_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "ok": { "type": "boolean" },
+          "url": { "type": "string", "maxLength": 8192 },
+          "title": { "type": "string", "maxLength": 8192 },
+          "effects": { "$ref": "#/$defs/Effects" },
+          "error": { "$ref": "#/$defs/ErrorBody" }
         }
       }
     },

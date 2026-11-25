@@ -1,0 +1,70 @@
+{
+ "element": {
+  "role": "button",
+  "name": "Pay ₫189,000",
+  "text": "Pay ₫189,000",
+  "tag": "button",
+  "type": "submit",
+  "input_id": "pay",
+  "form_action": "https://shop.test/pay",
+  "form_method": "post",
+  "is_submit": true,
+  "in_dialog": false,
+  "dialog_has_primary": false,
+  "dialog_primary_names": [],
+  "in_landmark_menu": false,
+  "nearby_text": "Card number Total ₫189,000 Pay ₫189,000",
+  "amounts": [
+   "₫189,000"
+  ]
+ },
+ "form": {
+  "fields": [
+   {
+    "kind": "card_number",
+    "label": "Card number",
+    "filled": false
+   }
+  ],
+  "recipients": []
+ },
+ "element_in_dialog": {
+  "role": "button",
+  "name": "Cancel",
+  "text": "Cancel",
+  "tag": "button",
+  "type": "button",
+  "input_id": "cancel",
+  "is_submit": false,
+  "in_dialog": true,
+  "dialog_text": "Delete your account permanently? Cancel Delete account",
+  "dialog_has_primary": true,
+  "dialog_primary_names": [
+   "Delete account"
+  ],
+  "dialog_markers": "onetrust-banner-sdk ot-sdk-container",
+  "in_landmark_menu": false,
+  "nearby_text": "Delete your account permanently? Cancel Delete account",
+  "amounts": []
+ },
+ "form_with_recipients": {
+  "fields": [
+   {
+    "kind": "email",
+    "label": "",
+    "filled": true
+   },
+   {
+    "kind": "other",
+    "label": "Visibility",
+    "filled": true
+   }
+  ],
+  "recipients": [
+   "an@example.com",
+   "binh@example.com"
+  ],
+  "conversation_title": "New message",
+  "visibility": "Friends"
+ }
+}
