@@ -749,7 +749,8 @@ pub(super) fn usage_reset_label(limit: &Limit, now: i64) -> Option<String> {
             usage::Window {
                 used_percent: 100.,
                 minutes: 300,
-                resets_at: Some(at)
+                resets_at: Some(at),
+                group: None,
             }
             .countdown(now)
         )
