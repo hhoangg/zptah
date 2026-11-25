@@ -191,6 +191,7 @@ pub(super) struct BrowserUi {
     /// Why the path typed in the page was not accepted.
     pub(super) node_error: Option<String>,
     pub(super) connect: super::browser_connect::ConnectUi,
+    pub(super) approval: super::browser_approval::ApprovalUi,
 }
 impl BrowserUi {
     pub(super) fn new() -> Self {
@@ -224,6 +225,7 @@ impl BrowserUi {
             node_requeue: false,
             node_error: None,
             connect: Default::default(),
+            approval: super::browser_approval::ApprovalUi::new(),
         }
     }
     /// Chrome's and node's environment as the page sees it now. In the app the node part is the
@@ -301,6 +303,7 @@ impl Monos {
             self.browser_check_node(cx);
         }
         self.browser_connect_refresh(cx);
+        self.browser_approval_page_refresh(cx);
         let env = self.browser_ui.env();
         let (profile_dir, profile_name) = self
             .roster
@@ -908,6 +911,7 @@ impl Monos {
         );
         if setting.enabled {
             sections.extend(self.browser_connect_card(cx));
+            sections.extend(self.browser_extension_cards(mono, &setting, cx));
             sections.push(self.browser_prerequisites(cx));
             sections.push(self.browser_profile_card(mono, &setting, cx));
             sections.push(self.browser_token_card(&setting, cx));

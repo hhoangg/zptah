@@ -218,7 +218,7 @@ pub fn start_app(
     #[cfg(not(unix))]
     let socket_dir = None;
     // A second call is a no-op: only the first one builds (and starts) a service.
-    Some(
+    let connect = Some(
         GLOBAL
             .get_or_init(|| {
                 Arc::new(BrowserConnect::new(ConnectOptions {
@@ -236,7 +236,12 @@ pub fn start_app(
                 }))
             })
             .clone(),
-    )
+    );
+    // The Mono runtimes find their link through the registry (the act tools, spec 8.2).
+    if let Some(c) = &connect {
+        super::links::registry::install(c.manager.clone());
+    }
+    connect
 }
 
 /// The app's link layer, once [`start_app`] ran.
@@ -632,7 +637,14 @@ fn watch_events(events: std::sync::mpsc::Receiver<LinkEvent>, observed: Arc<Mute
                         }
                         o.alert = Some(refusal.message());
                     }
-                    LinkEvent::Disconnected { .. } | LinkEvent::Extension { .. } => {}
+                    LinkEvent::Disconnected { .. } => {}
+                    LinkEvent::Extension {
+                        instance_id,
+                        envelope,
+                    } => {
+                        drop(o);
+                        super::gate::extension::act::dispatch_event(&instance_id, &envelope);
+                    }
                 }
             }
         });
