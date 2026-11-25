@@ -25,7 +25,7 @@ pub(crate) mod pairing;
 pub(crate) mod profiles;
 pub(crate) mod server;
 
-#[cfg(all(any(test, feature = "test-support"), unix))]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod fake_extension;
 
 #[cfg(test)]

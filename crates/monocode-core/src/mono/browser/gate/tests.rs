@@ -2145,7 +2145,7 @@ fn suggest_user(
     });
     (handle, shown)
 }
-fn three_steps(gate: &Gate) {
+fn three_steps(gate: &Gate) -> Value {
     call(
         gate,
         "browser_navigate",
@@ -2160,7 +2160,7 @@ fn three_steps(gate: &Gate) {
         gate,
         "browser_click",
         json!({"target": "e2", "element": "Next page"}),
-    );
+    )
 }
 fn wait_for(what: impl Fn() -> bool) -> bool {
     for _ in 0..100 {
@@ -2243,26 +2243,35 @@ fn accepting_the_suggestion_tells_the_mono_and_dismissing_does_not() {
     rig.gate.begin_turn(SHARED_ROUTE, "Check the list");
     rig.gate.exempt_from_taint(SHARED_ROUTE);
     let (handle, _) = suggest_user(rig.gate.attach(SHARED_ROUTE), vec![(true, false)]);
-    three_steps(&rig.gate);
+    let third = three_steps(&rig.gate);
     handle.join().unwrap();
     assert!(wait_for(|| rig
         .gate
         .inner
         .with_turn(SHARED_ROUTE, |t| t.save_ok)));
     let next = call(&rig.gate, "browser_snapshot", json!({}));
-    let parts = next["content"].as_array().unwrap();
-    assert!(parts.iter().any(|p| p["text"]
-        .as_str()
-        .is_some_and(|t| t.contains("call recipe_record"))));
+    // The card waits on its own thread: under load the answer can land before the third call's
+    // reply is built, so the note then rides on that reply instead of the next one.
+    let told = |reply: &Value| {
+        reply["content"].as_array().unwrap().iter().any(|p| {
+            p["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("call recipe_record"))
+        })
+    };
+    assert!(told(&third) || told(&next));
+    assert!(!(told(&third) && told(&next)), "the note is sent once");
     // Dismissed: nothing is stored, nothing is told, and the site is not blocked.
     rig.gate.begin_turn(SHARED_ROUTE, "Check the list again");
     rig.gate.exempt_from_taint(SHARED_ROUTE);
     let (handle, shown) = suggest_user(rig.gate.attach(SHARED_ROUTE), vec![(false, false)]);
-    three_steps(&rig.gate);
+    let third = three_steps(&rig.gate);
     handle.join().unwrap();
     assert_eq!(shown.lock().unwrap().len(), 1);
     std::thread::sleep(Duration::from_millis(100));
     assert!(!rig.gate.inner.with_turn(SHARED_ROUTE, |t| t.save_ok));
+    let next = call(&rig.gate, "browser_snapshot", json!({}));
+    assert!(!told(&third) && !told(&next));
     assert!(!MonoBrowserStore::at(rig.database.clone()).never_suggest(MONO, "https://shop.example"));
 }
 

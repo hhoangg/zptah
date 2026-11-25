@@ -300,7 +300,7 @@ const WRITE_TOOLS: [&str; 16] = [
 
 fn listed(csv: &str) -> Vec<String> {
     csv.split(',')
-        .filter_map(|t| t.strip_prefix("mcp__playwright_browser__"))
+        .filter_map(|t| t.strip_prefix("mcp__zptah_browser__"))
         .map(str::to_owned)
         .collect()
 }
@@ -349,7 +349,7 @@ fn level_1_disables_every_tool_but_the_read_ones_for_both_harnesses() {
     let codex: Vec<String> = serde_json::from_str(&codex).unwrap();
     assert_eq!(codex, disabled);
     // No harness prompt: the gate is the only guard, and it works in every permission mode.
-    assert_eq!(r.claude_allowed(), "mcp__playwright_browser");
+    assert_eq!(r.claude_allowed(), "mcp__zptah_browser");
 }
 
 #[test]
@@ -379,7 +379,7 @@ fn levels_2_and_3_disable_only_the_always_blocked_tools_for_both_harnesses() {
             serde_json::from_str::<Vec<String>>(&codex).unwrap(),
             disabled
         );
-        assert_eq!(r.claude_allowed(), "mcp__playwright_browser");
+        assert_eq!(r.claude_allowed(), "mcp__zptah_browser");
     }
 }
 
@@ -391,7 +391,7 @@ fn codex_gets_the_server_through_overrides_with_the_token_forwarded_not_inlined(
     let get = |key: &str| {
         overrides
             .iter()
-            .find(|(k, _)| k == &format!("mcp_servers.playwright_browser.{key}"))
+            .find(|(k, _)| k == &format!("mcp_servers.zptah_browser.{key}"))
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| panic!("{key}"))
     };
@@ -424,7 +424,7 @@ fn codex_gets_the_server_through_overrides_with_the_token_forwarded_not_inlined(
     );
     assert!(argv
         .iter()
-        .any(|a| a.starts_with("mcp_servers.playwright_browser.env_vars=")));
+        .any(|a| a.starts_with("mcp_servers.zptah_browser.env_vars=")));
     let token_env = command
         .get_envs()
         .find(|(k, _)| *k == TOKEN_ENV)
@@ -1046,7 +1046,7 @@ fn http_runtimes_point_claude_and_codex_at_the_running_server_without_the_token(
     let get = |key: &str| {
         overrides
             .iter()
-            .find(|(k, _)| k == &format!("mcp_servers.playwright_browser.{key}"))
+            .find(|(k, _)| k == &format!("mcp_servers.zptah_browser.{key}"))
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| panic!("{key}"))
     };
@@ -1055,7 +1055,7 @@ fn http_runtimes_point_claude_and_codex_at_the_running_server_without_the_token(
     for key in ["command", "args", "env_vars"] {
         assert!(overrides
             .iter()
-            .all(|(k, _)| k != &format!("mcp_servers.playwright_browser.{key}")));
+            .all(|(k, _)| k != &format!("mcp_servers.zptah_browser.{key}")));
     }
     // The tool rules are the same as for the stdio entry.
     assert!(get("disabled_tools").contains("browser_route"));
