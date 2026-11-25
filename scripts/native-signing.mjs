@@ -62,11 +62,35 @@ export function resolveSigningIdentity(env, run) {
 // Returns a problem message, or null when the identity is configured and listed.
 export const signingIdentityProblem = (env, run) => resolveSigningIdentity(env, run).problem ?? null;
 
+// Entitlements the release signature must carry, exactly (assets/native/Entitlements.plist).
+// Audit: the app has no dlopen of plugins or vendor dylibs (system frameworks only), no
+// DYLD_* use, and no microphone, camera, screen capture, Apple Events target or Keychain
+// access, so only the two memory entitlements are needed. Adding one needs a new audit.
+export const REQUIRED_ENTITLEMENTS = [
+  "com.apple.security.cs.allow-jit",
+  "com.apple.security.cs.allow-unsigned-executable-memory",
+];
+
+// Pure: problem message for the output of `codesign -d --entitlements :-`, or null.
+export function entitlementsProblem(entitlementsText) {
+  const text = String(entitlementsText);
+  const keys = [...text.matchAll(/<key>([^<]+)<\/key>\s*<true\/>/g)].map((m) => m[1]).sort();
+  const allKeys = [...text.matchAll(/<key>([^<]+)<\/key>/g)].map((m) => m[1]).sort();
+  const expected = [...REQUIRED_ENTITLEMENTS].sort();
+  if (JSON.stringify(keys) !== JSON.stringify(expected) || JSON.stringify(allKeys) !== JSON.stringify(expected))
+    return `The signed entitlements are not exactly ${expected.join(", ")}: ${text.trim() || "(none)"}`;
+  return null;
+}
+
 // Pure: problem message for the output of `codesign -d -r-` and `codesign -dv`, or null.
 // The requirement must be exactly the stable form for this certificate: no other
-// leaf hash and no extra `or` clauses.
+// leaf hash and no extra `or` clauses. The code directory flags must be exactly the
+// hardened runtime (0x10000): the self-signed signature is not ad-hoc (0x2) and has no
+// other flag.
 export function signatureProblem(requirementText, detailsText, sha1) {
   if (/^Signature=adhoc$/m.test(detailsText)) return "The packaged app is ad-hoc signed";
+  if (!/flags=0x10000\(runtime\)/.test(detailsText))
+    return `The packaged app is not signed with the hardened runtime (expected flags=0x10000(runtime)): ${detailsText.trim() || "(empty)"}`;
   const expected = `designated => identifier "app.zptah.desktop" and certificate leaf = H"${sha1.toLowerCase()}"`;
   const lines = requirementText.split("\n").map((l) => l.trim());
   if (!lines.includes(expected))
