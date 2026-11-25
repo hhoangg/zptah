@@ -467,6 +467,7 @@ interface GrantRef { kind: "user_reference"; quote: string; message_ms: number }
 | `tab.stopped` | `{tab, mono, by: "overlay"}` | The user pressed "Stop <Mono>" in the tab (10a) |
 | `dialog.opened` | `{tab, kind, message}` | JavaScript dialog on an owned tab (when detectable) |
 | `debugger.detached` | `{tab, reason}` | Includes `canceled_by_user` (the user pressed Cancel on the infobar) |
+| `act.late` | `{tab, prepare_id, ok, url?, title?, effects?, error?}` | The answer of a commit that ended as `E_DIALOG_SUSPECTED`, sent when the page finally answers (6.3, F1) |
 | `cursor.changed` | `{enabled, off_sites}` | Options page change |
 
 ## 6. The extension

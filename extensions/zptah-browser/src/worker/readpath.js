@@ -12,7 +12,8 @@ const HEX32 = /^[0-9a-f]{32}$/;
 /**
  * @param {import("./link.js").BrowserLink} link
  * @param {{ api?: any, now?: () => number, sleep?: (ms: number) => Promise<void>, imaging?: import("./screenshot.js").Imaging,
- *   ownerOf?: (tab: number) => string | null, captureTimeoutMs?: number }} [deps]
+ *   ownerOf?: (tab: number) => string | null, captureTimeoutMs?: number,
+ *   dbg?: { send: (tab: number, method: string, params?: Record<string, unknown>) => Promise<any>, isAttached: (tab: number) => boolean } }} [deps]
  */
 export function registerReadPath(link, deps = {}) {
   const api = deps.api ?? /** @type {any} */ (globalThis).chrome;
@@ -23,6 +24,7 @@ export function registerReadPath(link, deps = {}) {
   const pages = createPages({ api, now, sleep });
   const shots = createScreenshotter({
     api, sleep, now, imaging: deps.imaging ?? canvasImaging(), getGeneration: (t) => pages.gens.get(t), captureTimeoutMs: deps.captureTimeoutMs,
+    cdp: deps.dbg?.send, isAttached: deps.dbg?.isAttached,
   });
 
   /** @param {Record<string, any>} msg */
@@ -65,5 +67,6 @@ export function registerReadPath(link, deps = {}) {
   route("page.find", (entry, p) => pages.find(entry, p));
   route("page.wait", (entry, p) => pages.wait(entry, p));
   route("page.screenshot", (entry, p) => shots.screenshot(entry, p));
-  return pages;
+  // The act path shares the roster slot, the generation table and the screenshotter.
+  return Object.assign(pages, { slot, shots, ownerOf });
 }

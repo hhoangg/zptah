@@ -316,10 +316,12 @@ pub enum Event {
     DialogOpened,
     DebuggerDetached,
     CursorChanged,
+    /// The late result of a commit that ended as `E_DIALOG_SUSPECTED`.
+    ActLate,
 }
 
 impl Event {
-    pub const ALL: [Event; 8] = [
+    pub const ALL: [Event; 9] = [
         Event::TabUpdated,
         Event::TabRemoved,
         Event::TabOwnership,
@@ -328,6 +330,7 @@ impl Event {
         Event::DialogOpened,
         Event::DebuggerDetached,
         Event::CursorChanged,
+        Event::ActLate,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -340,6 +343,7 @@ impl Event {
             Event::DialogOpened => "dialog.opened",
             Event::DebuggerDetached => "debugger.detached",
             Event::CursorChanged => "cursor.changed",
+            Event::ActLate => "act.late",
         }
     }
 

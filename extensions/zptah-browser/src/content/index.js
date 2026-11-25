@@ -35,6 +35,10 @@
             ready: doc.readyState === "complete",
           };
         }
+        case "size": {
+          const el = root.document.documentElement;
+          return { width: Math.max(el?.scrollWidth ?? 0, root.innerWidth ?? 0), height: Math.max(el?.scrollHeight ?? 0, root.innerHeight ?? 0) };
+        }
         case "rect": {
           if (ns.snapshot.state.generation !== args.generation) return { stale: true };
           const el = ns.snapshot.resolveRef(args.ref);
@@ -46,12 +50,38 @@
             dpr: root.devicePixelRatio || 1,
           };
         }
+        case "act_prepare":
+          return ns.act.prepare(args);
+        case "act_revalidate":
+          return ns.act.revalidate(args);
+        case "act_perform":
+          return ns.act.perform(args).catch(failure);
+        case "act_locate":
+          return ns.act.locate(args);
+        case "act_focus":
+          return ns.act.focusTarget(args);
+        case "act_active":
+          return ns.act.active();
+        case "act_release":
+          return ns.act.release(args);
+        case "act_observe":
+          return ns.act.observe(args);
+        case "act_observed":
+          return ns.act.observed(args);
+        case "act_mutations":
+          return ns.act.mutationsSince(args);
         default:
           return { error: `unknown op ${op}` };
       }
     } catch (err) {
-      return { error: String(err instanceof Error ? err.message : err).slice(0, 200) };
+      return failure(err);
     }
+  }
+
+  /** @param {unknown} err */
+  function failure(err) {
+    const code = /** @type {any} */ (err)?.code;
+    return { error: String(err instanceof Error ? err.message : err).slice(0, 200), ...(typeof code === "string" && code.startsWith("E_") ? { code } : {}) };
   }
 
   ns.run = run;
