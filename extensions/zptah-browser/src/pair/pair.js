@@ -24,7 +24,9 @@ async function run() {
     await new Promise((r) => setTimeout(r, 500));
     const s = await chrome.runtime.sendMessage({ type: "zptah.status" });
     if (s?.status === "ready") return close();
-    if (s?.status === "pair_failed") return say("Pairing failed. Try again from zptah.");
+    if (["pair_failed", "auth_failed", "protocol_mismatch", "host_missing"].includes(s?.status)) {
+      return say("Pairing failed. Try again from zptah.");
+    }
   }
   say("Pairing timed out. Try again from zptah.");
 }

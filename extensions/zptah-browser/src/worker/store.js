@@ -28,3 +28,18 @@ export function createStore(area) {
   }
   return { load, saveKey };
 }
+
+/**
+ * Restricts chrome.storage.local to trusted contexts (no content scripts) and returns an area
+ * whose every read and write waits for that call, so K is never readable from a page context.
+ * @param {{ setAccessLevel(o: { accessLevel: string }): Promise<void>, get(key: string): Promise<Record<string, unknown>>, set(items: Record<string, unknown>): Promise<void> }} local
+ */
+export function trustedArea(local) {
+  const ready = local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+  return {
+    /** @param {string} key */
+    get: async (key) => (await ready, local.get(key)),
+    /** @param {Record<string, unknown>} items */
+    set: async (items) => (await ready, local.set(items)),
+  };
+}

@@ -7,7 +7,7 @@ import { b64decodeFixed, b64encode, toHex } from "../src/worker/bytes.js";
 import { randomBytes } from "../src/worker/crypto.js";
 import { appMac, DIR_APP_TO_EXT, extMac, Session, sessionKey } from "../src/worker/handshake.js";
 import { BrowserLink } from "../src/worker/link.js";
-import { createStore } from "../src/worker/store.js";
+import { createStore, trustedArea } from "../src/worker/store.js";
 
 const V = JSON.parse(readFileSync(new URL("../shared/handshake-vectors.json", import.meta.url), "utf8"));
 globalThis.chrome = /** @type {any} */ ({ runtime: { lastError: undefined } });
@@ -340,4 +340,17 @@ test("store creates a stable instance id once and keeps the key", async () => {
   await s.saveKey(V.key);
   assert.deepEqual(await s.load(), { instanceId: a.instanceId, key: V.key });
   assert.equal(toHex(randomBytes(16)).length, 32);
+});
+
+test("storage access is restricted to trusted contexts before any read or write", async () => {
+  const calls = [];
+  const local = {
+    setAccessLevel: async (o) => calls.push(`access:${o.accessLevel}`),
+    get: async (k) => (calls.push("get"), {}),
+    set: async () => void calls.push("set"),
+  };
+  const store = createStore(trustedArea(local));
+  await store.load();
+  assert.deepEqual(calls.slice(0, 2), ["access:TRUSTED_CONTEXTS", "get"]);
+  assert.equal(calls.indexOf("set") > 0, true);
 });

@@ -32,6 +32,7 @@ declare namespace chrome {
   }
   namespace storage {
     const local: {
+      setAccessLevel(options: { accessLevel: "TRUSTED_CONTEXTS" | "TRUSTED_AND_UNTRUSTED_CONTEXTS" }): Promise<void>;
       get(key: string): Promise<Record<string, unknown>>;
       set(items: Record<string, unknown>): Promise<void>;
     };

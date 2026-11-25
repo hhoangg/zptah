@@ -2,7 +2,7 @@
 // dispatcher arrive in later tickets and register on `link.handlers`.
 import { ALARM_NAME, HOST_NAME, PING_INTERVAL_MS } from "./config.js";
 import { BrowserLink } from "./link.js";
-import { createStore } from "./store.js";
+import { createStore, trustedArea } from "./store.js";
 
 /** Brand and version as the browser reports them; Chrome only exposes the major here. */
 function browserInfo() {
@@ -15,12 +15,15 @@ function browserInfo() {
   return { brand: "Chrome", version: m ? m[1] : "0" };
 }
 
+// First thing: keep K out of content scripts. Every store read and write waits for this.
+const storageArea = trustedArea(chrome.storage.local);
+
 const manifest = chrome.runtime.getManifest();
 
 export const link = new BrowserLink({
   hostName: HOST_NAME,
   connectNative: (name) => chrome.runtime.connectNative(name),
-  store: createStore(chrome.storage.local),
+  store: createStore(storageArea),
   extVersion: (manifest.version_name ?? manifest.version).slice(0, 32),
   browser: browserInfo(),
 });
@@ -54,7 +57,7 @@ chrome.runtime.onMessage.addListener(
 // read every 20 s counts as extension activity and the tick reconnects when the backoff
 // allows; the alarm wakes the worker again if it was stopped anyway. Chrome 120+ allows 30 s.
 function keepAlive() {
-  void chrome.storage.local.get("zptah.keepalive");
+  void storageArea.get("zptah.keepalive");
   void link.tick();
 }
 setInterval(keepAlive, PING_INTERVAL_MS);

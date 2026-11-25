@@ -84,6 +84,9 @@ export class Session {
   /**
    * MAC first, then the counter, which must be exactly the next one. State changes only on
    * success. Call in receive order.
+   * The MAC covers the received object as is (every field except `mac`), so the app must send
+   * exactly its serde envelope; the Rust side signs the parsed Envelope, which drops unknown
+   * fields, and it only ever sends known ones.
    * @param {Record<string, unknown>} envelope
    */
   async open(envelope) {
