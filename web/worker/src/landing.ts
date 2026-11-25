@@ -1,6 +1,7 @@
 // The public landing page of the official host (web/landing). It is a static asset under /landing/ (built into the
 // assets directory next to the SPA), and the Worker decides which of the two a request for `/` gets:
 //   - `/home`: always the landing page.
+//   - `/privacy`: the privacy policy of the zptah Browser extension (landing/privacy/), a plain static page.
 //   - `/`: the landing page when the request has no session cookie, the SPA (the assets' index.html) when it has one.
 // Presence check only: the cookie is not validated and D1 is not touched. A stale or forged cookie gets the SPA, whose
 // own auth guard sends it to /login. Both answers vary on the cookie, so no cache may share one with the other.
@@ -10,6 +11,8 @@ import { readSessionToken } from "./modules/sessions/session.ts";
 
 /** Where the landing build puts its page inside the assets directory (web/landing/build.mjs). */
 export const LANDING_ASSET_PATH = "/landing/";
+/** The privacy policy page, built next to the landing page. */
+export const PRIVACY_ASSET_PATH = "/landing/privacy/";
 
 /** True when the request carries a non-empty `__Host-mc_session` cookie (exact name, no validation). */
 export function hasSessionCookie(request: Request): boolean {
@@ -30,9 +33,16 @@ async function fetchLanding(env: AppEnv["Bindings"], request: Request): Promise<
   return env.ASSETS.fetch(new Request(url, { method: "GET", headers: { Accept: request.headers.get("Accept") ?? "text/html" } }));
 }
 
+async function fetchPrivacy(env: AppEnv["Bindings"], request: Request): Promise<Response> {
+  const url = new URL(PRIVACY_ASSET_PATH, request.url);
+  return env.ASSETS.fetch(new Request(url, { method: "GET", headers: { Accept: request.headers.get("Accept") ?? "text/html" } }));
+}
+
 /** Registers `GET /` and `GET /home` (HEAD is answered from GET by Hono). Other methods fall through to the catch-all. */
 export function landingRoutes(app: Hono<AppEnv>): void {
   app.on("GET", ["/home", "/home/"], async (c) => withCookieVariance(await fetchLanding(c.env, c.req.raw)));
+  // Public for everyone, cookie or not, so no Vary: Cookie and no no-store.
+  app.on("GET", ["/privacy", "/privacy/"], async (c) => fetchPrivacy(c.env, c.req.raw));
   app.on("GET", "/", async (c) => {
     const res = hasSessionCookie(c.req.raw) ? await c.env.ASSETS.fetch(c.req.raw) : await fetchLanding(c.env, c.req.raw);
     return withCookieVariance(res);
