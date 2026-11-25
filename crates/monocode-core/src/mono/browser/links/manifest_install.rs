@@ -175,7 +175,7 @@ impl InstallEnv {
     }
 
     /// The browser's user data dir, used to tell whether it is installed.
-    fn data_dir(&self, browser: Browser) -> Option<PathBuf> {
+    pub(crate) fn data_dir(&self, browser: Browser) -> Option<PathBuf> {
         let r = row(browser);
         match self.os {
             Os::Mac => r
