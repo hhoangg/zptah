@@ -167,6 +167,20 @@ impl Page {
         click(&mut self.visual, selector);
         self.visual.refresh().unwrap();
     }
+    /// Scrolls the page down by `pixels`: the extension cards pushed this control below the fold.
+    fn scroll_page(&mut self, pixels: f32) {
+        let center = self
+            .visual
+            .debug_bounds("mono-browser-page")
+            .unwrap()
+            .center();
+        self.visual.simulate_event(gpui::ScrollWheelEvent {
+            position: center,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-pixels))),
+            ..Default::default()
+        });
+        self.visual.refresh().unwrap();
+    }
     fn manager<R>(&mut self, f: impl FnOnce(&mut Monos, &mut Context<Monos>) -> R) -> R {
         let r = self.s.manager.update(&mut self.visual, f);
         self.visual.run_until_parked();
@@ -354,6 +368,7 @@ fn install_opens_the_web_store_in_the_profile_and_detects_it(cx: &mut TestAppCon
     assert!(!page.on("mono-browser-install"), "needs a profile first");
     page.choose("Profile 6");
     assert!(page.on("mono-browser-install") && !page.ui(|u| u.installed));
+    page.scroll_page(400.);
     page.click("mono-browser-install");
     assert_eq!(
         page.ops.opened.lock().unwrap().as_slice(),

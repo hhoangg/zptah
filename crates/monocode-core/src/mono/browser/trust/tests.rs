@@ -516,6 +516,19 @@ fn fixture() -> Fixture {
 }
 
 #[test]
+fn a_deleted_conversation_loses_every_monos_grants_from_the_database() {
+    let f = fixture();
+    for (mono, conversation) in [("mono-a", 7), ("mono-b", 7), ("mono-a", 8)] {
+        GrantBook::stored(f.secrets.clone(), mono, conversation)
+            .grant("files.example", &set(&[Category::Destructive]));
+    }
+    f.secrets.revoke_conversation_grants(7).unwrap();
+    assert!(f.secrets.list_grants("mono-b", None).is_empty());
+    assert_eq!(f.secrets.list_grants("mono-a", Some(7)), vec![]);
+    assert_eq!(f.secrets.list_grants("mono-a", Some(8)).len(), 1);
+}
+
+#[test]
 fn stored_grants_survive_a_restart_and_end_on_stop_and_settings_change() {
     let f = fixture();
     let mut book = GrantBook::stored(f.secrets.clone(), "mono-a", 7);
@@ -847,6 +860,20 @@ mod queue {
         // A second answer to the same card is refused.
         assert!(!queue.answer(&card.id, UserAnswer::Deny));
         assert!(changes.load(Ordering::SeqCst) >= 2, "opened and closed");
+    }
+
+    #[test]
+    fn dropping_the_last_subscriber_denies_the_open_cards() {
+        let queue = ApprovalQueue::new("mono-q");
+        let sub = queue.subscribe(|| {});
+        let other = queue.subscribe(|| {});
+        let waiting = ask(&queue, request(1, true), Duration::from_secs(30));
+        wait_for_card(&queue);
+        drop(sub);
+        assert_eq!(queue.pending().len(), 1, "another front end is still there");
+        drop(other);
+        assert_eq!(waiting.join().unwrap(), Outcome::Withdrawn);
+        assert!(queue.pending().is_empty());
     }
 
     #[test]

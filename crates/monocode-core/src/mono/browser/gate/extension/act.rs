@@ -150,9 +150,18 @@ pub fn upstream_for(mono_id: &str) -> Option<Arc<ExtensionUpstream>> {
         .find(|u| u.mono_id == mono_id)
 }
 
+/// A conversation (an app session) was closed, cleared or deleted: every Mono's grants of it end
+/// and its open cards close.
+pub fn end_conversation_everywhere(session: i64) {
+    let all: Vec<Arc<ExtensionUpstream>> =
+        lock(upstreams()).iter().filter_map(Weak::upgrade).collect();
+    for upstream in all {
+        upstream.end_conversation(session);
+    }
+}
+
 /// Hands an extension event of the link `instance_id` to the upstreams on that link. The code
 /// that owns the link manager's event receiver calls this for every `LinkEvent::Extension`.
-#[allow(dead_code)] // called by the link event pump (the Connect card, spec ticket T8)
 pub(crate) fn dispatch_event(instance_id: &str, envelope: &Envelope) {
     let all: Vec<Arc<ExtensionUpstream>> =
         lock(upstreams()).iter().filter_map(Weak::upgrade).collect();
@@ -339,7 +348,6 @@ impl ExtensionUpstream {
     }
 
     /// An event of the extension (spec 5.6) that matters to the gate.
-    #[allow(dead_code)] // reached through `dispatch_event`
     pub(crate) fn note_event(&self, envelope: &Envelope) {
         let Some(event) = envelope.method.as_deref() else {
             return;

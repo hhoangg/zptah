@@ -43,7 +43,7 @@ mod http;
 pub mod overlay;
 mod stdio;
 pub mod tabs;
-pub use extension::act::{upstream_for, ActConfig, ExtensionStatus};
+pub use extension::act::{end_conversation_everywhere, upstream_for, ActConfig, ExtensionStatus};
 pub use extension::{ExtensionUpstream, Origins};
 pub use http::HttpUpstream;
 pub use stdio::StdioUpstream;

@@ -23,6 +23,7 @@ impl Conversation {
                     label: question.notification_label().to_owned(),
                 }
             }))
+            .chain(self.browser_inputs())
             .collect()
     }
 

@@ -3,6 +3,7 @@ mod approvals;
 mod attachment_drop;
 mod auto_stop;
 mod background_tasks;
+pub(crate) mod browser_cards;
 mod btw;
 mod changes_shelf;
 pub(crate) mod cloud_branches;
@@ -308,6 +309,7 @@ pub(crate) struct Conversation {
     auto_resume_shown: Option<monocode_core::usage::AutoResume>,
     approvals: std::collections::VecDeque<Approval>,
     approval_ui: approvals::State,
+    browser: browser_cards::State,
     /// Approvals a remote device was shown, by the desktop's own opaque id.
     remote_approvals: std::cell::RefCell<Vec<mobile::RemoteApproval>>,
     questions:
@@ -451,7 +453,7 @@ impl Conversation {
             || self.input.read(cx).is_composing()
     }
     pub(crate) fn needs_approval(&self) -> bool {
-        !self.approvals.is_empty() || !self.questions.is_empty()
+        !self.approvals.is_empty() || !self.questions.is_empty() || self.browser_needs_attention()
     }
     pub(crate) fn responding(&self) -> bool {
         self.busy && !self.stopping
@@ -817,6 +819,7 @@ impl Conversation {
             auto_resume_shown: None,
             approvals: Default::default(),
             approval_ui: Default::default(),
+            browser: browser_cards::State::new(),
             remote_approvals: Default::default(),
             questions: Default::default(),
             question_overlay: Default::default(),
@@ -3277,6 +3280,7 @@ impl Conversation {
                 })
                 .child(open.picker.clone())
             }))
+            .child(self.browser_shelf(cx))
             .child(self.approval_shelf(window, cx))
             .child(
                 div()

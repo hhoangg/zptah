@@ -1,6 +1,9 @@
 //! Mono workspaces: one runtime per identity, shared by the rail, title tabs,
 //! overview, settings and floating windows.
 pub(crate) mod avatar;
+mod browser_approval;
+#[cfg(test)]
+mod browser_approval_tests;
 mod browser_connect;
 #[cfg(test)]
 mod browser_connect_tests;
@@ -556,6 +559,7 @@ impl Monos {
         cx.set_global(workflow_schedule::QuitTarget(this.workflows.clone()));
         this.watch_emoji_library(cx);
         this.start_workflow_checks(cx);
+        this.browser_approval_start(cx);
         if let Some(rx) = rx {
             this._bridge_task = Some(cx.spawn(async move |this, cx| {
                 while let Ok(call) = rx.recv().await {
@@ -824,6 +828,7 @@ impl Monos {
                 )
             })
             .collect::<Vec<_>>();
+        self.browser_approval_sync(cx);
         let previous = self.writes.take();
         self.writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
@@ -1072,7 +1077,9 @@ impl Monos {
                         this.card_action(&source, &event.0, cx)
                     },
                 ));
+                this.browser_approval_attach(&id, &view, cx);
                 this.chats.insert(id.clone(), view);
+                this.browser_approval_refresh(&id, true, cx);
                 // Settings may have opened before this chat existed: remember its model now.
                 if this.settings.is_some() && this.active.as_deref() == Some(&id) {
                     this.note_settings_model(cx);
