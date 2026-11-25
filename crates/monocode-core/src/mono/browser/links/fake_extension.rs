@@ -43,9 +43,14 @@ pub(crate) fn socket_pair(instance_id: &str, key: PairingKey) -> (Conn, FakeExte
 
 impl FakeExtension {
     pub(crate) fn new(stream: UnixStream, instance_id: &str, key: PairingKey) -> Self {
-        stream
-            .set_read_timeout(Some(READ_TIMEOUT))
-            .expect("read timeout");
+        // macOS refuses to set a timeout (EINVAL) on a socket whose peer already closed, which
+        // happens when the app refuses the connection before this runs. Reads on such a socket
+        // return EOF at once, so there is nothing to time out; any other error is a real failure.
+        match stream.set_read_timeout(Some(READ_TIMEOUT)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::InvalidInput => {}
+            Err(e) => panic!("read timeout: {e}"),
+        }
         Self {
             stream,
             instance_id: instance_id.to_string(),

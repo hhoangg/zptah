@@ -2260,15 +2260,18 @@ fn accepting_the_suggestion_tells_the_mono_and_dismissing_does_not() {
         })
     };
     assert!(told(&third) || told(&next));
+    assert!(!(told(&third) && told(&next)), "the note is sent once");
     // Dismissed: nothing is stored, nothing is told, and the site is not blocked.
     rig.gate.begin_turn(SHARED_ROUTE, "Check the list again");
     rig.gate.exempt_from_taint(SHARED_ROUTE);
     let (handle, shown) = suggest_user(rig.gate.attach(SHARED_ROUTE), vec![(false, false)]);
-    three_steps(&rig.gate);
+    let third = three_steps(&rig.gate);
     handle.join().unwrap();
     assert_eq!(shown.lock().unwrap().len(), 1);
     std::thread::sleep(Duration::from_millis(100));
     assert!(!rig.gate.inner.with_turn(SHARED_ROUTE, |t| t.save_ok));
+    let next = call(&rig.gate, "browser_snapshot", json!({}));
+    assert!(!told(&third) && !told(&next));
     assert!(!MonoBrowserStore::at(rig.database.clone()).never_suggest(MONO, "https://shop.example"));
 }
 
