@@ -874,6 +874,18 @@ test("upload.put collects ordered chunks and the upload builds File objects for 
   finish(s);
 });
 
+test("cancelling an upload prepare discards the bytes that were sent", async () => {
+  const s = setup({ build: (h) => [h("input", { id: "f", type: "file", "aria-label": "Photo", rect: [10, 10, 100, 30] })], url: "https://shop.test/upload" });
+  const text = await snap(s);
+  const stream = new Uint8Array([0, 0, 0, 1, 7]);
+  ok(await s.call("upload.put", { upload_id: "u2", seq: 0, bytes_b64: b64encode(stream), last: true }));
+  const p = await prep(s, { kind: "upload", ref: refOf(text, "button", "Photo"), upload_id: "u2", names: ["a.png"] });
+  assert.ok(s.acts.uploads.has("u2"));
+  ok(await s.call("act.cancel", { prepare_id: p.prepare_id }));
+  assert.equal(s.acts.uploads.has("u2"), false);
+  finish(s);
+});
+
 // ---- status ----
 
 test("status.get reports attached tabs and Monos with pending prepares", async () => {

@@ -367,7 +367,6 @@ fn level_1_lists_exactly_the_read_tools_and_all_of_them_are_known() {
             "browser_mouse_wheel",
             "browser_navigate",
             "browser_navigate_back",
-            "browser_navigate_forward",
             "browser_press_key",
             "browser_read",
             "browser_snapshot",
@@ -1134,7 +1133,7 @@ fn without_a_live_link_every_tool_says_the_extension_is_not_connected() {
             json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
         )
         .unwrap();
-    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 11);
+    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 10);
     for (tool, args) in [
         ("browser_tabs", json!({"action": "list"})),
         ("browser_snapshot", json!({"tab": 1})),

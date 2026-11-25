@@ -60,10 +60,9 @@ pub const CODE_TOOLS: [&str; 2] = ["browser_evaluate", "browser_run_code_unsafe"
 /// [`SCROLL_KEYS`]: a harness list cannot look at the key, so the gate does (Enter or Space can
 /// submit a form or press a focused button, and stay refused). `browser_mouse_wheel` comes from the
 /// `vision` capability and is listed when the server has it.
-pub const READ_ONLY_TOOLS: [&str; 14] = [
+pub const READ_ONLY_TOOLS: [&str; 13] = [
     "browser_navigate",
     "browser_navigate_back",
-    "browser_navigate_forward",
     "browser_snapshot",
     "browser_tabs",
     "browser_wait_for",
@@ -88,10 +87,9 @@ pub fn is_scroll_key(key: &str) -> bool {
 /// and `vision`), read from the package's README tool list, plus `browser_read`, which only the
 /// zptah Browser extension backend offers (page text as Markdown). A tool that is not here is
 /// neither offered nor run by the gate.
-pub const KNOWN_TOOLS: [&str; 35] = [
+pub const KNOWN_TOOLS: [&str; 34] = [
     "browser_navigate",
     "browser_navigate_back",
-    "browser_navigate_forward",
     "browser_snapshot",
     "browser_tabs",
     "browser_wait_for",
@@ -1300,10 +1298,7 @@ fn attach(
     // Playwright's files are page content from the user's Chrome: a private folder, swept below.
     let dir = output_dir(&ctx.root, &ctx.mono.id);
     let _ = output::prepare(&dir);
-    output::sweep_keeping(
-        &dir,
-        &MonoBrowserStore::at(database.clone()).audit_screenshots(&ctx.mono.id),
-    );
+    output::sweep(&dir);
     let spec = ServerSpec::new(browser, &dir, Some(&tools.npx))
         .with_session(&group_name(&ctx.mono), session_color(ctx.mono.color));
     let search_path = env.spawn_path();

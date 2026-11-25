@@ -282,7 +282,7 @@ fn verb_phrase(lang: Lang, facts: &CardFacts) -> String {
             None => format!("nhập vào {}", label(l)),
         },
         (ActionDesc::Select { label: l }, Lang::En) => format!("change {}", label(l)),
-        (ActionDesc::Select { label: l }, Lang::Vi) => format!("thay đổi {}", label(l)),
+        (ActionDesc::Select { label: l }, Lang::Vi) => format!("chọn ở {}", label(l)),
         (ActionDesc::Press { key }, Lang::En) => format!("press the {} key", clean(key, 32)),
         (ActionDesc::Press { key }, Lang::Vi) => format!("nhấn phím {}", clean(key, 32)),
         (ActionDesc::Drag, Lang::En) => "drag an item".into(),
@@ -308,9 +308,9 @@ fn verb_phrase(lang: Lang, facts: &CardFacts) -> String {
         }
         (ActionDesc::Dialog { accept }, Lang::Vi) => {
             if *accept {
-                "đồng ý một hộp thoại".into()
+                "bấm Đồng ý trong hộp thoại".into()
             } else {
-                "đóng một hộp thoại".into()
+                "bấm Hủy trong hộp thoại".into()
             }
         }
         (ActionDesc::Other, Lang::En) => "do something that needs your OK".into(),
@@ -420,7 +420,7 @@ fn tail(lang: Lang, category: Category, facts: &CardFacts) -> Option<String> {
             "Đây là thông tin nhạy cảm và lần nào cũng được hỏi.".into()
         }
         (Category::Terms, Lang::En) => "This accepts terms on your behalf.".into(),
-        (Category::Terms, Lang::Vi) => "Thao tác này đồng ý điều khoản thay bạn.".into(),
+        (Category::Terms, Lang::Vi) => "Thao tác này chấp nhận điều khoản thay bạn.".into(),
         (Category::UnrelatedDomain, Lang::En) => {
             let mut text = "This site is not part of what you asked for.".to_owned();
             if !facts.url.is_empty() {
@@ -497,25 +497,31 @@ fn tail(lang: Lang, category: Category, facts: &CardFacts) -> Option<String> {
 fn extra(lang: Lang, category: Category, facts: &CardFacts) -> Option<String> {
     Some(match (category, lang) {
         (Category::Payment, Lang::En) => "It also looks like a payment.".into(),
-        (Category::Payment, Lang::Vi) => "Nó cũng có vẻ là một khoản thanh toán.".into(),
+        (Category::Payment, Lang::Vi) => "Thao tác này cũng có vẻ là một khoản thanh toán.".into(),
         (Category::Destructive, Lang::En) => "It may also delete or cancel something.".into(),
-        (Category::Destructive, Lang::Vi) => "Nó cũng có thể xóa hoặc hủy một thứ gì đó.".into(),
+        (Category::Destructive, Lang::Vi) => {
+            "Thao tác này cũng có thể xóa hoặc hủy một thứ gì đó.".into()
+        }
         (Category::AccountSecurity, Lang::En) => "It also changes your account security.".into(),
         (Category::AccountSecurity, Lang::Vi) => {
-            "Nó cũng thay đổi bảo mật tài khoản của bạn.".into()
+            "Thao tác này cũng thay đổi bảo mật tài khoản của bạn.".into()
         }
         (Category::Sharing, Lang::En) => "It also changes who can see or open it.".into(),
-        (Category::Sharing, Lang::Vi) => "Nó cũng thay đổi ai có thể xem hoặc mở nó.".into(),
+        (Category::Sharing, Lang::Vi) => {
+            "Thao tác này cũng thay đổi ai có thể xem hoặc mở nó.".into()
+        }
         (Category::SendUnnamed, Lang::En) => "You did not mention who receives it.".into(),
         (Category::SendUnnamed, Lang::Vi) => "Bạn chưa nhắc tới người nhận.".into(),
         (Category::PostPublic, Lang::En) => "It will also be visible to the public.".into(),
-        (Category::PostPublic, Lang::Vi) => "Nó cũng sẽ hiển thị công khai.".into(),
+        (Category::PostPublic, Lang::Vi) => "Thao tác này cũng sẽ hiển thị công khai.".into(),
         (Category::Upload, Lang::En) => "It also uploads files from your computer.".into(),
-        (Category::Upload, Lang::Vi) => "Nó cũng tải tệp từ máy bạn lên.".into(),
+        (Category::Upload, Lang::Vi) => "Thao tác này cũng tải tệp từ máy bạn lên.".into(),
         (Category::CredentialEntry, Lang::En) => "It also enters sensitive information.".into(),
-        (Category::CredentialEntry, Lang::Vi) => "Nó cũng nhập thông tin nhạy cảm.".into(),
+        (Category::CredentialEntry, Lang::Vi) => {
+            "Thao tác này cũng nhập thông tin nhạy cảm.".into()
+        }
         (Category::Terms, Lang::En) => "It also accepts terms on your behalf.".into(),
-        (Category::Terms, Lang::Vi) => "Nó cũng đồng ý điều khoản thay bạn.".into(),
+        (Category::Terms, Lang::Vi) => "Thao tác này cũng chấp nhận điều khoản thay bạn.".into(),
         (Category::UnrelatedDomain, Lang::En) => {
             "This site is not part of what you asked for.".into()
         }
@@ -524,7 +530,10 @@ fn extra(lang: Lang, category: Category, facts: &CardFacts) -> Option<String> {
             format!("It is also on {}.", site_kind_noun(lang, facts.site_kind))
         }
         (Category::SensitiveSite, Lang::Vi) => {
-            format!("Nó cũng ở trên {}.", site_kind_noun(lang, facts.site_kind))
+            format!(
+                "Thao tác này cũng ở trên {}.",
+                site_kind_noun(lang, facts.site_kind)
+            )
         }
         (Category::SoulRule, _) => return tail(lang, category, facts),
         (Category::Tainted, _) | (Category::Injection, _) => return tail(lang, category, facts),
@@ -659,7 +668,7 @@ impl Buttons {
                 allow_once: "Cho phép lần này",
                 allow_conversation: "Cho phép trong cuộc trò chuyện này",
                 deny: "Không cho phép",
-                show_tab: "Mở tab",
+                show_tab: "Xem tab",
             },
         }
     }

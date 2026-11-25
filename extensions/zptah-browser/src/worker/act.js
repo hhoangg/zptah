@@ -700,7 +700,11 @@ export function registerActPath(link, deps) {
 
   route("act.cancel", async (entry, p) => {
     const rec = records.get(String(p.prepare_id));
-    if (rec && rec.mono === entry.id) drop(rec);
+    if (rec && rec.mono === entry.id) {
+      // A refused or timed out upload must not leave its bytes in memory.
+      if (rec.action?.kind === "upload") uploads.delete(String(rec.action.upload_id));
+      drop(rec);
+    }
     return {};
   });
 

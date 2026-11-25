@@ -115,7 +115,7 @@ const SNAPSHOTS: &[(&str, &str, &str)] = &[
     ("vi", "post_public", "Mira muốn bấm \"Post\" trên facebook.com.\n  Bài đăng sẽ hiển thị công khai."),
     ("vi", "upload", "Mira muốn tải \"invoice-2026-11.pdf\" từ máy bạn lên drive.google.com."),
     ("vi", "credential_entry", "Mira muốn nhập mã OTP trên vietcombank.com.vn.\n  Đây là thông tin nhạy cảm và lần nào cũng được hỏi."),
-    ("vi", "terms", "Mira muốn bấm \"I agree\" trên example.com.\n  Thao tác này đồng ý điều khoản thay bạn."),
+    ("vi", "terms", "Mira muốn bấm \"I agree\" trên example.com.\n  Thao tác này chấp nhận điều khoản thay bạn."),
     ("vi", "unrelated_domain", "Mira muốn mở evil-example.net.\n  Trang này không thuộc việc bạn yêu cầu. Địa chỉ đầy đủ: https://evil-example.net/collect?q=..."),
     ("vi", "sensitive_site", "Mira muốn mở vietcombank.com.vn, một trang ngân hàng."),
     ("vi", "soul_rule", "Mira muốn bấm \"Book\" trên airbnb.com.\n  Quy tắc bạn đặt cho Mira yêu cầu hỏi trước: click \"Book\" on airbnb.com."),
@@ -179,7 +179,7 @@ fn several_categories_share_one_card_with_a_line_each() {
     f.purpose = Some("Thanh toán đơn hàng bạn nhờ đặt.".into());
     assert_eq!(
         render(Lang::Vi, &f),
-        "Mira muốn bấm \"Pay\" trên shop.example.\n  Đây có vẻ là một khoản thanh toán.\n  Nó cũng có thể xóa hoặc hủy một thứ gì đó.\n  Nó cũng ở trên một trang ngân hàng.\n  Số tiền trên trang: 1,200,000 VND.\n  [Mira nói: \"Thanh toán đơn hàng bạn nhờ đặt.\"]"
+        "Mira muốn bấm \"Pay\" trên shop.example.\n  Đây có vẻ là một khoản thanh toán.\n  Thao tác này cũng có thể xóa hoặc hủy một thứ gì đó.\n  Thao tác này cũng ở trên một trang ngân hàng.\n  Số tiền trên trang: 1,200,000 VND.\n  [Mira nói: \"Thanh toán đơn hàng bạn nhờ đặt.\"]"
     );
 }
 
@@ -197,7 +197,7 @@ fn the_buttons_follow_the_language_and_the_conversation_grant_is_offered_only_wh
         Some("Cho phép trong cuộc trò chuyện này")
     );
     assert_eq!(vi.deny, "Không cho phép");
-    assert_eq!(vi.show_tab, "Mở tab");
+    assert_eq!(vi.show_tab, "Xem tab");
     for never in [
         Category::Payment,
         Category::CredentialEntry,
@@ -258,7 +258,7 @@ fn the_password_stop_the_banner_and_the_rule_review_have_both_languages() {
         vi.headline,
         "Mira cần mật khẩu của bạn trên accounts.google.com."
     );
-    assert_eq!(vi.show_tab, "Mở tab");
+    assert_eq!(vi.show_tab, "Xem tab");
     assert_eq!(stopped_banner(Lang::En).1, "Resume");
     assert_eq!(stopped_banner(Lang::Vi).1, "Tiếp tục");
     let review = rule_review(

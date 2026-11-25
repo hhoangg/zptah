@@ -269,7 +269,8 @@ impl Policy {
             }
             return self.approval_tool(args, page_url);
         }
-        if !KNOWN_TOOLS.contains(&tool) {
+        let forward = self.extension && tool == "browser_navigate_forward";
+        if !KNOWN_TOOLS.contains(&tool) && !forward {
             return Verdict::Deny(format!("{tool} is not an available browser tool."));
         }
         if let Some(reason) = unsafe_address(tool, args) {
@@ -278,7 +279,7 @@ impl Policy {
         if self.trust == BrowserTrust::ReadOnly {
             let action = args["action"].as_str().unwrap_or("");
             // Closing a tab ends something the user may still need.
-            let allowed = READ_ONLY_TOOLS.contains(&tool)
+            let allowed = (READ_ONLY_TOOLS.contains(&tool) || forward)
                 && (tool != "browser_tabs" || matches!(action, "list" | "new" | "select"));
             // `browser_press_key` is the Level 1 way to scroll, for the scroll keys only: Enter or
             // Space could submit a form or press a focused button.
@@ -419,7 +420,8 @@ impl Policy {
 
     /// Whether the gate lists `tool` to the agent.
     pub fn offers(&self, tool: &str) -> bool {
-        self.trust.offers(tool)
+        // Going forward exists only with the extension backend (Playwright has no such tool).
+        (self.extension && tool == "browser_navigate_forward") || self.trust.offers(tool)
     }
 }
 
@@ -847,7 +849,10 @@ pub struct Workspace {
 impl Workspace {
     /// Removes old files from the output folder, keeping the screenshots that audit rows still
     /// point to (spec 8.5: they live as long as their row).
-    pub fn sweep(&self) -> usize {
+    pub fn sweep(&self, keep_audit_screenshots: bool) -> usize {
+        if !keep_audit_screenshots {
+            return output::sweep(&self.output_dir);
+        }
         let keep = MonoBrowserStore::at(self.database.clone()).audit_screenshots(&self.mono_id);
         output::sweep_keeping(&self.output_dir, &keep)
     }
@@ -942,7 +947,7 @@ impl Gate {
     /// on and confines `filename` arguments to the output folder.
     pub fn set_workspace(&self, workspace: Workspace) {
         let _ = output::prepare(&workspace.output_dir);
-        workspace.sweep();
+        self.inner.sweep_output(&workspace);
         *self
             .inner
             .workspace
@@ -977,7 +982,7 @@ impl Gate {
             recipe_id,
             workspace.recipe_options.clone(),
         );
-        workspace.sweep();
+        self.inner.sweep_output(&workspace);
         result
     }
 
@@ -1246,6 +1251,12 @@ impl Inner {
         }
     }
 
+    /// Sweeps the output folder; with the extension backend the pictures of audit rows stay.
+    fn sweep_output(&self, workspace: &Workspace) -> usize {
+        let extension = self.lock_state().policy.extension;
+        workspace.sweep(extension)
+    }
+
     /// The app session id a route was issued for (0: none).
     fn session_of(&self, route: &str) -> i64 {
         self.lock_state()
@@ -1317,7 +1328,7 @@ impl Inner {
                 return tool_text(reason, true);
             }
             if self.calls.fetch_add(1, Ordering::Relaxed) % 25 == 24 {
-                workspace.sweep();
+                self.sweep_output(&workspace);
             }
         }
         let page_before = self.lock_state().page.clone();
@@ -1790,7 +1801,7 @@ impl Inner {
         let reply = recipe::tools::call(name, args, &context);
         if uses_browser {
             // A run reads many snapshots: sweep at the end of each one.
-            workspace.sweep();
+            self.sweep_output(&workspace);
         }
         if name == recipe::tools::RECORD && !reply.is_error {
             if let Some(trace) = self

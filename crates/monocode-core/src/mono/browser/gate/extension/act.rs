@@ -102,6 +102,8 @@ struct ActState {
     trust: HashMap<i64, TrustState>,
     /// The text of the last JavaScript dialog the extension reported, per tab.
     dialogs: HashMap<u64, String>,
+    /// Single keys pressed per (session, tab), for the card-number check only.
+    key_text: HashMap<(i64, u64), String>,
     /// The toolbar Stop was pressed and not resumed.
     stopped: bool,
 }
@@ -657,7 +659,11 @@ fn build_plan(tool: &str, args: &Value) -> Result<Plan, String> {
                     key: key.clone(),
                     target,
                 },
-                format!("press {key}"),
+                if key.chars().count() == 1 && !scroll && !enter {
+                    "pressed a text key into field".to_owned()
+                } else {
+                    format!("press {key}")
+                },
             );
             plan.kind = if scroll {
                 None
@@ -729,9 +735,33 @@ impl ExtensionUpstream {
             "browser_file_upload" => self.upload_tool(args),
             n if n == super::super::APPROVAL_TOOL => self.request_approval_tool(args),
             _ => {
-                let plan = build_plan(name, args)?;
+                let mut plan = build_plan(name, args)?;
+                self.note_key_text(&mut plan);
                 self.perform(plan)
             }
+        }
+    }
+
+    /// Characters pressed one key at a time add up per tab, in memory only, so a card number typed
+    /// digit by digit is still seen by the card check. Never written anywhere.
+    fn note_key_text(&self, plan: &mut Plan) {
+        let session = self.run_context().session_id;
+        let tab = plan.args["tab"].as_u64().unwrap_or(0);
+        let mut state = lock(&self.act.state);
+        match &plan.action {
+            Action::Press { key, .. } if plan.types => {
+                let buffer = state.key_text.entry((session, tab)).or_default();
+                buffer.push_str(key);
+                let extra = buffer.chars().count().saturating_sub(64);
+                if extra > 0 {
+                    *buffer = buffer.chars().skip(extra).collect();
+                }
+                plan.typed = Some(buffer.clone());
+            }
+            Action::Press { .. } | Action::Type { .. } | Action::Fill { .. } => {
+                state.key_text.remove(&(session, tab));
+            }
+            _ => {}
         }
     }
 
@@ -921,7 +951,10 @@ impl ExtensionUpstream {
         // A card with a picture: the prepare did not carry one, so prepare again asking for it
         // (the first prepare is cancelled; the answer replaces it, signals included).
         if matches!(ev.decision, Decision::Ask(_)) && prepared.screenshot.is_none() {
-            self.cancel(&prepared.id);
+            // An upload's bytes go with its prepare's cancel, and the second prepare needs them.
+            if !matches!(plan.action, Action::Upload { .. }) {
+                self.cancel(&prepared.id);
+            }
             prepared = self
                 .prepare(tab.tab, &plan.action, true)
                 .map_err(|f| self.prepare_failed(&ctx, &plan, &tab, f))?;
@@ -1037,8 +1070,9 @@ impl ExtensionUpstream {
 
         // The extension cross-checks its own categories against what was approved. Hovering
         // sends the ones it saw: it never asks.
-        let mut approved: BTreeSet<Category> = ev.categories.clone();
-        approved.extend(prepared.ext.iter().copied());
+        // Hovering never asks, so it never claims an approval: the extension refuses a hover on
+        // an element it finds risky (E_NEEDS_APPROVAL).
+        let approved: BTreeSet<Category> = ev.categories.clone();
         let approval = (!approved.is_empty()).then(|| {
             json!({
                 "approval_id": approval_id.clone().unwrap_or_else(|| format!("{:032x}", rand::random::<u128>())),
@@ -1613,6 +1647,10 @@ impl ExtensionUpstream {
             .unwrap_or_default();
         let mut action = TrustAction::new("browser_handle_dialog", args, &tab.url);
         action.kind = accept.then_some(ActionKind::Click);
+        if accept && message.is_empty() {
+            // The dialog's text is unknown (no debugger event): accepting it blind asks.
+            action.declared.insert(Category::Destructive);
+        }
         action.element = ElementSignals {
             role: "button".into(),
             name: message.clone(),
@@ -1720,7 +1758,12 @@ impl ExtensionUpstream {
 
     fn upload_tool(&self, args: &Value) -> Result<Value, String> {
         let tab = self.act_tab(args)?;
-        let _ = tab;
+        if self.act_config().level == BrowserLevel::ReadOnly {
+            return Err(
+                "browser_file_upload is not available: this Mono can only read the browser.".into(),
+            );
+        }
+        let home = upload_home().ok_or("Uploads are not available: the home folder is unknown, so credential files cannot be ruled out.")?;
         let target = ref_arg(args)
             .map_err(|_| "browser_file_upload needs `ref`: the file input (or the button that opens it) from a browser_snapshot, and `paths`: the files to upload.".to_owned())?;
         let paths: Vec<PathBuf> = args["paths"]
@@ -1730,7 +1773,7 @@ impl ExtensionUpstream {
             .iter()
             .filter_map(|p| p.as_str().map(PathBuf::from))
             .collect();
-        let files = read_upload_files(&paths, upload_home().as_deref())?;
+        let files = read_upload_files(&paths, Some(&home))?;
         let names: Vec<String> = files.iter().map(|(name, _)| name.clone()).collect();
         let upload_id = format!("{:032x}", rand::random::<u128>());
         // The extension holds the bytes (in memory, for 10 minutes at most) until the commit: the

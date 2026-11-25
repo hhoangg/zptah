@@ -274,10 +274,14 @@ fn hovering_never_asks_even_when_the_extension_saw_a_risk() {
     ));
     assert!(text.contains("Ran hover"), "{text}");
     assert!(front.cards().is_empty());
-    // The extension cross-checks its categories: they are sent as seen.
+    // Hovering never claims an approval: the extension refuses a risky one itself.
     let commits = r.rig.requests("act.commit");
-    let approval = &commits[0].params.as_ref().unwrap()["approval"];
-    assert_eq!(approval["categories"], json!(["destructive"]));
+    assert!(commits[0]
+        .params
+        .as_ref()
+        .unwrap()
+        .get("approval")
+        .is_none());
     r.rig.finish();
 }
 
@@ -958,5 +962,79 @@ fn the_sweep_keeps_the_pictures_of_audit_rows_and_pruned_rows_lose_theirs() {
         output::delete_files(r.out.path(), &["../escape.png".into(), "nope.png".into()]),
         0
     );
+    r.rig.finish();
+}
+
+#[test]
+fn keys_pressed_one_by_one_never_reach_the_audit_and_still_feed_the_card_check() {
+    let (r, front) = rig_with(
+        "https://shop.example/pay",
+        "Card number",
+        vec![UserAnswer::AllowOnce],
+    );
+    {
+        let mut a = r.act.lock().unwrap();
+        a.element["role"] = json!("textbox");
+        a.element["tag"] = json!("input");
+        a.element["type"] = json!("text");
+    }
+    for digit in "4111111111111111".chars() {
+        let key = digit.to_string();
+        let result = call(&r.gate, "browser_press_key", json!({"tab": 3, "key": key}));
+        if is_error(&result) {
+            break;
+        }
+    }
+    let rows = r.rows();
+    assert!(!rows.is_empty());
+    for row in &rows {
+        assert!(
+            row.tool != "browser_press_key" || !format!("{row:?}").contains("press 4"),
+            "{row:?}"
+        );
+    }
+    let entries = r.store.recent(MONO, 50);
+    let dump = format!("{rows:?} {entries:?}");
+    assert!(
+        !dump.contains("4111") && !dump.contains("press 4"),
+        "{dump}"
+    );
+    assert!(dump.contains("pressed a text key into"), "{dump}");
+    // The last digits made a card number: the card check asked.
+    assert!(front
+        .cards()
+        .iter()
+        .any(|c| c.facts.categories.contains(&Category::CredentialEntry)));
+    r.rig.finish();
+}
+
+#[test]
+fn an_upload_is_refused_at_read_only_before_any_byte_is_sent() {
+    let (r, _front) = rig_with("https://drive.example/up", "Upload", vec![]);
+    r.reconfigure(|c| c.level = BrowserLevel::ReadOnly);
+    let files = tempfile::tempdir().unwrap();
+    let path = files.path().join("a.txt");
+    std::fs::write(&path, b"x").unwrap();
+    let result = call(
+        &r.gate,
+        "browser_file_upload",
+        json!({"tab": 3, "ref": "e2", "paths": [path.to_string_lossy()]}),
+    );
+    assert!(is_error(&result));
+    assert!(r.rig.requests("upload.put").is_empty());
+    r.rig.finish();
+}
+
+#[test]
+fn accepting_a_dialog_whose_text_is_unknown_asks() {
+    let (r, front) = rig_with(SHOPPING, "x", vec![UserAnswer::Deny]);
+    let result = call(
+        &r.gate,
+        "browser_handle_dialog",
+        json!({"tab": 3, "accept": true}),
+    );
+    assert!(is_error(&result));
+    assert_eq!(front.cards().len(), 1);
+    assert!(r.rig.requests("dialog.respond").is_empty());
     r.rig.finish();
 }
