@@ -16,6 +16,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 mod acp;
+pub(crate) use acp::is_legacy_antigravity_server;
 mod browser_gate;
 mod commands;
 pub use commands::{
