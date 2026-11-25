@@ -23,6 +23,7 @@ import {
   SIGNING_IDENTITY_ENV,
   SIGNING_KEYCHAIN_ENV,
   signatureProblem,
+  entitlementsProblem,
   resolveSigningIdentity,
 } from "./native-signing.mjs";
 
@@ -266,6 +267,11 @@ export async function packageMonoptahNative({ binary, out, version }) {
     const details = spawnSync("codesign", ["-dv", app], { encoding: "utf8" });
     const bad = signatureProblem(requirementText, details.stderr ?? "", resolved.sha1);
     if (bad) throw new Error(bad);
+    // `:-` prints the raw entitlements plist on stdout.
+    const entitlements = spawnSync("codesign", ["-d", "--entitlements", ":-", app], { encoding: "utf8" });
+    if (entitlements.status !== 0) throw new Error(`codesign -d --entitlements failed (${entitlements.status})`);
+    const badEntitlements = entitlementsProblem(entitlements.stdout ?? "");
+    if (badEntitlements) throw new Error(badEntitlements);
 
     await mkdir(out, { recursive: true });
     const names = assetNames(version);
