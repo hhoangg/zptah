@@ -1,6 +1,8 @@
 # zptah Browser: our own Chrome extension for Mono browser use - design
 
-Status: design spec, for review. No code. Date: 2026-11-25. Native app only.
+Status: design spec. No code. Date: 2026-11-25, revised the same day with the user's answers to
+the open questions (section 18) and one new requirement (the in-tab overlay, section 10a).
+Native app only.
 
 Supersedes the Playwright MCP Bridge backend of `2026-11-21-mono-browser-design.md` and the
 recommendation of `2026-11-22-browser-all-tabs-research.md`. Builds on two spikes kept outside the
@@ -41,7 +43,23 @@ Mono agent -> zptah gate (in the app) -> zptah app link -> zptah-browser-host ->
   truly risky actions". The gate detects risk from structured page signals, in several languages
   including Vietnamese, and asks in plain language with an element screenshot.
 - Several Monos can use one profile at once: one tab group per Mono, one owner per tab.
-- A virtual cursor in the Mono's color shows what a Mono is doing, only while it acts.
+- A virtual cursor in the Mono's color shows what a Mono is doing, only while it acts, and an
+  in-tab overlay (a glow in the Mono's color plus a "Stop <Mono>" button) lets the user take a tab
+  back at once.
+- v1 supports Google Chrome only; Edge, Brave and Arc come later on the same design.
+
+Terms used below: a **run** is one agent turn of a Mono; a **task** is the conversation in which the
+user asked for the work (all runs of one Mono conversation). What lasts for the task:
+
+- task grants ("Allow for this task", answer 9) and sensitive-site approvals, both things the user
+  approved;
+- task domains, user references for adopting tabs (9.3) and the names behind `send_unnamed` (7.2),
+  because they come from what the user wrote in that conversation.
+
+A Stop resets part of this (10a, 11.1): text the user wrote before a Stop no longer counts as a
+reference to a tab that was taken back. Extending references, domains and names to the whole
+conversation (not only grants) is the spec's reading of answer 9 and is listed for confirmation in
+section 18.
 
 ## 2. Binding user decisions and where they are covered
 
@@ -49,12 +67,14 @@ Mono agent -> zptah gate (in the app) -> zptah app link -> zptah-browser-host ->
 |---|---|---|
 | D1 | Own MV3 extension in this monorepo; replaces Playwright MCP Bridge entirely; removal and migration plan | 4, 15 |
 | D2 | No extension panel UI. Toolbar icon = emergency stop all Monos plus badge with active Mono count; tiny options page (connection status, cursor toggle, per-site cursor off list) | 11 |
-| D3 | Settings > Browser "Connect extension" installs the native messaging host (Chrome, Edge, Brave, Arc; macOS, Linux, Windows) and pairs; no token copy-paste | 12 |
+| D3 | Settings > Browser "Connect extension" installs the native messaging host (Chrome, Edge, Brave, Arc; macOS, Linux, Windows) and pairs; no token copy-paste. Narrowed by answer 12: Chrome only in v1, the others later | 12 |
 | D4 | Many Monos per profile; one tab group per Mono titled emoji plus name; group color nearest of Chrome's 9; one owner per tab; any tab readable; acting on a user tab needs adoption and a user reference; never bring tabs to front or change focus | 9 |
 | D5 | Virtual cursor on by default, Mono's exact color, label with Mono name and current action, only while acting, closed shadow DOM, `pointer-events: none`, per-site off list | 10 |
 | D6 | Chrome Web Store: permission justifications, privacy policy (`zptah.app/privacy`), single purpose, review timeline, CI publishing via the API, versioning tied to the host protocol (host rejects unknown protocol), unpacked dev install | 13 |
 | D7 | Approval redesign: autonomy within the task; ask only for the listed risky classes plus soul rules; gate-detected risk from structured signals; agent may declare purpose but never downgrade; plain-language prompts with element screenshot; prompt-injection rules; full per-Mono audit; never type passwords; no incognito; each Mono sees only its granted profile | 7, 8 |
-| D8 | Default technique: hybrid, content scripts and `chrome.scripting` for reads and normal actions, `chrome.debugger` only when needed and detached right after; trade-offs documented | 6.4 |
+| D8 | Default technique: hybrid, content scripts and `chrome.scripting` for reads and normal actions, `chrome.debugger` only when needed; trade-offs documented. Revised by answer 14: when a site needs the debugger it stays attached for the task and detaches when the task ends or on Stop | 6.3, 6.4 |
+| D9 | New: while a Mono acts on a tab, an overlay inside the tab: a soft glow in the Mono's color around the viewport edges and a centered bottom "Stop <Mono name>" button that stops that Mono on that tab at once, returns the tab to the user and reports the stop to the Mono and the audit; closed shadow DOM, top-layer popover, pointer events only on the button, not injected on anti-bot frames or sites on the per-site list | 10a |
+| A1-A15 | User answers to the open questions, round 2 | 18 |
 | S1 | extension <-> native messaging <-> `zptah-browser-host` (subcommand of the signed zptah binary) <-> app over an authenticated unix socket or named pipe in a 0700 dir with peer-process verification, so a Mono's shell cannot drive the browser outside the gate | 4, 5, 5.4a, 14 |
 | S2 | CDP and command allowlist plus per-Mono origin allowlist inside the extension too | 6.3, 6.5 |
 | S3 | No remote code, no telemetry, no auto-downloaded adapters | 6.6, 14 |
@@ -77,7 +97,10 @@ Mono agent -> zptah gate (in the app) -> zptah app link -> zptah-browser-host ->
 
 ### Non-goals (v1)
 
-- Firefox and Safari (no MV3 `debugger`, different native messaging). Chromium-family only.
+- Firefox and Safari (no MV3 `debugger`, different native messaging).
+- Edge, Brave, Arc and Chromium in v1 (answer 12). The design stays portable: browser-specific
+  facts live in one table (12.2), the host name and protocol are browser-neutral, and the extension
+  uses only APIs these browsers share. Edge Add-ons and other stores come later too (answer 5).
 - Incognito windows (refused by design, section 8.7).
 - Downloads, cookies, storage, network interception, console capture, arbitrary JavaScript
   (`browser_evaluate`, `browser_run_code_unsafe`), coordinate clicks (`browser_mouse_*_xy`).
@@ -114,7 +137,7 @@ Mono agent -> zptah gate (in the app) -> zptah app link -> zptah-browser-host ->
  |  zptah-browser-host: no listener, no secrets, relays frames, checks sizes and schema  |
  +------------|----------------------------------------------------------------------------+
               | stdio, Chrome native messaging (32-bit length + UTF-8 JSON)
- +------------|------------------ Chrome / Edge / Brave / Arc, one profile ----------------+
+ +------------|------------------ Google Chrome (v1; others later), one profile ----------+
  |  zptah Browser extension (MV3)                                                          |
  |   service worker: protocol, auth, roster, ownership table, stop switch, CDP allowlist, |
  |                   per-Mono origin allowlist, invariants                                 |
@@ -263,9 +286,9 @@ The socket is the only way into the browser, so both ends verify each other.
 
 | | App (server) checks the connecting host | Host (client) checks the app |
 |---|---|---|
-| macOS | `getsockopt(LOCAL_PEERTOKEN)` audit token, `SecCodeCreateWithAuditToken`, `SecCodeCheckValidity` against the app's own designated requirement (the stable self-signed identity from `docs/native/release-flow.md`). The peer's parent must be a browser process from the allowlist (bundle ids `com.google.Chrome*`, `com.microsoft.edgemac*`, `com.brave.Browser*`, `company.thebrowser.Browser`) | Same audit-token and designated-requirement check on the server end of the socket |
-| Linux | `SO_PEERCRED` uid equals ours; `SO_PEERPIDFD` (Linux 6.5+, else pid plus start time from `/proc/<pid>/stat`) to avoid pid reuse; `/proc/<pid>/exe` is the same file (device and inode) as the app's own executable; parent exe is a known browser binary | Same uid and same-executable check on the server pid |
-| Windows | Pipe `\\.\pipe\zptah-browser-<sid hash>` created with `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS` and a DACL for the current user SID only. `GetNamedPipeClientProcessId`, `QueryFullProcessImageNameW` equals the app's install path and the file hash equals the running app's own. The ancestor chain must reach a browser executable (Chrome may start the host through `cmd.exe`; M0 verifies) | `GetNamedPipeServerProcessId`, same path and hash check |
+| macOS | `getsockopt(LOCAL_PEERTOKEN)` audit token, `SecCodeCreateWithAuditToken`, `SecCodeCheckValidity` against the app's own designated requirement (the stable self-signed identity from `docs/native/release-flow.md`). The peer's parent must be a browser process from the allowlist (bundle ids `com.google.Chrome*`, `com.microsoft.edgemac*`, `com.brave.Browser*`, `company.thebrowser.Browser`; v1 accepts only `com.google.Chrome*`) | Same audit-token and designated-requirement check on the server end of the socket |
+| Linux | `SO_PEERCRED` uid equals ours; `SO_PEERPIDFD` (Linux 6.5+, else pid plus start time from `/proc/<pid>/stat`) to avoid pid reuse; `/proc/<pid>/exe` is the same file (device and inode) as the app's own executable; parent exe is a known browser binary (v1: Google Chrome only) | Same uid and same-executable check on the server pid |
+| Windows | Pipe `\\.\pipe\zptah-browser-<sid hash>` created with `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS` and a DACL for the current user SID only. `GetNamedPipeClientProcessId`, `QueryFullProcessImageNameW` equals the app's install path and the file hash equals the running app's own. The ancestor chain must reach a browser executable (v1: Google Chrome only; Chrome may start the host through `cmd.exe`; M0 verifies) | `GetNamedPipeServerProcessId`, same path and hash check |
 
 Socket location:
 
@@ -311,20 +334,51 @@ Why both peer checks and the HMAC:
 
 ### 5.4a The Mono's own shell
 
-A Mono's shell runs as the user. The design above stops it from driving the browser through any
-channel except the gate when it cannot read the pairing key and cannot replace the user's browser
-profile, app data or socket directory. To make that hold, not just make it harder:
+Answer 13: the browser works with Monos running as they do today; **no sandbox is required**. A
+Mono's shell runs as the user, so the residual risk is stated plainly here and in section 14 (T1).
 
-- Monos with browser access should run their shell in the `sbx` sandbox
-  (`crates/monocode-core/src/sandboxes.rs`) with no read access to browser profile directories, the
-  zptah app data directory and the socket directory. Settings > Browser shows this per Mono: "This
-  Mono's shell is sandboxed: it can use the browser only through zptah's checks", or, when it is not
-  sandboxed, a warning: "This Mono's shell is not sandboxed. zptah's checks stop casual misuse, but a
-  determined program running as you could read the browser pairing key."
-- Without the sandbox the remaining paths need deliberate work (copying the profile and the key,
-  defeating the single-instance lock while the app runs, or injecting into a process). They are
-  documented in section 14 (T1) rather than claimed closed.
-- Whether browser access should require the sandbox is open question Q13.
+What still holds without a sandbox:
+
+- There is no listener a shell can talk to except the gate, which applies the same policy,
+  approvals and audit to every caller.
+- The shell cannot pose as the host (parent-is-a-browser check, no `K` in the host) or as the app
+  (signature check plus single-instance lock while the real app runs).
+- A copied profile cannot pose as the paired one (duplicate `instance_id` refusal and the browser
+  data-dir check, 5.4).
+
+**Residual risk.** A same-user process can read the pairing key `K` from the extension's storage in
+the Chrome profile on disk (`<profile>/Local Extension Settings/<extension id>/`), and the app-side
+copy where no OS credential store exists. With `K` and deliberate extra work (stopping the real app
+to take the socket, or copying the profile and faking the data-dir check by replacing the user's
+profile) it could impersonate one side. These are not casual paths, but they are not closed.
+
+Mitigations:
+
+1. **credential_guard.** The extension's storage is inside the Chrome profile, which
+   `credential_guard` already refuses whole (`SECRET_STORE_DIRS`, `CORE/credential_guard.rs:56`), so
+   remote reads, the cloud kit scan and the project-folder checks (`CORE/project_add.rs:224`)
+   already refuse it. The new item is the app-side key file, added to `credential_guard`. For the
+   agent's own file tools: for Claude, the app adds `Read(<path>)` deny rules for the Chrome profile
+   dirs and the key file to the existing `--disallowedTools` list (`CORE/provider.rs:1672`), for
+   Monos with browser access (the exact rule syntax is checked against the Claude Code version the
+   app pins, in M1). Codex has no per-path read-deny rule today, so nothing is added there. None of
+   this stops an arbitrary shell command (`cat`), which is why it is a mitigation, not a closure.
+2. **Key file 0600.** Where no OS credential store is available, `K` is kept in a key file (not in
+   the shared database) of mode 0600 inside a 0700 directory, checked at every read; a wider mode makes
+   the app refuse it and rotate. On macOS `K` lives in a Keychain item whose access control list
+   allows only the app's designated requirement, so another process reading it triggers a system
+   prompt.
+3. **Rotation on suspicion.** The app rotates `K` over the authenticated link (new key, both sides
+   switch after a confirmed round trip) when: an authentication fails, a duplicate `instance_id`
+   appears, the data-dir or browser check fails, the key file mode is wrong, or the user clicks
+   "Rotate pairing key" in Settings > Browser. It also rotates every 30 days. A rotation after a
+   suspicious event also alerts the user.
+4. **Peer verification** at both ends (5.4), so a stolen `K` alone is not enough: the attacker also
+   needs a verified host or app process.
+
+Settings > Browser states the residual risk in one sentence: "A program running as you could, with
+effort, read the browser pairing key. zptah checks every browser action, and rotates the key if
+anything looks wrong."
 
 ### 5.5 Methods (app to extension)
 
@@ -339,7 +393,7 @@ inside the extension (section 6.5).
 | `tabs.list` | `{all: bool}` | `{tabs: [TabInfo]}` | `all:false` gives the Mono's tabs; `all:true` every eligible tab of the profile |
 | `tab.open` | `{url, after_tab?}` | `TabInfo` | `active:false`, into the Mono's group |
 | `tab.close` | `{tab}` | `{}` | Own tabs only |
-| `tab.adopt` | `{tab, grant: GrantRef}` | `TabInfo` | Moves a user tab into the Mono's group (section 9.3) |
+| `tab.adopt` | `{tab, grant: GrantRef}` | `TabInfo` | Moves a user tab into the Mono's group (section 9.3). For a taken-back tab the `GrantRef` carries the time of the user's message, which must be after the stop (10a) |
 | `tab.release` | `{tab}` | `{}` | Ungroups, tab becomes the user's |
 | `page.snapshot` | `{tab, mode: "full"\|"interactive", scope_ref?, depth?, max_bytes?, from?}` | `{text, url, title, generation, truncated, hidden_dropped}` | Playwright-compatible YAML (section 6.1) |
 | `page.read` | `{tab, max_bytes?, from?}` | `{markdown, url, title, truncated}` | Main text as Markdown |
@@ -358,7 +412,7 @@ inside the extension (section 6.5).
 
 ```ts
 interface RosterEntry {
-  id: string; name: string; emoji: string;    // emoji from the mascot, section 9.1
+  id: string; name: string; emoji: string;    // Mono.badge_emoji, else the mascot's emoji (9.1)
   color: string;                              // "#rrggbb", exact Mono color (Mono.color, CORE/mono.rs:48)
   group_color: ChromeGroupColor;              // nearest of the 9 (section 9.1)
   level: "read" | "act";
@@ -395,7 +449,7 @@ interface Prepared {
 }
 
 interface ApprovalRef { approval_id: string; categories: RiskCategory[]; digest: string }
-interface GrantRef { kind: "user_reference"; quote: string } | { kind: "user_approved"; approval_id: string }
+interface GrantRef { kind: "user_reference"; quote: string; message_ms: number } | { kind: "user_approved"; approval_id: string }
 ```
 
 ### 5.6 Events (extension to app)
@@ -406,6 +460,7 @@ interface GrantRef { kind: "user_reference"; quote: string } | { kind: "user_app
 | `tab.removed` | `{tab}` | Owned tab closed |
 | `tab.ownership` | `{tab, owner, by: "user_drag"\|"user_ungroup"\|"popup"\|"group_closed"}` | User moved tabs in or out of a Mono group, or a Mono tab opened a popup |
 | `stop` | `{by: "toolbar"}` | Emergency stop clicked |
+| `tab.stopped` | `{tab, mono, by: "overlay"}` | The user pressed "Stop <Mono>" in the tab (10a) |
 | `dialog.opened` | `{tab, kind, message}` | JavaScript dialog on an owned tab (when detectable) |
 | `debugger.detached` | `{tab, reason}` | Includes `canceled_by_user` (the user pressed Cancel on the infobar) |
 | `cursor.changed` | `{enabled, off_sites}` | Options page change |
@@ -495,7 +550,7 @@ the debugger itself, through one wrapper, only for these methods:
 | `Input.dispatchMouseEvent` | Trusted click, hover, drag |
 | `Input.dispatchKeyEvent`, `Input.insertText` | Trusted keys, rich editors |
 | `Input.dispatchDragEvent` | Drag and drop |
-| `Page.captureScreenshot` (with `clip`, `captureBeyondViewport`) | Screenshots of background tabs |
+| `Page.captureScreenshot` (with `clip`, `captureBeyondViewport`) | Screenshots of a tab the debugger is already attached to |
 | `Page.enable`, `Page.handleJavaScriptDialog` | Dialogs |
 | `Emulation.setFocusEmulationEnabled` | Keyboard input to a background tab (only while attached) |
 
@@ -506,11 +561,18 @@ in particular `Runtime.*`, `Page.navigate`, `Page.addScriptToEvaluateOnNewDocume
 
 Lifecycle:
 
-- Attach only to a tab the Mono owns, only for the action that needs it.
-- Detach 3 s after the last debugger action, and always on stop, on ownership loss and on
-  navigation to another origin. This is a deliberate small deviation from "detach right after": a
-  sequence of keys or a drag would otherwise attach and detach many times and make the infobar
-  flicker. The grace is a constant; 0 is possible if the user prefers (Q14).
+- **Avoid the debugger by default** (answer 14): reads and normal actions use content scripts
+  (6.2). The debugger is attached only to a tab the Mono owns, and only when that tab needs it
+  (6.4, "When the extension switches to the debugger").
+- **Once attached, it stays attached for the task** on that tab: it is not detached after each
+  action, so the infobar does not come and go. It detaches when the task ends, on Stop (toolbar or
+  overlay), on ownership loss, when the tab leaves the Mono's allowed origins, and when the Mono's
+  run ends with no new run of the same task within 2 minutes (a conversation can stay open for days;
+  the debugger must not). A later run of the same task that needs it attaches again.
+- **The infobar cannot be hidden.** Chrome shows "<extension name> started debugging this browser"
+  while any extension debugger session is attached. A Web Store extension has no way to hide it;
+  only the user can, by launching the browser with `--silent-debugger-extension-api`, a flag we
+  never set and never ask users to set. The overlay (10a) and the badge explain what is going on.
 - If attach fails because DevTools or another debugger is attached, `E_DEBUGGER_BUSY`; the gate
   tells the agent and does not retry silently.
 - `onDetach` with `canceled_by_user` (the user pressed Cancel on Chrome's infobar) is treated like a
@@ -525,22 +587,25 @@ Lifecycle:
 
 | | Content script and `chrome.scripting` (default) | `chrome.debugger` (fallback) |
 |---|---|---|
-| Visible to the user | Nothing (cursor aside) | Chrome's "zptah Browser started debugging this browser" infobar while attached |
+| Visible to the user | Nothing (cursor and overlay aside) | Chrome's "zptah Browser started debugging this browser" infobar while attached; it cannot be hidden by the extension (6.3) |
 | Event trust | `isTrusted: false`. Some sites ignore it, no user activation (popups, clipboard, fullscreen, file pickers are blocked) | `isTrusted: true`, real user activation |
 | Background tabs | Works; reads and DOM events need no focus | Works; keyboard needs focus emulation |
 | Accuracy of names and roles | Our approximation of accessible names | Exact AX tree (not used in v1) |
 | Detectability by the page | Isolated world is invisible to page scripts; events are untrusted, which sites can notice | Infobar; trusted events; some anti-bot checks notice an attached debugger |
 | Permission | `scripting` plus host permissions | `debugger` (strong warning, extra store review scrutiny) |
-| Cost | Fast, no attach | Attach and detach take tens of ms |
+| Cost | Fast, no attach | One attach per tab and task; afterwards each command is fast |
 
 When the extension switches to the debugger:
 
-1. The action cannot be done without it: `drag`, keys other than the ones in 6.2, dialogs,
-   screenshots of tabs that are not visible, typing into rich editors (`contenteditable` roots whose
-   `beforeinput` default is prevented, such as Google Docs, Notion, Lexical and Slate editors).
+1. The action cannot be done without it: `drag`, keys other than the ones in 6.2, dialogs, typing
+   into rich editors (`contenteditable` roots whose `beforeinput` default is prevented, such as
+   Google Docs, Notion, Lexical and Slate editors). Screenshots never trigger an attach on their own
+   (see "Screenshots" below).
 2. The site is on the **trusted-input list**: a built-in seed list in `shared/risk-sites.json`
    (sites known to ignore untrusted clicks) plus sites the user added in Settings > Browser.
-3. The agent asks for it: a commit with `input: "trusted"` after a click visibly did nothing. The
+3. Stickiness: once the debugger is attached to a tab for any of the reasons here, it is used for
+   every action on that tab for the rest of the task (no switching back and forth).
+4. The agent asks for it (this is how a failure of content-script input is detected): a commit with `input: "trusted"` after a click visibly did nothing. The
    gate allows that only once per prepared action, so an action is never silently run twice. If the
    page changed after the first try (DOM mutation, navigation, focus change), the extension refuses
    the trusted retry (`E_STALE_PREPARE`), because a non-idempotent click may already have worked.
@@ -554,9 +619,12 @@ frames (`:2289-2295`; chrome-use's host list is in `CU/cli/src/native/observatio
 the user to solve it (`blocked_by_human_check` in the result), it never tries to solve it.
 
 Screenshots: if the tab is the active tab of a visible window, `chrome.tabs.captureVisibleTab`
-plus a crop (no infobar). Otherwise a short debugger attach for `Page.captureScreenshot`. Whether
-`captureVisibleTab` works for an unfocused but visible window, and how occluded windows behave, is
-spike M0.1.
+plus a crop (no infobar). If the debugger is already attached to the tab for the task, it is used.
+Otherwise the approval card shows the text preview (8.2) instead of attaching just for a picture,
+because an attach would then stay for the task (rule above). `browser_take_screenshot` follows the
+same rule: for a tab that is neither visible nor attached it returns `E_UNSUPPORTED` with "The tab
+is in the background; use browser_snapshot, or ask the user to show the tab". Whether `captureVisibleTab` works for
+an unfocused but visible window, and how occluded windows behave, is spike M0.1.
 
 ### 6.5 Invariants enforced in the extension (defense in depth)
 
@@ -588,6 +656,10 @@ per-Mono data (roster, origin lists) that can make them stricter.
 8. **Unknown Monos** (not in the roster) get `E_UNKNOWN_MONO`.
 9. **CDP allowlist** (section 6.3).
 10. **Navigation** only to `http:` and `https:` URLs.
+11. **Taken-back tabs** (10a): a tab the user took back with the overlay's Stop is not adopted again
+    by that Mono until the gate sends a reference newer than the stop, or the user drags it back.
+12. **Automatic consent clicks** (7.3) honor every rule above: they run only as a normal prepare and
+    commit, never while stopped, never outside the origin lists, never with the debugger.
 
 ### 6.6 No remote code, no telemetry, no adapters
 
@@ -737,6 +809,14 @@ Matching:
   when they are the whole name or the first word of a name of at most 6 words, so "Payment methods
   help" and "Buyer reviews" do not match (chrome-use's tests cover the same cases,
   `CU/cli/src/native/site_policy.rs:745-752`).
+- Diacritics are kept when the page text has them: an entry with diacritics matches page text
+  with diacritics exactly (after case and whitespace folding), and the stripped form is used only
+  for page text that has no Vietnamese diacritics at all. This avoids collisions the stripping
+  creates, for example `go` (Gỡ and the English "Go"), `moi` (Mời and Mới), `dang` (Đăng and
+  Đang), `dong` (Đóng, Đồng).
+- The longest matching phrase wins. "Not risky" entries (Appendix A.10) match only when they are
+  the whole name, and they never remove a category that comes from another signal (form fields,
+  dialog text, site category).
 - Bare `cancel`/`huy`/`dong` inside a dialog that also has a primary button counts as **dismiss**
   (not risky), unless the dialog text matches a destructive phrase ("Cancel your subscription?");
   then the primary button is the risky one.
@@ -749,7 +829,9 @@ Matching:
   Vietnamese, plus a small seed for Chinese, Japanese, Korean, Spanish, French, German, Portuguese,
   Thai and Indonesian. Adding a language is a data change with tests.
 
-Lexicon seed (normalized forms shown in the file; display forms here):
+Lexicon seed (display forms here). The Vietnamese list in Appendix A is a superset of the
+Vietnamese column below, with and without diacritics, for the user to review once (answer 11);
+`shared/risk-lexicon.json` is generated from Appendix A's data, not edited separately:
 
 | Category | English | Vietnamese |
 |---|---|---|
@@ -774,6 +856,34 @@ Form-field signals (computed in the extension, never sending field values):
 | `national_id` | SSN, passport number, CMND, CCCD, căn cước, mã định danh |
 | `file` | `type=file` |
 | `terms_checkbox` | checkbox whose label matches the terms lexicon |
+
+**Cookie consent (answer 3).** Cookie consent banners are not `terms`, and "Accept all" is clicked
+automatically. To keep that from becoming a way around the gate, the click is **gate-initiated**,
+not something the extension does on its own:
+
+1. On a Mono-owned tab, the content script reports a detected banner (`consent_banner` in the
+   result of `page.snapshot` and `act.prepare`).
+2. Before the Mono's next action on that tab, the gate runs a normal `act.prepare` and `act.commit`
+   for the banner's button, so the level (`read-only` does not click), soul rules, origin lists,
+   ownership, the stop switch and `ext_risk` all apply as for any click.
+3. It is skipped on sensitive sites (7.4) and on domains that are read-only for the task (7.4,
+   reached by a link); there the banner is left for the Mono to handle like any other control.
+4. The button is refused if it is a form submit, has a `form_action`, or has an `href` that leaves
+   the page; only untrusted content-script input is used, never the debugger.
+5. The audit row has `actor: auto_consent`.
+
+A banner counts as cookie consent only when all of these hold, so a page cannot dress a payment or
+a contract up as one:
+
+- the container's text contains words of the `consent` container class (`cookie`, `cookies` and
+  the Vietnamese terms in Appendix A.7), or the container belongs to a known consent manager
+  (OneTrust, Cookiebot, Didomi, Quantcast Choice, TrustArc, Usercentrics, Google's consent dialog);
+- the button's name is in the `consent` button class (Appendix A.7);
+- the container has no payment, account, sharing or terms-of-service signals other than a link to
+  a cookie or privacy policy.
+
+`consent` is a lexicon class that marks something as **not** risky; it is never a risk category.
+Anything that fails these checks falls back to the normal classification.
 
 How signals become categories:
 
@@ -865,8 +975,8 @@ site      = host | "*." host | "*"
 - The same applies to the Mono's browser settings stored in the data dir (`Mono.browser`,
   `CORE/mono.rs:87`): the gate keeps the last settings confirmed through the UI, and a change that
   did not come through the UI and loosens anything (a higher level, a removed blocked origin, an
-  added or emptied allowed list) waits for confirmation. Protection against a program that edits the
-  app store itself relies on the sandbox (5.4a).
+  added or emptied allowed list) waits for confirmation. A program that edits the app store itself
+  is the same-user residual risk of 5.4a.
 - A line that does not parse is shown as an error in Settings > Browser, and until it is fixed the
   Mono asks before every write action (fail closed).
 
@@ -879,10 +989,17 @@ else if level == read and the tool is not marked "yes" for Read only in 7.1
                                             -> deny ("read only")
 else if effective is empty                 -> allow
 else if every category is covered by a live "allow for this task" grant for this site
+        (grants last for the whole conversation, answer 9)
                                             -> allow (grant noted in the audit)
 else                                       -> ask, with all categories in one prompt
 ```
 
+- A task grant ("Allow for this task") covers its categories on its site for the **whole
+  conversation**, across runs, to avoid repeated prompts. Grants are stored with the conversation
+  in the app store, so they survive an app restart. They end when the conversation is closed or
+  cleared, or the Mono's browser settings change. The toolbar stop ends every grant of every Mono
+  in that profile; the overlay's Stop ends the grants of that Mono for that tab's site. Grants are
+  listed in Settings > Browser and can be revoked there.
 - Payments (`payment`) and `credential_entry` are never covered by a task grant: each one asks.
 - When no person can answer (scheduled runs, plan mode, the existing `can_answer` check in
   `CORE/provider/browser_gate.rs:27`), an ask is a deny, as today.
@@ -897,8 +1014,8 @@ else                                       -> ask, with all categories in one pr
 | Read only | `read-only` | The tools marked "yes" in the "Read only level" column of 7.1: tier R tools plus navigation (`browser_navigate`, `_back`, `_forward`, `browser_tabs new` and `select`), as today's Level 1 allows navigation (`B:52`); never clicks, types or changes a page's state |
 | Act for me (default) | `act` | Tier R and A within the task; asks only for the risky categories; tier K always asks |
 
-Today's `AskRisky` (asks before every write) and `Autonomous` levels (`B:173`) both migrate to
-`act` (section 15.3).
+There is no "ask before every action" level (answer 2). Today's `AskRisky` (asks before every
+write) and `Autonomous` levels (`B:173`) both migrate to `act` (section 15.3).
 
 ### 8.2 Where prompts appear
 
@@ -910,21 +1027,25 @@ Today's `AskRisky` (asks before every write) and `Autonomous` levels (`B:173`) b
 - The screenshot is the element with 24 px of context, cropped from the prepare screenshot. The app
   draws the highlight on the image, never on the page. It is saved to the Mono's output dir and
   referenced from the audit row.
-- Mono tabs are background tabs, so an element screenshot usually needs the debugger
-  (`Page.captureScreenshot`, 6.4). That is the main reason the pairing page offers the optional
-  `debugger` permission pre-selected. Without it, and when the tab is not visible, the card shows a
-  text preview instead (the element's name, the dialog or nearby text, the amounts, the page title)
-  with one line: "Preview image unavailable. Allow screenshots in the zptah Browser options." A
-  missing image never turns an ask into an allow.
+- Mono tabs are background tabs. The image comes from `captureVisibleTab` when the tab is visible,
+  or from the debugger when it is already attached for the task (6.4). Otherwise the card shows a
+  text preview (the element's name, the dialog or nearby text, the amounts, the page title) and a
+  "Show tab" button. M0.1 measures how often an image is available. A missing image never turns an
+  ask into an allow.
 - Text only, plain language, no JSON, no selectors, no refs. The Mono's `purpose` appears as a
   separate quoted line labelled as the Mono's words, so the user can tell gate facts from agent
   claims.
-- Buttons: "Allow once", "Allow for this task" (not for `payment` and `credential_entry`) and
-  "Don't allow". Keyboard: `enter` allows once, `escape` denies (as the card does today).
+- Buttons: "Allow once", the task grant button and "Don't allow". The task grant ("Allow for this
+  task" in the user's words, answer 9) lasts for the whole conversation, so its label says so:
+  "Allow in this conversation" / "Cho phép trong cuộc trò chuyện này". It is not offered for
+  `payment` and `credential_entry`. Vietnamese for the others: "Cho phép lần này", "Không cho
+  phép". Keyboard: `enter` allows once, `escape` denies (as the card does today).
 
 ### 8.3 Copy examples
 
-The UI language follows the app setting. `{mono}` is `Mono::label()` (`CORE/mono.rs:228`),
+The prompt copy follows the app language (answer 11): Vietnamese when the app UI is Vietnamese,
+English otherwise. The app has no UI language setting today, so M3 adds one (default: the system
+language, Vietnamese or English). `{mono}` is `Mono::label()` (`CORE/mono.rs:228`),
 `{site}` the registrable domain, `{label}` the element's visible name as the page shows it.
 
 | Category | English | Vietnamese |
@@ -996,10 +1117,10 @@ provider-event writer is removed so every row comes from the place that decided)
 | `tab_id`, `tab_owner` | Chrome tab id and owner at the time |
 | `tier` | R, A, K |
 | `categories` | comma list |
-| `decision` | `auto`, `asked_allowed_once`, `asked_allowed_task`, `asked_denied`, `asked_timeout`, `blocked`, `invariant` |
+| `decision` | `auto`, `asked_allowed_once`, `asked_allowed_task`, `asked_denied`, `asked_timeout`, `blocked`, `invariant`, `stopped` |
 | `reason` | short plain text (rule, invariant or error code) |
 | `approval_id`, `screenshot` | file name in the output dir for asked actions |
-| `actor` | `mono`, `recipe`, `user_stop` |
+| `actor` | `mono`, `recipe`, `auto_consent`, `user_stop` |
 | `input` | `content` or `debugger` |
 | `profile` | paired instance label |
 
@@ -1030,8 +1151,12 @@ provider's context, and an approval would train users to approve it.
 
 - One Chrome tab group per Mono per window. Title: `<emoji> <name>`, at most 40 characters, for
   example `🐸 Mira`. Monos have no identity emoji today (the `emoji` field, `CORE/mono.rs:84`, is
-  the emoji-library setting); the emoji comes from the mascot (`CORE/project_appearance.rs:14`): invader 👾, ghost 👻, robot 🤖, cat 🐱, skull 💀, crab 🦀,
-  mushroom 🍄, rocket 🚀, dino 🦖, frog 🐸.
+  the emoji-library setting), so `Mono` gains a new field (answer 1): `badge_emoji: Option<String>`,
+  serde default `None`, one emoji grapheme, editable in the Mono's settings with an emoji picker.
+  When it is `None` the emoji comes from the mascot (`CORE/project_appearance.rs:14`): invader 👾,
+  ghost 👻, robot 🤖, cat 🐱, skull 💀, crab 🦀, mushroom 🍄, rocket 🚀, dino 🦖, frog 🐸. The
+  name avoids a clash with the existing `emoji` field. The same emoji is used in the cursor label,
+  the overlay and the badge tooltip.
 - Two Monos with the same title get a ` 2`, ` 3` suffix in the later one.
 - Color: the nearest of Chrome's 9 group colors to the Mono's color, by distance in OKLab, not raw
   RGB. Today's `session_color` (`B:1010`) has 8 colors (`B:999`, no grey) and RGB distance; it gains
@@ -1071,7 +1196,7 @@ interface Owned { tab: number; mono: string; since_ms: number;
 | Read any eligible tab | Allowed, subject to the Mono's origin rules; never attaches the debugger; never changes the owner |
 | Act in own tab | Allowed (classifier applies) |
 | Act in a user tab | Refused (`E_NOT_OWNER`) until adopted |
-| Adopt a user tab | `browser_tabs adopt {tab, user_reference}`. The gate checks that `user_reference` is a verbatim substring of text the user typed in the current task (text the app marks as pasted or attached does not count), that it has at least 2 words or 8 characters after normalization, and that it points at exactly one eligible tab (its words match that tab's title or host, and no other tab's). Then the tab moves into the Mono's group with no prompt. Otherwise the adopt is **refused** with a hint for the Mono: "Ask the user to name the tab, or to drag it into your group." There is no approval prompt that replaces the user's reference (D4) |
+| Adopt a user tab | `browser_tabs adopt {tab, user_reference}`. The gate checks that `user_reference` is a verbatim substring of text the user typed in the current task (text the app marks as pasted or attached does not count; for a taken-back tab only text written after the stop counts, 10a), that it has at least 2 words or 8 characters after normalization, and that it points at exactly one eligible tab (its words match that tab's title or host, and no other tab's). Then the tab moves into the Mono's group with no prompt. Otherwise the adopt is **refused** with a hint for the Mono: "Ask the user to name the tab, or to drag it into your group." There is no approval prompt that replaces the user's reference (D4) |
 | User drags a tab into a Mono's group | Adopted by the user, no prompt (`tab.ownership by user_drag`) |
 | User drags a tab out, ungroups or closes the group | Released |
 | Tab owned by another Mono | Read allowed; act refused; transfer only with a user reference as for adopt **and** the user's approval ("tab transfer" copy), because it takes work away from another Mono |
@@ -1119,6 +1244,60 @@ never activation. The only path that fronts a tab is the user's "Show tab" butto
   trace. A closed shadow root hides the contents, not the existence, of the host while it is shown;
   that is why the per-site off list exists.
 
+## 10a. In-tab overlay and per-tab Stop
+
+New requirement (D9), modelled on how Claude in Chrome marks a tab it is working in.
+
+- **When**: shown in a tab from the Mono's first action on it in a run until that run ends, and in
+  any case for as long as the debugger is attached to the tab (6.3), so the Stop button is there
+  whenever the Mono controls the tab, including long waits. The glow pulses during actions and stays
+  steady in between. Never during pure reads of a tab, never on tabs the Mono does not own.
+- **Look**:
+  - A soft glow around the edges of the viewport in the Mono's exact color: an `inset` box-shadow on
+    a full-viewport element, about 12 px blur at 35% opacity, with a slow 2 s pulse that
+    `prefers-reduced-motion` turns off. It never covers page content.
+  - A pill button centered at the bottom, 24 px above the edge: a stop icon and "Stop Mira"
+    (Vietnamese "Dừng Mira"), in the Mono's color with contrast-picked text, plus the Mono's emoji.
+- **Rendering**:
+  - The same mechanism as the cursor (section 10): one host element per tab with
+    `attachShadow({mode: "closed"})`, shown as a `popover="manual"` in the top layer and re-shown when
+    the page opens a modal or goes fullscreen, so it stays above them. The cursor and the overlay can
+    share one host.
+  - The host and the glow have `pointer-events: none`. **Only the Stop button has
+    `pointer-events: auto`**, so the page stays fully usable around it.
+  - The button handles `pointerdown` and `click` inside the shadow root, acts only when
+    `event.isTrusted` is true (a page script cannot stop the Mono by dispatching events, and cannot
+    reach the button through the closed root), and stops propagation inside the shadow root. Page
+    listeners in the capture phase still see a retargeted event on the host; that leaks only that
+    the user clicked the overlay.
+- **Stop**: one click, no confirmation.
+  1. The extension cancels the Mono's in-flight and prepared actions on that tab, detaches the
+     debugger from that tab, removes the cursor and the overlay.
+  2. The tab goes back to the user: it is released from the Mono's group (ungrouped, left open,
+     same position) and marked **taken back** for that Mono. The mark is kept in the extension
+     (`chrome.storage.session`, invariant 11 in 6.5), so the app alone cannot override it. While
+     marked, `tab.adopt` for that Mono and tab is refused unless the gate presents a user reference
+     from a message the user wrote **after** the stop (9.3). The mark is cleared when the user drags
+     the tab back into the Mono's group, or closes it.
+  3. The extension sends `tab.stopped {tab, mono, by: "overlay"}` to the app. The gate returns a tool
+     error to the Mono's current call and to any later call on that tab: "The user stopped you on
+     the tab "<title>" and took it back. Do not use that tab unless the user asks again." It writes
+     an audit row (`actor: user_stop`, decision `stopped`).
+  4. The Mono's other tabs and other Monos are not affected. The toolbar icon (11.1) remains the
+     stop for everything.
+- **Never injected**: on sites in the per-site off list (11.3; the same list as the cursor, renamed
+  "Sites without in-page effects"), in anti-bot challenge frames (6.4), on restricted pages, and in
+  any frame other than the top frame. On such sites the toolbar stop is the only stop, and the
+  badge still shows that Monos are active.
+- **Safety**: the overlay never shows page-provided text, so a page cannot spoof it into asking for
+  anything. It offers only Stop: there is no "Allow" in the page, ever; approvals stay in zptah.
+- **Best effort, by nature**: the overlay lives in a page the site controls. A capture-phase
+  listener on `window` can swallow the click before it reaches the shadow root; page CSS or a later
+  popover can cover the host; and an open modal dialog may make it inert (M0.8 checks). The host
+  carries inline `!important` styles (`display`, `visibility`, `opacity`, `position`) and is
+  re-shown on top when covered, which makes these harder, not impossible. **The toolbar icon (11.1)
+  is the guaranteed stop**; the overlay is the convenient one.
+
 ## 11. Toolbar and options page
 
 ### 11.1 Toolbar icon
@@ -1149,8 +1328,9 @@ never activation. The only path that fronts a tab is the user's "Show tab" butto
 - Connection status: Connected to zptah (app version), paired as "<label>", protocol 1; or the
   error with one line of advice ("Open zptah > Settings > Browser > Connect extension").
 - Cursor: on or off.
-- Per-site cursor off list: add a host (`example.com` or `*.example.com`), remove. Stored in
-  `chrome.storage.local` (not `sync`, to keep the list on this device).
+- Per-site off list, "Sites without in-page effects": no cursor and no overlay there (10, 10a).
+  Add a host (`example.com` or `*.example.com`), remove. Stored in `chrome.storage.local` (not
+  `sync`, to keep the list on this device).
 - Debugger fallback: a button to grant the optional `debugger` permission (a user gesture is
   required by `chrome.permissions.request`), with one sentence about the infobar.
 - Version, extension id, a link to `https://zptah.app/privacy`. Nothing else.
@@ -1196,7 +1376,9 @@ panel or a place to talk to the Mono.
 
 ### 12.2 Manifest locations
 
-User-level only; no admin rights needed.
+User-level only; no admin rights needed. **v1 writes only the Google Chrome rows** (answer 12);
+the other rows are kept for the later browsers so the installer and the peer checks are written
+against a table, not hard-coded.
 
 | Browser | macOS | Linux | Windows (HKCU registry key, default value = manifest file path) |
 |---|---|---|---|
@@ -1205,7 +1387,7 @@ User-level only; no admin rights needed.
 | Chromium | `~/Library/Application Support/Chromium/NativeMessagingHosts/` | `~/.config/chromium/NativeMessagingHosts/` | `Software\Chromium\NativeMessagingHosts\...` |
 | Edge | `~/Library/Application Support/Microsoft Edge/NativeMessagingHosts/` | `~/.config/microsoft-edge/NativeMessagingHosts/` | `Software\Microsoft\Edge\NativeMessagingHosts\...` |
 | Brave | `~/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/` | `~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/` | `Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\...` |
-| Arc | `~/Library/Application Support/Arc/User Data/NativeMessagingHosts/` (unverified, M0) | n/a | unverified, M0 |
+| Arc (later) | `~/Library/Application Support/Arc/User Data/NativeMessagingHosts/` (unverified) | n/a | unverified |
 
 Sources: the Chrome and Edge native messaging docs, chrome-use's lists
 (`CU/cli/src/connect.rs:1718-1753` for macOS and Linux, `:1507-1516` for Windows), and the earlier
@@ -1219,8 +1401,8 @@ Settings > Browser (the per-Mono tab, `GPUI/monos/browser_ui.rs:868`) gets a "Br
 card that replaces the token card (`:1184`), the Node path card (`:1014`) and the Playwright install
 row (`:1147`):
 
-1. The user clicks **Connect extension**. The app detects installed browsers (the table above) and
-   shows them with a picker for the profile when it can read `Local State` (12.4).
+1. The user clicks **Connect extension**. The app detects Google Chrome (v1; other browsers later,
+   from the table above) and shows a picker for the profile when it can read `Local State` (12.4).
 2. The app writes the host manifest for every detected browser (cheap and idempotent).
 3. If the extension is not installed in that profile, the app opens the Web Store listing in that
    browser and profile (`open_in_profile`, `B:645`, generalized beyond Chrome). The user clicks
@@ -1232,8 +1414,9 @@ row (`:1147`):
    mechanism for its `connect.html` (`2026-11-21-mono-browser-design.md`, "Launch").
 5. `pair.html` (a plain page, not a UI surface beyond "Connecting to zptah...") hands the nonce to
    the worker, which connects the host and sends `pair.begin {nonce, instance_id}`.
-6. The app checks the nonce, generates the pairing key `K` (32 random bytes), stores it in
-   `mono_secrets` (encrypted with AAD as the token is today, `B:672`, `B:705`), and sends it once in
+6. The app checks the nonce, generates the pairing key `K` (32 random bytes), stores it as 5.4a
+   says (OS credential store, else a 0600 file or the encrypted `mono_secrets` table as the token is
+   today, `B:672`, `B:705`), and sends it once in
    the `pair.begin` result. The extension stores `K` in `chrome.storage.local`. The normal handshake
    (5.3) follows.
 7. The page offers the optional `debugger` permission (one click, the required user gesture) and
@@ -1294,7 +1477,7 @@ connected) and removes the binding.
 | `alarms` | yes | Reconnects to the zptah app after the browser wakes up or the background worker restarts. |
 | `webNavigation` | yes | Finds the frames of a page to read it fully, and restores your front tab when a page a Mono works in opens a popup. |
 | host permissions `<all_urls>` | yes | Monos work on the sites you ask them to use. Nothing runs on a page until a Mono reads or acts on it. |
-| `debugger` | **optional**, granted on the pairing page or in options | Used only for sites that ignore simulated input, for screenshots of background tabs and for page dialogs. Attached for the single action and detached right after; Chrome shows its debugging bar while attached. |
+| `debugger` | **optional**, granted on the pairing page or in options | Used only for sites that ignore simulated input, for rich text editors and for page dialogs. When a tab needs it, it stays attached while the assistant works in that tab and is detached when the work ends or the user presses Stop; Chrome shows its debugging bar while attached. |
 
 Not requested: `identity`, `downloads`, `cookies`, `history`, `bookmarks`, `webRequest`,
 `declarativeNetRequest`, `notifications`, `sidePanel`, `activeTab`, `management`, `clipboard*`.
@@ -1317,7 +1500,7 @@ A new page in `web/landing/src/html` built by `web/landing/build.mjs`. Content:
 
 Store data-usage form: declare "Website content" and "Web history" (tab addresses) as handled, with
 the limited-use certifications, because the content reaches the user's AI provider through the app.
-This is the conservative reading; see open question Q6.
+This is the conservative reading, chosen by the user (answer 6).
 
 ### 13.4 Review timeline
 
@@ -1340,9 +1523,14 @@ This is the conservative reading; see open question Q6.
 - Known builds: every release records the SHA-256 of the store package's files (excluding
   `manifest.json`'s `key`/`update_url` and `_metadata/`) in `extension-release.json`, and the app
   compiles in the list. When the app can read the installed extension's folder
-  (`<profile>/Extensions/<id>/<version>_0/`) it compares; an unknown build makes the link refuse to
-  start with "This extension version is not known to this zptah. Update zptah." (see Q7 for the
-  strictness choice). This is the defense against a store push the app does not know.
+  (`<profile>/Extensions/<id>/<version>_0/`) it compares hashes. When it cannot read the folder
+  (no Full Disk Access) it compares the version the extension reports with the list. **An unknown
+  build or version refuses to connect** (answer 7). The version check alone relies on what the
+  extension reports, so it stops an accidental mismatch, not a malicious build; the hash check is
+  the real defense where it can run. Native Dev with the dev extension id skips the list (it trusts
+  only the dev id, 12.1). The message is "This extension version is not known to this
+  zptah. Update zptah." This is the defense against a store push the app does not know. Because of
+  it, an extension release is published only after the app release that lists it (13.6).
 
 ### 13.6 CI publishing
 
@@ -1363,8 +1551,8 @@ This is the conservative reading; see open question Q6.
 - If the store offers verified uploads (packages signed with a developer key registered with the
   store), opt in and sign on the maintainer's Mac with an offline key, like the updater key, so a
   stolen CI secret alone cannot publish. To verify in M5.
-- Edge Add-ons: Edge users can install from the Chrome Web Store ("Allow extensions from other
-  stores"). A separate Edge listing is optional (Q5).
+- Chrome Web Store only for now (answer 5). Edge Add-ons and other stores come with the later
+  browsers; the build already produces a store-neutral zip.
 
 ## 14. Threat model
 
@@ -1376,13 +1564,13 @@ build we published, the browser.
 
 | # | Threat | Mitigation | Residual |
 |---|---|---|---|
-| T1 | A Mono's shell (or any same-user process) drives the browser outside the gate | No raw browser channel exists: the host has no listener; the app socket accepts only a verified host (signature or same-exe, parent is a browser) and only sends app-originated commands; the extension accepts commands only after the mutual HMAC and then a MAC on every frame; no `externally_connectable`. A second app instance cannot serve the socket (single-instance lock, 5.4); a copied profile cannot pose as the paired one (duplicate and data-dir checks, 5.4); `K` is in the OS credential store on the app side. The gate URL the shell can see leads to the gate itself, with the same policy, approvals and audit. Monos with browser access run their shell in `sbx` without access to profile dirs, app data and the socket dir (5.4a) | Without the sandbox, code running as the user can read `K` from the extension's storage on disk, and on Linux without Yama can `ptrace` the app; combined with killing the real app or replacing the user's profile, it could still impersonate a side. These paths need deliberate attacker work and are closed only by the sandbox (Q13) |
+| T1 | A Mono's shell (or any same-user process) drives the browser outside the gate | No raw browser channel exists: the host has no listener; the app socket accepts only a verified host (signature or same-exe, parent is a browser) and only sends app-originated commands; the extension accepts commands only after the mutual HMAC and then a MAC on every frame; no `externally_connectable`. A second app instance cannot serve the socket (single-instance lock, 5.4); a copied profile cannot pose as the paired one (duplicate and data-dir checks, 5.4); `K` is in the OS credential store on the app side. The gate URL the shell can see leads to the gate itself, with the same policy, approvals and audit. `credential_guard` refuses the key paths, the key file is 0600, and `K` is rotated on any suspicious event (5.4a). No sandbox is required (answer 13) | A same-user process can read `K` from the extension's storage on disk, and on Linux without Yama can `ptrace` the app; combined with stopping the real app or replacing the user's profile, it could impersonate a side. Accepted and stated in Settings (5.4a) |
 | T2 | A fake host (shell runs the signed binary in host mode, or starts a browser with a copied profile) | Parent-is-a-browser check; the HMAC needs `K`, which the host never has; the browser executable and `--user-data-dir` must match the pairing; a duplicate `instance_id` is refused and reported | As T1 |
 | T3 | A fake app (a process binds the socket first, or a second copy of the app with other data) | Host verifies the server's code signature or executable and that the server holds the single-instance lock; extension verifies the app's MAC; 0700 dir owned by the uid, checked before connect; socket path from `confstr`, not the environment | As T1 |
 | T4 | Prompt injection in page content | Section 8.4: fencing, scanning, taint, unrelated-domain and typed-URL rules, user-reference rule for adopting tabs, purpose cannot lower risk, sensitive sites ask | A risky action the user approves after being misled by the Mono's purpose line; mitigated by showing gate facts first and the Mono's words separately |
 | T5 | A malicious page misleads the classifier (a "Continue" label on a pay button, fake text fields for passwords, DOM swaps between check and act) | Signals from form fields, amounts, checkout paths and site categories, not only labels; password detection on labels and CSS masking; unknown element on a money page counts as payment; prepare and commit with element identity, name, box and URL re-check, and a full re-gather of signals whose digest must equal the approved one | Novel UI that hides a payment behind neutral words on an unknown site. The soul rules and the sensitive-site list let users close known gaps |
-| T6 | A malicious page attacks the extension (messages to the content script, detecting and spoofing the cursor, clickjacking) | Isolated world; no `window.postMessage` channel; closed shadow root; the cursor is `pointer-events: none` and `inert`; nothing injected until a Mono acts; never into challenge frames | Pages can detect the cursor host while shown; the per-site off list covers it |
-| T7 | Compromised extension update (store account or CI secret stolen) | Publish only from rebuilt tagged source; environment with a required reviewer; service account scoped to publish; verified uploads with an offline key if available; deferred publish; the app refuses unknown builds when it can read the extension folder; the extension holds no capability that bypasses the app's gate for actions (the gate still decides); permission changes re-prompt users | A malicious build with the existing permissions can read pages the user opens, without the app. That is inherent to any extension; the known-build check limits how long it goes unnoticed |
+| T6 | A malicious page attacks the extension (messages to the content script, detecting and spoofing the cursor or overlay, faking or blocking the overlay's Stop, clickjacking) | Isolated world; no `window.postMessage` channel; closed shadow root; the cursor is `pointer-events: none` and `inert`; the overlay's only interactive part is Stop, which acts only on `isTrusted` clicks and offers nothing but stopping; nothing injected until a Mono acts; never into challenge frames | Pages can detect the cursor and overlay hosts while shown (the per-site off list covers it), and can swallow, cover or make inert the overlay's Stop; the toolbar stop cannot be blocked by a page |
+| T7 | Compromised extension update (store account or CI secret stolen) | Publish only from rebuilt tagged source; environment with a required reviewer; service account scoped to publish; verified uploads with an offline key if available; deferred publish; the app refuses unknown builds (file hashes when it can read the extension folder, else the reported version, which a malicious build could fake, 13.5); the extension holds no capability that bypasses the app's gate for actions (the gate still decides); permission changes re-prompt users | A malicious build with the existing permissions can read pages the user opens, without the app. That is inherent to any extension; the known-build check limits how long it goes unnoticed |
 | T8 | Compromised zptah app update | Out of scope here (the app is the TCB); covered by the signed updater (`assets/native/updater.pub`) | |
 | T9 | One Mono interferes with another | Ownership per tab, per-tab queue, transfers need user approval, roster scoping, per-Mono origin lists | |
 | T10 | Mono acts in a profile it was not granted | App routes by binding; extension refuses unknown Monos; extension lives in one profile | |
@@ -1425,10 +1613,11 @@ renamed server key).
 |---|---|
 | `enabled` | kept |
 | `profile_dir`, `profile_name` | kept as a hint; the Mono shows "Reconnect needed" until bound to a paired connection (`connection: Option<String>`, new) |
-| `blocked_origins` | kept unchanged, including the old `DEFAULT_BLOCKED_ORIGINS` (`B:125`) for Monos that never edited it, so no existing Mono silently loses a hard block. New Monos start with an empty blocked list, because the sensitive-site rule (7.4) asks on those sites instead of blocking them. Whether to also move existing Monos to the new default is open question Q15 |
+| `blocked_origins` | kept unchanged (answer 15), including the old `DEFAULT_BLOCKED_ORIGINS` (`B:125`) for Monos that never edited it, so no existing Mono silently loses a hard block. New Monos start with an empty blocked list, because the sensitive-site rule (7.4) asks on those sites instead of blocking them. Settings > Browser shows existing Monos a one-time suggestion: "zptah now asks before risky steps on banking and payment sites instead of blocking them. Switch Mira to the new defaults?" with "Switch" and "Keep my list". "Switch" removes only the entries of the old `DEFAULT_BLOCKED_ORIGINS` that are still present; origins the user added stay blocked |
+| (new) `Mono.badge_emoji` | `None`, so the mascot's emoji is used until the user picks one (9.1) |
 | `allowed_origins` | kept |
 | `trust`: `read-only` | `read-only` |
-| `trust`: `ask-risky`, `autonomous` | `act`, with a one-time notice in Settings > Browser: "Monos now ask only before risky steps such as payments and deletions." Old ids stay readable by `from_id` |
+| `trust`: `ask-risky`, `autonomous` | `act` (the "ask every action" level is removed, answer 2), with a one-time notice in Settings > Browser: "Monos now ask only before risky steps such as payments and deletions." Old ids stay readable by `from_id` |
 | `show_actions` | becomes the per-Mono cursor switch |
 | `ready` | recomputed |
 | Secret `playwright-extension-token` in `mono_secrets` | deleted |
@@ -1492,6 +1681,9 @@ Rust (core, filtered to the touched modules, per the team rule of one test pass 
   unrelated domains, purpose cannot downgrade, task grants never cover payments.
 - Soul rule parser and the "weakening needs confirmation" rule.
 - Approval copy: rendered English and Vietnamese strings for every category (snapshot tests).
+- Lexicon collisions from Appendix A (diacritic-aware matching, longest phrase wins, A.10 whole-name
+  only), consent detection and its refusals, grant lifetime across runs and after Stop, the
+  taken-back rule, key rotation triggers.
 - Group color: OKLab nearest color, grey only for low chroma.
 - Migration from old `MonoBrowser` JSON and the token deletion.
 - `ExtensionUpstream` result formatting against the existing `page_url_of`, `parse_tabs`,
@@ -1529,14 +1721,18 @@ between two Monos, stop and resume, reconnect after a dropped link.
   refused; stop from a test hook that calls the same function as the toolbar click (dev build
   only); two Monos with separate groups, colors and ownership conflicts; cursor host present only
   while acting and closed shadow root; no tab ever becomes active (checked with `tabs.query` after
-  every step); the debugger detaches after the grace period.
+  every step); the debugger stays attached across actions and navigations for the task and detaches
+  at task end and on Stop; the overlay appears on acting, shows Stop, and a synthetic click on it
+  does nothing while a trusted click stops the Mono and marks the tab taken back; a consent banner
+  is accepted through prepare and commit and refused when its button is a submit; grants survive
+  runs of one conversation and end with it; Appendix A collision cases (Gỡ and "Go", Đăng and Đang).
 - Runs on Ubuntu in CI as its own job in `native.yml` (with `timeout-minutes`, skipped by the
   `changes` job when nothing under `extensions/` or the browser modules changed). The store build is
   also loaded once to prove it has no test hooks and starts cleanly.
 
 ### 16.4 Manual checks per release
 
-Real Chrome, Edge, Brave and Arc on macOS; Chrome on Windows and Linux; a short checklist on
+Real Google Chrome on macOS, Windows and Linux (other browsers when they are added); a short checklist on
 shopee.vn, tiki.vn, Gmail, Google Docs and a Vietnamese bank's public pages (no logins used for
 writes): classification, cursor, no focus change, emergency stop.
 
@@ -1546,45 +1742,286 @@ One engineer, native only. Estimates in working days.
 
 | Milestone | Content | Days |
 |---|---|---|
-| M0 Spikes | M0.1 background-tab screenshots (`captureVisibleTab` on unfocused or occluded windows, `Page.captureScreenshot` on hidden tabs); M0.2 writing `NativeMessagingHosts` on macOS under the privacy restriction; M0.3 Windows host launch chain (`cmd.exe`?) and pipe peer checks; M0.4 Arc paths on macOS and Windows; M0.5 dialog detection after a late `Page.enable`; M0.6 untrusted-input coverage on 20 common sites (Vietnamese and global); M0.7 Chrome for Testing headless with an extension and a native host on Ubuntu | 4 to 5 |
-| M1 Transport and pairing | Host mode in `main`, socket and named pipe, peer verification on three OSes, single-instance lock, duplicate and data-dir checks, framing, handshake, HMAC and per-frame MAC, OS credential store for `K`, manifest installer for all browsers, extension skeleton (worker, pair page, options page, badge, stop), Connect card, sandbox status per Mono | 10 to 12 |
+| M0 Spikes | See 17.1 | 4 to 5 |
+| M1 Transport and pairing | Host mode in `main`, socket and named pipe, peer verification on three OSes, single-instance lock, duplicate and data-dir checks, framing, handshake, HMAC and per-frame MAC, OS credential store for `K`, manifest installer for Chrome (table-driven for later browsers), extension skeleton (worker, pair page, options page, badge, stop), Connect card, key rotation, `credential_guard` paths | 10 to 12 |
 | M2 Read path | `ExtensionUpstream`, `BrowserLinks`, tabs list (all), snapshot in the Playwright-compatible format, read, find, screenshot, wait, extension origin allowlist, preview switch | 7 to 9 |
-| M3 Act path and approvals | Prepare and commit, content-script actions, debugger fallback with the CDP allowlist, lexicon and site data, classifier, soul rules, approval card with image, task grants, audit columns and Activity card | 11 to 14 |
-| M4 Multi-Mono and cursor | Groups, colors, ownership and transfers, drag events, popups and focus restore, cursor | 5 to 7 |
+| M3 Act path and approvals | Prepare and commit, content-script actions, debugger fallback with the CDP allowlist (held for the task), lexicon and site data generated from Appendix A, classifier with diacritic-aware matching, cookie consent through the gate, soul rules, approval card with image, conversation-long task grants, app UI language setting, audit columns and Activity card | 12 to 15 |
+| M4 Multi-Mono, cursor and overlay | Groups, colors, `badge_emoji`, ownership and transfers, drag events, popups and focus restore, cursor, in-tab overlay and per-tab Stop | 6 to 8 |
 | M5 Store and CI | Privacy page, listing, justifications, release workflow, CWS API script, known-build list, first submission (review time runs in parallel) | 4 to 6 |
 | M6 Migration and removal | Data migration, Playwright deletion, recipe dry runs, docs, release notes | 4 to 6 |
 | Security review | Separate review of transport, auth, invariants and classifier (high-risk per `CLAUDE.md`) | 2 to 3 |
-| **Total** | | **47 to 62** |
+| **Total** | | **49 to 64** |
 
 Order: M0, then M1 and the extension skeleton in parallel, M2, M3, M4, then M5 and M6 overlapping.
 
-## 18. Open questions for the user
+### 17.1 M0 spike definition
 
-1. **Mono emoji**: Monos have no emoji field, only a mascot. Use the mascot's emoji (9.1), or add an
-   emoji choice to the Mono?
-2. **Two levels**: drop "Ask before every action" entirely (current `AskRisky`), or keep it as a third
-   level for cautious users?
-3. **Cookie banners**: are "Accept all cookies" buttons `terms` (ask) or allowed? Proposal: allowed,
-   but the Mono prefers "Reject non-essential" when present.
-4. **Debugger permission**: optional and offered at pairing (proposed), or required at install
-   (simpler fallback, stronger install warning)?
-5. **Edge Add-ons listing**: publish there too, or rely on Edge's "Allow extensions from other
-   stores"?
-6. **Store data disclosure**: declare "Website content" and "Web history" as handled (conservative,
-   proposed), or treat local-only handoff as not collected?
-7. **Unknown extension builds**: refuse to connect (proposed, safest, but an outdated app breaks the
-   browser until it updates) or warn and continue?
-8. **Unrelated domains via links**: is "links are free to read, writes there ask" acceptable, or
-   should every new domain ask even for reading?
-9. **Task grant scope**: does "Allow for this task" end with the Mono's run (turn), or with the
-   conversation?
-10. **Retention**: 90 days or 20,000 rows of audit per Mono, acceptable?
-11. **Vietnamese copy**: the prompt copy in 8.3 is a draft; who reviews it?
-12. **Arc**: its native messaging paths are unverified (M0.4); keep it a v1 requirement, or best effort?
-13. **Sandbox requirement**: should browser access require the Mono's shell to run in `sbx` (5.4a),
-    or only warn when it does not? Requiring it is the only way to fully meet "a Mono's shell
-    cannot drive the browser outside the gate".
-14. **Debugger detach grace**: keep 3 s (no infobar flicker during key sequences) or detach after
-    every single action (6.3)?
-15. **Blocked origins of existing Monos**: keep the old hard-block defaults (proposed, 15.3) or move
-    them to the new "ask on sensitive sites" default like new Monos?
+Rules: prototypes only, outside product code (a scratch branch or `~/Documents/zptah-spikes/`);
+automated checks run in an isolated Chrome for Testing profile (its own `--user-data-dir`, never the
+user's Chrome); anything that needs the user's real Chrome or another machine is written down as a
+manual step, not done silently. Results go to `~/Documents/zptah-spikes/browser-ext-m0.md`, and to an
+addendum of this spec when they change the design.
+
+| Item | Question | Method | Done when |
+|---|---|---|---|
+| M0.1 | Can the extension screenshot a background tab without the debugger? | Prototype extension in Chrome for Testing (headful, started in the background): `captureVisibleTab` for the active tab of a focused window, an unfocused window, a window behind another, an off-screen window, a minimized window; `Page.captureScreenshot` on a background tab | A table of what works, with timings |
+| M0.2 | Can the app write `NativeMessagingHosts` in the user's Chrome dir on macOS? | Automated: read-only probe (stat and list) of `~/Library/Application Support/Google/Chrome/` from a process launched by the app. Manual (user): one documented command that creates and removes a test file there | Read result recorded; manual step listed |
+| M0.3 | How does Chrome on Windows start the host (parent chain, `cmd.exe`)? Do named-pipe peer checks work? | Needs a Windows machine: manual step with a script | Listed as manual |
+| M0.5 | Is an open JavaScript dialog visible after a late attach and `Page.enable`? | Prototype: `alert()` and `confirm()` open, then attach, `Page.enable`, wait for `Page.javascriptDialogOpening`, then `Page.handleJavaScriptDialog` | Yes or no, plus the event payload |
+| M0.6 | How often does content-script input (untrusted events, native value setter, `requestSubmit`) work? | Local fixtures (controlled input, `isTrusted` check, `contenteditable` with `beforeinput` prevented, Enter to submit, `target=_blank` popup) plus about 15 public sites, harmless actions only, no login (type into search, open a menu, follow a link) | A table per fixture and site |
+| M0.7 | Does Chrome for Testing load the unpacked extension and start a native host from its own data dir, headless? What are the host's argv and parent chain on macOS? | Headless Chrome for Testing with `--load-extension` and a manifest in `<user-data-dir>/NativeMessagingHosts/` and in the Chrome for Testing user dir; a logging host. Ubuntu: same script in a container or CI scratch run if available, else a manual step | Works or not, argv and parent chain recorded |
+| M0.8 | Do the overlay and cursor stay above modal dialogs and fullscreen, with clicks passing through except on the Stop button, and only trusted clicks counting? | Fixture page with `dialog.showModal()`, a fullscreen element, a page listener that dispatches synthetic clicks; prototype overlay in a closed shadow root as a top-layer popover | Each property pass or fail |
+| M0.9 | Does a debugger attach survive navigations, including cross-origin, for a whole task? Can the infobar be hidden? | Attach, navigate same-origin and cross-origin, watch `onDetach`; run once with `--silent-debugger-extension-api` (a user-launched flag, recorded only to document it) | Detach events and infobar behavior recorded |
+| M0.10 | Does Appendix A match the Vietnamese wording real sites show? | Read the visible button and link text of public pages (no login, no clicks beyond navigation) on Shopee, Lazada, Tiki, MoMo, Zalo and a few bank home pages; compare with Appendix A | Matches, misses and additions listed |
+
+M0.4 (Arc) moved out of v1 with answer 12.
+
+## 18. Decisions on the open questions (user, 2026-11-25)
+
+| # | Question | Answer | Where |
+|---|---|---|---|
+| 1 | Mono emoji | Add an emoji field to Mono, default from the mascot | 9.1, 15.3 |
+| 2 | "Ask every action" level | Removed | 8.1, 15.3 |
+| 3 | Cookie banners | Accept all automatically; not treated as accepting terms | 7.3, Appendix A.7 |
+| 4 | Debugger permission | Optional | 6.3, 13.2 |
+| 5 | Stores | Chrome Web Store only for now; Edge and other stores later | 13.6 |
+| 6 | Data disclosure | Conservative | 13.3 |
+| 7 | Unknown extension build | Refuse to connect | 13.5 |
+| 8 | Pages opened via links | Read freely; acting there asks | 7.4 |
+| 9 | "Allow for this task" | Lasts for the whole conversation; payments never covered | 7.6, 8.2 |
+| 10 | Audit retention | 90 days or 20,000 rows per Mono | 8.5 |
+| 11 | Vietnamese wording | Keyword list in Appendix A for one review; prompt copy follows the app language | 7.3, 8.3, Appendix A |
+| 12 | Browsers | Chrome only for v1; Edge, Brave, Arc later; keep the design portable | 3, 12.2 |
+| 13 | Sandbox | Not required; residual risk documented with mitigations | 5.4a, 14 |
+| 14 | Debugger lifecycle | Avoid by default; when needed keep attached for the task, detach at task end or on Stop; the infobar cannot be hidden by a store extension | 6.3, 6.4 |
+| 15 | Existing deny lists | Kept unchanged; suggest switching to the new defaults | 15.3 |
+| new | In-tab overlay | Glow in the Mono's color and a "Stop <Mono>" button | 10a |
+
+### Remaining open questions
+
+1. Appendix A needs one review by the user (wording and categories), after M0.10 adds what real
+   pages show.
+2. The app UI language setting (8.3) is new; is "system language, Vietnamese or English" the right
+   default?
+3. Answer 9 extended task grants to the whole conversation. The spec also lets task domains, user
+   references and the names behind `send_unnamed` last for the conversation (section 1, "Terms").
+   Confirm, or keep those per run.
+4. Debugger: the spec adds one detail to answer 14, detaching when a run ends and no new run of the
+   same conversation starts within 2 minutes, so a conversation left open for days does not keep
+   the infobar. Confirm.
+
+## Appendix A. Vietnamese risk keywords
+
+Source: written from the Vietnamese interfaces of the listed sites as the spec author knows them,
+not yet checked live; M0.10 compares them with the text real public pages show. Matching is
+diacritic-aware (7.3): page text with diacritics is matched against the phrase with diacritics,
+and the normalized form is used only for page text written without diacritics, so "Thanh toán" and
+"THANH TOAN" both match while "Đang" does not match "Đăng". Short
+words such as "Gửi", "Xóa", "Đăng" follow the short-word rule of 7.3 (whole name, or the first word
+of a short name). The English seed list is in 7.3.
+
+### A.1 Payment, checkout, transfers (`payment`)
+
+| Phrase | Without diacritics (normalized) | Typical on |
+|---|---|---|
+| Thanh toán | `thanh toan` | Shopee, Lazada, Tiki, MoMo, banks |
+| Thanh toán ngay | `thanh toan ngay` | Lazada, Shopee |
+| Tiến hành thanh toán | `tien hanh thanh toan` | Lazada |
+| Xác nhận thanh toán | `xac nhan thanh toan` | MoMo, VNPay, ZaloPay |
+| Thanh toán hóa đơn | `thanh toan hoa don` | MoMo, ZaloPay, banks |
+| Đặt hàng | `dat hang` | Shopee, Lazada, Tiki |
+| Xác nhận đặt hàng | `xac nhan dat hang` | shops in general |
+| Mua ngay | `mua ngay` | Shopee, Lazada, Tiki |
+| Mua hàng | `mua hang` | Shopee (cart) |
+| Chọn mua | `chon mua` | Tiki |
+| Đặt mua | `dat mua` | shops in general |
+| Mua lại | `mua lai` | Shopee (order history) |
+| Trả góp | `tra gop` | shops, banks |
+| Mua | `mua` | shops (short word rule) |
+| Trả tiền | `tra tien` | shops, services |
+| Nâng cấp gói | `nang cap goi` | subscriptions |
+| Chuyển tiền | `chuyen tien` | MoMo, ZaloPay, banks |
+| Chuyển khoản | `chuyen khoan` | banks |
+| Xác nhận chuyển tiền | `xac nhan chuyen tien` | MoMo, banks |
+| Xác nhận giao dịch | `xac nhan giao dich` | banks |
+| Nạp tiền | `nap tien` | MoMo, ZaloPay, telcos, games |
+| Rút tiền | `rut tien` | MoMo, ZaloPay |
+| Đăng ký gói | `dang ky goi` | subscriptions |
+| Nâng cấp | `nang cap` | subscriptions |
+| Gia hạn | `gia han` | subscriptions, domains |
+| Ủng hộ | `ung ho` | donations |
+| Quyên góp | `quyen gop` | donations |
+| Đặt vé | `dat ve` | airlines, cinemas, buses |
+| Đặt phòng | `dat phong` | hotels |
+| Đặt chỗ | `dat cho` | restaurants, travel |
+
+### A.2 Delete, remove, cancel, unsubscribe (`destructive`)
+
+| Phrase | Without diacritics (normalized) | Typical on |
+|---|---|---|
+| Xóa | `xoa` | Gmail, Drive, Zalo, everywhere |
+| Xoá | `xoa` | alternative spelling, same normalized form |
+| Xóa vĩnh viễn | `xoa vinh vien` | Gmail, Drive |
+| Chuyển vào thùng rác | `chuyen vao thung rac` | Drive |
+| Dọn sạch thùng rác | `don sach thung rac` | Gmail |
+| Xóa tin nhắn | `xoa tin nhan` | Zalo, Messenger |
+| Thu hồi | `thu hoi` | Zalo (recall a message) |
+| Xóa cuộc trò chuyện | `xoa cuoc tro chuyen` | Zalo, Messenger |
+| Rời nhóm | `roi nhom` | Zalo, Facebook |
+| Giải tán nhóm | `giai tan nhom` | Zalo |
+| Xóa bạn | `xoa ban` | Zalo |
+| Hủy kết bạn | `huy ket ban` | Facebook |
+| Chặn | `chan` | Zalo, Facebook |
+| Hủy đơn hàng | `huy don hang` | Shopee, Lazada, Tiki |
+| Hủy đơn | `huy don` | Shopee, Lazada |
+| Hủy đăng ký | `huy dang ky` | YouTube, newsletters |
+| Hủy gói | `huy goi` | subscriptions, telcos |
+| Tắt tự động gia hạn | `tat tu dong gia han` | subscriptions |
+| Hủy đặt chỗ | `huy dat cho` | travel |
+| Hủy vé | `huy ve` | airlines, buses |
+| Gỡ | `go` | apps, Facebook |
+| Gỡ bỏ | `go bo` | apps |
+| Bỏ theo dõi | `bo theo doi` | Facebook, TikTok |
+| Ngừng theo dõi | `ngung theo doi` | Facebook |
+| Xóa bài viết | `xoa bai viet` | Facebook |
+| Xóa tài khoản | `xoa tai khoan` | account settings |
+| Đóng tài khoản | `dong tai khoan` | banks |
+| Hủy liên kết | `huy lien ket` | MoMo, ZaloPay (unlink a bank) |
+| Vô hiệu hóa | `vo hieu hoa` | account settings |
+| Dọn thùng rác | `don thung rac` | general |
+
+### A.3 Account security (`account_security`)
+
+| Phrase | Without diacritics (normalized) | Typical on |
+|---|---|---|
+| Đổi mật khẩu | `doi mat khau` | everywhere |
+| Thay đổi mật khẩu | `thay doi mat khau` | everywhere |
+| Đặt lại mật khẩu | `dat lai mat khau` | everywhere |
+| Xác minh 2 bước | `xac minh 2 buoc` | Google |
+| Tắt xác minh 2 bước | `tat xac minh 2 buoc` | Google |
+| Xác thực hai yếu tố | `xac thuc hai yeu to` | Facebook, others |
+| Smart OTP | `smart otp` | banks |
+| Kích hoạt Smart OTP | `kich hoat smart otp` | banks |
+| Xác thực sinh trắc học | `xac thuc sinh trac hoc` | banks, MoMo |
+| Khóa truy cập | `khoa truy cap` | Google (passkeys) |
+| Mã dự phòng | `ma du phong` | Google |
+| Email khôi phục | `email khoi phuc` | Google |
+| Số điện thoại khôi phục | `so dien thoai khoi phuc` | Google |
+| Đổi email | `doi email` | account settings |
+| Đổi số điện thoại | `doi so dien thoai` | account settings, banks |
+| Đăng xuất khỏi tất cả thiết bị | `dang xuat khoi tat ca thiet bi` | Facebook, Zalo, Google |
+| Khóa thẻ | `khoa the` | banks |
+| Mở khóa thẻ | `mo khoa the` | banks |
+| Đổi mã PIN | `doi ma pin` | banks, MoMo |
+| Thay đổi hạn mức | `thay doi han muc` | banks |
+| Liên kết ngân hàng | `lien ket ngan hang` | MoMo, ZaloPay |
+| Ứng dụng xác thực | `ung dung xac thuc` | Google, banks |
+| Khóa bảo mật | `khoa bao mat` | Google |
+
+### A.4 Sharing, permissions, visibility (`sharing`)
+
+| Phrase | Without diacritics (normalized) | Typical on |
+|---|---|---|
+| Chia sẻ | `chia se` | Drive, Facebook |
+| Chia sẻ ngay | `chia se ngay` | Facebook |
+| Mời | `moi` | Zalo, Drive |
+| Thêm thành viên | `them thanh vien` | Zalo |
+| Bất kỳ ai có đường liên kết | `bat ky ai co duong lien ket` | Drive |
+| Công khai | `cong khai` | Facebook (audience) |
+| Mọi người | `moi nguoi` | Facebook, Drive |
+| Người chỉnh sửa | `nguoi chinh sua` | Drive |
+| Cấp quyền | `cap quyen` | apps, Drive |
+| Chuyển quyền sở hữu | `chuyen quyen so huu` | Drive |
+| Chế độ hiển thị | `che do hien thi` | account and post settings |
+| Quyền riêng tư | `quyen rieng tu` | account and post settings |
+| Đổi quyền | `doi quyen` | Drive, shared folders |
+
+### A.5 Send and post (`send_unnamed`, `post_public`, decided with the recipient and visibility signals)
+
+| Phrase | Without diacritics (normalized) | Typical on |
+|---|---|---|
+| Gửi | `gui` | Gmail, Zalo |
+| Gửi ngay | `gui ngay` | forms, chat |
+| Trả lời tất cả | `tra loi tat ca` | Gmail |
+| Chuyển tiếp | `chuyen tiep` | Gmail, Zalo |
+| Đăng | `dang` | Facebook |
+| Đăng bài | `dang bai` | Facebook, forums |
+| Đăng tin | `dang tin` | Chợ Tốt, classifieds |
+| Đăng ngay | `dang ngay` | Facebook |
+| Bình luận | `binh luan` | Facebook, YouTube |
+| Phản hồi | `phan hoi` | forums, Facebook |
+| Gửi đánh giá | `gui danh gia` | Shopee, Lazada |
+| Đánh giá | `danh gia` | Shopee, Lazada (after purchase) |
+| Phát trực tiếp | `phat truc tiep` | Facebook, TikTok |
+| Phát hành | `phat hanh` | publishing tools |
+
+### A.6 Accepting terms (`terms`)
+
+| Phrase | Without diacritics (normalized) | Typical on |
+|---|---|---|
+| Tôi đồng ý | `toi dong y` | everywhere |
+| Đồng ý và tiếp tục | `dong y va tiep tuc` | sign-ups |
+| Tôi đã đọc và đồng ý | `toi da doc va dong y` | sign-ups, banks |
+| Chấp nhận điều khoản | `chap nhan dieu khoan` | sign-ups |
+| Đồng ý với điều khoản | `dong y voi dieu khoan` | sign-ups |
+| Ký hợp đồng | `ky hop dong` | banks, insurers |
+| Chấp nhận và tiếp tục | `chap nhan va tiep tuc` | sign-ups |
+| Xác nhận và ký | `xac nhan va ky` | e-contracts |
+
+### A.7 Cookie consent (accepted automatically, not `terms`, section 7.3)
+
+| Phrase | Without diacritics (normalized) | Typical on |
+|---|---|---|
+| Chấp nhận tất cả | `chap nhan tat ca` | cookie banners |
+| Đồng ý tất cả | `dong y tat ca` | cookie banners |
+| Chấp nhận cookie | `chap nhan cookie` | cookie banners |
+| Cho phép tất cả cookie | `cho phep tat ca cookie` | cookie banners |
+
+### A.8 Field labels (form-field signals, 7.3; values are never read)
+
+| Phrase | Without diacritics (normalized) | Typical on |
+|---|---|---|
+| Mật khẩu | `mat khau` | `password` (blocked) |
+| Nhập mật khẩu | `nhap mat khau` | `password` (blocked) |
+| Mã PIN | `ma pin` | `password` (blocked) |
+| Mã OTP | `ma otp` | `otp` |
+| Mã xác thực | `ma xac thuc` | `otp` |
+| Mã xác minh | `ma xac minh` | `otp` |
+| Mã xác nhận | `ma xac nhan` | `otp` |
+| Số thẻ | `so the` | `card_number` |
+| Tên chủ thẻ | `ten chu the` | `card_number` context |
+| Ngày hết hạn | `ngay het han` | `card_expiry` |
+| Mã bảo mật thẻ | `ma bao mat the` | `card_cvc` |
+| Số tài khoản | `so tai khoan` | `bank_account` |
+| Số tiền | `so tien` | `amount` |
+| CMND | `cmnd` | `national_id` |
+| CCCD | `cccd` | `national_id` |
+| Căn cước công dân | `can cuoc cong dan` | `national_id` |
+| Số hộ chiếu | `so ho chieu` | `national_id` |
+
+### A.9 Context-dependent words (take the category of the page or dialog, 7.3)
+
+| Phrase | Without diacritics (normalized) | Typical on |
+|---|---|---|
+| Xác nhận | `xac nhan` | banks, MoMo, shops |
+| Tiếp tục | `tiep tuc` | everywhere |
+| Đồng ý | `dong y` | everywhere |
+| Hoàn tất | `hoan tat` | forms |
+| Có | `co` | dialogs |
+
+### A.10 Not risky by themselves (dismiss and browse, listed so they are not matched by accident)
+
+| Phrase | Without diacritics (normalized) | Typical on |
+|---|---|---|
+| Hủy | `huy` | dialog dismiss |
+| Hủy bỏ | `huy bo` | dialog dismiss |
+| Đóng | `dong` | dialogs |
+| Để sau | `de sau` | prompts |
+| Bỏ qua | `bo qua` | prompts |
+| Không | `khong` | dialogs |
+| Quay lại | `quay lai` | navigation |
+| Thêm vào giỏ hàng | `them vao gio hang` | Shopee, Lazada, Tiki |
+| Xem giỏ hàng | `xem gio hang` | shops |
+| Tiếp tục mua sắm | `tiep tuc mua sam` | shops |
+| Phương thức thanh toán | `phuong thuc thanh toan` | a heading, not an action |
+| Lịch sử giao dịch | `lich su giao dich` | banks, MoMo |
