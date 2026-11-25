@@ -1,32 +1,46 @@
 //! Tests of the app side of the link. Nothing here touches a real keychain, browser directory or
 //! the user's Chrome: keys and records are in memory and installs go to temp directories.
+#[cfg(unix)]
 use super::super::link::auth::{NONCE_LEN, PAIRING_TTL_MS};
+#[cfg(unix)]
 use super::super::link::protocol::{AuthResult, ErrorCode, Event, Method, ProtocolError};
-use super::super::peer::{Flavor, PeerReport};
+use super::super::peer::Flavor;
+#[cfg(unix)]
+use super::super::peer::PeerReport;
 use super::keystore::{
     keyring_service, FallbackKeyStore, LinkKeyStore, MemoryKeyStore, MonoSecretsKeyStore,
 };
+#[cfg(unix)]
 use super::manager::{
-    Deps, FileRecordStore, LinkEvent, LinkManager, LinkRecord, LinkRecordStore, ManagerConfig,
-    MemoryRecordStore, Refusal, RequestError,
+    Deps, LinkEvent, LinkManager, ManagerConfig, MemoryRecordStore, Refusal, RequestError,
 };
-use super::pairing::{open_in_profile_args, pair_page_url, PairingState, ProfileChoice};
+use super::manager::{FileRecordStore, LinkRecord, LinkRecordStore};
+#[cfg(unix)]
+use super::pairing::PairingState;
+use super::pairing::{open_in_profile_args, pair_page_url, ProfileChoice};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(unix)]
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
+#[cfg(unix)]
 use std::time::Duration;
 
 const INSTANCE: &str = "0123456789abcdef0123456789abcdef";
 const OTHER_INSTANCE: &str = "fedcba9876543210fedcba9876543210";
+#[cfg(unix)]
 const NONCE: [u8; NONCE_LEN] = [7; NONCE_LEN];
+#[cfg(unix)]
 const WAIT: Duration = Duration::from_secs(5);
 
+#[cfg(unix)]
 fn nonce_text() -> String {
     super::super::link::auth::encode_bytes(&NONCE)
 }
 
+#[cfg(unix)]
 fn report() -> PeerReport {
     PeerReport {
         pid: 4242,
@@ -40,6 +54,7 @@ fn profile() -> ProfileChoice {
     ProfileChoice::new("Profile 1", "Work").unwrap()
 }
 
+#[cfg(unix)]
 struct Rig {
     manager: LinkManager,
     events: Receiver<LinkEvent>,
@@ -48,6 +63,7 @@ struct Rig {
     clock: Arc<AtomicU64>,
 }
 
+#[cfg(unix)]
 fn rig_with(flavor: Flavor, tweak: impl FnOnce(&mut ManagerConfig)) -> Rig {
     let keys = Arc::new(MemoryKeyStore::new());
     let records = Arc::new(MemoryRecordStore::new());
@@ -67,6 +83,7 @@ fn rig_with(flavor: Flavor, tweak: impl FnOnce(&mut ManagerConfig)) -> Rig {
     }
 }
 
+#[cfg(unix)]
 fn rig() -> Rig {
     rig_with(Flavor::Release, |_| {})
 }
@@ -1234,10 +1251,14 @@ mod install {
             assert_eq!(again[0].change, Change::Unchanged);
 
             // The app moved: the manifest is rewritten.
-            let moved = PathBuf::from("/opt/zptah/zptah");
+            let moved = if cfg!(windows) {
+                PathBuf::from(r"C:\opt\zptah\zptah.exe")
+            } else {
+                PathBuf::from("/opt/zptah/zptah")
+            };
             let again = install(&env, Flavor::Release, &moved, V1_BROWSERS, &reg).unwrap();
             assert_eq!(again[0].change, Change::Written);
-            assert_eq!(read_manifest(path)["path"], "/opt/zptah/zptah");
+            assert_eq!(read_manifest(path)["path"], moved.to_str().unwrap());
 
             // V1 never touches the other browsers, even when installed.
             let edge = env.home.join(match os {

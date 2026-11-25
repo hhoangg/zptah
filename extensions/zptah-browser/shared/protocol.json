@@ -531,7 +531,7 @@
       },
       "result": {
         "type": "object",
-        "required": ["png_b64", "width", "height", "method"],
+        "required": ["png_b64", "width", "height", "method", "url"],
         "properties": {
           "png_b64": { "$ref": "#/$defs/B64Bytes" },
           "width": { "type": "integer", "minimum": 1, "maximum": 65535 },
