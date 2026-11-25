@@ -7,7 +7,6 @@ impl AssetSource for Assets {
    "pencil-edit-02"=>include_bytes!("../assets/hugeicons/pencil-edit-02.svg"),
    "login-01"=>include_bytes!("../assets/hugeicons/login-01.svg"),
    "logout-01"=>include_bytes!("../assets/hugeicons/logout-01.svg"),
-   "smart-phone"=>include_bytes!("../assets/hugeicons/smart-phone.svg"),
    "delete-02"=>include_bytes!("../assets/hugeicons/delete-02.svg"),
    "account-user"=>include_bytes!("../assets/hugeicons/account-user.svg"),
    "queue-list"=>include_bytes!("../assets/hugeicons/queue-list.svg"),

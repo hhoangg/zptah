@@ -65,17 +65,11 @@ fn tag(event: &SettingsEvent) -> Option<String> {
             projects,
             monos,
         } => format!("confirm:{fingerprint}:{permission:?}:{projects:?}:{monos:?}"),
-        SettingsEvent::PhoneSetProjects {
-            device_id,
-            projects,
-        } => format!("phone-projects:{device_id}:{projects:?}"),
         SettingsEvent::WebSetSelection {
             device_id,
             projects,
             monos,
         } => format!("web-selection:{device_id}:{projects:?}:{monos:?}"),
-        SettingsEvent::MobileRevoke(id) => format!("mobile-revoke:{id}"),
-        SettingsEvent::MobileConfigure { enabled, .. } => format!("mobile-configure:{enabled}"),
         _ => return None,
     })
 }
@@ -97,7 +91,6 @@ fn preview(cx: &mut TestAppContext) -> WindowHandle<Preview> {
                             Section::Connections,
                             Preferences::default(),
                             SettingsContext {
-                                mobile: Some(monocode_core::mobile::Status::default()),
                                 web: Some(WebStatus::default()),
                                 ..Default::default()
                             },
@@ -1072,45 +1065,6 @@ fn selection_is_none_for_all_projects_and_some_for_a_narrowed_list() {
     assert_eq!(draft.selection(&projects, &[]).1, Some(vec![]));
 }
 
-fn phone(projects: Option<Vec<String>>) -> Device {
-    Device {
-        kind: DeviceKind::Phone,
-        projects,
-        server_device_id: None,
-        ..device("ph1", Permission::Control)
-    }
-}
-
-fn with_phone(
-    window: &WindowHandle<Preview>,
-    visual: &mut VisualTestContext,
-    projects: Option<Vec<String>>,
-) {
-    set_web(window, visual, |ctx| {
-        ctx.mobile = Some(monocode_core::mobile::Status {
-            devices: vec![phone(projects)],
-            ..Default::default()
-        });
-        ctx.web_projects = choices(&["p1", "p2"]);
-    });
-}
-
-#[gpui::test]
-fn a_phone_with_no_selection_shows_all_projects_and_narrowing_emits_the_rest(
-    cx: &mut TestAppContext,
-) {
-    let window = preview(cx);
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    with_phone(&window, visual, None);
-    assert!(visual.debug_bounds("mobile-project-ph1-p1").is_none());
-    click(visual, "mobile-projects-ph1");
-    click(visual, "mobile-project-ph1-p1");
-    assert_eq!(
-        events(&window, visual),
-        ["phone-projects:ph1:Some([\"p2\"])"]
-    );
-}
-
 #[gpui::test]
 fn a_web_device_row_narrows_its_projects_from_the_desktop(cx: &mut TestAppContext) {
     let window = preview(cx);
@@ -1205,38 +1159,6 @@ fn an_access_change_reads_as_a_relative_time() {
     assert_eq!(web::devices::ago_text(0, 600), "10 min ago");
     assert_eq!(web::devices::ago_text(0, 7200), "2 h ago");
     assert_eq!(web::devices::ago_text(0, 200_000), "2 d ago");
-}
-
-#[gpui::test]
-fn your_phones_lists_only_phones_and_the_last_phone_ignores_web_rows(cx: &mut TestAppContext) {
-    let window = preview(cx);
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    set_web(&window, visual, |ctx| {
-        ctx.mobile = Some(monocode_core::mobile::Status {
-            devices: vec![device("w1", Permission::Control), phone(None)],
-            ..Default::default()
-        });
-    });
-    assert!(visual.debug_bounds("mobile-remove-ph1").is_some());
-    assert!(visual.debug_bounds("mobile-remove-w1").is_none());
-    // The one phone is the last phone though a web row exists: removing it
-    // switches mobile access off.
-    click(visual, "mobile-remove-ph1");
-    click(visual, "mobile-confirm-remove");
-    assert_eq!(
-        events(&window, visual),
-        ["mobile-revoke:ph1", "mobile-configure:false"]
-    );
-}
-
-#[gpui::test]
-fn ticking_every_project_again_goes_back_to_none(cx: &mut TestAppContext) {
-    let window = preview(cx);
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    with_phone(&window, visual, Some(vec!["p2".into()]));
-    click(visual, "mobile-projects-ph1");
-    click(visual, "mobile-project-ph1-p1");
-    assert_eq!(events(&window, visual), ["phone-projects:ph1:None"]);
 }
 
 #[gpui::test]
