@@ -1,6 +1,9 @@
 //! Tests of the app side of the link. Nothing here touches a real keychain, browser directory or
 //! the user's Chrome: keys and records are in memory and installs go to temp directories.
-use super::super::link::auth::{NONCE_LEN, PAIRING_TTL_MS};
+use super::super::link::auth::NONCE_LEN;
+#[cfg(unix)]
+use super::super::link::auth::PAIRING_TTL_MS;
+#[cfg(unix)]
 use super::super::link::protocol::{AuthResult, ErrorCode, Event, Method, ProtocolError};
 use super::super::peer::{Flavor, PeerReport};
 use super::keystore::{
@@ -8,9 +11,13 @@ use super::keystore::{
 };
 use super::manager::{
     Deps, FileRecordStore, LinkEvent, LinkManager, LinkRecord, LinkRecordStore, ManagerConfig,
-    MemoryRecordStore, Refusal, RequestError,
+    MemoryRecordStore,
 };
-use super::pairing::{open_in_profile_args, pair_page_url, PairingState, ProfileChoice};
+#[cfg(unix)]
+use super::manager::{Refusal, RequestError};
+#[cfg(unix)]
+use super::pairing::PairingState;
+use super::pairing::{open_in_profile_args, pair_page_url, ProfileChoice};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};

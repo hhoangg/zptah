@@ -338,7 +338,7 @@ pub(crate) enum LinkEvent {
     /// An extension event (spec 5.6), already MAC checked.
     Extension {
         instance_id: String,
-        envelope: Envelope,
+        envelope: Box<Envelope>,
     },
 }
 
@@ -1140,7 +1140,7 @@ impl LinkManager {
                 }
                 EnvelopeType::Evt => self.emit(LinkEvent::Extension {
                     instance_id: shared.instance_id.clone(),
-                    envelope: env,
+                    envelope: Box::new(env),
                 }),
                 // Extension requests after `auth` do not exist.
                 EnvelopeType::Req => break,
