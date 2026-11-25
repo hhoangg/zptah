@@ -6,7 +6,7 @@
 //! surface emits (Resume, the rule prompt). The Settings > Browser cards live here too: the preview
 //! switch, the conversation grants, the soul rule confirmation and the app language.
 use super::browser_ui::{action, note};
-use super::panels::{card, setting, switch_setting, switch_track};
+use super::panels::{card, setting};
 use super::*;
 use crate::conversation::browser_cards::{BrowserAction, ReviewPrompt, Surface};
 use monocode_core::mono::browser::copy::{self, Lang};
@@ -198,12 +198,12 @@ impl Monos {
         }
     }
 
-    /// The Mono uses the extension backend (preview switch on and the browser enabled).
+    /// The Mono's browser is on (the extension is the only backend).
     fn browser_uses_extension(&self, mono_id: &str) -> bool {
         self.roster
             .get(mono_id)
             .and_then(|m| m.browser.as_ref())
-            .is_some_and(|b| b.uses_extension())
+            .is_some_and(|b| b.enabled)
     }
 
     fn browser_approval_tick(&mut self, cx: &mut Context<Self>) {
@@ -213,7 +213,7 @@ impl Monos {
             .roster
             .monos
             .iter()
-            .filter(|m| m.browser.as_ref().is_some_and(|b| b.uses_extension()))
+            .filter(|m| m.browser.as_ref().is_some_and(|b| b.enabled))
             .map(|m| m.id.clone())
             .collect();
         for id in ids {
@@ -469,15 +469,7 @@ impl Monos {
         self.browser_repaint_chats(cx);
     }
 
-    pub(super) fn browser_toggle_extension(&mut self, cx: &mut Context<Self>) {
-        self.browser_edit(cx, |b| b.use_extension = !b.use_extension);
-        if let Some(id) = self.active.clone() {
-            self.browser_approval_refresh(&id, true, cx);
-        }
-        self.browser_approval_page_refresh(cx);
-    }
-
-    /// The cards of the Browser page that belong to the extension backend.
+    /// The cards of the Browser page that belong to the extension: language, rule review, grants.
     pub(super) fn browser_extension_cards(
         &mut self,
         mono: &Mono,
@@ -485,24 +477,6 @@ impl Monos {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let mut cards = Vec::new();
-        let toggle = switch_track(
-            "mono-browser-use-extension",
-            "Use the zptah Browser extension",
-            browser.use_extension,
-        )
-        .debug_selector(|| "mono-browser-use-extension".into())
-        .cursor_pointer()
-        .on_click(cx.listener(|this, _, _, cx| this.browser_toggle_extension(cx)));
-        cards.push(
-            card()
-                .child(switch_setting(
-                    "Use the zptah Browser extension (preview)",
-                    "Drives your Chrome through the extension instead of Playwright. Every risky action asks you first. Off by default.",
-                    false,
-                    toggle.into_any_element(),
-                ))
-                .into_any_element(),
-        );
         let ui = &self.browser_ui.approval;
         let language = ui.language;
         let error = ui.error.clone();
@@ -543,7 +517,7 @@ impl Monos {
                 ))
                 .into_any_element(),
         );
-        if !browser.uses_extension() {
+        if !browser.enabled {
             return cards;
         }
         let status = self.browser_ui.approval.rules.get(&mono.id).cloned();

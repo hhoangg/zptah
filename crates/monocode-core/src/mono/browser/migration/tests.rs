@@ -1,14 +1,16 @@
 use super::*;
-use crate::mono::browser::{
-    BrowserTrust, MonoBrowser, MonoBrowserStore, DEFAULT_BLOCKED_ORIGINS, SECRET_NAME,
-};
+use crate::mono::browser::{BrowserLevel, MonoBrowser, MonoBrowserStore, DEFAULT_BLOCKED_ORIGINS};
 use crate::mono::Roster;
 
 // Obviously fake: not a real extension token.
 const TOKEN: &str = "fake-extension-token-0123456789-ABCD";
-const ON: Options = Options { delete_token: true };
+const ON: Options = Options {
+    delete_token: true,
+    recipe_dry_run: false,
+};
 const OFF: Options = Options {
     delete_token: false,
+    recipe_dry_run: false,
 };
 
 struct Fixture {
@@ -65,7 +67,7 @@ fn trust_levels_become_act_and_read_only_stays() {
     let f = fixture(Some(&old));
     migrate(&f, &OFF);
     for id in ["a", "b", "d", "e", "h"] {
-        let level: crate::mono::browser::trust::BrowserLevel = browser_of(&f, id).trust.into();
+        let level: crate::mono::browser::trust::BrowserLevel = browser_of(&f, id).trust;
         assert_eq!(
             level,
             crate::mono::browser::trust::BrowserLevel::Act,
@@ -73,7 +75,7 @@ fn trust_levels_become_act_and_read_only_stays() {
         );
     }
     for id in ["c", "f", "g", "i"] {
-        assert_eq!(browser_of(&f, id).trust, BrowserTrust::ReadOnly, "{id}");
+        assert_eq!(browser_of(&f, id).trust, BrowserLevel::ReadOnly, "{id}");
     }
 }
 
@@ -100,7 +102,13 @@ fn each_other_field_is_kept_or_set_as_the_spec_says() {
     );
     assert_eq!(b.allowed_origins, ["https://docs.example"]);
     assert!(!b.show_actions, "the cursor switch keeps its value");
-    assert!(!b.use_extension, "Playwright is still the backend");
+    assert!(
+        !value(&stored(&f))["monos"][0]["browser"]
+            .as_object()
+            .unwrap()
+            .contains_key("useExtension"),
+        "the retired preview switch is dropped"
+    );
     assert!(!b.ready);
     assert_eq!(b.connection, None);
     assert!(b.needs_reconnect());
@@ -136,6 +144,10 @@ fn a_roster_without_a_list_keeps_the_old_defaults_and_a_custom_list_gets_no_sugg
 fn switching_to_the_new_defaults_removes_only_old_default_entries() {
     let mut b = MonoBrowser {
         suggest_new_defaults: true,
+        blocked_origins: DEFAULT_BLOCKED_ORIGINS
+            .iter()
+            .map(|o| (*o).into())
+            .collect(),
         ..Default::default()
     };
     b.blocked_origins.push("https://mine.example".into());
@@ -224,25 +236,36 @@ fn the_token_is_deleted_only_when_asked_and_only_once() {
     let old = roster_of(&[("a", r#"{"enabled":true}"#), ("b", r#"{}"#)]);
     let f = fixture(Some(&old));
     let secrets = MonoBrowserStore::for_store(&f.store).unwrap();
-    secrets.set_secret("gone", SECRET_NAME, TOKEN).unwrap();
-    secrets.set_secret("a", SECRET_NAME, TOKEN).unwrap();
-    secrets.set_secret("b", SECRET_NAME, TOKEN).unwrap();
+    secrets
+        .set_secret("gone", LEGACY_TOKEN_SECRET, TOKEN)
+        .unwrap();
+    secrets.set_secret("a", LEGACY_TOKEN_SECRET, TOKEN).unwrap();
+    secrets.set_secret("b", LEGACY_TOKEN_SECRET, TOKEN).unwrap();
     secrets.set_secret("a", "other-secret", TOKEN).unwrap();
 
-    // Playwright still in use: the token stays.
+    // Not asked: the token stays.
     migrate(&f, &OFF);
-    assert!(secrets.has_row("a", SECRET_NAME) && secrets.has_row("b", SECRET_NAME));
+    assert!(secrets.has_row("a", LEGACY_TOKEN_SECRET) && secrets.has_row("b", LEGACY_TOKEN_SECRET));
 
-    // Later release: the token goes, other secrets stay, and it is recorded.
+    // Asked: the token goes, other secrets stay, and it is recorded.
     migrate(&f, &ON);
-    assert!(!secrets.has_row("a", SECRET_NAME) && !secrets.has_row("b", SECRET_NAME));
     assert!(
-        !secrets.has_row("gone", SECRET_NAME),
+        !secrets.has_row("a", LEGACY_TOKEN_SECRET) && !secrets.has_row("b", LEGACY_TOKEN_SECRET)
+    );
+    assert!(
+        !secrets.has_row("gone", LEGACY_TOKEN_SECRET),
         "also a Mono no longer in the roster"
     );
     assert!(secrets.has_row("a", "other-secret"));
     assert!(f.store.setting(TOKEN_CLEANUP_KEY).unwrap().is_some());
     migrate(&f, &ON);
+}
+
+#[test]
+fn the_release_options_delete_the_token_and_mark_the_recipes() {
+    const { assert!(PLAYWRIGHT_REMOVED) };
+    let current = Options::current();
+    assert!(current.delete_token && current.recipe_dry_run);
 }
 
 #[test]
@@ -308,8 +331,8 @@ fn level_ids_accept_the_forms_the_migration_stores() {
     assert_eq!(BrowserLevel::from_id("nonsense"), None);
     for text in [r#""readOnly""#, r#""read-only""#] {
         assert_eq!(
-            serde_json::from_str::<BrowserTrust>(text).unwrap(),
-            BrowserTrust::ReadOnly
+            serde_json::from_str::<BrowserLevel>(text).unwrap(),
+            BrowserLevel::ReadOnly
         );
     }
 }

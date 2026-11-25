@@ -49,19 +49,7 @@ fn click<'a>(args: &'a Value, url: &'a str, name: &str) -> Action<'a> {
 // ---- levels and tiers -------------------------------------------------------------------------
 
 #[test]
-fn legacy_levels_become_act() {
-    assert_eq!(
-        BrowserLevel::from(BrowserTrust::AskRisky),
-        BrowserLevel::Act
-    );
-    assert_eq!(
-        BrowserLevel::from(BrowserTrust::Autonomous),
-        BrowserLevel::Act
-    );
-    assert_eq!(
-        BrowserLevel::from(BrowserTrust::ReadOnly),
-        BrowserLevel::ReadOnly
-    );
+fn legacy_levels_become_act_and_unknown_ones_read_only() {
     for (id, level) in [
         ("read-only", Some(BrowserLevel::ReadOnly)),
         ("act", Some(BrowserLevel::Act)),
@@ -77,8 +65,9 @@ fn legacy_levels_become_act() {
         BrowserLevel::ReadOnly,
         Category::Payment
     ));
-    let policy = crate::mono::browser::gate::Policy::new(BrowserTrust::Autonomous, Vec::new());
-    assert_eq!(policy.level(), BrowserLevel::Act);
+    // A value this build does not know never reads as `act`.
+    let level: BrowserLevel = serde_json::from_str("\"someFutureLevel\"").unwrap();
+    assert_eq!(level, BrowserLevel::ReadOnly);
 }
 
 #[test]

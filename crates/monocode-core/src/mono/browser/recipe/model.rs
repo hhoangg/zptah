@@ -450,9 +450,14 @@ pub struct Recipe {
     pub steps: Vec<Step>,
     #[serde(default)]
     pub risk: Risk,
-    /// The `@playwright/mcp` version the recipe was recorded on.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub playwright_mcp: String,
+    /// The browser backend the recipe was recorded on. The file key keeps its original name:
+    /// recipe files (schema 1) and their approved hashes must not change.
+    #[serde(
+        default,
+        skip_serializing_if = "String::is_empty",
+        rename = "playwright_mcp"
+    )]
+    pub recorded_on: String,
     /// Not part of the hash: it changes on every run.
     #[serde(default)]
     pub stats: Stats,

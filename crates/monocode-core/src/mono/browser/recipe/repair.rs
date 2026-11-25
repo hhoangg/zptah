@@ -423,7 +423,7 @@ pub fn others_unchanged(
         && base.description == next.description
         && base.params == next.params
         && base.risk == next.risk
-        && base.playwright_mcp == next.playwright_mcp;
+        && base.recorded_on == next.recorded_on;
     let mut kept: Vec<&Step> = next.steps.iter().collect();
     if inserted {
         if kept.len() != base.steps.len() + 1 {

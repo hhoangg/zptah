@@ -2,7 +2,7 @@
 //! profiles, write the native messaging host manifest, open the pair page in the chosen profile and
 //! show where the connection stands. The link layer lives in `monocode_core::mono::browser::connect`
 //! and runs for the whole app; this file only reads its status and calls `connect`, `cancel_pairing`
-//! and `disconnect`. The Playwright cards stay beside it until their removal ticket.
+//! and `disconnect`.
 use super::browser_ui::{action, note};
 use super::panels::{card, setting};
 use super::*;

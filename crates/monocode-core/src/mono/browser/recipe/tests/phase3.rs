@@ -50,8 +50,12 @@ pub(super) fn chat_web() -> Arc<Web> {
     web.pages.lock().unwrap().insert(CHAT.into(), chat_page());
     web
 }
-pub(super) fn chat_rig(trust: BrowserTrust) -> Rig {
+pub(super) fn chat_rig(trust: BrowserLevel) -> Rig {
     Rig::with(trust, chat_web())
+}
+/// A chat rig whose user says yes to every card.
+pub(super) fn chat_rig_yes() -> Rig {
+    Rig::with_yes(chat_web())
 }
 pub(super) fn target(role: &str, name: &str) -> Target {
     Target {
@@ -208,45 +212,20 @@ fn each_step_has_a_risk_class_and_the_recipe_risk_is_computed_never_trusted() {
 
 #[test]
 fn approval_asks_follow_the_gate_rule_for_each_level() {
-    let asks = [
+    for category in [
         Category::Payment,
         Category::SendMessage,
         Category::PostPublish,
         Category::Other,
-        Category::Code,
-        Category::FinancePage,
-        Category::CardData,
-    ];
-    for category in asks {
-        assert!(!approval_required(BrowserTrust::ReadOnly, category));
-        assert!(
-            approval_required(BrowserTrust::AskRisky, category),
-            "{category:?}"
-        );
-    }
-    for category in [
-        Category::Payment,
-        Category::Code,
-        Category::FinancePage,
-        Category::CardData,
     ] {
+        assert!(!approval_required(BrowserLevel::ReadOnly, category));
         assert!(
-            approval_required(BrowserTrust::Autonomous, category),
-            "{category:?}"
-        );
-    }
-    for category in [
-        Category::SendMessage,
-        Category::PostPublish,
-        Category::Other,
-    ] {
-        assert!(
-            !approval_required(BrowserTrust::Autonomous, category),
+            approval_required(BrowserLevel::Act, category),
             "{category:?}"
         );
     }
     // Saving a recipe has its own card and is not an approval of an action.
-    assert!(!approval_required(BrowserTrust::AskRisky, Category::Recipe));
+    assert!(!approval_required(BrowserLevel::Act, Category::Recipe));
 }
 
 #[test]
@@ -460,7 +439,7 @@ fn bound_values_are_never_credentials_and_a_value_cannot_expand_into_a_step() {
 
 #[test]
 fn a_write_recipe_runs_at_level_2_and_the_cards_show_the_step_the_page_and_the_values() {
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig(BrowserLevel::Act);
     approved_recipe(&rig, &chat_recipe());
     let (handle, shown) = user(rig.attach(), vec![true, true]);
     let (ok, result) = run_json(&rig, "rcp_0c0ffee1", say());
@@ -499,7 +478,7 @@ fn a_write_recipe_runs_at_level_2_and_the_cards_show_the_step_the_page_and_the_v
 
 #[test]
 fn a_no_on_the_card_stops_the_run_before_anything_is_typed() {
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig(BrowserLevel::Act);
     approved_recipe(&rig, &chat_recipe());
     let (handle, _) = user(rig.attach(), vec![false]);
     let (ok, result) = run_json(&rig, "rcp_0c0ffee1", say());
@@ -508,7 +487,7 @@ fn a_no_on_the_card_stops_the_run_before_anything_is_typed() {
     assert_eq!(acted_calls(&rig), 0, "{:?}", rig.web.names());
     assert!(result["reason"].as_str().unwrap().contains("Denied"));
     // The second card: the text is typed, the send is refused and not repeated by the Mono.
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig(BrowserLevel::Act);
     approved_recipe(&rig, &chat_recipe());
     let (handle, _) = user(rig.attach(), vec![true, false]);
     let (ok, result) = run_json(&rig, "rcp_0c0ffee1", say());
@@ -522,7 +501,7 @@ fn a_no_on_the_card_stops_the_run_before_anything_is_typed() {
         .unwrap()
         .contains("never send or post twice"));
     // Nobody to ask: the same fail-closed refusal, nothing typed.
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig(BrowserLevel::Act);
     approved_recipe(&rig, &chat_recipe());
     let (ok, _) = run_json(&rig, "rcp_0c0ffee1", say());
     assert!(!ok);
@@ -531,7 +510,7 @@ fn a_no_on_the_card_stops_the_run_before_anything_is_typed() {
 
 #[test]
 fn level_1_cannot_run_a_write_recipe_and_nothing_reaches_the_browser() {
-    let rig = chat_rig(BrowserTrust::ReadOnly);
+    let rig = chat_rig(BrowserLevel::ReadOnly);
     approved_recipe(&rig, &chat_recipe());
     let (ok, result) = run_json(&rig, "rcp_0c0ffee1", say());
     assert!(!ok);
@@ -542,7 +521,7 @@ fn level_1_cannot_run_a_write_recipe_and_nothing_reaches_the_browser() {
         .contains("changes things"));
     assert!(rig.web.tool_calls().is_empty());
     // The gate itself denies each tool at Level 1, whatever a recipe says.
-    let policy = Policy::new(BrowserTrust::ReadOnly, vec![]);
+    let policy = Policy::new(BrowserLevel::ReadOnly, vec![]);
     for (tool, args) in [
         ("browser_type", json!({"target": "e1", "text": "x"})),
         ("browser_click", json!({"target": "e1"})),
@@ -558,87 +537,41 @@ fn level_1_cannot_run_a_write_recipe_and_nothing_reaches_the_browser() {
         ),
     ] {
         assert!(
-            matches!(policy.evaluate(tool, &args, CHAT), Verdict::Deny(_)),
+            matches!(policy.evaluate(tool, &args), Verdict::Deny(_)),
             "{tool}"
         );
     }
 }
 
 #[test]
-fn level_3_drops_the_approvals_it_does_not_ask_for_and_keeps_money() {
-    let rig = chat_rig(BrowserTrust::Autonomous);
-    approved_recipe(&rig, &chat_recipe());
-    // No card for the write or the send: nobody is attached, and the run still passes.
-    let (ok, result) = run_json(&rig, "rcp_0c0ffee1", say());
-    assert!(ok, "{result}");
-    assert_eq!(typed_calls(&rig).len(), 1);
-    assert!(result["notes"].to_string().contains("Level 3 does not ask"));
-    // A payment asks at Level 3 too.
-    let mut buy = chat_recipe();
-    buy.id = "rcp_0c0ffee2".into();
-    buy.intent = "chat.buy".into();
-    buy.steps = vec![
-        chat_open(),
-        approve(ApproveKind::Payment),
-        Step::Act {
-            target: target("button", "Buy now"),
-            expect: vec![Expect::UrlMatches("^https://news\\.example/archive".into())],
-        },
-        extract_step(),
-    ];
-    buy.params = vec![n_declared()];
-    buy.risk = Risk::Money;
-    approved_recipe(&rig, &buy);
-    let clicks = |rig: &Rig| {
-        rig.web
-            .names()
-            .iter()
-            .filter(|n| *n == "browser_click")
-            .count()
-    };
-    let before = clicks(&rig);
-    let (ok, _) = run_json(&rig, "rcp_0c0ffee2", json!({}));
-    assert!(!ok, "no one to ask: the payment is denied");
-    assert_eq!(clicks(&rig), before);
-    let rig = chat_rig(BrowserTrust::Autonomous);
-    approved_recipe(&rig, &buy);
-    let (handle, shown) = user(rig.attach(), vec![true]);
-    let (ok, _) = run_json(&rig, "rcp_0c0ffee2", json!({}));
-    handle.join().unwrap();
-    assert!(ok);
-    assert_eq!(shown.lock().unwrap()[0].category, Category::Payment);
-}
-
-#[test]
 fn the_level_at_run_time_applies_not_the_level_at_record_time() {
     // Recorded at Level 2, run at Level 3: no cards. Run at Level 1: refused.
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig_yes();
     approved_recipe(&rig, &chat_recipe());
-    rig.gate
-        .set_policy(Policy::new(BrowserTrust::Autonomous, vec![]));
+    rig.gate.set_policy(Policy::new(BrowserLevel::Act, vec![]));
     assert!(run_json(&rig, "rcp_0c0ffee1", say()).0);
     rig.gate
-        .set_policy(Policy::new(BrowserTrust::ReadOnly, vec![]));
+        .set_policy(Policy::new(BrowserLevel::ReadOnly, vec![]));
     let before = acted_calls(&rig);
     assert!(!run_json(&rig, "rcp_0c0ffee1", say()).0);
     assert_eq!(acted_calls(&rig), before);
     // The level drops in the middle of a run: the next step that changes something is refused.
     struct Shifting {
         inner: ScriptHost,
-        level: Mutex<BrowserTrust>,
+        level: Mutex<BrowserLevel>,
     }
     impl Host for Shifting {
         fn call(&self, tool: &str, args: Value) -> Result<ToolOutput, String> {
             let out = self.inner.call(tool, args);
             if tool == "browser_navigate" {
-                *self.level.lock().unwrap() = BrowserTrust::ReadOnly;
+                *self.level.lock().unwrap() = BrowserLevel::ReadOnly;
             }
             out
         }
         fn page_url(&self) -> String {
             self.inner.page_url()
         }
-        fn trust(&self) -> BrowserTrust {
+        fn trust(&self) -> BrowserLevel {
             *self.level.lock().unwrap()
         }
         fn blocked_origins(&self) -> Vec<String> {
@@ -649,8 +582,8 @@ fn the_level_at_run_time_applies_not_the_level_at_record_time() {
     }
     let web = chat_web();
     let host = Shifting {
-        inner: ScriptHost::new(web.clone(), BrowserTrust::AskRisky),
-        level: Mutex::new(BrowserTrust::AskRisky),
+        inner: ScriptHost::new(web.clone(), BrowserLevel::Act),
+        level: Mutex::new(BrowserLevel::Act),
     };
     let outcome = runner::run(
         &host,
@@ -687,7 +620,8 @@ fn the_risk_is_worked_out_again_from_the_live_page() {
             .insert(SAVE_BTN.into(), (probe.clone(), probe));
         page.clicks.insert(SAVE_BTN.into(), ARCHIVE.into());
     };
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig_yes();
+    rig.gate.pass_selectors_through();
     relabel(&rig, "Send now");
     approved_recipe(&rig, &recipe);
     // The card for the writes is answered, the second one is for the live send.
@@ -704,27 +638,29 @@ fn the_risk_is_worked_out_again_from_the_live_page() {
         cards[1].detail()
     );
     assert!(!rig.web.names().iter().any(|n| n == "browser_click"));
-    // At Level 3 a send does not ask, so the same page runs.
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    // Answered yes, the same page runs.
+    let rig = chat_rig_yes();
+    rig.gate.pass_selectors_through();
     relabel(&rig, "Send now");
     approved_recipe(&rig, &recipe);
     assert!(run_json(&rig, &recipe.id, json!({})).0);
-    // A payment on the live page asks at Level 3 as well.
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    // A payment on the live page asks, and a no stops the run.
+    let rig = chat_rig_yes();
+    rig.gate.pass_selectors_through();
     relabel(&rig, "Pay now");
     approved_recipe(&rig, &recipe);
-    let (handle, shown) = user(rig.attach(), vec![false]);
+    let (handle, shown) = user(rig.attach(), vec![true, false]);
     let (ok, _) = run_json(&rig, &recipe.id, json!({}));
     handle.join().unwrap();
     assert!(!ok);
-    assert_eq!(shown.lock().unwrap()[0].category, Category::Payment);
+    assert_eq!(shown.lock().unwrap()[1].category, Category::Payment);
     assert!(!rig.web.names().iter().any(|n| n == "browser_click"));
 }
 
 #[test]
 fn a_field_that_turns_into_a_password_box_or_another_kind_of_element_is_not_typed_into() {
     for (name, role) in [("Password", "textbox"), ("Message", "button")] {
-        let rig = chat_rig(BrowserTrust::Autonomous);
+        let rig = chat_rig_yes();
         rig.web
             .pages
             .lock()
@@ -749,7 +685,7 @@ fn a_field_that_turns_into_a_password_box_or_another_kind_of_element_is_not_type
 
 #[test]
 fn a_card_number_or_a_token_is_never_typed_and_a_finance_site_never_has_a_recipe() {
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     approved_recipe(&rig, &chat_recipe());
     for secret in ["4111 1111 1111 1111", "sk-abcdefghijklmnopqrstuvwx"] {
         let (ok, result) = run_json(&rig, "rcp_0c0ffee1", json!({"text": secret, "n": 2}));
@@ -760,32 +696,17 @@ fn a_card_number_or_a_token_is_never_typed_and_a_finance_site_never_has_a_recipe
     let mut bank = chat_recipe();
     bank.origin = "https://www.paypal.com".into();
     assert!(bank.validate().is_err());
-    // The gate still asks for a change on a bank page, whatever runs it.
-    let policy = Policy::new(BrowserTrust::Autonomous, vec![]);
-    let verdict = policy.evaluate(
-        "browser_type",
-        &json!({"target": "e1", "text": "x"}),
-        "https://www.paypal.com/x",
-    );
-    assert_eq!(ask_of(verdict).category, Category::FinancePage);
     // A blocked origin stops the run before any call, as for a read recipe.
     rig.gate
-        .set_policy(Policy::new(BrowserTrust::Autonomous, vec![SITE.into()]));
+        .set_policy(Policy::new(BrowserLevel::Act, vec![SITE.into()]));
     let (ok, result) = run_json(&rig, "rcp_0c0ffee1", say());
     assert!(!ok);
     assert_eq!(result["op"], "origin");
 }
 
-fn ask_of(verdict: Verdict) -> ApprovalRequest {
-    match verdict {
-        Verdict::Ask(request) => request,
-        other => panic!("expected an approval, got {other:?}"),
-    }
-}
-
 #[test]
 fn a_changed_recipe_a_new_version_or_a_lower_risk_loses_its_approval() {
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     let recipe = chat_recipe();
     approved_recipe(&rig, &recipe);
     assert!(run_json(&rig, &recipe.id, say()).0);
@@ -830,7 +751,7 @@ fn a_changed_recipe_a_new_version_or_a_lower_risk_loses_its_approval() {
 fn the_first_run_of_a_recipe_that_changes_things_asks_once_more_with_the_values() {
     let mut recipe = chat_recipe();
     recipe.stats.verified = false;
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     approved_recipe(&rig, &recipe);
     let (handle, shown) = user(rig.attach(), vec![false]);
     let (ok, _) = run_json(&rig, &recipe.id, say());
@@ -842,12 +763,17 @@ fn the_first_run_of_a_recipe_that_changes_things_asks_once_more_with_the_values(
         detail.contains("hello team") && detail.contains("first time"),
         "{detail}"
     );
-    let (handle, _) = user(rig.attach(), vec![true]);
+    // The first-run card, then the recipe's own approval steps (Other, then the send).
+    let (handle, shown) = user(rig.attach(), vec![true, true, true]);
     assert!(run_json(&rig, &recipe.id, say()).0);
     handle.join().unwrap();
+    assert_eq!(shown.lock().unwrap().len(), 3);
     assert!(rig.store().get(&recipe.id).unwrap().stats.verified);
-    // The next run needs no extra card (Level 3: nobody attached).
+    // The next run needs no first-run card: only the two approval steps ask.
+    let (handle, shown) = user(rig.attach(), vec![true, true]);
     assert!(run_json(&rig, &recipe.id, say()).0);
+    handle.join().unwrap();
+    assert_eq!(shown.lock().unwrap().len(), 2);
 }
 
 // ---- Typed values never leave the run ----
@@ -872,8 +798,8 @@ fn a_typed_value_is_scrubbed_from_failures_audit_rows_and_the_trace() {
         fn page_url(&self) -> String {
             self.0.page_url()
         }
-        fn trust(&self) -> BrowserTrust {
-            BrowserTrust::Autonomous
+        fn trust(&self) -> BrowserLevel {
+            BrowserLevel::Act
         }
         fn blocked_origins(&self) -> Vec<String> {
             vec![]
@@ -889,7 +815,7 @@ fn a_typed_value_is_scrubbed_from_failures_audit_rows_and_the_trace() {
             }
         }
     }
-    let host = Echo(ScriptHost::new(chat_web(), BrowserTrust::Autonomous));
+    let host = Echo(ScriptHost::new(chat_web(), BrowserLevel::Act));
     let outcome = runner::run(
         &host,
         &chat_recipe(),
@@ -933,7 +859,7 @@ fn a_typed_value_is_scrubbed_from_failures_audit_rows_and_the_trace() {
 
 #[test]
 fn the_audit_log_of_a_write_run_holds_no_value_and_no_query() {
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     approved_recipe(&rig, &chat_recipe());
     assert!(run_json(&rig, "rcp_0c0ffee1", say()).0);
     let rows = rig.approvals().recent(MONO, 100);
@@ -953,7 +879,7 @@ fn the_audit_log_of_a_write_run_holds_no_value_and_no_query() {
 #[test]
 fn a_failure_after_the_action_is_never_repaired_by_running_it_again() {
     // The page does not go where the send step expects: the click already happened.
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     rig.web
         .pages
         .lock()
@@ -972,7 +898,7 @@ fn a_failure_after_the_action_is_never_repaired_by_running_it_again() {
         .unwrap()
         .contains("never send or post twice"));
     // A locator that did not resolve (nothing was done yet) can still be repaired.
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     rig.web
         .pages
         .lock()
@@ -1096,7 +1022,7 @@ fn a_repair_cannot_retarget_a_send_button_or_turn_a_read_into_a_write() {
 #[test]
 fn a_locator_failure_of_a_write_step_is_repaired_through_the_users_card_and_the_re_run_asks_again()
 {
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig(BrowserLevel::Act);
     let mut recipe = chat_recipe();
     recipe.steps[2] = Step::Type {
         target: target("textbox", "Message"),
@@ -1110,6 +1036,9 @@ fn a_locator_failure_of_a_write_step_is_repaired_through_the_users_card_and_the_
         let mut pages = rig.web.pages.lock().unwrap();
         let page = pages.get_mut(CHAT).unwrap();
         page.selectors.remove(MSG_BOX);
+        page.body = page
+            .body
+            .replace("textbox \"Message\"", "textbox \"message\"");
         let probe = "- textbox \"message\" [ref=e30]".to_owned();
         page.selectors.insert(
             "internal:role=textbox[name=\"message\"s]".into(),
@@ -1182,7 +1111,7 @@ fn mono_sends(rig: &Rig) {
 
 #[test]
 fn a_chat_task_is_recorded_with_parameters_approve_steps_and_no_literal() {
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig(BrowserLevel::Act);
     mono_chats(&rig);
     mono_sends(&rig);
     let calls_before = rig.web.names().len();
@@ -1251,7 +1180,7 @@ fn a_chat_task_is_recorded_with_parameters_approve_steps_and_no_literal() {
 #[test]
 fn recording_refuses_what_it_cannot_parameterize_or_must_never_store() {
     let refused = |setup: &dyn Fn(&Rig), params: Value, needle: &str| {
-        let rig = chat_rig(BrowserTrust::AskRisky);
+        let rig = chat_rig(BrowserLevel::Act);
         setup(&rig);
         let result = rig.call("recipe_record", chat_draft(params));
         assert_eq!(result["isError"], true, "{needle}: {}", text(&result));
@@ -1347,7 +1276,7 @@ fn recording_refuses_what_it_cannot_parameterize_or_must_never_store() {
 
 #[test]
 fn a_mono_approval_in_the_trace_can_only_make_a_step_ask_for_a_payment_never_less() {
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig(BrowserLevel::Act);
     mono_chats(&rig);
     let (handle, _) = user(rig.attach(), vec![true]);
     let asked = rig.call(
@@ -1376,7 +1305,7 @@ fn a_mono_approval_in_the_trace_can_only_make_a_step_ask_for_a_payment_never_les
     let file = std::fs::read_to_string(rig.store().path_of(&recipe)).unwrap();
     assert!(!file.contains(TYPED) && !file.contains("send it"));
     // A Mono that asked for something weaker does not weaken the recipe.
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig(BrowserLevel::Act);
     mono_chats(&rig);
     let (handle, _) = user(rig.attach(), vec![true]);
     rig.call(
@@ -1403,7 +1332,7 @@ fn a_mono_approval_in_the_trace_can_only_make_a_step_ask_for_a_payment_never_les
 #[test]
 fn a_button_a_form_a_menu_and_enter_are_recorded_as_their_own_steps() {
     // A payment button and a plain save button, a form fill, a menu, Enter.
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig(BrowserLevel::Act);
     rig.call("browser_navigate", json!({"url": CHAT}));
     rig.call("browser_snapshot", json!({}));
     rig.call(
@@ -1466,7 +1395,7 @@ fn a_task_that_clicks_on_a_bank_page_is_not_recorded() {
     let web = chat_web();
     let bank = "https://news.example/checkout";
     web.pages.lock().unwrap().insert(bank.into(), chat_page());
-    let rig = Rig::with(BrowserTrust::AskRisky, web);
+    let rig = Rig::with(BrowserLevel::Act, web);
     rig.call("browser_navigate", json!({"url": bank}));
     rig.call("browser_snapshot", json!({}));
     // The page is a checkout page: the gate asks for a write there.
@@ -1497,8 +1426,8 @@ impl Host for Capture {
     fn page_url(&self) -> String {
         self.inner.page_url()
     }
-    fn trust(&self) -> BrowserTrust {
-        BrowserTrust::AskRisky
+    fn trust(&self) -> BrowserLevel {
+        BrowserLevel::Act
     }
     fn blocked_origins(&self) -> Vec<String> {
         vec![]
@@ -1515,7 +1444,7 @@ fn i1_a_send_card_lists_every_value_typed_on_the_page_also_after_a_repair_restar
         let web = chat_web();
         *web.current.lock().unwrap() = CHAT.into();
         let host = Capture {
-            inner: ScriptHost::new(web, BrowserTrust::AskRisky),
+            inner: ScriptHost::new(web, BrowserLevel::Act),
             cards: Mutex::new(vec![]),
         };
         let options = Options {
@@ -1564,7 +1493,7 @@ fn i2_card_numbers_are_found_through_unicode_and_odd_separators_and_split_fields
     }
     assert!(!risk::secret_field("Discard draft"));
     // Two typed halves are refused when the second one completes a card; one fill is refused whole.
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     let mut recipe = chat_recipe();
     recipe.params = vec![
         text_param(),
@@ -1604,7 +1533,7 @@ fn i2_card_numbers_are_found_through_unicode_and_odd_separators_and_split_fields
         ],
         expect: vec![Expect::TextVisible("x".into())],
     };
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     approved_recipe(&rig, &form);
     let (ok, result) = run_json(
         &rig,
@@ -1669,7 +1598,7 @@ fn i4_a_typed_parameter_has_no_default_in_a_file_or_a_recording() {
     let mut r = chat_recipe();
     r.params[0].default = Some(json!("hi"));
     assert!(r.validate().unwrap_err().contains("no default"));
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig(BrowserLevel::Act);
     mono_chats(&rig);
     mono_sends(&rig);
     let params = json!([
@@ -1683,7 +1612,7 @@ fn i4_a_typed_parameter_has_no_default_in_a_file_or_a_recording() {
 
 #[test]
 fn m1_a_payment_approval_attaches_to_the_click_not_the_typing_after_it() {
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig(BrowserLevel::Act);
     rig.call("browser_navigate", json!({"url": CHAT}));
     rig.call("browser_snapshot", json!({}));
     let (handle, _) = user(rig.attach(), vec![true]);
@@ -1810,7 +1739,7 @@ fn m3_the_repair_card_shows_the_locator_diff_and_a_send_keeps_its_area_and_a_nam
 
 #[test]
 fn m4_verified_does_not_survive_a_change_of_content() {
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     let recipe = chat_recipe();
     approved_recipe(&rig, &recipe);
     let db = rig.approvals();
@@ -1834,7 +1763,7 @@ fn m4_verified_does_not_survive_a_change_of_content() {
 #[test]
 fn r6_a_file_that_claims_to_be_verified_does_not_skip_the_first_run_card() {
     // The stats of the file say verified, the database has no such run: the card is shown.
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     let recipe = chat_recipe();
     assert!(recipe.stats.verified);
     rig.store().save(&recipe).unwrap();
@@ -1847,7 +1776,7 @@ fn r6_a_file_that_claims_to_be_verified_does_not_skip_the_first_run_card() {
     assert!(!ok);
     assert!(shown.lock().unwrap()[0].detail().contains("first time"));
     // A passing run is remembered for this hash only, and a Mono's data removal forgets it.
-    let (handle, _) = user(rig.attach(), vec![true]);
+    let (handle, _) = user(rig.attach(), vec![true, true, true]);
     assert!(run_json(&rig, &recipe.id, say()).0);
     handle.join().unwrap();
     let db = rig.approvals();
@@ -1884,7 +1813,7 @@ fn r1_a_live_upgraded_card_also_lists_what_was_typed_before_it() {
         page.clicks.insert(SAVE_BTN.into(), ARCHIVE.into());
     }
     let host = Capture {
-        inner: ScriptHost::new(web, BrowserTrust::AskRisky),
+        inner: ScriptHost::new(web, BrowserLevel::Act),
         cards: Mutex::new(vec![]),
     };
     let outcome = runner::run(&host, &recipe, json!(say()).as_object().unwrap(), fast());
@@ -1911,7 +1840,7 @@ fn r2_a_card_number_hides_in_longer_digit_runs_slices_and_earlier_fields() {
     assert!(!risk::split_card(&["x", "4111", "y", "z"]));
     assert!(risk::split_card(&["4111", "1111", "1111", "1111"]));
     // A card half typed, half in a later select or fill, is refused at the step that completes it.
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     let mut recipe = chat_recipe();
     recipe.params = vec![
         text_param(),
@@ -1955,7 +1884,7 @@ fn r2_a_card_number_hides_in_longer_digit_runs_slices_and_earlier_fields() {
             expect: vec![Expect::TextVisible("x".into())],
         },
     );
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     approved_recipe(&rig, &sel);
     let (ok, _) = run_json(
         &rig,
@@ -1996,7 +1925,8 @@ fn r5_a_select_takes_the_class_of_the_live_menu() {
     recipe.params = vec![text_param(), n_declared()];
     recipe.risk = Risk::Write;
     assert!(recipe.validate().is_ok(), "{:?}", recipe.validate());
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
+    rig.gate.pass_selectors_through();
     {
         let mut pages = rig.web.pages.lock().unwrap();
         let page = pages.get_mut(CHAT).unwrap();
@@ -2007,10 +1937,72 @@ fn r5_a_select_takes_the_class_of_the_live_menu() {
             .insert("internal:role=combobox".into(), (probe.clone(), probe));
     }
     approved_recipe(&rig, &recipe);
-    let (handle, shown) = user(rig.attach(), vec![false]);
+    // The recipe's own approval step asks first; the live menu is a payment.
+    let (handle, shown) = user(rig.attach(), vec![true, false]);
     let (ok, _) = run_json(&rig, &recipe.id, say());
     handle.join().unwrap();
     assert!(!ok);
-    assert_eq!(shown.lock().unwrap()[0].category, Category::Payment);
+    assert_eq!(shown.lock().unwrap()[1].category, Category::Payment);
     assert!(!rig.web.names().iter().any(|n| n == "browser_select_option"));
+}
+
+#[test]
+fn a_fill_and_a_type_step_run_through_refs_without_passing_selectors_through() {
+    // No `pass_selectors_through`: the gate turns every selector, also the ones of a form's
+    // fields, into refs, as it must on the extension.
+    let mut recipe = chat_recipe();
+    recipe.steps[2] = Step::Fill {
+        fields: vec![FormField {
+            target: target("textbox", "Message"),
+            kind: FieldKind::Textbox,
+            value: "{text}".into(),
+        }],
+        expect: vec![Expect::TextVisible("Team chat".into())],
+    };
+    let rig = chat_rig_yes();
+    approved_recipe(&rig, &recipe);
+    let (ok, result) = run_json(&rig, &recipe.id, say());
+    assert!(ok, "{result}");
+    let fills: Vec<Value> = rig
+        .web
+        .tool_calls()
+        .into_iter()
+        .filter(|c| c.0 == "browser_fill_form")
+        .map(|c| c.1)
+        .collect();
+    assert_eq!(fills.len(), 1);
+    assert_eq!(fills[0]["fields"][0]["value"], TYPED);
+    // The backend got a ref, never the selector.
+    let targets = rig.web.fill_targets.lock().unwrap().clone();
+    assert_eq!(targets, ["e30"]);
+
+    // A type step too.
+    let rig = chat_rig_yes();
+    approved_recipe(&rig, &chat_recipe());
+    let (ok, result) = run_json(&rig, &chat_recipe().id, say());
+    assert!(ok, "{result}");
+    assert_eq!(typed_calls(&rig).len(), 1);
+
+    // One field that matches nothing fails the whole step: nothing is filled.
+    let mut two = recipe.clone();
+    two.steps[2] = Step::Fill {
+        fields: vec![
+            FormField {
+                target: target("textbox", "Message"),
+                kind: FieldKind::Textbox,
+                value: "{text}".into(),
+            },
+            FormField {
+                target: target("textbox", "Nowhere"),
+                kind: FieldKind::Textbox,
+                value: "{text}".into(),
+            },
+        ],
+        expect: vec![Expect::TextVisible("Team chat".into())],
+    };
+    let rig = chat_rig_yes();
+    approved_recipe(&rig, &two);
+    let (ok, _) = run_json(&rig, &two.id, say());
+    assert!(!ok);
+    assert!(!rig.web.names().iter().any(|n| n == "browser_fill_form"));
 }

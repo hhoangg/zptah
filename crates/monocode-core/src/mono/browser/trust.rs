@@ -1,9 +1,8 @@
 //! Two-level trust, task state and the decision for the extension backend (spec 7.4 to 7.6, 8.1,
 //! 8.4).
 //!
-//! * [`BrowserLevel`]: `read-only` and `act`. The old three levels stay in [`super::BrowserTrust`]
-//!   only for the Playwright backend, which T20 removes; [`BrowserLevel::from`] maps them (both
-//!   asking levels become `act`).
+//! * [`BrowserLevel`]: `read-only` and `act`. The ids of the retired levels still read (both
+//!   asking levels become `act`); an unknown stored value reads as `read-only`, never as `act`.
 //! * [`TrustState`]: what the gate remembers for a conversation: task domains, domains reached
 //!   by a link (read-only until approved), sensitive sites already asked about, conversation-long
 //!   grants ([`grants::GrantBook`]) and the taint of the run.
@@ -25,15 +24,17 @@ use super::risk::signals::{
 };
 use super::risk::Category;
 use super::soul_rules::{ActionFacts, FactKind, Parsed};
-use super::BrowserTrust;
+use super::{ALWAYS_BLOCKED_TOOLS, KNOWN_TOOLS, READ_ONLY_TOOLS};
 use grants::GrantBook;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 // ---- Levels ----
 
 /// How far a Mono may act (spec 8.1). There is no "ask before every action" level.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum BrowserLevel {
     /// Reads and navigates; never clicks, types or changes a page.
     ReadOnly,
@@ -72,12 +73,53 @@ impl BrowserLevel {
     }
 }
 
-impl From<BrowserTrust> for BrowserLevel {
-    fn from(trust: BrowserTrust) -> Self {
-        match trust {
-            BrowserTrust::ReadOnly => Self::ReadOnly,
-            BrowserTrust::AskRisky | BrowserTrust::Autonomous => Self::Act,
+impl<'de> Deserialize<'de> for BrowserLevel {
+    /// A retired asking level reads as `act`; anything else that is not known (also `null` or a
+    /// value that is not text) reads as `read-only`: a value this build does not understand never
+    /// gives a Mono more power than the least one.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(value
+            .as_str()
+            .and_then(Self::from_id)
+            .unwrap_or(Self::ReadOnly))
+    }
+}
+
+impl BrowserLevel {
+    /// The level as a number, for recipes (`min_level`): 1 reads, 2 acts.
+    pub fn level(self) -> u8 {
+        match self {
+            Self::ReadOnly => 1,
+            Self::Act => 2,
         }
+    }
+
+    /// The short explanation shown under the level.
+    pub fn explanation(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "Looks only: opens pages, reads, takes screenshots and scrolls (with the Page Up, Page Down, Home, End and arrow keys). It cannot click, type or submit.",
+            Self::Act => "Clicks, types and navigates on its own. Asks you first only before risky steps such as payments, deletions, sending, posting and account changes.",
+        }
+    }
+
+    /// What the app guarantees, shown once under the levels.
+    pub const ENFORCEMENT_NOTE: &'static str = "zptah checks every step itself, before it runs and whatever the Mono was told. A payment always asks you, every time.";
+
+    /// The tools the harness must not offer at this level.
+    pub fn disabled_tools(self) -> Vec<&'static str> {
+        match self {
+            Self::ReadOnly => KNOWN_TOOLS
+                .into_iter()
+                .filter(|tool| !READ_ONLY_TOOLS.contains(tool))
+                .collect(),
+            Self::Act => ALWAYS_BLOCKED_TOOLS.to_vec(),
+        }
+    }
+
+    /// Whether the gate lists `tool` to the agent at this level.
+    pub fn offers(self, tool: &str) -> bool {
+        KNOWN_TOOLS.contains(&tool) && !self.disabled_tools().contains(&tool)
     }
 }
 

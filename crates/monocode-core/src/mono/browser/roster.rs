@@ -10,7 +10,7 @@
 //!   Chrome profile that link belongs to.
 use super::link::protocol::{AccessLevel, AuthResult, ChromeGroupColor, Method, RosterEntry};
 use super::links::manager::{LinkManager, RosterSource};
-use super::{group_name, normalize_origin, BrowserTrust};
+use super::{group_name, normalize_origin, BrowserLevel};
 use crate::mono::Mono;
 use serde_json::json;
 use std::collections::HashMap;
@@ -109,10 +109,10 @@ fn protocol_id(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// The Chrome profile directory and the roster entry of a Mono that uses the extension; `None`
-/// for a Mono that does not (or whose id the protocol cannot carry).
+/// The Chrome profile directory and the roster entry of a Mono with its browser on; `None`
+/// for a Mono without (or whose id the protocol cannot carry).
 pub fn entry_for(mono: &Mono) -> Option<(String, RosterEntry)> {
-    let browser = mono.browser.as_ref().filter(|b| b.uses_extension())?;
+    let browser = mono.browser.as_ref().filter(|b| b.enabled)?;
     if !protocol_id(&mono.id) || !super::valid_profile_dir(&browser.profile_dir) {
         return None;
     }
@@ -133,7 +133,7 @@ pub fn entry_for(mono: &Mono) -> Option<(String, RosterEntry)> {
             emoji: mono.badge(),
             color: format!("#{:06x}", mono.color & 0xff_ffff),
             group_color: group_color(mono.color),
-            level: if browser.trust == BrowserTrust::ReadOnly {
+            level: if browser.trust == BrowserLevel::ReadOnly {
                 AccessLevel::Read
             } else {
                 AccessLevel::Act

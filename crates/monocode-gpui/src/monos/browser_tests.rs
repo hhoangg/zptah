@@ -1,76 +1,24 @@
-//! The Browser page of a Mono's settings: its states, the token handling and the safety
-//! rules. Nothing here starts Chrome or the MCP server; `Fake` stands in for both.
-use super::browser_ui::{BrowserOps, TestState};
+//! The Browser page of a Mono's settings: its states, the Chrome profile and the safety rules.
+//! Nothing here starts Chrome or reaches a gate; `Fake` stands in for both.
+use super::browser_ui::BrowserOps;
 use super::workflows_ui::tests::click;
 use super::*;
 use crate::monos::tests::{Setup, setup};
 use gpui::{TestAppContext, VisualTestContext};
 use monocode_core::mono::browser::recipe::manage::DryRunReport;
-use monocode_core::mono::browser::{self, BrowserTrust, MonoBrowser, MonoBrowserStore, PrereqEnv};
-use monocode_core::node_tool::{NodeSource, NodeTools};
+use monocode_core::mono::browser::{self, BrowserLevel, MonoBrowser, MonoBrowserStore, PrereqEnv};
 use std::sync::{Arc, Mutex as StdMutex};
-
-fn fake_node(source: NodeSource) -> NodeTools {
-    NodeTools {
-        npx: "/good/bin/npx".into(),
-        node: "/good/bin/node".into(),
-        bin_dir: "/good/bin".into(),
-        source,
-    }
-}
-
-// Obviously fake: not a real extension token.
-const TOKEN: &str = "fake-extension-token-0123456789-WXYZ";
 
 #[derive(Default)]
 struct Fake {
-    opened: StdMutex<Vec<(String, String)>>,
     fda: StdMutex<u32>,
-    probe: StdMutex<Option<Result<(), String>>>,
-    probed: StdMutex<Vec<(Vec<String>, String)>>,
     /// What the next recipe dry run answers, and which ones were asked for.
     dry: StdMutex<Option<Result<DryRunReport, String>>>,
     dry_asked: StdMutex<Vec<(String, String)>>,
-    /// What a node lookup finds, how many were run, rechecks asked for, and paths applied.
-    node: StdMutex<Option<NodeTools>>,
-    lookups: StdMutex<u32>,
-    rechecks: StdMutex<u32>,
-    applied: StdMutex<Vec<String>>,
 }
 impl BrowserOps for Fake {
-    fn resolve_node(&self) -> Option<NodeTools> {
-        *self.lookups.lock().unwrap() += 1;
-        self.node.lock().unwrap().clone()
-    }
-    fn recheck_node(&self) {
-        *self.rechecks.lock().unwrap() += 1;
-    }
-    fn validate_node_path(&self, raw: &str) -> Result<NodeTools, String> {
-        if raw.starts_with("/good") {
-            Ok(fake_node(NodeSource::Override))
-        } else {
-            Err("That path does not exist or is not executable.".into())
-        }
-    }
-    fn apply_node_path(&self, path: &str) {
-        self.applied.lock().unwrap().push(path.into());
-    }
-    fn open_in_profile(&self, _: &PrereqEnv, profile: &str, url: &str) -> Result<(), String> {
-        self.opened
-            .lock()
-            .unwrap()
-            .push((profile.into(), url.into()));
-        Ok(())
-    }
     fn open_full_disk_access(&self) {
         *self.fda.lock().unwrap() += 1;
-    }
-    fn probe(&self, runtime: &browser::Runtime, _: &PrereqEnv) -> Result<(), String> {
-        self.probed
-            .lock()
-            .unwrap()
-            .push((runtime.spec.args.clone(), runtime.token().to_owned()));
-        self.probe.lock().unwrap().clone().unwrap_or(Ok(()))
     }
     fn dry_run_recipe(&self, mono_id: &str, recipe_id: &str) -> Result<DryRunReport, String> {
         self.dry_asked
@@ -89,16 +37,11 @@ const LOCAL_STATE: &str = r#"{"profile":{"info_cache":{
   "Default":{"name":"Personal","user_name":"me@example.com"},
   "Profile 6":{"name":"Work","user_name":"work@example.com","avatar_icon":"chrome://theme/IDR_PROFILE_AVATAR_26"}}}}"#;
 
-/// A Chrome that exists, with its profile list readable and node on the path.
+/// A Chrome that exists, with its profile list readable.
 fn chrome_env(dir: &std::path::Path, complete: bool) -> PrereqEnv {
-    let bin = dir.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
     let chrome = dir.join("chrome-bin");
     let data = dir.join("Chrome");
     if complete {
-        for tool in ["node", "npx"] {
-            std::fs::write(bin.join(tool), "").unwrap();
-        }
         std::fs::write(&chrome, "").unwrap();
         std::fs::create_dir_all(&data).unwrap();
         std::fs::write(data.join("Local State"), LOCAL_STATE).unwrap();
@@ -106,8 +49,6 @@ fn chrome_env(dir: &std::path::Path, complete: bool) -> PrereqEnv {
     PrereqEnv {
         chrome_binaries: vec![chrome],
         user_data_dir: data,
-        search_path: bin.to_string_lossy().into_owned(),
-        node: None,
     }
 }
 
@@ -167,20 +108,6 @@ impl Page {
         click(&mut self.visual, selector);
         self.visual.refresh().unwrap();
     }
-    /// Scrolls the page down by `pixels`: the extension cards pushed this control below the fold.
-    fn scroll_page(&mut self, pixels: f32) {
-        let center = self
-            .visual
-            .debug_bounds("mono-browser-page")
-            .unwrap()
-            .center();
-        self.visual.simulate_event(gpui::ScrollWheelEvent {
-            position: center,
-            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-pixels))),
-            ..Default::default()
-        });
-        self.visual.refresh().unwrap();
-    }
     fn manager<R>(&mut self, f: impl FnOnce(&mut Monos, &mut Context<Monos>) -> R) -> R {
         let r = self.s.manager.update(&mut self.visual, f);
         self.visual.run_until_parked();
@@ -238,10 +165,6 @@ impl Page {
         }
         self.click(selector);
     }
-    fn save_token(&mut self, token: &str) {
-        self.type_into("browser-token", token);
-        self.tap("mono-browser-token-save");
-    }
 }
 
 #[gpui::test]
@@ -257,33 +180,41 @@ fn the_browser_tab_starts_off_and_shows_only_the_switch(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
-fn turning_it_on_shows_prerequisites_and_the_prefilled_blocklist(cx: &mut TestAppContext) {
+fn turning_it_on_shows_the_chrome_check_and_an_empty_blocklist(cx: &mut TestAppContext) {
     let mut page = open_with(cx, false);
     page.enable();
     let setting = page.setting().unwrap();
     assert!(setting.enabled && !setting.ready);
     assert_eq!(
         setting.trust,
-        BrowserTrust::AskRisky,
-        "new Monos start at Level 2"
+        BrowserLevel::Act,
+        "new Monos act and ask before risky steps"
     );
-    assert!(
-        setting
-            .blocked_origins
-            .iter()
-            .any(|o| o == "https://www.paypal.com")
-    );
+    // New Monos block nothing: the sensitive-site rule asks on banking and payment sites.
+    assert!(setting.blocked_origins.is_empty());
     for id in [
         "mono-browser-prereq-chrome",
         "mono-browser-prereq-fda",
-        "mono-browser-prereq-node",
-        "mono-browser-blocked-0",
-        browser_ui::trust_selector(BrowserTrust::AskRisky),
+        browser_ui::trust_selector(BrowserLevel::Act),
     ] {
         assert!(page.on(id), "{id}");
     }
+    assert!(!page.on("mono-browser-blocked-0"));
+    // No Node.js, token, Playwright or connection test: the extension needs none of them.
+    for gone in [
+        "mono-browser-prereq-node",
+        "mono-browser-node-path-save",
+        "mono-browser-token-save",
+        "mono-browser-open-token-page",
+        "mono-browser-test",
+        "mono-browser-install",
+        "mono-browser-use-extension",
+        "mono-browser-blocked-reset",
+    ] {
+        assert!(!page.on(gone), "{gone}");
+    }
     let prereq = page.ui(|u| u.prereq.clone()).unwrap();
-    assert!(!prereq.all_ok() && !prereq.chrome.is_ok() && !prereq.node.is_ok());
+    assert!(!prereq.all_ok() && !prereq.chrome.is_ok());
     // Turning it off again keeps the choices but removes the controls.
     page.enable();
     assert!(!page.setting().unwrap().enabled);
@@ -306,7 +237,7 @@ fn a_refused_profile_read_offers_the_full_disk_access_fix(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-fn the_picker_lists_chrome_profiles_and_changing_one_drops_the_token(cx: &mut TestAppContext) {
+fn the_picker_lists_chrome_profiles_and_changing_one_keeps_it_ready(cx: &mut TestAppContext) {
     let mut page = open(cx);
     page.enable();
     let labels = page.ui(|u| u.profiles.iter().map(|p| p.label()).collect::<Vec<_>>());
@@ -328,17 +259,15 @@ fn the_picker_lists_chrome_profiles_and_changing_one_drops_the_token(cx: &mut Te
         (setting.profile_dir.as_str(), setting.profile_name.as_str()),
         ("Profile 6", "Work")
     );
-    page.save_token(TOKEN);
-    assert!(page.secrets().has_secret(&page.s.id, browser::SECRET_NAME));
+    assert!(page.setting().unwrap().ready, "Chrome and a profile");
     page.choose("Profile 6");
-    assert!(
-        page.secrets().has_secret(&page.s.id, browser::SECRET_NAME),
-        "same profile keeps it"
-    );
+    assert!(page.setting().unwrap().ready, "same profile keeps it");
     page.choose("Default");
-    assert!(!page.secrets().has_secret(&page.s.id, browser::SECRET_NAME));
-    assert!(!page.setting().unwrap().ready);
-    assert!(page.ui(|u| u.hint.is_none()) && page.on("mono-browser-token-save"));
+    assert_eq!(page.setting().unwrap().profile_dir, "Default");
+    assert!(
+        page.setting().unwrap().ready,
+        "Chrome is there and so is a profile"
+    );
 }
 
 #[gpui::test]
@@ -362,87 +291,11 @@ fn another_mono_on_the_same_profile_gets_a_warning(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn install_opens_the_web_store_in_the_profile_and_detects_it(cx: &mut TestAppContext) {
+fn the_browser_is_ready_only_with_chrome_and_a_profile(cx: &mut TestAppContext) {
     let mut page = open(cx);
     page.enable();
-    assert!(!page.on("mono-browser-install"), "needs a profile first");
+    assert!(!page.setting().unwrap().ready, "no profile yet");
     page.choose("Profile 6");
-    assert!(page.on("mono-browser-install") && !page.ui(|u| u.installed));
-    page.scroll_page(400.);
-    page.click("mono-browser-install");
-    assert_eq!(
-        page.ops.opened.lock().unwrap().as_slice(),
-        [("Profile 6".to_owned(), browser::install_url())]
-    );
-    // The user installs it in Chrome; the next check sees the folder.
-    let folder = page
-        .env
-        .user_data_dir
-        .join("Profile 6/Extensions")
-        .join(browser::EXTENSION_ID);
-    std::fs::create_dir_all(folder.join("1.0_0")).unwrap();
-    page.manager(|m, cx| m.browser_refresh(cx));
-    assert!(page.ui(|u| u.installed));
-    assert!(!page.on("mono-browser-install"));
-    assert!(page.on("mono-browser-install-status"));
-}
-
-#[gpui::test]
-fn the_token_is_stored_sealed_and_shown_as_its_last_four(cx: &mut TestAppContext) {
-    let mut page = open(cx);
-    page.enable();
-    page.choose("Profile 6");
-    page.tap("mono-browser-open-token-page");
-    assert_eq!(
-        page.ops.opened.lock().unwrap()[0].1,
-        browser::token_page_url()
-    );
-
-    page.save_token("too short");
-    assert!(page.ui(|u| u.error().is_some()), "refused");
-    assert!(page.ui(|u| u.hint.is_none()));
-
-    page.save_token(TOKEN);
-    assert_eq!(page.ui(|u| u.hint.clone()).as_deref(), Some("WXYZ"));
-    assert_eq!(
-        page.secrets().token(&page.s.id).unwrap().unwrap().as_str(),
-        TOKEN
-    );
-    assert!(page.on("mono-browser-token-hint") && !page.on("mono-browser-token-save"));
-    // The roster, which is plain JSON, never holds it.
-    let roster = locked(&page.s.store)
-        .unwrap()
-        .setting("mono-roster")
-        .unwrap()
-        .unwrap();
-    assert!(!roster.contains(TOKEN) && !roster.contains("WXYZ"));
-    // The field is empty again and stays secret.
-    let field = page
-        .s
-        .manager
-        .read_with(&page.visual, |m, _| m.fields.get("browser-token").cloned())
-        .unwrap();
-    assert!(field.read_with(&page.visual, |f, _| f.content.is_empty()));
-
-    page.click("mono-browser-token-replace");
-    assert!(page.on("mono-browser-token-save"));
-    assert!(field.read_with(&page.visual, |f, _| f.is_secret()));
-    page.save_token(&format!("{}AAAA", &TOKEN[..32]));
-    assert_eq!(page.ui(|u| u.hint.clone()).as_deref(), Some("AAAA"));
-
-    page.click("mono-browser-token-remove");
-    assert!(page.secrets().token(&page.s.id).unwrap().is_none());
-    assert!(page.on("mono-browser-token-save") && page.ui(|u| u.hint.is_none()));
-}
-
-#[gpui::test]
-fn the_browser_is_ready_only_with_prerequisites_a_profile_and_a_token(cx: &mut TestAppContext) {
-    let mut page = open(cx);
-    page.enable();
-    assert!(!page.setting().unwrap().ready);
-    page.choose("Profile 6");
-    assert!(!page.setting().unwrap().ready, "no token yet");
-    page.save_token(TOKEN);
     let setting = page.setting().unwrap();
     assert!(setting.ready && setting.active());
     // The Mono's rules now carry the browser paragraph for the chosen profile.
@@ -453,77 +306,29 @@ fn the_browser_is_ready_only_with_prerequisites_a_profile_and_a_token(cx: &mut T
         )
     });
     assert!(rules.contains("## Browser") && rules.contains("profile \"Work\""));
-    page.click("mono-browser-token-remove");
-    assert!(!page.setting().unwrap().ready);
-}
-
-#[gpui::test]
-fn test_connection_starts_the_pinned_server_with_the_token_and_reports_the_outcome(
-    cx: &mut TestAppContext,
-) {
-    let mut page = open(cx);
-    page.enable();
-    page.choose("Profile 6");
-    page.tap("mono-browser-test");
-    assert!(matches!(page.ui(|u| u.test_state()), TestState::Failed(e) if e.contains("token")));
-    page.save_token(TOKEN);
-
-    page.tap("mono-browser-test");
-    page.visual.run_until_parked();
-    assert_eq!(page.ui(|u| u.test_state()), TestState::Passed);
-    {
-        let probed = page.ops.probed.lock().unwrap();
-        let (args, token) = &probed[0];
-        assert_eq!(token, TOKEN);
-        assert!(args.iter().any(|a| a == "@playwright/mcp@0.0.86"));
-        assert!(args.iter().any(|a| a == "Profile 6"));
-        assert!(
-            args.iter().all(|a| !a.contains(TOKEN)),
-            "token never in argv"
-        );
-    }
-    page.visual.refresh().unwrap();
-    assert!(page.on("mono-browser-test-result"));
-
-    *page.ops.probe.lock().unwrap() = Some(Err("Token needs update: rotate it.".into()));
-    page.tap("mono-browser-test");
-    page.visual.run_until_parked();
-    assert_eq!(
-        page.ui(|u| u.test_state()),
-        TestState::Failed("Token needs update: rotate it.".into())
-    );
+    assert!(!rules.to_lowercase().contains("playwright"));
 }
 
 #[gpui::test]
 fn safety_rules_can_be_edited_and_invalid_origins_are_refused(cx: &mut TestAppContext) {
     let mut page = open(cx);
     page.enable();
-    let defaults = page.setting().unwrap().blocked_origins;
+    assert!(page.setting().unwrap().blocked_origins.is_empty());
 
     // The lists are far below the fold of the test window, so the actions are called directly;
     // the buttons call the same methods.
     page.type_into("browser-blocked-add", "Bank.Example");
     page.manager(|m, cx| m.browser_add_origin(false, cx));
     let blocked = page.setting().unwrap().blocked_origins;
-    assert_eq!(blocked.last().unwrap(), "https://bank.example");
-    assert_eq!(blocked.len(), defaults.len() + 1);
+    assert_eq!(blocked, ["https://bank.example"]);
 
     page.type_into("browser-blocked-add", "*.wildcard.example");
     page.manager(|m, cx| m.browser_add_origin(false, cx));
     assert!(page.ui(|u| u.error().is_some()));
-    assert_eq!(
-        page.setting().unwrap().blocked_origins.len(),
-        defaults.len() + 1
-    );
+    assert_eq!(page.setting().unwrap().blocked_origins.len(), 1);
 
     page.manager(|m, cx| m.browser_remove_origin(false, 0, cx));
-    assert_eq!(page.setting().unwrap().blocked_origins[0], defaults[1]);
-    page.manager(|m, cx| {
-        m.browser_edit(cx, |b| {
-            b.blocked_origins = MonoBrowser::default().blocked_origins
-        })
-    });
-    assert_eq!(page.setting().unwrap().blocked_origins, defaults);
+    assert!(page.setting().unwrap().blocked_origins.is_empty());
 
     page.type_into("browser-allowed-add", "https://docs.example/some/page");
     page.manager(|m, cx| m.browser_add_origin(true, cx));
@@ -541,23 +346,23 @@ fn the_trust_selector_offers_only_read_only_and_act_for_me(cx: &mut TestAppConte
     page.enable();
     // The old "ask before send, post, delete or pay" switch and its read-only note are gone.
     assert!(!page.on("mono-browser-confirm") && !page.on("mono-browser-full-access-note"));
-    for trust in [BrowserTrust::ReadOnly, BrowserTrust::AskRisky] {
+    for trust in BrowserLevel::ALL {
         let selector = browser_ui::trust_selector(trust);
         assert!(page.on(selector), "{selector}");
     }
-    assert!(!page.on(browser_ui::trust_selector(BrowserTrust::Autonomous)));
-    // Each row has its own explanation, and one note says what is enforced and what is trusted.
+    // The "ask every action" and "autonomous" choices are gone.
+    assert!(!page.on("mono-browser-trust-ask-risky") && !page.on("mono-browser-trust-autonomous"));
+    // Each row has its own explanation, and one note says what is enforced.
     for selector in [
         "mono-browser-trust-read-only-text",
-        "mono-browser-trust-ask-risky-text",
+        "mono-browser-trust-act-text",
         "mono-browser-trust-note",
     ] {
         assert!(page.on(selector), "{selector}");
     }
-    assert!(!page.on("mono-browser-trust-autonomous-text"));
-    assert_eq!(page.setting().unwrap().trust, BrowserTrust::AskRisky);
+    assert_eq!(page.setting().unwrap().trust, BrowserLevel::Act);
 
-    for trust in [BrowserTrust::ReadOnly, BrowserTrust::AskRisky] {
+    for trust in BrowserLevel::ALL {
         // The rows are far below the fold of the test window, so the row's action is called
         // directly; the click calls the same method.
         page.manager(|m, cx| m.browser_set_trust(trust, cx));
@@ -566,30 +371,33 @@ fn the_trust_selector_offers_only_read_only_and_act_for_me(cx: &mut TestAppConte
 }
 
 #[gpui::test]
-fn a_stored_legacy_level_displays_as_act_for_me(cx: &mut TestAppContext) {
-    use super::browser_migration::{CHOICES, shows_as, trust_label};
+fn a_stored_legacy_level_reads_as_act_for_me_and_an_unknown_one_as_read_only(
+    cx: &mut TestAppContext,
+) {
+    use super::browser_migration::{CHOICES, trust_label};
     use monocode_core::mono::browser::copy::Lang;
+    assert_eq!(CHOICES, [BrowserLevel::ReadOnly, BrowserLevel::Act]);
+    for (stored, shown) in [
+        ("autonomous", BrowserLevel::Act),
+        ("askRisky", BrowserLevel::Act),
+        ("ask-every", BrowserLevel::Act),
+        ("readOnly", BrowserLevel::ReadOnly),
+        // An unknown value never reads as a level that acts.
+        ("someFutureLevel", BrowserLevel::ReadOnly),
+    ] {
+        let loaded: MonoBrowser =
+            serde_json::from_str(&format!(r#"{{"enabled":true,"trust":"{stored}"}}"#)).unwrap();
+        assert_eq!(loaded.trust, shown, "{stored}");
+    }
+    assert_eq!(trust_label(BrowserLevel::Act, Lang::En), "Act for me");
+    assert_eq!(trust_label(BrowserLevel::ReadOnly, Lang::En), "Read only");
+    assert_ne!(
+        trust_label(BrowserLevel::Act, Lang::Vi),
+        trust_label(BrowserLevel::Act, Lang::En)
+    );
     let mut page = open(cx);
     page.enable();
-    page.manager(|m, cx| m.browser_edit(cx, |b| b.trust = BrowserTrust::Autonomous));
-    // Stored as is (the gate decides what it means), shown as the one acting choice.
-    let stored = page.setting().unwrap().trust;
-    assert_eq!(stored, BrowserTrust::Autonomous);
-    let shown: Vec<_> = CHOICES
-        .into_iter()
-        .filter(|c| shows_as(stored, *c))
-        .collect();
-    assert_eq!(shown, [BrowserTrust::AskRisky]);
-    assert_eq!(trust_label(BrowserTrust::AskRisky, Lang::En), "Act for me");
-    assert_eq!(trust_label(BrowserTrust::ReadOnly, Lang::En), "Read only");
-    assert_ne!(
-        trust_label(BrowserTrust::AskRisky, Lang::Vi),
-        trust_label(BrowserTrust::AskRisky, Lang::En)
-    );
-    assert!(page.on(browser_ui::trust_selector(BrowserTrust::AskRisky)));
-    // Not asserted: aria_selected of the row, the harness has no accessor for it.
-    let read_only = shows_as(BrowserTrust::ReadOnly, BrowserTrust::ReadOnly);
-    assert!(read_only && !shows_as(BrowserTrust::ReadOnly, BrowserTrust::AskRisky));
+    assert!(page.on(browser_ui::trust_selector(BrowserLevel::Act)));
 }
 
 /// A migrated Mono: the notice, the offer and a profile with no connection.
@@ -673,64 +481,70 @@ fn switch_and_keep_resolve_the_blocked_list_offer_once(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
-fn a_migrated_extension_mono_without_a_connection_shows_reconnect_needed(cx: &mut TestAppContext) {
+fn a_migrated_mono_without_a_connection_shows_reconnect_needed(cx: &mut TestAppContext) {
     let mut page = open(cx);
     page.enable();
     page.manager(|m, cx| {
         m.browser_edit(cx, |b| {
             *b = migrated();
-            b.use_extension = true;
             b.migrated = 0;
         })
     });
     assert!(!page.on("mono-browser-reconnect"), "never migrated");
-    page.manager(|m, cx| {
-        m.browser_edit(cx, |b| {
-            b.migrated = 1;
-            b.use_extension = false;
-        })
-    });
-    assert!(!page.on("mono-browser-reconnect"), "Playwright backend");
-    page.manager(|m, cx| m.browser_edit(cx, |b| b.use_extension = true));
+    page.manager(|m, cx| m.browser_edit(cx, |b| b.migrated = 1));
     assert!(page.setting().unwrap().needs_reconnect());
     assert!(page.on("mono-browser-reconnect"));
-    page.manager(|m, cx| m.browser_edit(cx, |b| b.connection = Some("link-1".into())));
+    page.manager(|m, cx| m.browser_edit(cx, |b| b.profile_dir.clear()));
+    assert!(!page.on("mono-browser-reconnect"), "no saved profile");
+    page.manager(|m, cx| {
+        m.browser_edit(cx, |b| {
+            b.profile_dir = "Default".into();
+            b.connection = Some("link-1".into())
+        })
+    });
     assert!(!page.on("mono-browser-reconnect"));
 }
 
 #[gpui::test]
-fn changing_the_level_reconfigures_the_gate_and_keeps_the_server(cx: &mut TestAppContext) {
+fn changing_the_level_reconfigures_the_gate_and_keeps_it(cx: &mut TestAppContext) {
     use monocode_core::mono::browser::gate::Policy;
     let mut page = open(cx);
     page.enable();
     let before = page.setting().unwrap().server_key().1.to_owned();
-    page.manager(|m, cx| m.browser_edit(cx, |b| b.trust = BrowserTrust::ReadOnly));
+    page.manager(|m, cx| m.browser_edit(cx, |b| b.trust = BrowserLevel::ReadOnly));
     let setting = page.setting().unwrap();
-    assert_eq!(setting.trust, BrowserTrust::ReadOnly);
+    assert_eq!(setting.trust, BrowserLevel::ReadOnly);
     assert_eq!(setting.server_key().1, before);
-    // The level is not part of the server's shape, so choosing one never restarts the server.
+    // The level is not part of the gate's shape, so choosing one never drops the gate.
     let mut other = setting.clone();
-    other.trust = BrowserTrust::Autonomous;
+    other.trust = BrowserLevel::Act;
     assert_eq!(setting.server_key(), other.server_key());
     assert_eq!(
         Policy::new(setting.trust, setting.blocked_origins.clone()).trust,
-        BrowserTrust::ReadOnly
+        BrowserLevel::ReadOnly
     );
 }
 
 #[gpui::test]
-fn showing_agent_actions_defaults_on_and_the_switch_reaches_the_policy(cx: &mut TestAppContext) {
+fn showing_agent_actions_defaults_on_and_the_switch_reaches_the_roster(cx: &mut TestAppContext) {
+    use monocode_core::mono::browser::roster::entry_for;
     let mut page = open(cx);
     page.enable();
+    page.choose("Profile 6");
     assert!(page.on("mono-browser-show-actions"));
+    let entry = |page: &mut Page| {
+        page.s.manager.read_with(&page.visual, |m, _| {
+            entry_for(m.roster.get(&page.s.id).unwrap()).map(|(_, entry)| entry.cursor)
+        })
+    };
     let setting = page.setting().unwrap();
-    assert!(setting.show_actions, "the overlay is on by default");
-    assert!(setting.policy().show_actions);
+    assert!(setting.show_actions, "the cursor is on by default");
+    assert_eq!(entry(&mut page), Some(true));
     page.manager(|m, cx| m.browser_toggle_show_actions(cx));
     let setting = page.setting().unwrap();
     assert!(!setting.show_actions);
-    assert!(!setting.policy().show_actions);
-    // The switch is not part of the server's shape: flipping it never restarts the server.
+    assert_eq!(entry(&mut page), Some(false));
+    // The switch is not part of the gate's shape: flipping it never drops the gate.
     let mut other = setting.clone();
     other.show_actions = true;
     assert_eq!(setting.server_key(), other.server_key());
@@ -755,39 +569,15 @@ fn the_activity_log_lists_this_monos_browser_calls(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn deleting_a_mono_deletes_its_token_and_activity(cx: &mut TestAppContext) {
+fn deleting_a_mono_deletes_its_activity(cx: &mut TestAppContext) {
     let mut page = open(cx);
     page.enable();
     page.choose("Profile 6");
-    page.save_token(TOKEN);
     let entry = browser::audit_entry("mcp__playwright_browser__browser_click", "{}", 1).unwrap();
     page.secrets().record(&page.s.id, &entry).unwrap();
     let id = page.s.id.clone();
     page.manager(|m, cx| m.remove_mono(&id, cx));
-    assert!(page.secrets().token(&id).unwrap().is_none());
     assert!(page.secrets().recent(&id, 10).is_empty());
-}
-
-#[gpui::test]
-fn the_install_poll_does_not_decrypt_the_token_again(cx: &mut TestAppContext) {
-    let mut page = open(cx);
-    page.enable();
-    page.choose("Profile 6");
-    page.save_token(TOKEN);
-    assert_eq!(page.ui(|u| u.hint.clone()).as_deref(), Some("WXYZ"));
-    // Another token behind the page's back: a refresh keeps the cached last four.
-    let other = format!("{}QQQQ", &TOKEN[..32]);
-    page.secrets().save_token(&page.s.id, &other).unwrap();
-    page.manager(|m, cx| m.browser_refresh(cx));
-    assert_eq!(page.ui(|u| u.hint.clone()).as_deref(), Some("WXYZ"));
-    // A token saved through the page is read again.
-    page.click("mono-browser-token-replace");
-    page.save_token(&other);
-    assert_eq!(page.ui(|u| u.hint.clone()).as_deref(), Some("QQQQ"));
-    // A vanished row clears it.
-    page.secrets().remove_token(&page.s.id).unwrap();
-    page.manager(|m, cx| m.browser_refresh(cx));
-    assert!(page.ui(|u| u.hint.is_none()));
 }
 
 #[test]
@@ -821,7 +611,6 @@ fn without_chromes_profile_list_the_saved_profile_still_shows_and_works(cx: &mut
     let mut page = open(cx);
     page.enable();
     page.choose("Profile 6");
-    page.save_token(TOKEN);
     assert!(page.setting().unwrap().ready);
     // Full Disk Access is gone: Chrome's Local State cannot be read.
     std::fs::remove_file(page.env.user_data_dir.join("Local State")).unwrap();
@@ -851,26 +640,13 @@ fn the_reason_a_launch_could_not_attach_the_browser_is_shown_on_the_tab(cx: &mut
     page.enable();
     let id = page.s.id.clone();
     assert!(!page.on("mono-browser-attach-error"));
-    browser::server::servers().set_attach_error(&id, Some("no extension token is saved".into()));
+    browser::server::servers()
+        .set_attach_error(&id, Some("the zptah Browser link is not running".into()));
     page.manager(|m, cx| m.browser_refresh(cx));
     assert!(page.on("mono-browser-attach-error"));
     browser::server::servers().set_attach_error(&id, None);
     page.manager(|m, cx| m.browser_refresh(cx));
     assert!(!page.on("mono-browser-attach-error"));
-}
-
-#[gpui::test]
-fn the_attach_note_goes_once_its_cause_is_fixed(cx: &mut TestAppContext) {
-    let mut page = open(cx);
-    page.enable();
-    page.choose("Profile 6");
-    let id = page.s.id.clone();
-    browser::server::servers().set_attach_error(&id, Some("no extension token is saved".into()));
-    page.manager(|m, cx| m.browser_refresh(cx));
-    assert!(page.on("mono-browser-attach-error"), "no token yet");
-    page.save_token(TOKEN);
-    assert!(!page.on("mono-browser-attach-error"));
-    assert_eq!(browser::server::servers().attach_error(&id), None);
 }
 
 // ---- Recipes (Phase 4) ----
@@ -1228,88 +1004,4 @@ mod recipes {
         assert!(page.rows().is_empty());
         assert!(page.secrets().approved_hash(&page.s.id, &v1.id).is_none());
     }
-}
-
-#[gpui::test]
-fn node_is_looked_up_in_the_background_and_shown_with_its_source(cx: &mut TestAppContext) {
-    // The environment has no node on PATH: only the resolver's lookup can find it.
-    let mut page = open_with(cx, false);
-    *page.ops.node.lock().unwrap() = Some(fake_node(NodeSource::LoginShell));
-    page.manager(|m, _| m.browser_ui.node_known = false);
-    page.enable();
-    assert_eq!(*page.ops.lookups.lock().unwrap(), 1);
-    assert!(page.ui(|u| u.prereq.clone()).unwrap().node.is_ok());
-    assert!(page.on("mono-browser-node-location"));
-    let text = page.ui(|u| u.node_found.clone()).unwrap();
-    assert_eq!(text.source, NodeSource::LoginShell);
-    // Known now: a refresh does not look again.
-    page.manager(|m, cx| m.browser_refresh(cx));
-    assert_eq!(*page.ops.lookups.lock().unwrap(), 1);
-}
-
-#[gpui::test]
-fn recheck_clears_the_lookup_and_looks_again(cx: &mut TestAppContext) {
-    let mut page = open_with(cx, false);
-    page.enable();
-    assert!(!page.ui(|u| u.prereq.clone()).unwrap().node.is_ok());
-    assert!(!page.on("mono-browser-node-location"));
-    *page.ops.node.lock().unwrap() = Some(fake_node(NodeSource::WellKnown));
-    page.click("mono-browser-node-recheck");
-    assert_eq!(*page.ops.rechecks.lock().unwrap(), 1);
-    assert_eq!(*page.ops.lookups.lock().unwrap(), 1);
-    assert!(page.ui(|u| u.prereq.clone()).unwrap().node.is_ok());
-    assert!(page.on("mono-browser-node-location"));
-}
-
-#[gpui::test]
-fn a_bad_node_path_is_reported_and_not_applied(cx: &mut TestAppContext) {
-    let mut page = open_with(cx, false);
-    page.enable();
-    page.type_into("browser-node-path", "/nope/npx");
-    page.click("mono-browser-node-path-save");
-    assert!(page.on("mono-browser-node-error"));
-    assert!(page.ops.applied.lock().unwrap().is_empty());
-    assert_eq!(*page.ops.rechecks.lock().unwrap(), 0);
-}
-
-#[gpui::test]
-fn a_good_node_path_is_applied_saved_and_rechecked(cx: &mut TestAppContext) {
-    let mut page = open_with(cx, false);
-    page.enable();
-    page.type_into("browser-node-path", "/nope/npx");
-    page.click("mono-browser-node-path-save");
-    assert!(page.on("mono-browser-node-error"));
-    page.type_into("browser-node-path", "  /good/bin/npx ");
-    page.click("mono-browser-node-path-save");
-    assert!(!page.on("mono-browser-node-error"));
-    assert_eq!(
-        page.ops.applied.lock().unwrap().as_slice(),
-        ["/good/bin/npx"]
-    );
-    assert_eq!(*page.ops.rechecks.lock().unwrap(), 1);
-    assert_eq!(
-        page.s
-            .manager
-            .read_with(&page.visual, |m, _| m.prefs.node_path.clone()),
-        "/good/bin/npx"
-    );
-    // Empty goes back to automatic.
-    page.type_into("browser-node-path", "");
-    page.click("mono-browser-node-path-save");
-    assert_eq!(page.ops.applied.lock().unwrap().last().unwrap(), "");
-}
-
-#[gpui::test]
-fn a_recheck_during_a_lookup_looks_again_when_it_ends(cx: &mut TestAppContext) {
-    let mut page = open_with(cx, false);
-    *page.ops.node.lock().unwrap() = Some(fake_node(NodeSource::LoginShell));
-    page.manager(|m, cx| {
-        m.browser_ui.node_known = false;
-        m.browser_check_node(cx);
-        // The lookup is in flight: Recheck must not be lost.
-        m.browser_recheck_node(cx);
-    });
-    assert_eq!(*page.ops.rechecks.lock().unwrap(), 1);
-    assert_eq!(*page.ops.lookups.lock().unwrap(), 2);
-    assert!(page.ui(|u| u.node_found.is_some() && u.node_known && !u.node_checking));
 }

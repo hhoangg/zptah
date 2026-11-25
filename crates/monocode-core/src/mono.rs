@@ -86,7 +86,7 @@ pub struct Mono {
     /// (spec 9.1). Not the emoji-library setting above. `None`: the mascot's emoji.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub badge_emoji: Option<String>,
-    /// Real Chrome through Playwright MCP. The token is not here, see `browser::MonoBrowserStore`.
+    /// Real Chrome through the zptah Browser extension (see `browser::MonoBrowser`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub browser: Option<browser::MonoBrowser>,
 }

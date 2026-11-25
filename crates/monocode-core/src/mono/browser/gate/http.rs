@@ -1,6 +1,4 @@
-//! The two HTTP halves of the gate: a tiny loopback MCP server for the agent (Streamable HTTP,
-//! JSON replies only) and the client the gate uses to reach the Playwright server.
-use super::Upstream;
+//! The gate's loopback MCP server for the agent (Streamable HTTP, JSON replies only).
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -238,81 +236,5 @@ fn serve(stream: TcpStream, port: u16, secret: &str, handler: &dyn Handler) -> R
     match reply {
         Some(reply) => respond(&stream, "200 OK", "", Some(&reply.to_string())),
         None => respond(&stream, "202 Accepted", "", None),
-    }
-}
-
-/// Reaches the Playwright server over Streamable HTTP. A reply is JSON or an event stream; the
-/// stream is read until the event that answers the request.
-pub struct HttpUpstream {
-    agent: ureq::Agent,
-}
-impl HttpUpstream {
-    pub fn new() -> Self {
-        Self {
-            agent: ureq::AgentBuilder::new()
-                .timeout_connect(Duration::from_secs(10))
-                // A page action may wait for a slow page: well above Playwright's own limits.
-                .timeout_read(Duration::from_secs(300))
-                .build(),
-        }
-    }
-}
-impl Default for HttpUpstream {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-impl Upstream for HttpUpstream {
-    fn post(
-        &self,
-        url: &str,
-        session: Option<&str>,
-        message: &Value,
-    ) -> Result<(Option<Value>, Option<String>), String> {
-        let mut request = self
-            .agent
-            .post(url)
-            .set("Content-Type", "application/json")
-            .set("Accept", "application/json, text/event-stream");
-        if let Some(session) = session {
-            request = request.set("Mcp-Session-Id", session);
-        }
-        let response = match request.send_string(&message.to_string()) {
-            Ok(response) => response,
-            Err(ureq::Error::Status(code, _)) => return Err(format!("HTTP {code}")),
-            Err(error) => return Err(error.to_string()),
-        };
-        let session = response.header("mcp-session-id").map(str::to_owned);
-        let Some(id) = message.get("id").filter(|id| !id.is_null()).cloned() else {
-            return Ok((None, session));
-        };
-        let event_stream = response
-            .header("content-type")
-            .is_some_and(|t| t.contains("text/event-stream"));
-        if !event_stream {
-            let mut text = String::new();
-            response
-                .into_reader()
-                .take(64 * 1024 * 1024)
-                .read_to_string(&mut text)
-                .map_err(|e| e.to_string())?;
-            let reply = serde_json::from_str(&text).map_err(|_| "Unreadable reply".to_owned())?;
-            return Ok((Some(reply), session));
-        }
-        let mut data = String::new();
-        for line in BufReader::new(response.into_reader()).lines() {
-            let line = line.map_err(|e| e.to_string())?;
-            if let Some(chunk) = line.strip_prefix("data:") {
-                data.push_str(chunk.trim_start());
-            } else if line.is_empty() && !data.is_empty() {
-                let event = std::mem::take(&mut data);
-                if let Ok(reply) = serde_json::from_str::<Value>(&event) {
-                    if reply["id"] == id {
-                        return Ok((Some(reply), session));
-                    }
-                }
-            }
-        }
-        Err("The browser server ended its reply early.".into())
     }
 }

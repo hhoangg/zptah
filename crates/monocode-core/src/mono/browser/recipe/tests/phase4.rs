@@ -3,8 +3,8 @@
 //! tool schemas, the streak after a repaired pass, money words, card numbers).
 //! Same scripted [`Web`] as the other recipe tests: no real Chrome.
 use super::phase3::{
-    chat_open, chat_recipe, chat_rig, extract_step, n_declared, target, text_param, typed, CHAT,
-    TYPED,
+    chat_open, chat_recipe, chat_rig, chat_rig_yes, extract_step, n_declared, target, text_param,
+    typed, CHAT, TYPED,
 };
 use super::*;
 use crate::mono::browser::gate::{contains_card_number, digits_hold_card};
@@ -63,7 +63,7 @@ fn conforms(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
 /// Transcribed from `playwright-core` 1.66.0-alpha (the engine of `@playwright/mcp` 0.0.86),
 /// `tools/backend/snapshot.ts` (`elementSchema`, `selectOptionSchema`), `form.ts` and `type`
 /// (`typeSchema`): `target` is required, `element` is optional, and every value is a string.
-fn playwright_schema(tool: &str) -> Value {
+fn tool_schema(tool: &str) -> Value {
     let element = json!({"element": {"type": "string"}, "target": {"type": "string"}});
     let with = |extra: Value| {
         let mut props = element.clone();
@@ -102,7 +102,7 @@ fn playwright_schema(tool: &str) -> Value {
 const NOTIFY_BOX: &str = "internal:role=checkbox[name=\"Notify\"s]";
 
 #[test]
-fn a_write_recipe_sends_the_parameter_shapes_of_the_playwright_mcp_0_0_86_tools() {
+fn a_write_recipe_sends_the_parameter_shapes_of_the_browser_tools() {
     let web = super::phase3::chat_web();
     {
         let mut pages = web.pages.lock().unwrap();
@@ -116,7 +116,7 @@ fn a_write_recipe_sends_the_parameter_shapes_of_the_playwright_mcp_0_0_86_tools(
             ),
         );
     }
-    let rig = Rig::with(BrowserTrust::Autonomous, web);
+    let rig = Rig::with_yes(web);
     let mut recipe = chat_recipe();
     recipe.params = vec![
         text_param(),
@@ -169,7 +169,7 @@ fn a_write_recipe_sends_the_parameter_shapes_of_the_playwright_mcp_0_0_86_tools(
     let mut seen = Vec::new();
     for (name, args) in rig.web.tool_calls() {
         if ["browser_type", "browser_fill_form", "browser_select_option"].contains(&name.as_str()) {
-            conforms(&args, &playwright_schema(&name), &name)
+            conforms(&args, &tool_schema(&name), &name)
                 .unwrap_or_else(|e| panic!("{name} does not match the schema: {e}\n{args}"));
             seen.push((name, args));
         }
@@ -182,13 +182,13 @@ fn a_write_recipe_sends_the_parameter_shapes_of_the_playwright_mcp_0_0_86_tools(
     // The checker itself is not vacuous.
     assert!(conforms(
         &json!({"fields": [{"name": "n", "type": "checkbox", "target": "e1", "value": true}]}),
-        &playwright_schema("browser_fill_form"),
+        &tool_schema("browser_fill_form"),
         "x"
     )
     .is_err());
     assert!(conforms(
         &json!({"values": ["a"]}),
-        &playwright_schema("browser_select_option"),
+        &tool_schema("browser_select_option"),
         "x"
     )
     .is_err());
@@ -326,7 +326,7 @@ fn approve_current(rig: &Rig, id: &str) {
 }
 /// The export text of an approved recipe of a first Mono.
 fn exported(recipe: &Recipe) -> String {
-    let producer = Rig::new(BrowserTrust::AskRisky);
+    let producer = Rig::new(BrowserLevel::Act);
     approved_recipe(&producer, recipe);
     share::export(&producer.store().get(&recipe.id).unwrap()).unwrap()
 }
@@ -370,7 +370,7 @@ fn an_export_has_a_version_origin_steps_and_hash_and_no_stats() {
 #[test]
 fn an_imported_recipe_is_a_draft_with_a_new_id_and_needs_approval_then_a_dry_run() {
     let text = exported(&sample_recipe());
-    let rig = Rig::new(BrowserTrust::AskRisky);
+    let rig = Rig::new(BrowserLevel::Act);
     let recipe = import_into(&rig, &text, &[]).unwrap();
     assert_ne!(recipe.id, sample_recipe().id, "a new id in the new Mono");
     assert_eq!(recipe.version, 1);
@@ -439,7 +439,7 @@ fn text_of(result: &Value) -> String {
 #[test]
 fn an_import_refuses_tampered_unknown_secret_blocked_newer_and_oversized_files() {
     let good = exported(&sample_recipe());
-    let rig = Rig::new(BrowserTrust::AskRisky);
+    let rig = Rig::new(BrowserLevel::Act);
     let refuses = |text: &str, blocked: &[String], expect: &str| {
         let err = import_into(&rig, text, blocked).unwrap_err();
         assert!(
@@ -544,7 +544,7 @@ fn an_import_refuses_tampered_unknown_secret_blocked_newer_and_oversized_files()
 #[test]
 fn a_file_with_stats_or_a_foreign_id_brings_neither_in() {
     let good = exported(&sample_recipe());
-    let rig = Rig::new(BrowserTrust::AskRisky);
+    let rig = Rig::new(BrowserLevel::Act);
     let loaded = edit(&good, |v| {
         v["recipe"]["stats"]["runs"] = json!(500);
         v["recipe"]["stats"]["ok"] = json!(500);
@@ -578,7 +578,7 @@ fn export_refuses_a_recipe_that_holds_a_secret() {
 #[test]
 fn a_write_recipe_dry_run_never_acts_and_the_recipe_still_asks_on_its_first_run() {
     let text = exported(&chat_recipe());
-    let rig = chat_rig(BrowserTrust::AskRisky);
+    let rig = chat_rig(BrowserLevel::Act);
     let recipe = import_into(&rig, &text, &[]).unwrap();
     assert!(recipe.changes_things());
     approve_current(&rig, &recipe.id);
@@ -615,14 +615,14 @@ fn a_write_recipe_dry_run_never_acts_and_the_recipe_still_asks_on_its_first_run(
 
 #[test]
 fn a_dry_run_obeys_the_blocked_list_and_never_touches_the_browser_for_a_blocked_site() {
-    let rig = Rig::new(BrowserTrust::AskRisky);
+    let rig = Rig::new(BrowserLevel::Act);
     let recipe = sample_recipe();
     approved_recipe(&rig, &recipe);
     rig.approvals()
         .mark_outside(MONO, &recipe.id, "import")
         .unwrap();
     rig.gate
-        .set_policy(Policy::new(BrowserTrust::AskRisky, vec![SITE.to_owned()]));
+        .set_policy(Policy::new(BrowserLevel::Act, vec![SITE.to_owned()]));
     let report = rig.gate.dry_run_recipe(&recipe.id).unwrap();
     assert!(!report.ok, "{report:?}");
     assert!(report.failure.unwrap().contains("blocked"));
@@ -641,7 +641,7 @@ fn library() -> (tempfile::TempDir, Library) {
 #[test]
 fn only_an_approved_dry_run_recipe_is_promoted_and_unsharing_leaves_copies_alone() {
     let (_dir, library) = library();
-    let rig = Rig::new(BrowserTrust::AskRisky);
+    let rig = Rig::new(BrowserLevel::Act);
     let mut recipe = sample_recipe();
     rig.store().save(&recipe).unwrap();
     // A draft is not shared.
@@ -661,13 +661,13 @@ fn only_an_approved_dry_run_recipe_is_promoted_and_unsharing_leaves_copies_alone
     assert!(err.contains("Another Mono"), "{err}");
     // A recipe from outside is not re-shared before it passed its dry run in this Mono.
     let outside = import_into(
-        &Rig::new(BrowserTrust::AskRisky),
+        &Rig::new(BrowserLevel::Act),
         &exported(&sample_recipe()),
         &[],
     )
     .unwrap();
     assert_eq!(outside.version, 1);
-    let consumer = Rig::new(BrowserTrust::AskRisky);
+    let consumer = Rig::new(BrowserLevel::Act);
     let copy = library
         .adopt(
             SITE,
@@ -699,7 +699,7 @@ fn only_an_approved_dry_run_recipe_is_promoted_and_unsharing_leaves_copies_alone
 #[test]
 fn a_shared_recipe_is_copied_as_an_unapproved_draft_and_the_consuming_monos_rules_apply() {
     let (_dir, library) = library();
-    let source = Rig::new(BrowserTrust::AskRisky);
+    let source = Rig::new(BrowserLevel::Act);
     let recipe = click_recipe();
     approved_recipe(&source, &recipe);
     manage::promote(
@@ -712,7 +712,7 @@ fn a_shared_recipe_is_copied_as_an_unapproved_draft_and_the_consuming_monos_rule
     .unwrap();
 
     // A Mono that blocks the site can not copy it.
-    let blocking = Rig::new(BrowserTrust::AskRisky);
+    let blocking = Rig::new(BrowserLevel::Act);
     let err = library
         .adopt(
             SITE,
@@ -727,7 +727,7 @@ fn a_shared_recipe_is_copied_as_an_unapproved_draft_and_the_consuming_monos_rule
     assert!(blocking.store().list().is_empty());
 
     // Another Mono copies it: a draft with its own id, marked `shared`, nothing approved.
-    let consumer = Rig::new(BrowserTrust::AskRisky);
+    let consumer = Rig::new(BrowserLevel::Act);
     let copy = library
         .adopt(
             SITE,
@@ -765,7 +765,7 @@ fn a_shared_recipe_is_copied_as_an_unapproved_draft_and_the_consuming_monos_rule
     // Trust level and blocked list are read again at run time: raising the block list stops it.
     consumer
         .gate
-        .set_policy(Policy::new(BrowserTrust::AskRisky, vec![SITE.to_owned()]));
+        .set_policy(Policy::new(BrowserLevel::Act, vec![SITE.to_owned()]));
     let (ok, result) = run_json(&consumer, &copy.id, json!({"n": 2}));
     assert!(!ok);
     assert!(
@@ -775,7 +775,7 @@ fn a_shared_recipe_is_copied_as_an_unapproved_draft_and_the_consuming_monos_rule
     // And a Mono at Level 1 can not run a recipe that clicks, shared or not.
     consumer
         .gate
-        .set_policy(Policy::new(BrowserTrust::ReadOnly, vec![]));
+        .set_policy(Policy::new(BrowserLevel::ReadOnly, vec![]));
     let (ok, result) = run_json(&consumer, &copy.id, json!({"n": 2}));
     assert!(!ok);
     assert!(
@@ -786,7 +786,7 @@ fn a_shared_recipe_is_copied_as_an_unapproved_draft_and_the_consuming_monos_rule
     assert!(!dry.ok, "{dry:?}");
     // Sharing widened nothing for the Mono that had no rights: a Level 1 Mono that copies it
     // gets the same refusal from its first dry run.
-    let weak = Rig::new(BrowserTrust::ReadOnly);
+    let weak = Rig::new(BrowserLevel::ReadOnly);
     let weak_copy = library
         .adopt(
             SITE,
@@ -805,7 +805,7 @@ fn a_shared_recipe_is_copied_as_an_unapproved_draft_and_the_consuming_monos_rule
 #[test]
 fn a_library_file_edited_by_hand_is_skipped_and_never_adopted() {
     let (_dir, library) = library();
-    let source = Rig::new(BrowserTrust::AskRisky);
+    let source = Rig::new(BrowserLevel::Act);
     let recipe = sample_recipe();
     approved_recipe(&source, &recipe);
     manage::promote(
@@ -832,7 +832,7 @@ fn a_library_file_edited_by_hand_is_skipped_and_never_adopted() {
     )
     .unwrap();
     assert!(library.list().is_empty());
-    let consumer = Rig::new(BrowserTrust::AskRisky);
+    let consumer = Rig::new(BrowserLevel::Act);
     let err = library
         .adopt(
             SITE,
@@ -851,7 +851,7 @@ fn a_library_file_edited_by_hand_is_skipped_and_never_adopted() {
 
 #[test]
 fn the_list_shows_status_runs_success_rate_last_run_flaky_and_the_steps_without_values() {
-    let rig = chat_rig(BrowserTrust::Autonomous);
+    let rig = chat_rig_yes();
     let mut recipe = chat_recipe();
     recipe.stats.verified = true;
     approved_recipe(&rig, &recipe);
@@ -876,7 +876,7 @@ fn the_list_shows_status_runs_success_rate_last_run_flaky_and_the_steps_without_
     assert_eq!(row.risk, Risk::Send);
     assert!(row.outside.is_none() && row.previous.is_none());
     // A recipe that never ran has no rate.
-    let fresh = Rig::new(BrowserTrust::ReadOnly);
+    let fresh = Rig::new(BrowserLevel::ReadOnly);
     approved_recipe(&fresh, &sample_recipe());
     assert_eq!(
         manage::rows(&fresh.store(), &fresh.approvals(), MONO)[0].success_percent(),
@@ -897,7 +897,7 @@ fn the_list_shows_status_runs_success_rate_last_run_flaky_and_the_steps_without_
 
 #[test]
 fn approve_is_bound_to_the_content_shown_and_rollback_and_delete_keep_their_rules() {
-    let rig = Rig::new(BrowserTrust::AskRisky);
+    let rig = Rig::new(BrowserLevel::Act);
     let v1 = sample_recipe();
     rig.store().save(&v1).unwrap();
     let shown = v1.content_hash();
@@ -909,7 +909,7 @@ fn approve_is_bound_to_the_content_shown_and_rollback_and_delete_keep_their_rule
     assert!(err.contains("changed"), "{err}");
     assert!(rig.approvals().approved_hash(MONO, &v1.id).is_none());
     // Back to what was shown, approve it, then a second version.
-    let rig = Rig::new(BrowserTrust::AskRisky);
+    let rig = Rig::new(BrowserLevel::Act);
     rig.store().save(&v1).unwrap();
     manage::approve(&rig.store(), &rig.approvals(), MONO, &v1.id, &shown).unwrap();
     let mut v2 = v1.clone();
@@ -952,7 +952,7 @@ fn approve_is_bound_to_the_content_shown_and_rollback_and_delete_keep_their_rule
 #[test]
 fn a_repair_of_an_imported_recipe_keeps_it_runnable_and_counts_the_pass_in_the_streak() {
     let text = exported(&sample_recipe());
-    let rig = Rig::new(BrowserTrust::AskRisky);
+    let rig = Rig::new(BrowserLevel::Act);
     let recipe = import_into(&rig, &text, &[]).unwrap();
     approve_current(&rig, &recipe.id);
     assert!(rig.gate.dry_run_recipe(&recipe.id).unwrap().ok);
@@ -1011,7 +1011,7 @@ fn export_and_the_library_never_carry_a_parameter_default_and_import_drops_one()
         v["recipe"] = serde_json::to_value(&with).unwrap();
         v["hash"] = json!(hash);
     });
-    let rig = Rig::new(BrowserTrust::AskRisky);
+    let rig = Rig::new(BrowserLevel::Act);
     let imported = import_into(&rig, &file, &[]).unwrap();
     assert!(imported.params.iter().all(|p| p.default.is_none()));
     assert!(!std::fs::read_to_string(rig.store().path_of(&imported))
@@ -1042,7 +1042,7 @@ fn two_origins_with_the_same_readable_name_do_not_share_a_library_slot() {
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].origin, "https://my.site.com");
     // A file moved to another slot is not the entry asked for.
-    let rig = Rig::new(BrowserTrust::AskRisky);
+    let rig = Rig::new(BrowserLevel::Act);
     library.promote(MONO, &a).unwrap();
     let from = library
         .dir()
@@ -1068,7 +1068,7 @@ fn two_origins_with_the_same_readable_name_do_not_share_a_library_slot() {
 #[test]
 fn recording_over_an_outside_recipe_counts_as_its_dry_run() {
     let text = exported(&sample_recipe());
-    let rig = Rig::new(BrowserTrust::AskRisky);
+    let rig = Rig::new(BrowserLevel::Act);
     let old = import_into(&rig, &text, &[]).unwrap();
     approve_current(&rig, &old.id);
     assert!(rig.gate.dry_run_recipe(&old.id).unwrap().ok);
@@ -1128,4 +1128,61 @@ fn jcb_15_digit_and_every_visa_length_are_still_cards() {
         assert_eq!(number.len(), len);
         assert!(digits_hold_card(&number), "{number}");
     }
+}
+
+#[test]
+fn the_migration_makes_every_saved_recipe_wait_for_a_dry_run_once() {
+    use crate::mono::browser::migration::{self, Options};
+    let root = tempfile::tempdir().unwrap();
+    let store = crate::store::Store::open(&root.path().join("monocode.db")).unwrap();
+    let approvals = MonoBrowserStore::for_store(&store).unwrap();
+    let monos = crate::mono::root(&store);
+    let recipes = RecipeStore::new(crate::mono::browser::recipes_dir(&monos, "mono-a"));
+    let mut recipe = sample_recipe();
+    recipes.save(&recipe).unwrap();
+    // A recipe that was imported keeps the mark it has.
+    let imported = RecipeStore::new(crate::mono::browser::recipes_dir(&monos, "mono-b"));
+    recipe.id = "rcp_0a1b2c3e".into();
+    imported.save(&recipe).unwrap();
+    approvals
+        .mark_outside("mono-b", &recipe.id, SOURCE_IMPORT)
+        .unwrap();
+    // The shared library is not a Mono.
+    std::fs::create_dir_all(crate::mono::browser::shared_recipes_dir(&monos)).unwrap();
+
+    migration::run(&store, None, &Options::current());
+    let first = sample_recipe();
+    assert_eq!(
+        approvals.outside_source("mono-a", &first.id).as_deref(),
+        Some(share::SOURCE_MIGRATED)
+    );
+    assert_eq!(
+        approvals.outside_source("mono-b", &recipe.id).as_deref(),
+        Some(SOURCE_IMPORT)
+    );
+    assert!(approvals.needs_dry_run("mono-a", &first));
+    // A dry run that passes is remembered, and a second load does not ask for it again.
+    approvals
+        .mark_dry_run("mono-a", &first.id, &first.content_hash())
+        .unwrap();
+    migration::run(&store, None, &Options::current());
+    assert!(!approvals.needs_dry_run("mono-a", &first));
+}
+
+#[test]
+fn a_fresh_install_marks_no_recipe_made_later_as_migrated() {
+    use crate::mono::browser::migration::{self, Options, RECIPE_DRY_RUN_KEY};
+    let root = tempfile::tempdir().unwrap();
+    let store = crate::store::Store::open(&root.path().join("monocode.db")).unwrap();
+    let approvals = MonoBrowserStore::for_store(&store).unwrap();
+    // Nothing recorded yet: the migration is done at once.
+    migration::run(&store, None, &Options::current());
+    assert!(store.setting(RECIPE_DRY_RUN_KEY).unwrap().is_some());
+    // A recipe saved after that is not marked on the next load.
+    let monos = crate::mono::root(&store);
+    let recipes = RecipeStore::new(crate::mono::browser::recipes_dir(&monos, "mono-a"));
+    let recipe = sample_recipe();
+    recipes.save(&recipe).unwrap();
+    migration::run(&store, None, &Options::current());
+    assert_eq!(approvals.outside_source("mono-a", &recipe.id), None);
 }
