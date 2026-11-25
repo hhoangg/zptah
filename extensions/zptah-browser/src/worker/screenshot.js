@@ -97,8 +97,10 @@ export async function fitPng(imaging, png, max, crop) {
  * @param {() => number} deps.now
  * @param {(tabId: number) => number | undefined} deps.getGeneration
  * @param {number} [deps.captureTimeoutMs]
+ * @param {(tabId: number, method: string, params: Record<string, unknown>) => Promise<any>} [deps.cdp] the debugger wrapper (CDP allowlist)
+ * @param {(tabId: number) => boolean} [deps.isAttached]
  */
-export function createScreenshotter({ api, imaging, sleep, now, getGeneration, captureTimeoutMs = CAPTURE_TIMEOUT_MS }) {
+export function createScreenshotter({ api, imaging, sleep, now, getGeneration, captureTimeoutMs = CAPTURE_TIMEOUT_MS, cdp, isAttached }) {
   let lastCapture = 0;
   let queue = Promise.resolve();
 
@@ -171,7 +173,9 @@ export function createScreenshotter({ api, imaging, sleep, now, getGeneration, c
       timer = setTimeout(() => reject(new ZptahError("E_TIMEOUT", "The debugger did not answer in time.")), DEBUGGER_TIMEOUT_MS);
     });
     try {
-      return await Promise.race([api.debugger.sendCommand(target, method, params), timeout]);
+      // With the debugger wrapper every command goes through its allowlist.
+      const sent = cdp ? cdp(target.tabId, method, params) : api.debugger.sendCommand(target, method, params);
+      return await Promise.race([sent, timeout]);
     } finally {
       clearTimeout(timer);
     }
@@ -191,6 +195,7 @@ export function createScreenshotter({ api, imaging, sleep, now, getGeneration, c
   async function debuggerReady(tab) {
     try {
       if (!(await api.permissions.contains({ permissions: ["debugger"] }))) return false;
+      if (isAttached) return isAttached(tab.id);
       /** @type {any[]} */
       const targets = await api.debugger.getTargets();
       return targets.some((t) => t.tabId === tab.id && t.attached);
@@ -233,10 +238,9 @@ export function createScreenshotter({ api, imaging, sleep, now, getGeneration, c
     let crop;
     if (p.full_page === true) {
       if (!(await debuggerReady(tab))) throw new ZptahError("E_UNSUPPORTED", "A full-page picture needs the debugger, which is not attached to this tab. Take a picture of the visible part, or use browser_snapshot.");
-      const metrics = await commandWithTimeout({ tabId: tab.id }, "Page.getLayoutMetrics", {}).catch((e) => {
-        throw debuggerError(e);
-      });
-      const size = metrics?.cssContentSize ?? metrics?.contentSize ?? { width: 1280, height: 800 };
+      // The page size comes from the content script: Page.getLayoutMetrics is not on the CDP allowlist.
+      const [sized] = await runInFrames(api, tab.id, [0], "size", {});
+      const size = sized?.result?.width > 0 ? sized.result : { width: 1280, height: 800 };
       png = await captureDebugger(tab, { x: 0, y: 0, width: Math.ceil(size.width), height: Math.min(Math.ceil(size.height), MAX_FULL_PAGE_HEIGHT), scale: 1 }, true);
       method = "debugger";
     } else if (await isShown(tab)) {
