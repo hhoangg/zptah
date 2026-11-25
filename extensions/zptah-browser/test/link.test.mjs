@@ -12,13 +12,14 @@ import { createStore, trustedArea } from "../src/worker/store.js";
 const V = JSON.parse(readFileSync(new URL("../shared/handshake-vectors.json", import.meta.url), "utf8"));
 globalThis.chrome = /** @type {any} */ ({ runtime: { lastError: undefined } });
 
-const tick = () => new Promise((r) => setImmediate(r));
+// WebCrypto runs on a thread pool, so the number of event loop turns a step takes is not
+// fixed. Wait for the condition itself; the 20 s limit only bounds a genuine hang.
 async function until(cond, what) {
-  for (let i = 0; i < 200; i += 1) {
-    if (cond()) return;
-    await tick();
+  const limit = Date.now() + 20_000;
+  while (!cond()) {
+    if (Date.now() > limit) assert.fail(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 2));
   }
-  assert.fail(`timed out waiting for ${what}`);
 }
 
 /** The app side of one connection, written against the same primitives and the wire rules of auth.rs. */
