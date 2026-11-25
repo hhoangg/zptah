@@ -22,6 +22,8 @@ use std::path::{Path, PathBuf};
 pub mod connect;
 pub mod copy;
 pub mod defense;
+#[cfg(all(unix, feature = "test-support", any(test, debug_assertions)))]
+pub mod e2e;
 pub mod gate;
 pub mod host_mode;
 pub mod link;

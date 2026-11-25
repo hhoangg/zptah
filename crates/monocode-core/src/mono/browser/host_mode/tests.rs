@@ -406,3 +406,22 @@ mod windows_relay {
             .is_ok());
     }
 }
+
+#[test]
+fn the_dev_policy_accepts_an_extra_browser_only_by_absolute_path() {
+    // An absolute path on every platform.
+    let exe = std::env::temp_dir().join("cft-chrome");
+    let with = dev_policy(Some(exe.clone().into_os_string()));
+    assert!(with.relaxed());
+    assert_eq!(with.extra_browsers(), [exe]);
+    assert!(dev_policy(Some("chrome".into()))
+        .extra_browsers()
+        .is_empty());
+    assert!(dev_policy(None).extra_browsers().is_empty());
+}
+
+#[test]
+fn the_release_policy_never_has_an_extra_browser() {
+    assert!(!policy_for(Flavor::Release).relaxed());
+    assert!(policy_for(Flavor::Release).extra_browsers().is_empty());
+}
