@@ -547,7 +547,8 @@ mod over_socket {
     #[test]
     fn mono_requests_without_a_mono_and_oversize_requests_are_refused_locally() {
         let rig = rig();
-        let (_fake, handle) = rig.connected(INSTANCE);
+        let (fake, handle) = rig.connected(INSTANCE);
+        let echo = std::thread::spawn(move || fake.serve_echo());
         let live = rig.manager.handle(INSTANCE).unwrap();
         let err = live
             .request(Method::PageSnapshot, None, json!({}), WAIT)
@@ -558,8 +559,15 @@ mod over_socket {
             .request(Method::StatusGet, None, json!({ "pad": big }), WAIT)
             .expect_err("over 1 MB");
         assert!(matches!(err, RequestError::TooLarge));
+        // Nothing was sealed for the refused request, so the next one has no `seq` gap and the
+        // extension (which checks every counter) still answers.
+        let ok = live
+            .request(Method::StatusGet, None, json!({}), WAIT)
+            .expect("the link survives a refused request");
+        assert_eq!(ok, json!({ "echo": "status.get" }));
         live.close();
         handle.join().unwrap();
+        echo.join().unwrap();
     }
 
     #[test]
@@ -749,6 +757,23 @@ fn the_fallback_store_uses_the_secondary_when_the_credential_store_fails() {
 }
 
 #[test]
+fn the_fallback_store_reports_when_a_key_lives_outside_the_credential_store() {
+    use super::super::link::auth::PairingKey;
+    let primary = Arc::new(MemoryKeyStore::new());
+    let fallback = Arc::new(MemoryKeyStore::new());
+    let both = FallbackKeyStore::new(primary.clone(), fallback);
+    assert!(!both.uses_fallback());
+    both.set(INSTANCE, &PairingKey::generate()).unwrap();
+    assert!(
+        !both.uses_fallback(),
+        "a working credential store is not a fallback"
+    );
+    primary.fail_writes(true);
+    both.set(OTHER_INSTANCE, &PairingKey::generate()).unwrap();
+    assert!(both.uses_fallback());
+}
+
+#[test]
 fn the_mono_secrets_store_round_trips_a_key_in_a_temp_database() {
     use super::super::link::auth::PairingKey;
     use super::super::MonoBrowserStore;
@@ -929,15 +954,20 @@ mod builds {
             builds(Some(good)).check("1.0.0", Some(&dir)),
             BuildVerdict::HashMismatch("1.0.0".into())
         );
-        // No folder or an unreadable one falls back to the version check.
+        // No folder at all, or a build without a recorded hash, falls back to the version check.
         assert_eq!(
             builds(Some(good)).check("1.0.0", None),
             BuildVerdict::Accepted
         );
+        assert_eq!(
+            builds(None).check("1.0.0", Some(&dir)),
+            BuildVerdict::Accepted
+        );
+        // A folder that was found but cannot be hashed fails closed.
         let gone = tmp.path().join("gone");
         assert_eq!(
             builds(Some(good)).check("1.0.0", Some(&gone)),
-            BuildVerdict::Accepted
+            BuildVerdict::HashMismatch("1.0.0".into())
         );
     }
 

@@ -4,6 +4,7 @@
 use super::super::link::auth::PairingKey;
 use super::super::MonoBrowserStore;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Keyed by the extension's `instance_id`. Errors are user-safe text, never the key.
@@ -11,6 +12,11 @@ pub(crate) trait LinkKeyStore: Send + Sync {
     fn get(&self, instance_id: &str) -> Result<Option<PairingKey>, String>;
     fn set(&self, instance_id: &str, key: &PairingKey) -> Result<(), String>;
     fn delete(&self, instance_id: &str) -> Result<(), String>;
+    /// True when a key was stored in the weaker `mono_secrets` fallback because the OS credential
+    /// store was unavailable. The Connect card shows a notice for it.
+    fn uses_fallback(&self) -> bool {
+        false
+    }
 }
 
 /// Service name of the credential-store items. Native Dev uses its own so it never reads or
@@ -24,6 +30,13 @@ pub(crate) fn keyring_service(dev: bool) -> &'static str {
 }
 
 /// The OS credential store through the `keyring` crate.
+///
+/// Access control: this sets no explicit ACL. On macOS a Keychain item is readable without a
+/// prompt only by the app that created it (and the user can approve others), and that identity is
+/// the stable self-signed designated requirement, so updates keep access. The spec's "ACL limited
+/// to the app's designated requirement" (5.4) therefore rests on that default and on the signing
+/// identity, not on an ACL written here. Windows uses the user's DPAPI-protected store and Linux the
+/// Secret Service, both per user.
 pub(crate) struct KeyringStore {
     service: &'static str,
 }
@@ -112,11 +125,16 @@ impl LinkKeyStore for MonoSecretsKeyStore {
 pub(crate) struct FallbackKeyStore {
     primary: Arc<dyn LinkKeyStore>,
     fallback: Arc<dyn LinkKeyStore>,
+    in_fallback: AtomicBool,
 }
 
 impl FallbackKeyStore {
     pub(crate) fn new(primary: Arc<dyn LinkKeyStore>, fallback: Arc<dyn LinkKeyStore>) -> Self {
-        Self { primary, fallback }
+        Self {
+            primary,
+            fallback,
+            in_fallback: AtomicBool::new(false),
+        }
     }
 }
 
@@ -124,18 +142,29 @@ impl LinkKeyStore for FallbackKeyStore {
     fn get(&self, instance_id: &str) -> Result<Option<PairingKey>, String> {
         match self.primary.get(instance_id) {
             Ok(Some(key)) => Ok(Some(key)),
-            Ok(None) | Err(_) => self.fallback.get(instance_id),
+            Ok(None) | Err(_) => {
+                let found = self.fallback.get(instance_id)?;
+                if found.is_some() {
+                    self.in_fallback.store(true, Ordering::SeqCst);
+                }
+                Ok(found)
+            }
         }
     }
 
     fn set(&self, instance_id: &str, key: &PairingKey) -> Result<(), String> {
         match self.primary.set(instance_id, key) {
             Ok(()) => {
+                self.in_fallback.store(false, Ordering::SeqCst);
                 // A stale copy in the fallback must not outlive a rotated key.
                 let _ = self.fallback.delete(instance_id);
                 Ok(())
             }
-            Err(_) => self.fallback.set(instance_id, key),
+            Err(_) => {
+                self.fallback.set(instance_id, key)?;
+                self.in_fallback.store(true, Ordering::SeqCst);
+                Ok(())
+            }
         }
     }
 
@@ -143,6 +172,10 @@ impl LinkKeyStore for FallbackKeyStore {
         let first = self.primary.delete(instance_id);
         let second = self.fallback.delete(instance_id);
         first.and(second)
+    }
+
+    fn uses_fallback(&self) -> bool {
+        self.in_fallback.load(Ordering::SeqCst)
     }
 }
 

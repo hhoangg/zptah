@@ -65,9 +65,10 @@ impl KnownBuilds {
         };
         match hash_extension_dir(dir) {
             Ok(got) if got.eq_ignore_ascii_case(want) => BuildVerdict::Accepted,
-            // A folder we cannot read or hash falls back to the version check, like a missing one.
-            Err(_) => BuildVerdict::Accepted,
-            Ok(_) => BuildVerdict::HashMismatch(ext_version.to_string()),
+            // A folder that was found but cannot be hashed, or hashes differently, fails closed.
+            // Only a missing folder (`installed_dir` is `None`) or a build without a recorded
+            // hash falls back to the version check.
+            Ok(_) | Err(_) => BuildVerdict::HashMismatch(ext_version.to_string()),
         }
     }
 }

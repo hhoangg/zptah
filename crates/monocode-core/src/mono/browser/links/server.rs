@@ -3,20 +3,18 @@
 //! (our own executable, started by a browser) before a byte is read, then handed to the manager on
 //! its own thread.
 //!
-//! Windows serves a named pipe instead; that listener is not part of this ticket (the pipe helpers
-//! are in `peer`), so [`LinkServer::start`] reports `Unsupported` there. When it is written, a
-//! reader and a writer thread must not share one synchronous pipe handle (that deadlocks): serve
-//! the pipe with overlapped I/O (`create_pipe_instance` already sets `FILE_FLAG_OVERLAPPED`).
-use super::super::peer::{Flavor, PeerError, PeerPolicy, PeerReport};
+//! Windows serves a named pipe instead; that listener is ticket T7b in the plan (the pipe helpers
+//! are in `peer`), so [`LinkServer::start`] reports `Unsupported` there. T7b must not share one
+//! synchronous pipe handle between a reader and a writer thread (that deadlocks): serve the pipe
+//! with overlapped I/O (`create_pipe_instance` already sets `FILE_FLAG_OVERLAPPED`).
+use super::super::peer::{Flavor, PeerError, PeerPolicy};
 use super::manager::LinkManager;
-
-/// More unauthenticated handshakes than this at once are dropped.
-const MAX_CONCURRENT: usize = 8;
 
 #[cfg(unix)]
 mod unix {
     use super::*;
     use crate::mono::browser::links::manager::Conn;
+    use crate::mono::browser::peer::PeerReport;
     use crate::mono::browser::peer::{self, dir, lock::InstanceLock};
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::{Path, PathBuf};
@@ -24,6 +22,10 @@ mod unix {
     use std::sync::Arc;
     use std::thread::JoinHandle;
     use std::time::Duration;
+
+    /// More handshakes in progress at once than this are dropped. A link that finished its
+    /// handshake no longer counts.
+    const MAX_CONCURRENT: usize = 8;
 
     /// Verifies one accepted stream. Production uses `peer::verify_host_peer`; tests inject one.
     pub(crate) type Verifier =
@@ -95,6 +97,17 @@ mod unix {
         }
     }
 
+    /// One in-progress handshake in the counter, released exactly once.
+    struct HandshakeSlot(Arc<AtomicUsize>, AtomicBool);
+
+    impl HandshakeSlot {
+        fn release(&self) {
+            if !self.1.swap(true, Ordering::SeqCst) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+    }
+
     fn accept_loop(
         listener: UnixListener,
         manager: LinkManager,
@@ -123,21 +136,25 @@ mod unix {
                 active.fetch_sub(1, Ordering::SeqCst);
                 continue;
             }
-            let (manager, verifier, counter) = (manager.clone(), verifier.clone(), active.clone());
+            let (manager, verifier) = (manager.clone(), verifier.clone());
+            let slot = Arc::new(HandshakeSlot(active.clone(), AtomicBool::new(false)));
+            let thread_slot = slot.clone();
             let spawned = std::thread::Builder::new()
                 .name("zptah-browser-link".into())
                 .spawn(move || {
                     match verifier(&stream) {
                         Ok(report) => match Conn::from_unix(stream) {
-                            Ok(conn) => manager.serve(conn, &report),
+                            Ok(conn) => {
+                                manager.serve_notify(conn, &report, || thread_slot.release())
+                            }
                             Err(e) => manager.report_peer_refused(&e),
                         },
                         Err(e) => manager.report_peer_refused(&e),
                     }
-                    counter.fetch_sub(1, Ordering::SeqCst);
+                    thread_slot.release();
                 });
             if spawned.is_err() {
-                active.fetch_sub(1, Ordering::SeqCst);
+                slot.release();
                 std::thread::sleep(Duration::from_millis(200));
             }
         }

@@ -167,10 +167,24 @@ impl FileRecordStore {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir).map_err(|_| fail())?;
         }
-        let tmp = self.path.with_extension("json.tmp");
+        let tmp = self
+            .path
+            .with_extension(format!("json.{:016x}.tmp", rand::random::<u64>()));
         let bytes = serde_json::to_vec_pretty(records).map_err(|_| fail())?;
-        std::fs::write(&tmp, bytes).map_err(|_| fail())?;
-        std::fs::rename(&tmp, &self.path).map_err(|_| fail())
+        // `create_new` (O_EXCL) never follows a planted file or link at the temp name.
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .and_then(|mut f| f.write_all(&bytes));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(fail());
+        }
+        std::fs::rename(&tmp, &self.path).map_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+            fail()
+        })
     }
 }
 
@@ -402,14 +416,13 @@ pub(crate) enum RequestError {
     Remote(ErrorBody),
 }
 
-struct LinkIo {
-    writer: Box<dyn Write + Send>,
-    session: Session,
-}
-
 struct Shared {
     instance_id: String,
-    io: Mutex<LinkIo>,
+    /// Held for a whole send (seal and write) so frames leave in `seq` order. A slow write blocks
+    /// other senders but never the reader.
+    writer: Mutex<Box<dyn Write + Send>>,
+    /// Held only for the instant of a `seal` or an `open`.
+    session: Mutex<Session>,
     pending: Mutex<HashMap<String, mpsc::Sender<Envelope>>>,
     next_id: AtomicU64,
     closed: AtomicBool,
@@ -480,15 +493,26 @@ impl LinkHandle {
     }
 
     fn send(&self, env: &mut Envelope) -> Result<(), RequestError> {
-        let mut io = self.shared.io.lock().unwrap();
-        io.session.seal(env).map_err(RequestError::Invalid)?;
-        let bytes = env.to_vec();
-        // The extension takes at most 1 MB per message (spec 5.1); the app chunks anything bigger.
-        if bytes.len() > MAX_HOST_TO_EXTENSION_FRAME {
+        // Chrome takes at most 1 MiB per message to the extension (spec 5.1); the app chunks
+        // anything bigger. Check before sealing: sealing consumes a `seq`, and a frame that is
+        // sealed but never sent would make the extension see a gap and close the link.
+        if env.to_vec().len() + SEAL_OVERHEAD > MAX_HOST_TO_EXTENSION_FRAME {
             return Err(RequestError::TooLarge);
         }
-        if write_frame(&mut io.writer, FrameFormat::SOCKET, &bytes).is_err() {
-            drop(io);
+        let mut writer = lock(&self.shared.writer);
+        lock(&self.shared.session)
+            .seal(env)
+            .map_err(RequestError::Invalid)?;
+        let bytes = env.to_vec();
+        if bytes.len() > MAX_HOST_TO_EXTENSION_FRAME {
+            // Safety net: the pre-check leaves room, so this should not happen. The seq is spent,
+            // so the link cannot continue.
+            drop(writer);
+            self.shared.close();
+            return Err(RequestError::TooLarge);
+        }
+        if write_frame(&mut *writer, FrameFormat::SOCKET, &bytes).is_err() {
+            drop(writer);
             self.shared.close();
             return Err(RequestError::Closed);
         }
@@ -642,6 +666,12 @@ impl LinkManager {
 
     // ---- queries and control ----
 
+    /// True when a pairing key lives in the `mono_secrets` fallback instead of the OS credential
+    /// store, so the Connect card can say so.
+    pub(crate) fn keys_in_fallback(&self) -> bool {
+        self.inner.keys.uses_fallback()
+    }
+
     pub(crate) fn links(&self) -> Result<Vec<LinkInfo>, String> {
         let live: Vec<String> = lock(&self.inner.links)
             .iter()
@@ -677,6 +707,14 @@ impl LinkManager {
     pub(crate) fn disconnect(&self, instance_id: &str) -> Result<(), String> {
         if let Some(handle) = self.handle(instance_id) {
             handle.close();
+        }
+        {
+            // A link that authenticated but is not live yet loses its reservation, so `run`
+            // refuses to start it.
+            let mut links = lock(&self.inner.links);
+            if matches!(links.get(instance_id), Some(Slot::Reserved)) {
+                links.remove(instance_id);
+            }
         }
         let keys = self.inner.keys.delete(instance_id);
         let records = self.inner.records.remove(instance_id);
@@ -719,6 +757,17 @@ impl LinkManager {
 
     /// Runs one verified connection to its end on the calling thread.
     pub(crate) fn serve(&self, conn: Conn, report: &PeerReport) {
+        self.serve_notify(conn, report, || {});
+    }
+
+    /// Like `serve`, calling `handshake_done` once the handshake ended (success or not), before
+    /// a long-lived link starts serving. The server uses it to count only unauthenticated work.
+    pub(crate) fn serve_notify(
+        &self,
+        conn: Conn,
+        report: &PeerReport,
+        handshake_done: impl FnOnce(),
+    ) {
         let Conn {
             mut reader,
             mut writer,
@@ -726,16 +775,16 @@ impl LinkManager {
         } = conn;
         control.set_read_timeout(Some(self.inner.config.handshake_timeout));
         let mut instance = None;
-        match self.handshake(&mut reader, &mut writer, report, &mut instance) {
+        let outcome = self.handshake(&mut reader, &mut writer, report, &mut instance);
+        handshake_done();
+        match outcome {
             Ok(Outcome::Paired) => control.close(),
             Ok(Outcome::Linked(linked)) => {
                 control.set_read_timeout(None);
                 let shared = Arc::new(Shared {
                     instance_id: linked.instance_id,
-                    io: Mutex::new(LinkIo {
-                        writer,
-                        session: linked.session,
-                    }),
+                    writer: Mutex::new(writer),
+                    session: Mutex::new(linked.session),
                     pending: Mutex::new(HashMap::new()),
                     next_id: AtomicU64::new(1),
                     closed: AtomicBool::new(false),
@@ -1050,7 +1099,16 @@ impl LinkManager {
 
     /// Serves an admitted link until it closes.
     fn run(&self, shared: Arc<Shared>, name: String, mut reader: Box<dyn Read + Send>) {
-        lock(&self.inner.links).insert(shared.instance_id.clone(), Slot::Live(shared.clone()));
+        {
+            let mut links = lock(&self.inner.links);
+            if !matches!(links.get(&shared.instance_id), Some(Slot::Reserved)) {
+                // Disconnected between `auth` and now: do not start a link for a forgotten pairing.
+                drop(links);
+                shared.close();
+                return;
+            }
+            links.insert(shared.instance_id.clone(), Slot::Live(shared.clone()));
+        }
         self.emit(LinkEvent::Connected {
             instance_id: shared.instance_id.clone(),
             name,
@@ -1070,7 +1128,7 @@ impl LinkManager {
                 break;
             }
             // A bad MAC or an old seq closes the link (spec 5.3).
-            if lock(&shared.io).session.open(&env).is_err() {
+            if lock(&shared.session).open(&env).is_err() {
                 break;
             }
             match env.kind {

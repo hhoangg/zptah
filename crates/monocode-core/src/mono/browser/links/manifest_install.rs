@@ -446,13 +446,22 @@ fn write_file(path: &Path, text: &str) -> Result<Change, InstallError> {
     }
     // Same directory, so the rename is atomic and a browser never reads half a manifest.
     let tmp = dir.join(format!(
-        ".{}.{}.tmp",
+        ".{}.{:016x}.tmp",
         path.file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("manifest"),
-        std::process::id()
+        rand::random::<u64>()
     ));
-    std::fs::write(&tmp, text)?;
+    // `create_new` (O_EXCL) never follows a planted file or link at the temp name.
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut f| io::Write::write_all(&mut f, text.as_bytes()));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
     if let Err(e) = std::fs::rename(&tmp, path) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e.into());
