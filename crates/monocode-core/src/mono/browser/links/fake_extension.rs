@@ -1,7 +1,7 @@
 //! An in-process stand-in for the extension, for tests of the app side of the link (and of later
 //! tickets that sit on top of it, such as the extension upstream). It speaks the real framing and
-//! the real handshake through `link::auth::ExtHandshake`, over one end of a socket pair; the other
-//! end is given to [`LinkManager::serve`](super::manager::LinkManager::serve).
+//! the real handshake through `link::auth::ExtHandshake`, over one end of a socket pair (a pipe on
+//! Windows); the other end is given to [`LinkManager::serve`](super::manager::LinkManager::serve).
 //!
 //! Every read has a timeout, so a broken test fails instead of hanging.
 use super::super::link::auth::{Challenge, ExtHandshake, PairingKey, Session};
@@ -12,16 +12,42 @@ use super::super::link::protocol::{
 };
 use super::manager::Conn;
 use serde_json::{json, Value};
-use std::io;
-use std::os::unix::net::UnixStream;
+use std::io::{self, Read, Write};
 use std::time::Duration;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The extension's end of a connection: a unix socket, or an overlapped named pipe on Windows.
+pub(crate) trait FakeStream: Read + Write + Send {
+    fn set_read_timeout(&self, timeout: Option<Duration>);
+    /// Closes both directions.
+    fn shutdown(&self);
+}
+
+#[cfg(unix)]
+impl FakeStream for std::os::unix::net::UnixStream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) {
+        std::os::unix::net::UnixStream::set_read_timeout(self, timeout).expect("read timeout");
+    }
+    fn shutdown(&self) {
+        let _ = std::os::unix::net::UnixStream::shutdown(self, std::net::Shutdown::Both);
+    }
+}
+
+#[cfg(windows)]
+impl FakeStream for crate::mono::browser::peer::windows_pipe::OverlappedPipe {
+    fn set_read_timeout(&self, timeout: Option<Duration>) {
+        crate::mono::browser::peer::windows_pipe::OverlappedPipe::set_read_timeout(self, timeout);
+    }
+    fn shutdown(&self) {
+        self.close();
+    }
+}
+
 type HelloTweak = Box<dyn FnOnce(&mut HelloParams) + Send>;
 
 pub(crate) struct FakeExtension {
-    stream: UnixStream,
+    stream: Box<dyn FakeStream>,
     pub instance_id: String,
     pub key: PairingKey,
     pub ext_version: String,
@@ -33,21 +59,34 @@ pub(crate) struct FakeExtension {
 }
 
 /// A connected pair: the app's [`Conn`] and the extension that talks to it.
+#[cfg(unix)]
 pub(crate) fn socket_pair(instance_id: &str, key: PairingKey) -> (Conn, FakeExtension) {
-    let (app, ext) = UnixStream::pair().expect("socket pair");
+    let (app, ext) = std::os::unix::net::UnixStream::pair().expect("socket pair");
     (
         Conn::from_unix(app).expect("conn"),
         FakeExtension::new(ext, instance_id, key),
     )
 }
 
+/// A connected pair over a private named pipe: the app's [`Conn`] and the extension.
+#[cfg(all(windows, test))]
+pub(crate) fn pipe_pair(instance_id: &str, key: PairingKey) -> (Conn, FakeExtension) {
+    let (app, ext) = crate::mono::browser::peer::windows_pipe::test_pair();
+    (
+        Conn::from_pipe(app),
+        FakeExtension::new(ext, instance_id, key),
+    )
+}
+
 impl FakeExtension {
-    pub(crate) fn new(stream: UnixStream, instance_id: &str, key: PairingKey) -> Self {
-        stream
-            .set_read_timeout(Some(READ_TIMEOUT))
-            .expect("read timeout");
+    pub(crate) fn new(
+        stream: impl FakeStream + 'static,
+        instance_id: &str,
+        key: PairingKey,
+    ) -> Self {
+        stream.set_read_timeout(Some(READ_TIMEOUT));
         Self {
-            stream,
+            stream: Box::new(stream),
             instance_id: instance_id.to_string(),
             key,
             ext_version: "1.0.0".to_string(),
@@ -83,7 +122,6 @@ impl FakeExtension {
 
     /// Writes bytes as they are (a broken length prefix, garbage).
     pub(crate) fn send_bytes(&mut self, bytes: &[u8]) {
-        use std::io::Write;
         self.stream.write_all(bytes).expect("write");
     }
 
@@ -240,7 +278,7 @@ impl FakeExtension {
     }
 
     pub(crate) fn close(self) {
-        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+        self.stream.shutdown();
     }
 }
 

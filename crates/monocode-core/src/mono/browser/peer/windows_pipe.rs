@@ -8,19 +8,32 @@
 use std::io::{self, Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use windows_sys::Win32::Foundation::{ERROR_BROKEN_PIPE, HANDLE};
+use std::time::Duration;
+use windows_sys::Win32::Foundation::{
+    ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, HANDLE, WAIT_TIMEOUT,
+};
 use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile};
-use windows_sys::Win32::System::Threading::CreateEventW;
-use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 
 /// Largest chunk handed to one `ReadFile` or `WriteFile`; callers loop on short counts.
 const MAX_CHUNK: usize = 1 << 20;
 
+/// Stored in `read_timeout_ms` for "wait as long as it takes".
+const NO_TIMEOUT: u64 = u64::MAX;
+
+struct Inner {
+    handle: OwnedHandle,
+    read_timeout_ms: AtomicU64,
+    closed: AtomicBool,
+}
+
 /// One overlapped pipe handle, shared by the reader and the writer through [`Self::try_clone`].
 #[derive(Clone)]
 pub(crate) struct OverlappedPipe {
-    handle: Arc<OwnedHandle>,
+    inner: Arc<Inner>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -33,7 +46,11 @@ impl OverlappedPipe {
     /// `handle` must have been opened or created with `FILE_FLAG_OVERLAPPED`.
     pub(crate) fn new(handle: OwnedHandle) -> Self {
         Self {
-            handle: Arc::new(handle),
+            inner: Arc::new(Inner {
+                handle,
+                read_timeout_ms: AtomicU64::new(NO_TIMEOUT),
+                closed: AtomicBool::new(false),
+            }),
         }
     }
 
@@ -41,7 +58,35 @@ impl OverlappedPipe {
         self.clone()
     }
 
+    /// A read that waits longer than this fails with `TimedOut` (`None`: no limit). Applies to
+    /// every clone and to reads already waiting only from their next call.
+    pub(crate) fn set_read_timeout(&self, timeout: Option<Duration>) {
+        let ms = match timeout {
+            // At least 1 ms (0 would poll) and below INFINITE (u32::MAX).
+            Some(t) => (t.as_millis().min(u128::from(u32::MAX - 1)) as u64).max(1),
+            None => NO_TIMEOUT,
+        };
+        self.inner.read_timeout_ms.store(ms, Ordering::SeqCst);
+    }
+
+    /// Ends the connection for every clone: a pending or later read returns end of stream and a
+    /// write fails. The handle itself closes when the last clone is dropped, so data already
+    /// written stays readable for the other end until then.
+    pub(crate) fn close(&self) {
+        self.inner.closed.store(true, Ordering::SeqCst);
+        // SAFETY: a live handle; a null OVERLAPPED cancels every pending operation on it. The
+        // result is moot: nothing pending is not an error here.
+        unsafe { CancelIoEx(self.raw(), ptr::null()) };
+    }
+
+    fn raw(&self) -> HANDLE {
+        self.inner.handle.as_raw_handle() as HANDLE
+    }
+
     fn transfer(&self, op: Op, buf: *mut u8, len: usize) -> io::Result<usize> {
+        if self.inner.closed.load(Ordering::SeqCst) {
+            return Err(io::Error::from(io::ErrorKind::BrokenPipe));
+        }
         let len = len.min(MAX_CHUNK) as u32;
         // SAFETY: null attributes and name; a manual-reset, initially unsignaled event.
         let event = unsafe { CreateEventW(ptr::null(), 1, 0, ptr::null()) };
@@ -53,7 +98,7 @@ impl OverlappedPipe {
         // SAFETY: an all-zero OVERLAPPED is valid; a pipe ignores the offset fields.
         let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
         overlapped.hEvent = event;
-        let handle = self.handle.as_raw_handle() as HANDLE;
+        let handle = self.raw();
         // SAFETY: `buf` is valid for `len` bytes and, with `overlapped`, outlives the operation
         // because GetOverlappedResult below waits for it to finish before this function returns.
         let started = unsafe {
@@ -64,17 +109,42 @@ impl OverlappedPipe {
         };
         if started == 0 {
             let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(windows_sys::Win32::Foundation::ERROR_IO_PENDING as i32)
-            {
+            if error.raw_os_error() != Some(ERROR_IO_PENDING as i32) {
                 return Err(error);
+            }
+        }
+        // `close` may have run between the check above and the start of this operation, when its
+        // cancel had nothing to hit yet.
+        if self.inner.closed.load(Ordering::SeqCst) {
+            // SAFETY: `overlapped` identifies the operation started above.
+            unsafe { CancelIoEx(handle, &overlapped) };
+        }
+        let mut timed_out = false;
+        let timeout = self.inner.read_timeout_ms.load(Ordering::SeqCst);
+        if op == Op::Read && timeout != NO_TIMEOUT {
+            // SAFETY: a live event handle.
+            if unsafe { WaitForSingleObject(event, timeout as u32) } == WAIT_TIMEOUT {
+                timed_out = true;
+                // SAFETY: `overlapped` identifies the operation started above.
+                unsafe { CancelIoEx(handle, &overlapped) };
             }
         }
         let mut done = 0u32;
         // SAFETY: `overlapped` is the structure the operation was started with; bWait = TRUE.
         if unsafe { GetOverlappedResult(handle, &overlapped, &mut done, 1) } == 0 {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            if timed_out && error.raw_os_error() == Some(ERROR_OPERATION_ABORTED as i32) {
+                return Err(io::Error::from(io::ErrorKind::TimedOut));
+            }
+            return Err(error);
         }
         Ok(done as usize)
+    }
+}
+
+impl AsRawHandle for OverlappedPipe {
+    fn as_raw_handle(&self) -> RawHandle {
+        self.inner.handle.as_raw_handle()
     }
 }
 
@@ -84,8 +154,15 @@ impl Read for OverlappedPipe {
             return Ok(0);
         }
         match self.transfer(Op::Read, buf.as_mut_ptr(), buf.len()) {
-            // The other end closed the pipe: end of stream.
+            // The other end closed the pipe, or we did: end of stream.
             Err(e) if e.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) => Ok(0),
+            Err(e)
+                if self.inner.closed.load(Ordering::SeqCst)
+                    && (e.kind() == io::ErrorKind::BrokenPipe
+                        || e.raw_os_error() == Some(ERROR_OPERATION_ABORTED as i32)) =>
+            {
+                Ok(0)
+            }
             other => other,
         }
     }
@@ -119,7 +196,7 @@ pub(crate) fn test_pair() -> (OverlappedPipe, OverlappedPipe) {
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     );
-    let server = super::super::peer::create_pipe_instance(&name, true).expect("create pipe");
+    let server = super::create_pipe_instance(&name, true).expect("create pipe");
     let client = std::fs::OpenOptions::new()
         .read(true)
         .write(true)

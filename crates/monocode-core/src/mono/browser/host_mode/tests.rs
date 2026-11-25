@@ -355,8 +355,8 @@ fn the_error_reply_to_a_hidden_id_falls_back_to_x0() {
 
 #[cfg(windows)]
 mod windows_relay {
-    use super::super::windows_pipe::test_pair;
     use super::*;
+    use crate::mono::browser::peer::windows_pipe::test_pair;
 
     #[test]
     fn a_pending_read_does_not_block_a_write_on_the_same_pipe() {
