@@ -432,6 +432,16 @@ test("hover fires the hover events and scroll scrolls", async () => {
   finish(s);
 });
 
+test("hovering a Delete button needs no approval, clicking it still does", async () => {
+  const s = setup({ build: (h) => [h("button", { id: "d", type: "button", rect: [10, 10, 120, 30] }, "Delete account")], url: "https://shop.test/" });
+  const ref = refOf(await snap(s), "button", "Delete account");
+  const hover = await prep(s, { kind: "hover", ref });
+  ok(await s.call("act.commit", { prepare_id: hover.prepare_id }));
+  const click = await prep(s, { kind: "click", ref });
+  err(await s.call("act.commit", { prepare_id: click.prepare_id }), "E_NEEDS_APPROVAL");
+  finish(s);
+});
+
 test("decoy inputs (readonly, hidden) are refused and a covered control is not clicked", async () => {
   const s = setup({
     build: (h) => [h("input", { id: "decoy", type: "text", readonly: "", "aria-label": "Search", rect: [10, 10, 200, 30] }), h("button", { id: "b", type: "button", rect: [10, 60, 80, 30] }, "Next")],
@@ -645,6 +655,32 @@ test("the debugger detaches 2 minutes after the last use, and use resets the tim
   finish(s);
 });
 
+test("task.end starts the 2 minute clock at the end of the run, and use after it keeps the session", async () => {
+  const s = setup({ debuggerPermission: true });
+  await s.dbg.attach(1);
+  s.advance(100000);
+  ok(await s.call("task.end", {}));
+  s.advance(100000);
+  await s.dbg.sweep();
+  assert.deepEqual(s.dbg.attachedTabs(), [1], "the clock restarted at task.end (it would have gone at 120 s from the last use)");
+  s.dbg.touch(1);
+  s.advance(100000);
+  await s.dbg.sweep();
+  assert.deepEqual(s.dbg.attachedTabs(), [1], "a new run using the tab keeps it");
+  ok(await s.call("task.end", {}));
+  s.advance(121000);
+  await s.dbg.sweep();
+  assert.deepEqual(s.dbg.attachedTabs(), []);
+  assert.deepEqual(s.events.at(-1), { method: "debugger.detached", params: { tab: 1, reason: "task_ended" } });
+  finish(s);
+});
+
+test("task.end is refused for a Mono that is not in the roster", async () => {
+  const s = setup({ debuggerPermission: true });
+  err(await s.call("task.end", {}, "f".repeat(32)), "E_UNKNOWN_MONO");
+  finish(s);
+});
+
 test("Stop detaches every session, drops prepares and tells the app", async () => {
   const s = setup({ debuggerPermission: true, build: (h) => [h("button", { id: "b", type: "button", rect: [10, 40, 80, 30] }, "Next")], url: "https://shop.test/" });
   const p = await prep(s, { kind: "click", ref: refOf(await snap(s), "button", "Next") });
@@ -845,6 +881,18 @@ test("upload.put collects ordered chunks and the upload builds File objects for 
   const input = s.world.document.querySelector("#f");
   assert.deepEqual(input.files.map((f) => [f.name, f.size, f.type]), [["a.png", 3, "image/png"], ["b.txt", 2, "text/plain"]]);
   err(await s.call("upload.put", { upload_id: "big", seq: 0, bytes_b64: b64encode(new Uint8Array(512 * 1024 + 1)), last: true }), "E_TOO_LARGE");
+  finish(s);
+});
+
+test("cancelling an upload prepare discards the bytes that were sent", async () => {
+  const s = setup({ build: (h) => [h("input", { id: "f", type: "file", "aria-label": "Photo", rect: [10, 10, 100, 30] })], url: "https://shop.test/upload" });
+  const text = await snap(s);
+  const stream = new Uint8Array([0, 0, 0, 1, 7]);
+  ok(await s.call("upload.put", { upload_id: "u2", seq: 0, bytes_b64: b64encode(stream), last: true }));
+  const p = await prep(s, { kind: "upload", ref: refOf(text, "button", "Photo"), upload_id: "u2", names: ["a.png"] });
+  assert.ok(s.acts.uploads.has("u2"));
+  ok(await s.call("act.cancel", { prepare_id: p.prepare_id }));
+  assert.equal(s.acts.uploads.has("u2"), false);
   finish(s);
 });
 

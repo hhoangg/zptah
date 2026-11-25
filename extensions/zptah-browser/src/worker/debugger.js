@@ -211,6 +211,21 @@ export function createDebugger(deps) {
     }
   }
 
+  /**
+   * A run of the task ended (decision 4): the clock for these tabs starts now, so a debugger session
+   * or a "declined" mark that is not used again within the 2 minutes ends. Another run of the same
+   * conversation that uses the tab in that time keeps it (every use counts through `touch`).
+   * @param {number[]} tabIds
+   */
+  function endTask(tabIds) {
+    for (const tab of tabIds) {
+      const s = tabs.get(tab);
+      if (!s || !(s.attached || s.declined)) continue;
+      s.last = now();
+      armTimer(tab);
+    }
+  }
+
   /** @param {number} tab */
   function forget(tab) {
     const s = tabs.get(tab);
@@ -249,5 +264,5 @@ export function createDebugger(deps) {
     }
   }
 
-  return { attach, send, detach, detachAll, sweep, touch, forget, isAttached, isSticky, openDialog, attachedTabs, permitted, onDetach, onEvent, tabs };
+  return { attach, send, detach, detachAll, sweep, touch, endTask, forget, isAttached, isSticky, openDialog, attachedTabs, permitted, onDetach, onEvent, tabs };
 }
