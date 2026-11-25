@@ -33,23 +33,34 @@ struct Fixture {
     scene: Arc<FlowScene>,
     probe: Probe,
     width: f32,
+    /// Stands in for a dialog or terminal that handles Esc itself.
+    trap: gpui::FocusHandle,
 }
 
 impl gpui::Render for Fixture {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().w(px(self.width)).child(
-            DiagramViewer::new(
-                "t",
-                "flow",
-                "Test flow",
-                ViewerContent::Flow(self.scene.clone()),
+        let trap = self.trap.clone();
+        div()
+            .track_focus(&trap)
+            .on_key_down(|event, _, cx| {
+                if event.keystroke.key == "escape" {
+                    cx.stop_propagation();
+                }
+            })
+            .w(px(self.width))
+            .child(
+                DiagramViewer::new(
+                    "t",
+                    "flow",
+                    "Test flow",
+                    ViewerContent::Flow(self.scene.clone()),
+                )
+                .source(
+                    "source".into(),
+                    Box::new(|| div().size_full().child("source text").into_any_element()),
+                )
+                .probe(self.probe.clone()),
             )
-            .source(
-                "source".into(),
-                Box::new(|| div().size_full().child("source text").into_any_element()),
-            )
-            .probe(self.probe.clone()),
-        )
     }
 }
 
@@ -69,10 +80,11 @@ fn open_window(
     let handed = probe.clone();
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
-            cx.new(|_| Fixture {
+            cx.new(|cx| Fixture {
                 scene: scene(),
                 probe: handed,
                 width: 700.,
+                trap: cx.focus_handle(),
             })
         })
         .unwrap()
@@ -376,4 +388,43 @@ fn a_horizontal_wheel_with_the_secondary_key_pans_instead_of_zooming(
     assert_eq!(after.scale, before.scale);
     assert!((after.x - (before.x - 25.)).abs() < 0.01);
     assert_eq!(wheel_factor(0.), 1.);
+}
+
+fn enter_fullscreen(visual: &mut gpui::VisualTestContext) {
+    let full = visual.debug_bounds("flow-fullscreen").unwrap();
+    visual.simulate_click(full.center(), Default::default());
+    visual.run_until_parked();
+}
+
+#[gpui::test]
+fn escape_consumed_by_a_focused_element_keeps_fullscreen(cx: &mut gpui::TestAppContext) {
+    let (probe, window, visual) = open_window(cx);
+    let viewer = state(&probe);
+    enter_fullscreen(visual);
+    assert!(viewer.read_with(visual, |s, _| s.fullscreen));
+    window
+        .update(visual, |fixture, window, cx| {
+            window.focus(&fixture.trap, cx)
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    assert!(viewer.read_with(visual, |s, _| s.fullscreen));
+}
+
+#[gpui::test]
+fn shift_escape_keeps_fullscreen(cx: &mut gpui::TestAppContext) {
+    let (probe, visual) = open(cx);
+    let viewer = state(&probe);
+    enter_fullscreen(visual);
+    // The panel sits under the fixture's Esc trap; keep focus out of its path.
+    visual.update(|window, cx| window.blur(cx));
+    visual.run_until_parked();
+    visual.simulate_keystrokes("shift-escape");
+    visual.run_until_parked();
+    assert!(viewer.read_with(visual, |s, _| s.fullscreen));
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    assert!(!viewer.read_with(visual, |s, _| s.fullscreen));
 }

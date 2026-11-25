@@ -157,8 +157,16 @@ impl ViewerState {
     fn enter_fullscreen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_fullscreen(true, cx);
         window.focus(&self.focus, cx);
-        self.esc = Some(cx.observe_keystrokes(|this, event, _, cx| {
-            if event.keystroke.key == "escape" {
+        // Observers run after dispatch and only for keystrokes nobody stopped, so
+        // an Esc consumed by a dialog, popover or terminal never reaches here.
+        // A bound action means a binding handled it; modifiers mean another key.
+        let handle = window.window_handle();
+        self.esc = Some(cx.observe_keystrokes(move |this, event, window, cx| {
+            if window.window_handle() == handle
+                && event.keystroke.key == "escape"
+                && event.action.is_none()
+                && !event.keystroke.modifiers.modified()
+            {
                 this.set_fullscreen(false, cx);
             }
         }));
