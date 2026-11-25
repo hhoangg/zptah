@@ -1251,10 +1251,14 @@ mod install {
             assert_eq!(again[0].change, Change::Unchanged);
 
             // The app moved: the manifest is rewritten.
-            let moved = PathBuf::from("/opt/zptah/zptah");
+            let moved = if cfg!(windows) {
+                PathBuf::from(r"C:\opt\zptah\zptah.exe")
+            } else {
+                PathBuf::from("/opt/zptah/zptah")
+            };
             let again = install(&env, Flavor::Release, &moved, V1_BROWSERS, &reg).unwrap();
             assert_eq!(again[0].change, Change::Written);
-            assert_eq!(read_manifest(path)["path"], "/opt/zptah/zptah");
+            assert_eq!(read_manifest(path)["path"], moved.to_str().unwrap());
 
             // V1 never touches the other browsers, even when installed.
             let edge = env.home.join(match os {
