@@ -69,9 +69,47 @@ const VI_MARKS: [char; 8] = [
     '\u{300}', '\u{301}', '\u{302}', '\u{303}', '\u{306}', '\u{309}', '\u{31b}', '\u{323}',
 ];
 
+/// Invisible format characters (Unicode Cf): zero-width spaces and joiners, bidi controls, soft
+/// hyphen, BOM and tag characters. A page can put them inside "Pay" to dodge the lexicon.
+fn is_format_char(c: char) -> bool {
+    matches!(c as u32,
+        0x00AD | 0x061C | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064
+        | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB | 0xE0000..=0xE007F)
+}
+
+/// Common Cyrillic and Greek lowercase letters that look like a Latin one.
+fn fold_confusable(c: char) -> char {
+    match c {
+        'а' | 'α' => 'a',
+        'е' => 'e',
+        'о' | 'ο' => 'o',
+        'р' | 'ρ' => 'p',
+        'с' => 'c',
+        'х' => 'x',
+        'у' => 'y',
+        'і' | 'ι' | 'ӏ' => 'i',
+        'ј' => 'j',
+        'ѕ' => 's',
+        'һ' => 'h',
+        'ԁ' => 'd',
+        'ԛ' => 'q',
+        'ԝ' => 'w',
+        'ν' => 'v',
+        'κ' => 'k',
+        'υ' => 'u',
+        other => other,
+    }
+}
+
 fn clusters(text: &str) -> Vec<Cluster> {
     let mut out: Vec<Cluster> = Vec::new();
-    for ch in text.to_lowercase().nfd() {
+    let folded: String = text
+        .to_lowercase()
+        .chars()
+        .filter(|c| !is_format_char(*c))
+        .map(fold_confusable)
+        .collect();
+    for ch in folded.nfd() {
         if unicode_normalization::char::is_combining_mark(ch) {
             if let Some(last) = out.last_mut() {
                 last.marks.push(ch);

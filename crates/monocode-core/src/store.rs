@@ -182,6 +182,8 @@ impl Store {
             .map_err(|e| e.to_string())?;
         conn.execute_batch(crate::mono::browser::BROWSER_TABLES)
             .map_err(|e| e.to_string())?;
+        crate::mono::browser::trust::audit::migrate_audit_columns(&conn)
+            .map_err(|e| e.to_string())?;
         conn.execute_batch(crate::docker_accounts::DOCKER_ACCOUNTS_TABLE)
             .map_err(|e| e.to_string())?;
         conn.execute_batch(crate::mobile::identity_store::MOBILE_IDENTITY_TABLE)
