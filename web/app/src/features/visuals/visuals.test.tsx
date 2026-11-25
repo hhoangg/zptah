@@ -25,11 +25,11 @@ const KINDS: Record<string, VisualNode> = {
     width: 100,
     height: 50,
     shapes: [
-      { kind: "rect", x: 1, y: 1, width: 10, height: 10, color: "accent" },
-      { kind: "circle", x: 20, y: 20, radius: 5, color: "positive" },
-      { kind: "line", x1: 0, y1: 0, x2: 9, y2: 9, width: 1, color: "ink" },
-      { kind: "polyline", points: [[0, 0], [5, 5], [9, 2]], width: 1, color: "warning" },
-      { kind: "label", x: 4, y: 4, text: "hi", color: "ink" },
+      { kind: "rect", x: 1, y: 1, width: 10, height: 10, color: "accent", radius: 0, stroke: null, stroke_width: 1.5, fill: true },
+      { kind: "circle", x: 20, y: 20, radius: 5, color: "positive", stroke: null, stroke_width: 1.5, fill: true },
+      { kind: "line", x1: 0, y1: 0, x2: 9, y2: 9, width: 1, color: "ink", arrow: "none", dashed: false },
+      { kind: "polyline", points: [[0, 0], [5, 5], [9, 2]], width: 1, color: "warning", arrow: "none", dashed: false },
+      { kind: "label", x: 4, y: 4, text: "hi", color: "ink", align: "start", baseline: "top", chip: false },
     ],
   },
 };

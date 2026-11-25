@@ -1,0 +1,9 @@
+flowchart LR
+  A[Mono request] --> B{Risk?}
+  B -- safe --> C[Auto act]
+  B -->|risky| D([Ask user])
+  D -. maybe .-> E((Done))
+  C ==> E
+  D -- allow --> F[Commit]
+  D -- deny --> G["Stop<br/>here"]
+  E --- A

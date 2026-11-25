@@ -58,7 +58,10 @@ export type SessionsItem = { type: "sessions"; id: string; sessions: LaunchedSes
 export type ChoicesItem = { type: "choices"; id: string; options: string[]; chosen?: string };
 export type DocumentItem = { type: "document"; id: string; documentId: string; title: string; kind: string };
 
-export type TurnItem = UserItem | TextItem | HeaderItem | WorkItem | NoticeItem | SessionsItem | ChoicesItem | DocumentItem;
+/** A native visual the desktop rendered inline: its title and its component tree (data, parsed by `parseVisualTree`). */
+export type VisualItem = { type: "visual"; id: string; title: string; tree: unknown };
+
+export type TurnItem = UserItem | TextItem | HeaderItem | WorkItem | NoticeItem | SessionsItem | ChoicesItem | DocumentItem | VisualItem;
 
 export interface TurnMetrics {
   inputTokens?: number;
@@ -68,7 +71,7 @@ export interface TurnMetrics {
   cacheHitPercent?: number;
 }
 
-const KNOWN = new Set(["user", "text", "header", "work", "notice", "sessions", "choices", "document"]);
+const KNOWN = new Set(["user", "text", "header", "work", "notice", "sessions", "choices", "document", "visual"]);
 const KINDS = new Set<string>(["research", "edit", "run", "agent", "other", "think", "note"]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -194,6 +197,8 @@ export function readItem(raw: unknown): TurnItem | null {
       };
     case "document":
       return { type: "document", id, documentId: str(raw.documentId), title: str(raw.title), kind: str(raw.kind) };
+    case "visual":
+      return { type: "visual", id, title: str(raw.title), tree: raw.tree };
     default:
       return null;
   }

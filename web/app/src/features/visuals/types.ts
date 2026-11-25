@@ -2,6 +2,8 @@
 // A visual's component tree as the desktop renders it
 // (crates/monocode-core/src/visual/model.rs): data, never HTML.
 
+import type { FlowGraph } from "@/features/diagram/model";
+
 export type ThemeColor =
   | "ink" | "muted" | "faint" | "accent" | "positive" | "negative" | "warning"
   | "series1" | "series2" | "series3" | "series4" | "series5" | "series6";
@@ -9,12 +11,17 @@ export type TextSize = "caption" | "small" | "body" | "subtitle" | "title" | "he
 export type Series = { label: string; values: number[]; color?: ThemeColor };
 export type Slice = { label: string; value: number; color?: ThemeColor };
 
+export type ArrowEnds = "none" | "end" | "start" | "both";
+export type LabelAlign = "start" | "center" | "end";
+export type LabelBaseline = "top" | "middle" | "bottom" | "alphabetic";
+
 export type Shape =
-  | { kind: "rect"; x: number; y: number; width: number; height: number; color: ThemeColor }
-  | { kind: "circle"; x: number; y: number; radius: number; color: ThemeColor }
-  | { kind: "line"; x1: number; y1: number; x2: number; y2: number; width: number; color: ThemeColor }
-  | { kind: "polyline"; points: [number, number][]; width: number; color: ThemeColor }
-  | { kind: "label"; x: number; y: number; text: string; color: ThemeColor };
+  | { kind: "rect"; x: number; y: number; width: number; height: number; color: ThemeColor; radius: number; stroke: ThemeColor | null; stroke_width: number; fill: boolean }
+  | { kind: "circle"; x: number; y: number; radius: number; color: ThemeColor; stroke: ThemeColor | null; stroke_width: number; fill: boolean }
+  | { kind: "line"; x1: number; y1: number; x2: number; y2: number; width: number; color: ThemeColor; arrow: ArrowEnds; dashed: boolean }
+  | { kind: "polyline"; points: [number, number][]; width: number; color: ThemeColor; arrow: ArrowEnds; dashed: boolean }
+  /** `color: null` is automatic: dark or light ink by the fill under the anchor. `chip` paints a surface chip behind the text. */
+  | { kind: "label"; x: number; y: number; text: string; color: ThemeColor | null; align: LabelAlign; baseline: LabelBaseline; chip: boolean };
 
 export type VisualNode =
   | { kind: "column" | "row" | "card"; children: VisualNode[]; gap: number }
@@ -43,4 +50,5 @@ export type VisualNode =
   | { kind: "slider"; label: string; value: number; min: number; max: number; step: number; handler: string }
   | { kind: "tabs"; labels: string[]; selected: number; handler: string }
   | { kind: "canvas"; width: number; height: number; shapes: Shape[] }
-  | { kind: "scene"; width: number; height: number };
+  | { kind: "scene"; width: number; height: number }
+  | { kind: "flow"; graph: FlowGraph; title: string | null; height: number | null };

@@ -3,7 +3,8 @@
 // values per series, 512 shapes), but this is a different machine than the one that checked it: every field the
 // renderer reads is checked here, the same bounds are applied, and a tree that does not fit is not drawn (null)
 // rather than crashing the page. A node kind this app does not know is skipped, as the renderer always did.
-import type { Series, Shape, Slice, TextSize, ThemeColor, VisualNode } from "./types";
+import { MAX_FLOW_EDGES, MAX_FLOW_NODES, type FlowEdge, type FlowGraph, type FlowNode, type NodeKind, validateGraph } from "@/features/diagram/model";
+import type { ArrowEnds, LabelAlign, LabelBaseline, Series, Shape, Slice, TextSize, ThemeColor, VisualNode } from "./types";
 
 export const MAX_NODES = 512;
 export const MAX_DEPTH = 16;
@@ -13,8 +14,13 @@ export const CHART_HEIGHT = { min: 120, max: 900, fallback: 220 } as const;
 
 const KNOWN = new Set([
   "column", "row", "card", "grid", "text", "stat", "table", "chart", "gauge", "donut", "heatmap", "progress",
-  "button", "toggle", "input", "select", "slider", "tabs", "canvas", "scene",
+  "button", "toggle", "input", "select", "slider", "tabs", "canvas", "scene", "flow",
 ]);
+const ARROWS: readonly ArrowEnds[] = ["none", "end", "start", "both"];
+const ALIGNS: readonly LabelAlign[] = ["start", "center", "end"];
+const BASELINES: readonly LabelBaseline[] = ["top", "middle", "bottom", "alphabetic"];
+const NODE_KINDS: readonly NodeKind[] = ["box", "round", "decision", "start", "end", "circle"];
+const DIRECTIONS = ["LR", "RL", "TB", "BT"] as const;
 const SIZES: readonly TextSize[] = ["caption", "small", "body", "subtitle", "title", "hero"];
 
 class Malformed extends Error {}
@@ -33,16 +39,41 @@ const color = (value: unknown): ThemeColor => (typeof value === "string" ? (valu
 const gap = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(value, 0), 64) : 8);
 const dimension = (value: unknown): number => Math.min(Math.max(num(value), 1), 4096);
 
+const oneOf = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T => (allowed.includes(value as T) ? (value as T) : fallback);
+const optColor = (value: unknown): ThemeColor | null => (typeof value === "string" ? (value as ThemeColor) : null);
+const strokeWidth = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(value, 0), 64) : 1.5);
+
 function shape(value: unknown): Shape {
   if (!isRecord(value)) return bad();
   const c = color(value.color);
   switch (value.kind) {
     case "rect":
-      return { kind: "rect", x: num(value.x), y: num(value.y), width: num(value.width), height: num(value.height), color: c };
+      return {
+        kind: "rect",
+        x: num(value.x),
+        y: num(value.y),
+        width: num(value.width),
+        height: num(value.height),
+        color: c,
+        radius: typeof value.radius === "number" && Number.isFinite(value.radius) ? Math.max(value.radius, 0) : 0,
+        stroke: optColor(value.stroke),
+        stroke_width: strokeWidth(value.stroke_width),
+        fill: value.fill !== false,
+      };
     case "circle":
-      return { kind: "circle", x: num(value.x), y: num(value.y), radius: num(value.radius), color: c };
+      return { kind: "circle", x: num(value.x), y: num(value.y), radius: num(value.radius), color: c, stroke: optColor(value.stroke), stroke_width: strokeWidth(value.stroke_width), fill: value.fill !== false };
     case "line":
-      return { kind: "line", x1: num(value.x1), y1: num(value.y1), x2: num(value.x2), y2: num(value.y2), width: num(value.width), color: c };
+      return {
+        kind: "line",
+        x1: num(value.x1),
+        y1: num(value.y1),
+        x2: num(value.x2),
+        y2: num(value.y2),
+        width: num(value.width),
+        color: c,
+        arrow: oneOf(value.arrow, ARROWS, "none"),
+        dashed: value.dashed === true,
+      };
     case "polyline":
       return {
         kind: "polyline",
@@ -52,12 +83,38 @@ function shape(value: unknown): Shape {
         }),
         width: num(value.width),
         color: c,
+        arrow: oneOf(value.arrow, ARROWS, "none"),
+        dashed: value.dashed === true,
       };
     case "label":
-      return { kind: "label", x: num(value.x), y: num(value.y), text: str(value.text), color: c };
+      return {
+        kind: "label",
+        x: num(value.x),
+        y: num(value.y),
+        text: str(value.text),
+        color: optColor(value.color),
+        align: oneOf(value.align, ALIGNS, "start"),
+        baseline: oneOf(value.baseline, BASELINES, "top"),
+        chip: value.chip === true,
+      };
     default:
       return bad();
   }
+}
+
+/** A `visual.flow` graph as the desktop serialises it; bounded and validated like the desktop does. */
+function flowGraph(value: unknown): FlowGraph {
+  if (!isRecord(value)) return bad();
+  const nodes: FlowNode[] = arr(value.nodes, MAX_FLOW_NODES).map((entry) => {
+    if (!isRecord(entry)) return bad();
+    return { id: str(entry.id), label: str(entry.label), kind: oneOf(entry.kind, NODE_KINDS, "box"), color: optColor(entry.color) };
+  });
+  const edges: FlowEdge[] = arr(value.edges, MAX_FLOW_EDGES).map((entry) => {
+    if (!isRecord(entry)) return bad();
+    return { from: str(entry.from), to: str(entry.to), label: optStr(entry.label) ?? null, dashed: entry.dashed === true, arrow: entry.arrow !== false };
+  });
+  const graph: FlowGraph = { direction: oneOf(value.direction, DIRECTIONS, "LR"), nodes, edges };
+  return validateGraph(graph) === null ? graph : bad();
 }
 
 /** One node; null for a kind this app does not know. Throws `Malformed` for a known kind with the wrong shape. */
@@ -131,6 +188,13 @@ function node(value: unknown, budget: { nodes: number }, depth: number): VisualN
       return { kind: "canvas", width: dimension(value.width), height: dimension(value.height), shapes: arr(value.shapes, MAX_NODES).map(shape) };
     case "scene":
       return { kind: "scene", width: dimension(value.width), height: dimension(value.height) };
+    case "flow":
+      return {
+        kind: "flow",
+        graph: flowGraph(value.graph),
+        title: optStr(value.title) ?? null,
+        height: typeof value.height === "number" && Number.isFinite(value.height) ? value.height : null,
+      };
     default:
       return null;
   }

@@ -6,7 +6,9 @@
 import { Component, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Cartesian, Donut, Gauge, Heatmap, Progress, Trend, alpha, useVisualColor } from "./charts";
-import type { Shape, TextSize, VisualNode } from "./types";
+import { LazyFlowDiagram } from "@/features/diagram/lazy";
+import { CanvasShapes } from "./Canvas";
+import type { TextSize, VisualNode } from "./types";
 
 export { parseVisualTree } from "./parse";
 
@@ -208,12 +210,20 @@ function Node({ node }: { node: VisualNode }) {
       );
     case "canvas":
       return (
-        <svg viewBox={`0 0 ${node.width} ${node.height}`} role="img" aria-label="Canvas" className="block h-auto w-full" data-visual="canvas">
-          {node.shapes.map((shape, i) => (
-            <CanvasShape key={i} shape={shape} tint={color(shape.color)} />
-          ))}
+        <svg
+          viewBox={`0 0 ${node.width} ${node.height}`}
+          role="img"
+          aria-label="Canvas"
+          preserveAspectRatio="xMidYMin meet"
+          className="block h-auto w-full"
+          style={{ maxHeight: node.height }}
+          data-visual="canvas"
+        >
+          <CanvasShapes shapes={node.shapes} />
         </svg>
       );
+    case "flow":
+      return <LazyFlowDiagram graph={node.graph} title={node.title ?? "Diagram"} ariaLabel={`${node.title ?? "Flow"} diagram`} boardHeight={node.height} testId="visual-flow" />;
     case "scene":
       return (
         <div className="grid place-items-center rounded-card border border-stroke bg-[var(--content-a04)] p-4 text-small text-muted-text" style={{ aspectRatio: node.width / node.height || 16 / 9 }}>
@@ -222,24 +232,5 @@ function Node({ node }: { node: VisualNode }) {
       );
     default:
       return null;
-  }
-}
-
-function CanvasShape({ shape, tint }: { shape: Shape; tint: string }) {
-  switch (shape.kind) {
-    case "rect":
-      return <rect x={shape.x} y={shape.y} width={shape.width} height={shape.height} fill={tint} />;
-    case "circle":
-      return <circle cx={shape.x} cy={shape.y} r={shape.radius} fill={tint} />;
-    case "line":
-      return <line x1={shape.x1} y1={shape.y1} x2={shape.x2} y2={shape.y2} stroke={tint} strokeWidth={shape.width} />;
-    case "polyline":
-      return <polyline points={shape.points.map((point) => point.join(",")).join(" ")} stroke={tint} strokeWidth={shape.width} fill="none" />;
-    case "label":
-      return (
-        <text x={shape.x} y={shape.y} fill={tint} fontSize={12}>
-          {shape.text}
-        </text>
-      );
   }
 }

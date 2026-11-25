@@ -21,7 +21,8 @@ import { sessionErrorContent } from "./sessionError";
 import { Shimmer } from "./Shimmer";
 import { CopyFallbackDialog, TurnMetricsDialog } from "./TurnDialogs";
 import { useCollapsedToolCalls } from "./toolCallsSetting";
-import { readItems, readMetrics, type HeaderItem, type NoticeItem, type UserItem, type WorkKind, type WorkPhase } from "./turnItems";
+import { readItems, readMetrics, type HeaderItem, type NoticeItem, type UserItem, type VisualItem, type WorkKind, type WorkPhase } from "./turnItems";
+import { VisualTree, parseVisualTree } from "@/features/visuals/VisualTree";
 import { safeClipboardText } from "@/lib/clipboardText";
 
 const WORK_TEXT = "text-body";
@@ -66,6 +67,8 @@ export const TranscriptTurn = memo(function TranscriptTurn({ turn, agent }: Tran
             return <MonoChoices key={item.id} options={item.options} chosen={item.chosen} />;
           case "document":
             return <DocumentCard key={item.id} document={item} />;
+          case "visual":
+            return <VisualFigure key={item.id} item={item} />;
           case "notice":
             return item.error ? (
               <ErrorNotice key={item.id} item={item} onPress={() => onError?.(item)} />
@@ -80,6 +83,16 @@ export const TranscriptTurn = memo(function TranscriptTurn({ turn, agent }: Tran
     </div>
   );
 });
+
+/** A native visual of the reply, drawn from its component tree; a tree the web app cannot draw says so instead. */
+function VisualFigure({ item }: { item: VisualItem }) {
+  const tree = parseVisualTree(item.tree);
+  return (
+    <figure aria-label={item.title || "Visual"} data-testid="transcript-visual" className="min-w-0 px-5 py-2">
+      {tree ? <VisualTree node={tree} /> : <p className="text-small text-[color:var(--content-a50)]">{item.title || "Visual"} {"\u00b7"} Open it on your desktop to see it.</p>}
+    </figure>
+  );
+}
 
 function ErrorNotice({ item, onPress }: { item: NoticeItem; onPress: () => void }) {
   const { title, recovery } = sessionErrorContent(item.text);

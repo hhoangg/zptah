@@ -5,6 +5,7 @@ import { Fragment, memo, useMemo, type CSSProperties, type ReactNode } from "rea
 import { FileTypeIcon } from "@/features/files/FileTypeIcon";
 import { useMediaQuery } from "@/ui/useMediaQuery";
 import "@/styles/markdown.css";
+import { LazyMermaidBlock, isMermaidLanguage } from "@/features/diagram/lazy";
 import { CodeBlock } from "./CodeBlock";
 import { ExternalLink, inlineText } from "./ExternalLink";
 import { inlineFileReference } from "./fileLinks";
@@ -207,6 +208,7 @@ const BlockView = memo(function BlockView({ block, fade, handlers, streamingTail
       );
     }
     case "code":
+      if (isMermaidLanguage(block.lang)) return <LazyMermaidBlock code={withoutMarks(block.text)} isIncomplete={streamingTail} />;
       return <CodeBlock code={withoutMarks(block.text)} language={block.lang} isIncomplete={streamingTail} />;
     case "list": {
       const Tag = block.ordered ? "ol" : "ul";
