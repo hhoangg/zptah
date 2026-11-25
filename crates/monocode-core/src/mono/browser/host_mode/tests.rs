@@ -406,3 +406,23 @@ mod windows_relay {
             .is_ok());
     }
 }
+
+#[test]
+fn the_dev_policy_accepts_an_extra_browser_only_by_absolute_path() {
+    let with = dev_policy(Some("/opt/cft/chrome".into()));
+    assert!(with.relaxed());
+    assert_eq!(
+        with.extra_browsers(),
+        [std::path::PathBuf::from("/opt/cft/chrome")]
+    );
+    assert!(dev_policy(Some("chrome".into()))
+        .extra_browsers()
+        .is_empty());
+    assert!(dev_policy(None).extra_browsers().is_empty());
+}
+
+#[test]
+fn the_release_policy_never_has_an_extra_browser() {
+    assert!(!policy_for(Flavor::Release).relaxed());
+    assert!(policy_for(Flavor::Release).extra_browsers().is_empty());
+}

@@ -142,10 +142,22 @@ pub fn maybe_run(args: &[String]) -> Option<i32> {
 fn policy_for(flavor: Flavor) -> PeerPolicy {
     #[cfg(any(test, debug_assertions))]
     if flavor == Flavor::Dev {
-        return PeerPolicy::native_dev();
+        return dev_policy(std::env::var_os("ZPTAH_DEV_EXTRA_BROWSER"));
     }
     let _ = flavor;
     PeerPolicy::release()
+}
+
+/// The dev policy. The headless end-to-end test runs Chrome for Testing, which is not an allowed
+/// browser, so an absolute path in `ZPTAH_DEV_EXTRA_BROWSER` (the browser's environment reaches
+/// the host) is accepted as the parent. Debug builds only, and only for the dev flavor.
+#[cfg(any(test, debug_assertions))]
+fn dev_policy(extra_browser: Option<std::ffi::OsString>) -> PeerPolicy {
+    let policy = PeerPolicy::native_dev();
+    match extra_browser.map(std::path::PathBuf::from) {
+        Some(exe) if exe.is_absolute() => policy.with_extra_browser(exe),
+        _ => policy,
+    }
 }
 
 fn run(launch: &Launch) -> i32 {
