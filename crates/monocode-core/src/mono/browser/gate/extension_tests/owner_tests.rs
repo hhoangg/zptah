@@ -804,3 +804,38 @@ fn only_the_user_dragging_a_stopped_tab_back_ends_the_mark() {
     );
     two.rig.finish();
 }
+
+#[test]
+fn a_stop_that_arrives_after_the_list_dropped_the_owner_still_takes_effect() {
+    let two = two(vec![]);
+    let route = two.a.route_for(Some(11));
+    two.a.begin_turn(&route, "look");
+    ok_text(call_gate(&two.a, &route, json!({"action": "list"})));
+    // The extension was offline: it took tab 3 back, and the next list says nobody owns it.
+    two.world.lock().unwrap().tabs[2].owner = None;
+    ok_text(call_gate(
+        &two.a,
+        &route,
+        json!({"action": "list", "all": true}),
+    ));
+    assert_eq!(mirror_owner(&two, 3), None);
+    // The queued Stop is flushed on reconnect.
+    tab_stopped_event(&two.instance, MONO, 3);
+    assert!(ownership::with_table(&two.instance, |t| t.taken_back_at(3)).is_some());
+    let stopped = call_tool(&two.a, &route, "browser_snapshot", json!({"tab": 3}));
+    assert!(
+        text_of(&stopped).contains("The user stopped you on the tab"),
+        "{}",
+        text_of(&stopped)
+    );
+    // A Stop for a tab Kai owned last is not Mira's to make.
+    two.world.lock().unwrap().tabs[3].owner = None;
+    ok_text(call_gate(
+        &two.a,
+        &route,
+        json!({"action": "list", "all": true}),
+    ));
+    tab_stopped_event(&two.instance, MONO, 4);
+    assert!(ownership::with_table(&two.instance, |t| t.taken_back_at(4)).is_none());
+    two.rig.finish();
+}

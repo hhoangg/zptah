@@ -503,7 +503,7 @@ impl ExtensionUpstream {
             let _ = store.revoke_grants(&self.mono_id, None, Some(&site));
         }
         self.approvals().withdraw_all();
-        self.mirror(|t| t.take_back(tab, crate::time::now_ms()));
+        self.mirror(|t| t.mark_taken_back(tab, crate::time::now_ms()));
         self.forget_tab(tab);
         self.state().stopped_tabs.insert(tab, title);
         self.write_row(

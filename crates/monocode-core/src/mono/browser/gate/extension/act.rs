@@ -198,7 +198,9 @@ pub(crate) fn dispatch_event(instance_id: &str, envelope: &Envelope) {
         for upstream in all.iter().filter(|u| {
             u.mono_id == mono && (u.link)().is_some_and(|l| l.instance_id() == instance_id)
         }) {
-            let owns = ownership::with_table(instance_id, |t| t.owner_of(tab) == Some(mono));
+            // A Stop that reached the app late (the extension was offline) finds the tab already
+            // listed as the user's: it still counts when this Mono owned it last.
+            let owns = ownership::with_table(instance_id, |t| t.owned_or_last_by(tab, mono));
             if owns {
                 upstream.tab_stopped_by_user(tab);
             }
