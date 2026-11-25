@@ -351,3 +351,57 @@ fn the_error_reply_to_a_hidden_id_falls_back_to_x0() {
     assert_eq!(id_hint(b"garbage"), "x-0");
     assert_eq!(id_hint(br#"{"id":7}"#), "x-0");
 }
+
+#[cfg(windows)]
+mod windows_relay {
+    use super::super::windows_pipe::test_pair;
+    use super::*;
+
+    #[test]
+    fn a_pending_read_does_not_block_a_write_on_the_same_pipe() {
+        let (mut server, client) = test_pair();
+        let mut reader = client.try_clone();
+        let mut writer = client;
+        let pending = std::thread::spawn(move || {
+            let mut buf = [0u8; 5];
+            reader.read_exact(&mut buf).unwrap();
+            buf
+        });
+        // Give the reader time to be pending, then write from the same pipe.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        writer.write_all(b"hello").unwrap();
+        let mut got = [0u8; 5];
+        server.read_exact(&mut got).unwrap();
+        assert_eq!(&got, b"hello");
+        server.write_all(b"world").unwrap();
+        assert_eq!(&pending.join().unwrap(), b"world");
+    }
+
+    #[test]
+    fn two_extension_frames_reach_the_app_before_it_answers() {
+        let (mut app, host) = test_pair();
+        let host_out = host.try_clone();
+        let mut input = framed(&hello_with([1, 1], "x-1"));
+        input.extend(framed(
+            &Envelope::event("x-2", Event::Stop, json!({})).to_vec(),
+        ));
+        let out = Sink::default();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let sink = out.clone();
+        std::thread::spawn(move || {
+            let end = run_session(std::io::Cursor::new(input), sink, move || {
+                Ok((host, host_out))
+            });
+            let _ = done_tx.send(end);
+        });
+        for _ in 0..2 {
+            let frame = read_frame(&mut app, FrameFormat::SOCKET).unwrap().unwrap();
+            assert!(Envelope::from_slice(&frame).is_ok());
+        }
+        let reply = Envelope::response_ok("x-1", json!({"protocol": 1})).to_vec();
+        write_frame(&mut app, FrameFormat::SOCKET, &reply).unwrap();
+        assert!(done_rx
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .is_ok());
+    }
+}

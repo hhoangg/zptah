@@ -20,6 +20,9 @@ use serde_json::Value;
 use std::io::{Read, Write};
 use std::sync::{mpsc, Arc, Mutex};
 
+#[cfg(windows)]
+mod windows_pipe;
+
 #[cfg(test)]
 mod tests;
 
@@ -190,16 +193,20 @@ fn connect_app(
 fn connect_app(
     flavor: Flavor,
     policy: &PeerPolicy,
-) -> Result<(std::fs::File, std::fs::File), String> {
+) -> Result<(windows_pipe::OverlappedPipe, windows_pipe::OverlappedPipe), String> {
+    use std::os::windows::fs::OpenOptionsExt;
     let name = peer::pipe_name(flavor).map_err(|e| e.to_string())?;
+    // Overlapped, so the reader thread's pending read never blocks the writer thread's writes.
     let pipe = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
+        .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED)
         .open(&name)
         .map_err(|e| format!("the app is not reachable: {e}"))?;
     peer::verify_app_peer(&pipe, policy).map_err(|e| e.to_string())?;
-    let writer = pipe.try_clone().map_err(|e| e.to_string())?;
-    Ok((pipe, writer))
+    let reader = windows_pipe::OverlappedPipe::new(std::os::windows::io::OwnedHandle::from(pipe));
+    let writer = reader.try_clone();
+    Ok((reader, writer))
 }
 
 /// Why a session ended. Only `ExtensionClosed` is a normal exit.
@@ -355,8 +362,9 @@ where
             if checked.is_err() {
                 break End::AppClosed;
             }
-            // Over 1 MiB Chrome would drop the host; the app keeps frames under that, so a longer
-            // one is a bug or an attack and the link closes.
+            // App to extension frames must stay under 1 MiB (MAX_HOST_TO_EXTENSION_FRAME): Chrome
+            // drops a host that sends more. The app chunks large payloads, so a longer frame is a
+            // bug or an attack and the link closes.
             if send(&chrome_out, FrameFormat::HOST_TO_EXTENSION, &bytes).is_err() {
                 break End::AppClosed;
             }
