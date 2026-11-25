@@ -516,6 +516,19 @@ fn fixture() -> Fixture {
 }
 
 #[test]
+fn a_deleted_conversation_loses_every_monos_grants_from_the_database() {
+    let f = fixture();
+    for (mono, conversation) in [("mono-a", 7), ("mono-b", 7), ("mono-a", 8)] {
+        GrantBook::stored(f.secrets.clone(), mono, conversation)
+            .grant("files.example", &set(&[Category::Destructive]));
+    }
+    f.secrets.revoke_conversation_grants(7).unwrap();
+    assert!(f.secrets.list_grants("mono-b", None).is_empty());
+    assert_eq!(f.secrets.list_grants("mono-a", Some(7)), vec![]);
+    assert_eq!(f.secrets.list_grants("mono-a", Some(8)).len(), 1);
+}
+
+#[test]
 fn stored_grants_survive_a_restart_and_end_on_stop_and_settings_change() {
     let f = fixture();
     let mut book = GrantBook::stored(f.secrets.clone(), "mono-a", 7);

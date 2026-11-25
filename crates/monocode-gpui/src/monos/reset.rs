@@ -287,6 +287,9 @@ impl Monos {
         self.chats.remove(id);
         if let Some(old) = old {
             monocode_core::mono::browser::gate::end_conversation_everywhere(old);
+            let _ = self
+                .browser_store()
+                .and_then(|b| b.revoke_conversation_grants(old));
             self.roster.hidden_sessions.retain(|&s| s != old);
         }
         // The Mono may have been deleted while the row was going: it must not

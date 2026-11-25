@@ -217,6 +217,22 @@ impl MonoBrowserStore {
         }
     }
 
+    /// Ends the grants every Mono holds in one conversation (it was deleted or reset), whether
+    /// or not an upstream is alive to do it.
+    pub fn revoke_conversation_grants(&self, conversation: i64) -> Result<(), String> {
+        let Some(conn) = self.open()? else {
+            return Ok(());
+        };
+        match conn.execute(
+            "DELETE FROM mono_browser_grants WHERE conversation=?1",
+            params![conversation],
+        ) {
+            Ok(_) => Ok(()),
+            Err(e) if e.to_string().contains("no such table") => Ok(()),
+            Err(_) => Err("Could not end the browser grants.".into()),
+        }
+    }
+
     /// The rule lines the user last confirmed for this Mono (`None`: none yet).
     pub fn confirmed_rules(&self, mono_id: &str) -> Option<Vec<String>> {
         let Ok(Some(conn)) = self.open() else {

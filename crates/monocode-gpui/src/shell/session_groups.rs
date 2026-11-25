@@ -1271,6 +1271,10 @@ impl Shell {
         }
         // The conversation is gone: grants given "in this conversation" go with it.
         monocode_core::mono::browser::gate::end_conversation_everywhere(id);
+        // Also from the database, for when no upstream is alive.
+        let _ = locked(&self.store)
+            .and_then(|s| monocode_core::mono::browser::MonoBrowserStore::for_store(&s))
+            .and_then(|b| b.revoke_conversation_grants(id));
         self.release_closed_file_panes(cx);
         self.rehome_mono_panes(id, cx);
         if self
