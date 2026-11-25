@@ -280,6 +280,31 @@ test("pairing: the app closing the connection right after pair.begin does not lo
   assert.ok(!h.statuses.includes("pair_failed"));
 });
 
+test("a ready link that drops does not run queued app requests", async () => {
+  const h = harness({ key: KEY, stored: paired });
+  await h.link.start();
+  await until(() => h.link.status === "ready", "ready");
+  const app = h.ports[0].app;
+  const ran = [];
+  /** @type {() => void} */
+  let release = () => {};
+  const gate = new Promise((r) => (release = r));
+  h.link.handlers.set("status.get", async (f) => {
+    ran.push(f.id);
+    await gate;
+    return { v: 1, type: "res", id: f.id, ok: true, result: { stopped: false } };
+  });
+  app.send(await app.session.seal({ v: 1, type: "req", id: "a-1", method: "status.get", params: {} }));
+  app.send(await app.session.seal({ v: 1, type: "req", id: "a-2", method: "status.get", params: {} }));
+  await until(() => ran.length === 1, "first handler started");
+  h.ports[0].drop("Native host has exited.");
+  assert.equal(h.link.status, "disconnected", "the port is gone at once");
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(ran, ["a-1"], "the queued request never runs");
+  assert.equal(h.timers.length, 1, "a reconnect is scheduled");
+});
+
 test("pairing: a mac in the unpaired hello result, a bad key or an app error fail pairing and store nothing", async () => {
   const nonce = b64encode(randomBytes(16));
   const cases = {

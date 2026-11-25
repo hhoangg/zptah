@@ -191,9 +191,17 @@ export class BrowserLink {
     });
     port.onDisconnect.addListener(() => {
       const message = chrome.runtime.lastError?.message ?? null;
-      // Messages arrive before the disconnect, but they are handled asynchronously. The app closes
-      // the pairing connection right after its answer, so handle what is queued first: otherwise a
-      // finished pairing is reported as failed and its key is lost.
+      if (port !== this.#port) return;
+      // A ready link is gone at once: queued app requests must not run on the page after the app
+      // left, and the reconnect should not wait for them. During the handshake and pairing the
+      // answer may still be queued behind the disconnect: the app closes the pairing connection
+      // right after its answer, and Chrome delivers the message before the disconnect, but it is
+      // handled asynchronously. Handle what is queued first, or a finished pairing is reported as
+      // failed and its key is lost.
+      if (this.#stage === "ready") {
+        this.#onGone(message, pairing);
+        return;
+      }
       void this.#inbound.then(() => {
         if (port === this.#port) this.#onGone(message, pairing);
       });
