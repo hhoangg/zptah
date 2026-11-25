@@ -11,6 +11,7 @@ The spec is in [`docs/README.md`](docs/README.md) (architecture, security, desig
 | `protocol/` | `@monoptah/protocol` | Wire contracts, zod schemas, test vectors (`vectors.json`, `methods.json`) |
 | `worker/` | `@monoptah/worker` | Worker, `DesktopRoom` Durable Object, D1 schema and migrations |
 | `app/` | `@monoptah/app` | Vite + React SPA, design tokens, TanStack Router routes |
+| `landing/` | - | The public landing page (plain Node build, no dependencies); built into the app's assets and served by the Worker at `/` without a session cookie and at `/home`; see `docs/deploy-runbook.md` |
 | `mock-desktop/` | `@monoptah/mock-desktop` | Scripted fake desktop for tests and manual runs (never talks to a real host) |
 | `wrangler.jsonc` | - | Worker config shared by `worker` and `app` (bindings, assets, cron, vars) |
 | `.dev.vars.example` | - | Fake local secrets; copy to `.dev.vars` |

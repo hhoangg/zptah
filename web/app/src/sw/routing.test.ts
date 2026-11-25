@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { generateURLVariations } from "workbox-precaching/utils/generateURLVariations.js";
 import { NAVIGATION_DENYLIST, NAVIGATION_FALLBACK, RUNTIME_CACHE_ROUTES, isNeverCached, isShellNavigation } from "./routing";
 
 const swSource = readFileSync(path.resolve(import.meta.dirname, "../sw.ts"), "utf8");
@@ -10,12 +11,14 @@ describe("service worker routing config", () => {
     expect(NAVIGATION_FALLBACK).toBe("/index.html");
   });
 
-  it.each(["/api/me", "/api/desktops/abc", "/relay/room", "/relay/"])("denies the shell for %s", (pathname) => {
-    expect(isShellNavigation(pathname)).toBe(false);
-    expect(NAVIGATION_DENYLIST.some((pattern) => pattern.test(pathname))).toBe(true);
+  it.each(["/api/me", "/api/desktops/abc", "/relay/room", "/relay/", "/", "/home", "/home/", "/landing", "/landing/", "/landing/landing.css", "/?utm_source=hn", "/home?ref=x", "/home/?ref=x", "/landing?x=1"])("denies the shell for %s", (target) => {
+    // Workbox matches a denylist entry against pathname + search.
+    const url = new URL(target, "https://zptah.app");
+    expect(isShellNavigation(url.pathname, url.search)).toBe(false);
+    expect(NAVIGATION_DENYLIST.some((pattern) => pattern.test(url.pathname + url.search))).toBe(true);
   });
 
-  it.each(["/", "/desktops", "/d/dk1/s/s9", "/settings", "/settings/notifications", "/apiary", "/relayed"])("serves the shell for %s", (pathname) => {
+  it.each(["/app", "/app?x=1", "/desktops", "/homework", "/landingpage", "/d/dk1/s/s9", "/settings", "/settings/notifications", "/apiary", "/relayed"])("serves the shell for %s", (pathname) => {
     expect(isShellNavigation(pathname)).toBe(true);
   });
 
@@ -34,14 +37,23 @@ describe("service worker routing config", () => {
 });
 
 describe("sw.ts wiring", () => {
-  it("registers exactly one route, the navigation route with the denylist", () => {
-    expect(swSource.match(/registerRoute\(/g)).toHaveLength(1);
+  it("registers exactly two routes: the network-first `/` route and the navigation route with the denylist", () => {
+    expect(swSource.match(/registerRoute\(/g)).toHaveLength(2);
+    expect(swSource).toContain("isRootNavigation(url.pathname)");
     expect(swSource).toContain("new NavigationRoute(");
     expect(swSource).toContain("denylist: [...NAVIGATION_DENYLIST]");
   });
 
   it("uses no runtime strategy and no fetch handler of its own", () => {
     expect(swSource).not.toMatch(/workbox-strategies|NetworkFirst|CacheFirst|StaleWhileRevalidate|addEventListener\(\s*["']fetch["']/);
+  });
+
+  it("precaches without a directory index, so `/` is never answered with the shell by the precache route", () => {
+    expect(swSource).toContain('directoryIndex: ""');
+    // Behavior of that option in Workbox: no `index.html` variant is tried for a URL ending in `/`.
+    const variants = (directoryIndex?: string) => [...generateURLVariations("https://zptah.app/", directoryIndex === undefined ? {} : { directoryIndex })].map((u) => new URL(u).pathname);
+    expect(variants()).toContain("/index.html");
+    expect(variants("")).not.toContain("/index.html");
   });
 
   it("does not skip waiting by itself, only on a SKIP_WAITING message", () => {

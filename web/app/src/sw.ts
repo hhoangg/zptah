@@ -8,19 +8,29 @@
 //
 // Never cached: /api/* and /relay/* (src/sw/routing.ts). There are no runtime caching routes.
 import { clientsClaim } from "workbox-core";
-import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from "workbox-precaching";
+import { cleanupOutdatedCaches, createHandlerBoundToURL, matchPrecache, precacheAndRoute } from "workbox-precaching";
 import { NavigationRoute, registerRoute } from "workbox-routing";
 import { idbPendingStore } from "./sw/pendingTarget";
 import { createPushHandlers } from "./sw/pushHandlers";
 import { resubscribe } from "./sw/resubscribe";
-import { NAVIGATION_DENYLIST, NAVIGATION_FALLBACK } from "./sw/routing";
+import { createRootNavigationHandler } from "./sw/rootNavigation";
+import { isRootNavigation, NAVIGATION_DENYLIST, NAVIGATION_FALLBACK } from "./sw/routing";
 
 declare const self: ServiceWorkerGlobalScope & { __WB_MANIFEST: Array<string | { url: string; revision: string | null }> };
 
 // --- 1. Precache and navigation fallback ---
 
 cleanupOutdatedCaches();
-precacheAndRoute(self.__WB_MANIFEST);
+// An empty directoryIndex (falsy, and the types do not take null), or Workbox answers a navigation to `/` with the precached index.html before the denylist below
+// is consulted, and a signed-out visitor would get the shell instead of the landing page.
+precacheAndRoute(self.__WB_MANIFEST, { directoryIndex: "" });
+// `/` is denylisted below (the Worker decides landing or app), but an app installed with the old start_url `/` must still
+// open offline: network first, then the precached shell (sw/rootNavigation.ts).
+const rootNavigation = createRootNavigationHandler({
+  fetch: (request) => fetch(request),
+  matchShell: () => matchPrecache(NAVIGATION_FALLBACK),
+});
+registerRoute(({ request, url }) => request.mode === "navigate" && isRootNavigation(url.pathname), ({ request }) => rootNavigation(request));
 registerRoute(new NavigationRoute(createHandlerBoundToURL(NAVIGATION_FALLBACK), { denylist: [...NAVIGATION_DENYLIST] }));
 
 // --- 2. Update protocol ---

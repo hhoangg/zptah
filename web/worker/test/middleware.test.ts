@@ -191,8 +191,8 @@ describe("response headers", () => {
     });
   });
 
-  it("does not set no-store on a non-API path", async () => {
-    const res = await call("/");
+  it("does not set no-store on a non-API path (`/` is the exception: it varies on the cookie, see landing.test.ts)", async () => {
+    const res = await call("/d/some/deep/link");
     expect(res.headers.get("Cache-Control")).not.toBe("no-store");
   });
 

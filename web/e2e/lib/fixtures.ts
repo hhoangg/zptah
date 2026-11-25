@@ -27,7 +27,7 @@ export const test = base.extend<Fixtures, WorkerFixtures>({
     await use(async () => {
       const context = await browser.newContext({ baseURL: origin() });
       const page = await context.newPage();
-      await page.goto("/");
+      await page.goto("/login");
       const authenticator = await addVirtualAuthenticator(context, page);
       const actor = new Actor(context, page, authenticator, origin(), testIp(nextIp++));
       opened.push(actor);
@@ -44,7 +44,7 @@ export const test = base.extend<Fixtures, WorkerFixtures>({
       await use(async () => {
         const context = await browser.newContext({ baseURL: origin() });
         const page = await context.newPage();
-        await page.goto("/");
+        await page.goto("/login");
         const authenticator = await addVirtualAuthenticator(context, page);
         const actor = new Actor(context, page, authenticator, origin(), testIp(nextIp++));
         opened.push(actor);

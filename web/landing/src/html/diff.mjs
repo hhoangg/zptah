@@ -1,0 +1,16 @@
+// Diff and changed-file data for the three demo sessions, rendered once at build time.
+import { ic, esc, hl } from '../icons.mjs';
+
+/* ---------- diff data ---------- */
+export const row = (t, o, n, c) => `<div class="dl ${t === '+' ? 'ad' : t === '-' ? 'dl-' : ''}"><i class="dn">${o}</i><i class="dn">${n}</i><i class="ds">${t.trim()}</i><span class="dc">${hl(c)}</span></div>`;
+export const CH = {
+  s1: { n: [106, 1], branch: 'feat/rate-limit', files: [['src/middleware', 'rateLimit.ts', 'M'], ['src/config', 'limits.ts', 'M'], ['test', 'rateLimit.test.ts', 'U']], path: 'src/middleware/rateLimit.ts', a: 13, d: 1, hunk: '@@ -8,6 +8,17 @@',
+    lines: [[' ', 8, 8, 'import { clock } from "../util/clock";'], [' ', 9, 9, ''], ['-', 10, '', 'const LIMIT = 100;'], ['+', '', 10, 'export interface Bucket {'], ['+', '', 11, '  tokens: number;'], ['+', '', 12, '  updated: number;'], ['+', '', 13, '}'], ['+', '', 14, 'const buckets = new Map<string, Bucket>();'], ['+', '', 15, ''], ['+', '', 16, 'export function take(key: string) {'], ['+', '', 17, '  const b = buckets.get(key) ?? fresh();'], ['+', '', 18, '  b.tokens = refill(b, clock.now());'], ['+', '', 19, '  return b.tokens-- > 0;'], ['+', '', 20, '}']] },
+  s2: { n: [22, 4], branch: 'fix/sync-retry', files: [['src/sync', 'client.ts', 'M'], ['src/sync', 'errors.ts', 'M'], ['test', 'sync.test.ts', 'U']], path: 'src/sync/client.ts', a: 10, d: 1, hunk: '@@ -20,5 +20,14 @@',
+    lines: [[' ', 20, 20, 'async function pushOnce(batch: Batch) {'], ['-', 21, '', '  const res = await send(batch);'], ['+', '', 21, '  let delay = 200;'], ['+', '', 22, '  for (let n = 0; n < 5; n++) {'], ['+', '', 23, '    const res = await send(batch);'], ['+', '', 24, '    if (res.ok) return res;'], ['+', '', 25, '    await sleep(delay + jitter());'], ['+', '', 26, '    delay *= 2;'], ['+', '', 27, '  }'], ['+', '', 28, '  throw new SyncError("retries exhausted");'], [' ', 22, 29, '}']] },
+  s3: { n: [30, 6], branch: 'eng-482-webhook-retries', files: [['src/queue', 'retry.ts', 'M'], ['src/webhooks', 'dispatcher.ts', 'M'], ['test', 'retry.test.ts', 'U']], path: 'src/queue/retry.ts', a: 2, d: 1, hunk: '@@ -14,6 +14,8 @@',
+    lines: [[' ', 14, 14, 'export function schedule(ev: Event) {'], ['-', 15, '', '  queue.push(ev);'], ['+', '', 15, '  const wait = backoff(ev.attempts);'], ['+', '', 16, '  queue.insert(ev, now() + wait);'], [' ', 16, 17, '}']] },
+};
+export const fileRows = (sid) => CH[sid].files.map((f, i) => `<div class="frow${i === 0 ? ' first' : ''}" data-t="file-${i}"><span class="fi">${ic('file')}</span><span class="fn">${f[1]}</span><span class="fd">${f[0]}</span><b class="fs ${f[2] === 'M' ? 'm' : 'u'}">${f[2]}</b></div>`).join('');
+export const reviewBody = (sid) => { const c = CH[sid]; const sp = c.path.lastIndexOf('/'); return `<div class="rv-fh"><span class="cv2">${ic('chevron-down')}</span><b>${c.path.slice(sp + 1)}</b><span class="fdir">${c.path.slice(0, sp)}</span><span class="sp"></span><span class="pl">+${c.a}</span><span class="mi2">-${c.d}</span><span class="ibtn">${ic('check')}</span></div><div class="rv-hh">${c.hunk}</div>${c.lines.map((l) => row(...l)).join('')}`; };
+export const CHJ = Object.fromEntries(Object.keys(CH).map((k) => [k, { n: CH[k].n, branch: CH[k].branch, files: fileRows(k), review: reviewBody(k) }]));

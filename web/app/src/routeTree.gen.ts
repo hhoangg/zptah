@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AppRouteImport } from './routes/app'
 import { Route as InstallRouteImport } from './routes/install'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as RecoverRouteImport } from './routes/recover'
@@ -59,6 +60,11 @@ import { Route as DDesktopIdMonosMonoIdProfileHabitIdRouteImport } from './route
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppRoute = AppRouteImport.update({
+  id: '/app',
+  path: '/app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InstallRoute = InstallRouteImport.update({
@@ -299,6 +305,7 @@ const DDesktopIdMonosMonoIdProfileHabitIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/settings': typeof SettingsRouteRouteWithChildren
+  '/app': typeof AppRoute
   '/install': typeof InstallRoute
   '/login': typeof LoginRoute
   '/recover': typeof RecoverRoute
@@ -346,6 +353,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/app': typeof AppRoute
   '/install': typeof InstallRoute
   '/login': typeof LoginRoute
   '/recover': typeof RecoverRoute
@@ -394,6 +402,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/settings': typeof SettingsRouteRouteWithChildren
+  '/app': typeof AppRoute
   '/install': typeof InstallRoute
   '/login': typeof LoginRoute
   '/recover': typeof RecoverRoute
@@ -444,6 +453,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/settings'
+    | '/app'
     | '/install'
     | '/login'
     | '/recover'
@@ -491,6 +501,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/app'
     | '/install'
     | '/login'
     | '/recover'
@@ -538,6 +549,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/settings'
+    | '/app'
     | '/install'
     | '/login'
     | '/recover'
@@ -587,6 +599,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SettingsRouteRoute: typeof SettingsRouteRouteWithChildren
+  AppRoute: typeof AppRoute
   InstallRoute: typeof InstallRoute
   LoginRoute: typeof LoginRoute
   RecoverRoute: typeof RecoverRoute
@@ -610,6 +623,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/app': {
+      id: '/app'
+      path: '/app'
+      fullPath: '/app'
+      preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/install': {
@@ -1017,6 +1037,7 @@ const DDesktopIdRouteRouteWithChildren = DDesktopIdRouteRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SettingsRouteRoute: SettingsRouteRouteWithChildren,
+  AppRoute: AppRoute,
   InstallRoute: InstallRoute,
   LoginRoute: LoginRoute,
   RecoverRoute: RecoverRoute,

@@ -1,0 +1,19 @@
+# __SITE__: the landing page (/ and /home) is public; the web app behind it is not for crawlers.
+# /login, /register, /recover are disallowed too: they are forms with nothing to index, and the landing links to them.
+# /install is the public page that explains how to install the app, so it stays allowed.
+# /landing/ (the page's own CSS, JS and images) must stay crawlable so search engines can render the page.
+User-agent: *
+Disallow: /admin
+Disallow: /api/
+Disallow: /app$
+Disallow: /app/
+Disallow: /d/
+Disallow: /desktops
+Disallow: /login
+Disallow: /pair
+Disallow: /recover
+Disallow: /register
+Disallow: /relay/
+Disallow: /settings
+
+Sitemap: __SITE__/sitemap.xml

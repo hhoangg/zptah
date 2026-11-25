@@ -51,6 +51,20 @@ describe("last place registry", () => {
   });
 });
 
+describe("/app redirect (the installed app's start_url)", () => {
+  it("restores the last place like /", async () => {
+    registerLastPlaceResolver(() => "/d/dk1/s/s9");
+    const router = renderAt("/app");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/d/dk1/s/s9"));
+  });
+
+  it("goes to /settings/desktops when there is no last place", async () => {
+    const router = renderAt("/app");
+    await screen.findByRole("heading", { level: 1, name: "All desktops" });
+    expect(router.state.location.pathname).toBe("/settings/desktops");
+  });
+});
+
 describe("/ redirect", () => {
   it("drops a last used desktop that is no longer in the account and goes to /settings/desktops (N-12)", async () => {
     localStorage.setItem(LAST_DESKTOP_KEY, "gone");

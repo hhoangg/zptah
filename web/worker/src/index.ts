@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import type { Env } from "./env.ts";
 import { apiError, type AppEnv } from "./http.ts";
 import { scheduled } from "./cron.ts";
+import { landingRoutes } from "./landing.ts";
 import { securityHeaders } from "./middleware/security.ts";
 import { MODULES } from "./modules/index.ts";
 import { routes as transfers } from "./modules/transfers/index.ts";
@@ -23,6 +24,9 @@ export function createApp(): Hono<AppEnv> {
 
   // The encrypted file transfers (binary bodies, so outside the JSON route registry).
   app.route("/", transfers);
+
+  // The landing page: `/` without a session cookie, `/home` always (landing.ts).
+  landingRoutes(app);
 
   // 3. Unknown API and relay paths are JSON 404s; everything else is the SPA.
   const notFound = (c: Parameters<typeof apiError>[0]) => apiError(c, 404, "not_found", "Not found");
