@@ -437,6 +437,10 @@ mod tests {
                     board.bottom_right().x <= panel.bottom_right().x + px(0.1),
                     "{code}, width={width}"
                 );
+                assert!(
+                    board.bottom_right().y <= panel.bottom_right().y + px(0.1),
+                    "{code}, width={width}"
+                );
             }
         }
     }

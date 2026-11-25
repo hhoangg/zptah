@@ -32,11 +32,12 @@ type Probe = Rc<RefCell<Option<Entity<ViewerState>>>>;
 struct Fixture {
     scene: Arc<FlowScene>,
     probe: Probe,
+    width: f32,
 }
 
 impl gpui::Render for Fixture {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().w(px(700.)).child(
+        div().w(px(self.width)).child(
             DiagramViewer::new(
                 "t",
                 "flow",
@@ -53,6 +54,17 @@ impl gpui::Render for Fixture {
 }
 
 fn open(cx: &mut gpui::TestAppContext) -> (Probe, &'static mut gpui::VisualTestContext) {
+    let (probe, _, visual) = open_window(cx);
+    (probe, visual)
+}
+
+fn open_window(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    Probe,
+    gpui::WindowHandle<Fixture>,
+    &'static mut gpui::VisualTestContext,
+) {
     let probe = Probe::default();
     let handed = probe.clone();
     let window = cx.update(|cx| {
@@ -60,6 +72,7 @@ fn open(cx: &mut gpui::TestAppContext) -> (Probe, &'static mut gpui::VisualTestC
             cx.new(|_| Fixture {
                 scene: scene(),
                 probe: handed,
+                width: 700.,
             })
         })
         .unwrap()
@@ -68,7 +81,7 @@ fn open(cx: &mut gpui::TestAppContext) -> (Probe, &'static mut gpui::VisualTestC
     visual.run_until_parked();
     // Paint fits the first view and defers a refresh for the zoom label.
     visual.run_until_parked();
-    (probe, visual)
+    (probe, window, visual)
 }
 
 fn state(probe: &Probe) -> Entity<ViewerState> {
@@ -167,21 +180,36 @@ fn dragging_pans_and_double_click_fits(cx: &mut gpui::TestAppContext) {
     visual.run_until_parked();
 }
 
+fn wheel(
+    visual: &mut gpui::VisualTestContext,
+    at: Point<Pixels>,
+    dx: f32,
+    dy: f32,
+    secondary: bool,
+) {
+    visual.simulate_mouse_move(at, None, Default::default());
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: at,
+        delta: gpui::ScrollDelta::Pixels(point(px(dx), px(dy))),
+        modifiers: if secondary {
+            gpui::Modifiers::secondary_key()
+        } else {
+            Default::default()
+        },
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    visual.run_until_parked();
+}
+
 #[gpui::test]
-fn wheel_zooms_at_the_pointer(cx: &mut gpui::TestAppContext) {
+fn secondary_wheel_zooms_at_the_pointer(cx: &mut gpui::TestAppContext) {
     let (probe, visual) = open(cx);
     let viewer = state(&probe);
     let board = visual.debug_bounds("flow-image").unwrap();
     let at = board.origin + point(px(120.), px(60.));
     let before = viewer.read_with(visual, |s, _| s.shared.borrow().view);
     let content_point = before.to_content(120., 60.);
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: at,
-        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-40.))),
-        modifiers: Default::default(),
-        touch_phase: gpui::TouchPhase::Moved,
-    });
-    visual.run_until_parked();
+    wheel(visual, at, 0., -40., true);
     let after = viewer.read_with(visual, |s, _| s.shared.borrow().view);
     assert!(after.scale > before.scale);
     let held = after.to_content(120., 60.);
@@ -189,7 +217,85 @@ fn wheel_zooms_at_the_pointer(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn fullscreen_fills_the_window_and_escape_exits(cx: &mut gpui::TestAppContext) {
+fn plain_wheel_scrolls_the_chat_and_horizontal_wheel_pans(cx: &mut gpui::TestAppContext) {
+    let (probe, visual) = open(cx);
+    let viewer = state(&probe);
+    let board = visual.debug_bounds("flow-image").unwrap();
+    let at = board.origin + point(px(120.), px(60.));
+    let before = viewer.read_with(visual, |s, _| s.shared.borrow().view);
+    // Vertical wheel without a modifier leaves the view alone (and bubbles).
+    wheel(visual, at, 0., -40., false);
+    assert_eq!(
+        viewer.read_with(visual, |s, _| s.shared.borrow().view),
+        before
+    );
+    // Horizontal wheel pans.
+    wheel(visual, at, 30., 0., false);
+    let panned = viewer.read_with(visual, |s, _| s.shared.borrow().view);
+    assert!((panned.x - (before.x - 30.)).abs() < 0.01);
+    assert_eq!((panned.y, panned.scale), (before.y, before.scale));
+}
+
+#[gpui::test]
+fn fullscreen_wheel_zooms_without_a_modifier(cx: &mut gpui::TestAppContext) {
+    let (probe, visual) = open(cx);
+    let viewer = state(&probe);
+    let full = visual.debug_bounds("flow-fullscreen").unwrap();
+    visual.simulate_click(full.center(), Default::default());
+    visual.run_until_parked();
+    // Let the fullscreen board paint and fit before the wheel arrives.
+    visual.update(|window, _| window.refresh());
+    visual.run_until_parked();
+    let board = visual.debug_bounds("flow-image").unwrap();
+    assert!(
+        board.size.height > px(300.),
+        "fullscreen board must have height: {board:?}"
+    );
+    let before = viewer.read_with(visual, |s, _| s.shared.borrow().view);
+    wheel(visual, board.center(), 0., -40., false);
+    assert!(
+        viewer
+            .read_with(visual, |s, _| s.shared.borrow().view)
+            .scale
+            > before.scale
+    );
+}
+
+#[gpui::test]
+fn resize_refits_an_untouched_view_but_keeps_a_zoomed_one(cx: &mut gpui::TestAppContext) {
+    let (probe, window, visual) = open_window(cx);
+    let viewer = state(&probe);
+    let resize = |visual: &mut gpui::VisualTestContext, width: f32| {
+        window
+            .update(visual, |this, _, cx| {
+                this.width = width;
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        visual.run_until_parked();
+    };
+    let wide = viewer.read_with(visual, |s, _| s.shared.borrow().view);
+    resize(visual, 360.);
+    let narrow = viewer.read_with(visual, |s, _| s.shared.borrow().view);
+    let board = viewer.read_with(visual, |s, _| s.shared.borrow().board);
+    let content = viewer.read_with(visual, |s, _| s.shared.borrow().content);
+    assert!(narrow.scale < wide.scale, "{narrow:?} {wide:?}");
+    assert!((narrow.x - (board[0] - content[0] * narrow.scale) / 2.).abs() < 0.5);
+    // After the user zooms, a resize keeps their view.
+    let zoom_in = visual.debug_bounds("flow-zoom-in").unwrap();
+    visual.simulate_click(zoom_in.center(), Default::default());
+    visual.run_until_parked();
+    let zoomed = viewer.read_with(visual, |s, _| s.shared.borrow().view);
+    resize(visual, 600.);
+    assert_eq!(
+        viewer.read_with(visual, |s, _| s.shared.borrow().view),
+        zoomed
+    );
+}
+
+#[gpui::test]
+fn fullscreen_fills_the_window_and_escape_exits_even_when_unfocused(cx: &mut gpui::TestAppContext) {
     let (probe, visual) = open(cx);
     let viewer = state(&probe);
     let small = visual.debug_bounds("flow-panel").unwrap();
@@ -199,6 +305,10 @@ fn fullscreen_fills_the_window_and_escape_exits(cx: &mut gpui::TestAppContext) {
     assert!(viewer.read_with(visual, |s, _| s.fullscreen));
     let large = visual.debug_bounds("flow-panel").unwrap();
     assert!(large.size.height > small.size.height * 1.5);
+    // Focus lost to something else: the next paint takes it back.
+    visual.update(|window, cx| window.blur(cx));
+    visual.run_until_parked();
+    visual.run_until_parked();
     visual.simulate_keystrokes("escape");
     visual.run_until_parked();
     assert!(!viewer.read_with(visual, |s, _| s.fullscreen));

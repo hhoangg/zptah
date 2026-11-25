@@ -80,6 +80,8 @@ struct Shared {
     board: [f32; 2],
     content: [f32; 2],
     fitted: bool,
+    /// The user panned or zoomed: a resize keeps their view instead of refitting.
+    touched: bool,
     drag: Option<([f32; 2], [f32; 2])>,
 }
 
@@ -87,6 +89,7 @@ impl Shared {
     fn fit(&mut self) {
         self.view = Viewport::fit(self.content, self.board);
         self.fitted = true;
+        self.touched = false;
     }
     fn local(&self, p: Point<Pixels>) -> [f32; 2] {
         [p.x.as_f32() - self.origin[0], p.y.as_f32() - self.origin[1]]
@@ -123,6 +126,7 @@ impl ViewerState {
             let mut shared = self.shared.borrow_mut();
             let (cx_, cy) = (shared.board[0] / 2., shared.board[1] / 2.);
             shared.view.zoom_at(factor, cx_, cy);
+            shared.touched = true;
         }
         cx.notify();
     }
@@ -134,7 +138,11 @@ impl ViewerState {
 
     fn set_fullscreen(&mut self, on: bool, cx: &mut Context<Self>) {
         self.fullscreen = on;
-        self.shared.borrow_mut().fitted = false;
+        {
+            let mut shared = self.shared.borrow_mut();
+            shared.fitted = false;
+            shared.touched = false;
+        }
         cx.notify();
     }
 
@@ -443,10 +451,19 @@ impl RenderOnce for DiagramViewer {
             let loading = matches!(content, ViewerContent::Loading);
             let paint_state = state.clone();
             let paint_shared = shared.clone();
+            let paint_focus = focus.clone();
             let board = canvas(
                 |_, _, _| {},
                 move |bounds, _, window, cx| {
-                    paint_board(bounds, &paint_shared, &paint_state, &content, window, cx)
+                    paint_board(
+                        bounds,
+                        &paint_shared,
+                        &paint_state,
+                        &content,
+                        &paint_focus,
+                        window,
+                        cx,
+                    )
                 },
             )
             .absolute()
@@ -477,14 +494,22 @@ impl RenderOnce for DiagramViewer {
                     cx.stop_propagation();
                 })
                 .on_scroll_wheel(move |event, _, cx| {
-                    let dy = event.delta.pixel_delta(px(20.)).y.as_f32();
-                    if dy == 0. {
+                    let delta = event.delta.pixel_delta(px(20.));
+                    let (dx, dy) = (delta.x.as_f32(), delta.y.as_f32());
+                    let zoom = fullscreen || event.modifiers.secondary();
+                    if !zoom && dx.abs() <= dy.abs() {
+                        // Plain vertical scroll belongs to the chat.
                         return;
                     }
                     {
                         let mut shared = wheel_shared.borrow_mut();
-                        let [x, y] = shared.local(event.position);
-                        shared.view.zoom_at(wheel_factor(dy), x, y);
+                        shared.touched = true;
+                        if zoom {
+                            let [x, y] = shared.local(event.position);
+                            shared.view.zoom_at(wheel_factor(dy), x, y);
+                        } else {
+                            shared.view.pan(-dx, 0.);
+                        }
                     }
                     wheel_state.update(cx, |_, cx| cx.notify());
                     cx.stop_propagation();
@@ -493,6 +518,7 @@ impl RenderOnce for DiagramViewer {
                     {
                         let mut shared = pinch_shared.borrow_mut();
                         let [x, y] = shared.local(event.position);
+                        shared.touched = true;
                         shared.view.zoom_at(pinch_factor(event.delta), x, y);
                     }
                     pinch_state.update(cx, |_, cx| cx.notify());
@@ -527,35 +553,44 @@ impl RenderOnce for DiagramViewer {
             })
             .child(toolbar)
             .child(
-                body_height(
-                    div()
-                        .w_full()
-                        .debug_selector(sel("panel"))
-                        .flex()
-                        .flex_col()
-                        .border_t_1()
-                        .border_color(content(0.1)),
-                )
-                .when_some(
-                    if show_source {
-                        self.source_status.or(self.status)
-                    } else {
-                        self.status
-                    },
-                    |d, status| {
-                        d.child(
-                            div()
-                                .px_3()
-                                .py_1()
-                                .flex_shrink_0()
-                                .truncate()
-                                .text_size(px(12.))
-                                .text_color(content(0.5))
-                                .child(status),
-                        )
-                    },
-                )
-                .child(div().relative().flex_1().min_h_0().min_w_0().child(media)),
+                div()
+                    .w_full()
+                    .debug_selector(sel("panel"))
+                    .flex()
+                    .flex_col()
+                    .border_t_1()
+                    .border_color(content(0.1))
+                    // Outside fullscreen the board's own height sizes the body.
+                    .when(fullscreen, |d| d.flex_1().min_h_0())
+                    .when_some(
+                        if show_source {
+                            self.source_status.or(self.status)
+                        } else {
+                            self.status
+                        },
+                        |d, status| {
+                            d.child(
+                                div()
+                                    .px_3()
+                                    .py_1()
+                                    .flex_shrink_0()
+                                    .truncate()
+                                    .text_size(px(12.))
+                                    .text_color(content(0.5))
+                                    .child(status),
+                            )
+                        },
+                    )
+                    .child(
+                        div()
+                            .relative()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h_0()
+                            .min_w_0()
+                            .child(media),
+                    ),
             );
         if !fullscreen {
             return panel.into_any_element();
@@ -596,6 +631,7 @@ fn paint_board(
     shared: &Rc<RefCell<Shared>>,
     state: &Entity<ViewerState>,
     content_data: &ViewerContent,
+    focus: &FocusHandle,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -606,8 +642,8 @@ fn paint_board(
         let resized = board != s.board;
         s.board = board;
         let first = !s.fitted && board[0] > 1. && board[1] > 1.;
-        // Keep a user's own zoom on resize; refit only the untouched view.
-        if first || (resized && !s.fitted) {
+        // Keep a user's own pan and zoom on resize; refit only the untouched view.
+        if first || (resized && !s.touched) {
             s.fit();
         }
         first
@@ -616,6 +652,11 @@ fn paint_board(
         // The zoom label was drawn before this paint fitted the view.
         let state = state.clone();
         cx.defer(move |cx| state.update(cx, |_, cx| cx.notify()));
+    }
+    // Esc needs focus in the panel; take it back if something else holds it.
+    if state.read(cx).fullscreen && !focus.contains_focused(window, cx) {
+        let focus = focus.clone();
+        window.defer(cx, move |window, cx| window.focus(&focus, cx));
     }
     // Drag follows the pointer anywhere in the window.
     let move_shared = shared.clone();
@@ -630,6 +671,7 @@ fn paint_board(
                 s.drag = None;
                 return;
             }
+            s.touched = true;
             s.view.x = offset[0] + event.position.x.as_f32() - from[0];
             s.view.y = offset[1] + event.position.y.as_f32() - from[1];
             drop(s);
