@@ -469,7 +469,7 @@ export function registerActPath(link, deps) {
     if (approvedAction && nothing && input === "auto") {
       drop(rec);
       if (action.kind === "upload") uploads.delete(action.upload_id);
-      effects.hint = effects.hint ?? "Nothing visibly changed, but this approved action may have run. Do not repeat it: check the page, or ask the user.";
+      effects.hint = "Nothing visibly changed, but this approved action may have run. Do not repeat it: check the page, or ask the user." + (effects.hint ? ` ${effects.hint}` : "");
     } else if (attemptedUntrusted && nothing && input === "auto" && result.effects.method === "content" && ["click", "type", "fill", "press"].includes(action.kind)) {
       rec.state = "committed_once";
       rec.expires = now() + RETRY_TTL_MS;

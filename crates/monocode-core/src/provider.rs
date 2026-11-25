@@ -1492,8 +1492,6 @@ fn run_process(
     run_operation(request, cancel, controls, probe, false, false, emit)
 }
 
-/// Resolves the Mono's browser once and records the outcome in the settings, so the rules the
-/// provider gets agree with what the launch adds (the server, or the reason it is missing).
 /// The Claude MCP config as a private file (created 0600), for `--mcp-config <path>`. The servers
 /// carry the browser gate's bearer token and argv is readable by other users.
 fn write_mcp_config(
@@ -1512,6 +1510,8 @@ fn write_mcp_config(
     Ok(file)
 }
 
+/// Resolves the Mono's browser once and records the outcome in the settings, so the rules the
+/// provider gets agree with what the launch adds (the server, or the reason it is missing).
 fn apply_browser(
     settings: &mut Settings,
     resolve: impl FnOnce(&crate::agent::MonoContext) -> crate::mono::browser::Attach,

@@ -331,7 +331,8 @@ fn an_approved_action_that_changed_nothing_is_never_retried() {
     assert_eq!(commits.len(), 1, "one commit for one approval: {commits:?}");
     assert!(commits[0].get("input").is_none());
     assert!(commits[0].get("approval").is_some());
-    assert!(text.contains("Nothing visibly changed"), "{text}");
+    assert!(text.contains("may have run"), "{text}");
+    assert!(text.contains("Do not repeat"), "{text}");
     r.rig.finish();
 }
 

@@ -1165,6 +1165,14 @@ impl ExtensionUpstream {
                     // Nothing changed with the plain input: one retry through the debugger (6.4).
                     self.commit(&prepared, approval.as_ref(), Some("trusted"))
                         .or(Ok(first))
+                } else if approval.is_some()
+                    && first["effects"]["hint"].as_str().is_some()
+                    && needs_trusted_retry(&first["effects"])
+                {
+                    // The hint of an approved action must never invite a retry.
+                    let mut first = first;
+                    first["effects"]["hint"] = json!("Nothing visibly changed, but this approved action may have run. Do not repeat it: check the page, or ask the user.");
+                    Ok(first)
                 } else {
                     Ok(first)
                 }
@@ -1532,11 +1540,18 @@ impl ExtensionUpstream {
                 } else {
                     "back"
                 };
-                let _ = self.ask_raw(
+                let moved = self.ask_raw(
                     Method::NavHistory,
                     json!({"tab": tab.tab, "dir": back}),
                     DEFAULT_DEADLINE_MS,
                 );
+                if moved.is_err() {
+                    return Err(format!(
+                        "{} The tab could NOT be moved back and is still on that page (tab {}): do not read it, and tell the user.",
+                        text.replace(" The tab was moved back.", "").replace(" (the page history led there; the tab was moved back.)", ""),
+                        tab.tab
+                    ));
+                }
                 return Err(text);
             }
         }
@@ -1557,13 +1572,6 @@ impl ExtensionUpstream {
         tab: &TabInfo,
         url: &str,
     ) -> Result<(), String> {
-        if let Err(reason) = self.origins().check(url) {
-            let text = format!(
-                "{} (the page history led there; the tab was moved back.)",
-                refusal_text(reason)
-            );
-            return Err(text);
-        }
         let mut action = TrustAction::new(name, args, &tab.url);
         action.target_url = Some(url);
         action.page_title = &tab.title;
@@ -1581,6 +1589,23 @@ impl ExtensionUpstream {
             name.trim_start_matches("browser_"),
             audit_url(url)
         );
+        if let Err(reason) = self.origins().check(url) {
+            let text = format!(
+                "{} (the page history led there; the tab was moved back.)",
+                refusal_text(reason)
+            );
+            self.write_nav_row(
+                ctx,
+                name,
+                tab,
+                &ev,
+                &summary,
+                AuditDecision::Blocked,
+                &text,
+                None,
+            );
+            return Err(text);
+        }
         match ev.decision.clone() {
             Decision::Deny(reason) => {
                 self.write_nav_row(
