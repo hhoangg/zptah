@@ -1,0 +1,85 @@
+{
+ "direction": "RL",
+ "nodes": [
+  {
+   "id": "a",
+   "label": "Node a",
+   "kind": "box",
+   "color": null
+  },
+  {
+   "id": "b",
+   "label": "Node b",
+   "kind": "decision",
+   "color": null
+  },
+  {
+   "id": "c",
+   "label": "Node c",
+   "kind": "box",
+   "color": null
+  },
+  {
+   "id": "d",
+   "label": "Node d",
+   "kind": "box",
+   "color": null
+  },
+  {
+   "id": "e",
+   "label": "Node e",
+   "kind": "box",
+   "color": null
+  },
+  {
+   "id": "f",
+   "label": "Node f",
+   "kind": "box",
+   "color": null
+  }
+ ],
+ "edges": [
+  {
+   "from": "a",
+   "to": "b",
+   "label": null,
+   "dashed": false,
+   "arrow": true
+  },
+  {
+   "from": "b",
+   "to": "c",
+   "label": "safe",
+   "dashed": false,
+   "arrow": true
+  },
+  {
+   "from": "b",
+   "to": "d",
+   "label": "risky",
+   "dashed": false,
+   "arrow": true
+  },
+  {
+   "from": "d",
+   "to": "e",
+   "label": "allow",
+   "dashed": false,
+   "arrow": true
+  },
+  {
+   "from": "d",
+   "to": "f",
+   "label": "deny",
+   "dashed": false,
+   "arrow": true
+  },
+  {
+   "from": "c",
+   "to": "e",
+   "label": "skip a long layer",
+   "dashed": false,
+   "arrow": true
+  }
+ ]
+}

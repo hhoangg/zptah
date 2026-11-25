@@ -223,6 +223,71 @@ export class MockWorld {
         },
       ],
     });
+    // Visuals: a reply with a Mermaid flowchart and a Mermaid diagram the web app shows as source, then the native visuals
+    // the desktop rendered inline (a flow, a canvas with anchored labels, and a stat with a chart), as `visual` items.
+    const visuals = this.#addSession({ id: "sess-visuals", projectId: "proj-alpha", title: "Diagrams and visuals", target: { kind: "local" } });
+    const flowNode = (id: string, label: string, kind: string, color: string | null = null) => ({ id, label, kind, color });
+    visuals.turns.push({
+      id: `${visuals.id}-t3`,
+      stampAt: at - 30_000,
+      completedAt: at - 20_000,
+      durationMs: 10_000,
+      items: [
+        { type: "text", id: `${visuals.id}-a2`, text: "The approval path:\n\n```mermaid\nflowchart LR\n  A[Mono request] --> B{Risk?}\n  B -- safe --> C[Auto act]\n  B -- risky --> D[Ask user]\n  D -- allow --> E[Commit]\n  D -- deny --> F[Stop]\n```\n\nA sequence the web app does not draw:\n\n```mermaid\nsequenceDiagram\n  A->>B: hi\n```\n\n![Approval flow](visual:approval)" },
+        {
+          type: "visual",
+          id: `${visuals.id}-v1`,
+          title: "Approval flow",
+          tree: {
+            kind: "flow",
+            title: "Approval flow",
+            height: null,
+            graph: {
+              direction: "LR",
+              nodes: [flowNode("req", "Request", "start", "accent"), flowNode("cls", "Classify risk", "box"), flowNode("auto", "Auto act", "box", "positive"), flowNode("ask", "Ask user", "box", "warning"), flowNode("done", "Commit", "end", "positive")],
+              edges: [
+                { from: "req", to: "cls", label: null, dashed: false, arrow: true },
+                { from: "cls", to: "auto", label: "safe", dashed: false, arrow: true },
+                { from: "cls", to: "ask", label: "risky", dashed: false, arrow: true },
+                { from: "ask", to: "done", label: "allow", dashed: true, arrow: true },
+                { from: "auto", to: "done", label: null, dashed: false, arrow: true },
+              ],
+            },
+          },
+        },
+        {
+          type: "visual",
+          id: `${visuals.id}-v2`,
+          title: "Canvas",
+          tree: {
+            kind: "canvas",
+            width: 320,
+            height: 140,
+            shapes: [
+              { kind: "rect", x: 10, y: 10, width: 140, height: 50, color: "warning", radius: 10, stroke: "ink", stroke_width: 1.5, fill: true },
+              { kind: "label", x: 80, y: 35, text: "Centered", color: null, align: "center", baseline: "middle", chip: false },
+              { kind: "line", x1: 150, y1: 35, x2: 230, y2: 35, width: 2, color: "ink", arrow: "end", dashed: true },
+              { kind: "label", x: 190, y: 30, text: "go", color: null, align: "center", baseline: "bottom", chip: true },
+              { kind: "circle", x: 260, y: 35, radius: 22, color: "series3", stroke: null, stroke_width: 1.5, fill: true },
+              { kind: "label", x: 260, y: 35, text: "End", color: null, align: "center", baseline: "middle", chip: false },
+            ],
+          },
+        },
+        {
+          type: "visual",
+          id: `${visuals.id}-v3`,
+          title: "Deploys",
+          tree: {
+            kind: "column",
+            gap: 8,
+            children: [
+              { kind: "stat", label: "Deploys", value: "42", detail: "+12% vs last week", color: "accent", delta: null, trend: [3, 5, 4, 8, 9], lower_is_better: false },
+              { kind: "chart", chart_type: "bar", series: [{ label: "Deploys", values: [3, 5, 4, 8, 9] }], labels: ["Mon", "Tue", "Wed", "Thu", "Fri"], height: 160 },
+            ],
+          },
+        },
+      ],
+    });
     this.#addSession({ id: "sess-remote-1", projectId: "proj-beta", title: "Work on a remote machine", target: { kind: "remote", instance: "example-remote" }, cloudState: "available" });
   }
 

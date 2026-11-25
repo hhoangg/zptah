@@ -33,7 +33,7 @@ export function useVisualColor(): (token?: ThemeColor) => string {
     if (token === "ink") return "var(--content)";
     if (token === "muted") return alpha("var(--content)", 60);
     if (token === "faint") return alpha("var(--content)", 20);
-    return HUE_TOKENS[token] ?? "var(--accent-color)";
+    return (Object.hasOwn(HUE_TOKENS, token) ? HUE_TOKENS[token] : undefined) ?? "var(--accent-color)";
   };
 }
 

@@ -1,0 +1,53 @@
+{
+ "direction": "LR",
+ "nodes": [
+  {
+   "id": "a",
+   "label": "Node a",
+   "kind": "box",
+   "color": null
+  },
+  {
+   "id": "b",
+   "label": "Node b",
+   "kind": "box",
+   "color": null
+  },
+  {
+   "id": "c",
+   "label": "Node c",
+   "kind": "box",
+   "color": null
+  }
+ ],
+ "edges": [
+  {
+   "from": "a",
+   "to": "b",
+   "label": "go",
+   "dashed": false,
+   "arrow": true
+  },
+  {
+   "from": "b",
+   "to": "c",
+   "label": null,
+   "dashed": false,
+   "arrow": true
+  },
+  {
+   "from": "c",
+   "to": "a",
+   "label": "retry",
+   "dashed": false,
+   "arrow": true
+  },
+  {
+   "from": "b",
+   "to": "b",
+   "label": "again",
+   "dashed": false,
+   "arrow": true
+  }
+ ]
+}

@@ -1,0 +1,72 @@
+{
+ "direction": "BT",
+ "nodes": [
+  {
+   "id": "s",
+   "label": "Start here",
+   "kind": "start",
+   "color": null
+  },
+  {
+   "id": "q",
+   "label": "Is it ready for the long wait?",
+   "kind": "decision",
+   "color": null
+  },
+  {
+   "id": "c",
+   "label": "Circle",
+   "kind": "circle",
+   "color": null
+  },
+  {
+   "id": "r",
+   "label": "Round node",
+   "kind": "round",
+   "color": null
+  },
+  {
+   "id": "e",
+   "label": "Done",
+   "kind": "end",
+   "color": null
+  }
+ ],
+ "edges": [
+  {
+   "from": "s",
+   "to": "q",
+   "label": null,
+   "dashed": false,
+   "arrow": true
+  },
+  {
+   "from": "q",
+   "to": "c",
+   "label": "yes",
+   "dashed": false,
+   "arrow": true
+  },
+  {
+   "from": "q",
+   "to": "r",
+   "label": "no",
+   "dashed": true,
+   "arrow": true
+  },
+  {
+   "from": "c",
+   "to": "e",
+   "label": null,
+   "dashed": false,
+   "arrow": true
+  },
+  {
+   "from": "r",
+   "to": "e",
+   "label": null,
+   "dashed": false,
+   "arrow": false
+  }
+ ]
+}
