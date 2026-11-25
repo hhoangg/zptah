@@ -25,6 +25,7 @@ pub mod gate;
 pub mod host_mode;
 pub mod link;
 pub(crate) mod links;
+pub mod migration;
 pub mod output;
 pub(crate) mod peer;
 pub mod recipe;
@@ -281,6 +282,18 @@ pub struct MonoBrowser {
     /// the UI only: a launch never reads it (a stale value used to drop the server silently), it
     /// checks the live conditions instead, see [`resolve`].
     pub ready: bool,
+    /// The paired zptah Browser connection this Mono is bound to (spec 15.3). `None` until the
+    /// user binds one: a Mono with a saved Chrome profile and no connection shows "Reconnect
+    /// needed" (see [`MonoBrowser::needs_reconnect`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<String>,
+    /// The one-time notice of [`migration`] has not been dismissed yet (Settings > Browser).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub migration_notice: bool,
+    /// The migration kept the old default blocked list: Settings > Browser offers once to switch
+    /// to the new defaults (spec 18, decision 15). See [`MonoBrowser::switch_to_new_defaults`].
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub suggest_new_defaults: bool,
 }
 impl Default for MonoBrowser {
     fn default() -> Self {
@@ -297,6 +310,9 @@ impl Default for MonoBrowser {
             show_actions: true,
             use_extension: false,
             ready: false,
+            connection: None,
+            migration_notice: false,
+            suggest_new_defaults: false,
         }
     }
 }
@@ -310,6 +326,21 @@ impl MonoBrowser {
     /// the browser is switched on).
     pub fn uses_extension(&self) -> bool {
         self.enabled && self.use_extension
+    }
+    /// A migrated Mono that has a saved profile but is not bound to a paired connection yet.
+    pub fn needs_reconnect(&self) -> bool {
+        valid_profile_dir(&self.profile_dir) && self.connection.is_none()
+    }
+    /// "Switch" of the one-time suggestion: removes only the entries of the old
+    /// [`DEFAULT_BLOCKED_ORIGINS`] that are still present; origins the user added stay blocked.
+    pub fn switch_to_new_defaults(&mut self) {
+        self.blocked_origins
+            .retain(|o| !DEFAULT_BLOCKED_ORIGINS.contains(&o.as_str()));
+        self.suggest_new_defaults = false;
+    }
+    /// "Keep my list" of the one-time suggestion: the list stays as it is.
+    pub fn keep_blocked_list(&mut self) {
+        self.suggest_new_defaults = false;
     }
     /// The browser is switched on and has a saved profile: a launch tries to add the server and
     /// the prompt mentions it. Whether it can be attached right now is decided by [`resolve`].
