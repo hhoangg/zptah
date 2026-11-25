@@ -180,7 +180,23 @@ struct Events {
 }
 
 impl Events {
-    fn new(rx: Receiver<LinkEvent>) -> Self {
+    fn new(source: Receiver<LinkEvent>) -> Self {
+        // Log every event with a timestamp as it happens (the runner prints stderr on a failure),
+        // then hand it on to `wait_for`.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let start = Instant::now();
+        std::thread::spawn(move || {
+            while let Ok(event) = source.recv() {
+                let (kind, detail) = Self::describe(&event);
+                eprintln!(
+                    "{:>8} ms link event {kind} {detail}",
+                    start.elapsed().as_millis()
+                );
+                if tx.send(event).is_err() {
+                    break;
+                }
+            }
+        });
         Self {
             rx,
             pending: Vec::new(),

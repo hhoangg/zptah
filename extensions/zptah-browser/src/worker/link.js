@@ -104,6 +104,7 @@ export class BrowserLink {
 
   /** @param {LinkStatus} status @param {unknown} [detail] */
   #setStatus(status, detail) {
+    console.debug("zptah-link", status, detail instanceof Error ? detail.message : detail ?? "");
     this.#status = status;
     this.#deps.onStatus?.(status, detail);
   }

@@ -33,8 +33,8 @@ const PAGES = {
 
 /** @type {{ name: string, ok: boolean, detail?: string }[]} */
 const results = [];
-/** What to print when a check failed: the temp dir (browser logs) and the app side. @type {{ base?: string, app?: { stderr: string } }} */
-const diag = {};
+/** What to print when a check failed: the temp dir (browser logs) and the app side. @type {{ base?: string, app?: { stderr: string }, worker: string[] }} */
+const diag = { worker: /** @type {string[]} */ ([]) };
 /**
  * @param {string} name
  * @param {boolean} ok
@@ -83,7 +83,7 @@ function launchChrome(o) {
     "about:blank",
   ];
   const log = openSync(join(o.profile, "..", `browser-${basename(o.profile)}.log`), "a");
-  const child = spawn(o.exe, ["--enable-logging=stderr", ...args], { stdio: ["ignore", "ignore", log], env: { ...process.env, ...o.env } });
+  const child = spawn(o.exe, ["--enable-logging=stderr", "--v=1", ...args], { stdio: ["ignore", "ignore", log], env: { ...process.env, ...o.env } });
   cleanups.push(() => stop(child));
   return child;
 }
@@ -219,6 +219,7 @@ async function main() {
   const browser = launchChrome({ exe: chrome, profile, extension: devDir, env });
   const cdp = await connectBrowser(profile);
   const worker = await cdp.worker(DEV_ID);
+  await cdp.traceConsole(worker.targetId, diag.worker);
   check("the dev extension loads with the pinned id (F9)", worker.url.includes(DEV_ID));
 
   // Pairing.
@@ -292,11 +293,12 @@ async function main() {
 /** Browser logs (extension console and native messaging lines) and the app's stderr. */
 function printDiagnostics() {
   console.log("--- diagnostics ---");
+  console.log(`extension worker console:\n${diag.worker.join("\n")}`);
   console.log(`app stderr:\n${diag.app?.stderr ?? "(none)"}`);
   if (!diag.base) return;
   for (const name of readdirSync(diag.base).filter((n) => n.startsWith("browser-"))) {
-    const lines = readFileSync(join(diag.base, name), "utf8").split("\n").filter((l) => /CONSOLE|zptah|native|Native|host/i.test(l));
-    console.log(`${name} (${lines.length} matching lines, last 60):\n${lines.slice(-60).join("\n")}`);
+    const lines = readFileSync(join(diag.base, name), "utf8").split("\n").filter((l) => /zptah|native_message|NativeMessage|host/i.test(l));
+    console.log(`${name} (${lines.length} matching lines, last 150):\n${lines.slice(-150).join("\n")}`);
   }
 }
 
