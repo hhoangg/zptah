@@ -103,6 +103,8 @@ pub(crate) struct ViewerState {
     pub(crate) fullscreen: bool,
     copy_reset: Option<Task<()>>,
     focus: FocusHandle,
+    /// Window-level Esc observer, alive only while fullscreen.
+    esc: Option<gpui::Subscription>,
 }
 
 impl ViewerState {
@@ -114,6 +116,7 @@ impl ViewerState {
             fullscreen: false,
             copy_reset: None,
             focus: cx.focus_handle(),
+            esc: None,
         }
     }
 
@@ -138,12 +141,27 @@ impl ViewerState {
 
     fn set_fullscreen(&mut self, on: bool, cx: &mut Context<Self>) {
         self.fullscreen = on;
+        if !on {
+            self.esc = None;
+        }
         {
             let mut shared = self.shared.borrow_mut();
             shared.fitted = false;
             shared.touched = false;
         }
         cx.notify();
+    }
+
+    /// Enter fullscreen: focus the panel once and watch for Esc at window
+    /// level, so Esc works wherever focus later moves.
+    fn enter_fullscreen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_fullscreen(true, cx);
+        window.focus(&self.focus, cx);
+        self.esc = Some(cx.observe_keystrokes(|this, event, _, cx| {
+            if event.keystroke.key == "escape" {
+                this.set_fullscreen(false, cx);
+            }
+        }));
     }
 
     pub(crate) fn copy(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -363,7 +381,6 @@ impl RenderOnce for DiagramViewer {
         };
         let full = {
             let state = state.clone();
-            let focus = focus.clone();
             tool_button(
                 button_id("full"),
                 if fullscreen { "Exit" } else { "Full" },
@@ -375,10 +392,10 @@ impl RenderOnce for DiagramViewer {
             )
             .debug_selector(sel("fullscreen"))
             .on_click(move |_, window, cx| {
-                let on = !state.read(cx).fullscreen;
-                state.update(cx, |s, cx| s.set_fullscreen(on, cx));
-                if on {
-                    window.focus(&focus, cx);
+                if state.read(cx).fullscreen {
+                    state.update(cx, |s, cx| s.set_fullscreen(false, cx));
+                } else {
+                    state.update(cx, |s, cx| s.enter_fullscreen(window, cx));
                 }
                 cx.stop_propagation();
             })
@@ -451,19 +468,10 @@ impl RenderOnce for DiagramViewer {
             let loading = matches!(content, ViewerContent::Loading);
             let paint_state = state.clone();
             let paint_shared = shared.clone();
-            let paint_focus = focus.clone();
             let board = canvas(
                 |_, _, _| {},
                 move |bounds, _, window, cx| {
-                    paint_board(
-                        bounds,
-                        &paint_shared,
-                        &paint_state,
-                        &content,
-                        &paint_focus,
-                        window,
-                        cx,
-                    )
+                    paint_board(bounds, &paint_shared, &paint_state, &content, window, cx)
                 },
             )
             .absolute()
@@ -496,8 +504,13 @@ impl RenderOnce for DiagramViewer {
                 .on_scroll_wheel(move |event, _, cx| {
                     let delta = event.delta.pixel_delta(px(20.));
                     let (dx, dy) = (delta.x.as_f32(), delta.y.as_f32());
-                    let zoom = fullscreen || event.modifiers.secondary();
-                    if !zoom && dx.abs() <= dy.abs() {
+                    let zoom = (fullscreen || event.modifiers.secondary()) && dy != 0.;
+                    if !zoom
+                        && (dx == 0.
+                            || (!fullscreen
+                                && !event.modifiers.secondary()
+                                && dx.abs() <= dy.abs()))
+                    {
                         // Plain vertical scroll belongs to the chat.
                         return;
                     }
@@ -528,16 +541,9 @@ impl RenderOnce for DiagramViewer {
                 .into_any_element()
         };
 
-        let escape_state = state.clone();
         let panel = div()
             .id(ElementId::from(self.id.clone()))
             .track_focus(&focus)
-            .on_key_down(move |event, _, cx| {
-                if event.keystroke.key == "escape" && escape_state.read(cx).fullscreen {
-                    escape_state.update(cx, |s, cx| s.set_fullscreen(false, cx));
-                    cx.stop_propagation();
-                }
-            })
             .flex()
             .flex_col()
             .w_full()
@@ -631,7 +637,6 @@ fn paint_board(
     shared: &Rc<RefCell<Shared>>,
     state: &Entity<ViewerState>,
     content_data: &ViewerContent,
-    focus: &FocusHandle,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -652,11 +657,6 @@ fn paint_board(
         // The zoom label was drawn before this paint fitted the view.
         let state = state.clone();
         cx.defer(move |cx| state.update(cx, |_, cx| cx.notify()));
-    }
-    // Esc needs focus in the panel; take it back if something else holds it.
-    if state.read(cx).fullscreen && !focus.contains_focused(window, cx) {
-        let focus = focus.clone();
-        window.defer(cx, move |window, cx| window.focus(&focus, cx));
     }
     // Drag follows the pointer anywhere in the window.
     let move_shared = shared.clone();

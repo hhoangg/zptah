@@ -305,9 +305,8 @@ fn fullscreen_fills_the_window_and_escape_exits_even_when_unfocused(cx: &mut gpu
     assert!(viewer.read_with(visual, |s, _| s.fullscreen));
     let large = visual.debug_bounds("flow-panel").unwrap();
     assert!(large.size.height > small.size.height * 1.5);
-    // Focus lost to something else: the next paint takes it back.
+    // Focus lost to nothing: Esc is still watched at window level.
     visual.update(|window, cx| window.blur(cx));
-    visual.run_until_parked();
     visual.run_until_parked();
     visual.simulate_keystrokes("escape");
     visual.run_until_parked();
@@ -340,4 +339,41 @@ fn board_height_follows_content_within_limits() {
     assert_eq!(board_height([100., 200.], None), 240.);
     assert_eq!(board_height([100., 200.], Some(300.)), 300.);
     assert_eq!(board_height([100., 200.], Some(900.)), MAX_BOARD);
+}
+
+#[gpui::test]
+fn fullscreen_does_not_steal_focus_back_after_repaints(cx: &mut gpui::TestAppContext) {
+    let (_, visual) = open(cx);
+    let full = visual.debug_bounds("flow-fullscreen").unwrap();
+    visual.simulate_click(full.center(), Default::default());
+    visual.run_until_parked();
+    let other = visual.update(|window, cx| {
+        let handle = cx.focus_handle();
+        window.focus(&handle, cx);
+        handle
+    });
+    for _ in 0..3 {
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+    }
+    assert!(visual.update(|window, _| other.is_focused(window)));
+    // Esc still exits while another element holds focus.
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("flow-panel").unwrap().size.height < px(400.));
+}
+
+#[gpui::test]
+fn a_horizontal_wheel_with_the_secondary_key_pans_instead_of_zooming(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (probe, visual) = open(cx);
+    let viewer = state(&probe);
+    let board = visual.debug_bounds("flow-image").unwrap();
+    let before = viewer.read_with(visual, |s, _| s.shared.borrow().view);
+    wheel(visual, board.center(), 25., 0., true);
+    let after = viewer.read_with(visual, |s, _| s.shared.borrow().view);
+    assert_eq!(after.scale, before.scale);
+    assert!((after.x - (before.x - 25.)).abs() < 0.01);
+    assert_eq!(wheel_factor(0.), 1.);
 }
