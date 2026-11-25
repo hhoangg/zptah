@@ -15,7 +15,16 @@ pub(crate) fn current_uid() -> u32 {
 /// never `$TMPDIR` (the host inherits the browser's environment, which a launcher could change).
 /// Linux: `$XDG_RUNTIME_DIR/zptah` when it is an absolute path, else `/tmp/zptah-<uid>`.
 /// The directory is not created here.
+///
+/// Debug builds only: `ZPTAH_DEV_SOCKET_DIR` (an absolute path) replaces it, so the headless
+/// end-to-end test never touches the user's real socket directory. Release builds ignore it.
 pub(crate) fn socket_dir() -> Result<PathBuf, PeerError> {
+    #[cfg(any(test, debug_assertions))]
+    if let Some(dir) = std::env::var_os("ZPTAH_DEV_SOCKET_DIR").map(PathBuf::from) {
+        if dir.is_absolute() {
+            return Ok(dir);
+        }
+    }
     #[cfg(target_os = "macos")]
     {
         let base = darwin_user_temp_dir()?;

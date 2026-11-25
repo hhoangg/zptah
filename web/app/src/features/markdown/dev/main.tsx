@@ -5,9 +5,11 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "@/styles/index.css";
 import { Markdown } from "../Markdown";
-import { SAMPLE } from "./sample";
+import { ALL_ELEMENTS } from "./fixture";
+import { SAMPLE as DEFAULT_SAMPLE } from "./sample";
 
 const params = new URLSearchParams(location.search);
+const SAMPLE = params.get("sample") === "all" ? ALL_ELEMENTS : DEFAULT_SAMPLE;
 document.documentElement.dataset.scheme = params.get("scheme") === "dark" ? "dark" : "light";
 
 function Demo() {

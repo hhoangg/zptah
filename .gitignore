@@ -62,3 +62,4 @@ Desktop.ini
 # Local mail feature wireframe
 /work/
 .pnpm-store/
+.cache/

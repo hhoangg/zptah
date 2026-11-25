@@ -73,7 +73,7 @@ export class BrowserLink {
   #retryTimer = null;
   /** @type {Map<string, (frame: Frame) => Promise<Frame> | Frame>} */
   handlers = new Map();
-  /** @type {Frame | null} */
+  /** @type {unknown[] | null} */
   roster = null;
   stopped = false;
   /** The app's version from the last hello, for the options page. */
@@ -267,7 +267,7 @@ export class BrowserLink {
     const session = await hs.session();
     await session.open(msg);
     const { roster, stopped } = msg.result;
-    if (!isObject(roster) || typeof stopped !== "boolean") throw new AuthError("invalid", "malformed auth result");
+    if (!Array.isArray(roster) || typeof stopped !== "boolean") throw new AuthError("invalid", "malformed auth result");
     this.#session = session;
     this.roster = roster;
     this.stopped = stopped;

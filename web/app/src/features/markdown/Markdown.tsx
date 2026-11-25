@@ -216,7 +216,12 @@ const BlockView = memo(function BlockView({ block, fade, handlers, streamingTail
           start={block.ordered && block.start !== 1 ? block.start : undefined}
         >
           {block.items.map((item, index) => (
-            <li key={index}>
+            <li key={index} className={block.tasks?.[index] != null ? "md-task" : undefined}>
+              {block.tasks?.[index] != null ? (
+                <span className="md-task-box" role="img" aria-label={block.tasks[index] ? "Done" : "Not done"}>
+                  {block.tasks[index] ? "\u2611" : "\u2610"}
+                </span>
+              ) : null}
               <Blocks blocks={item} fade={fade} handlers={handlers} />
             </li>
           ))}
