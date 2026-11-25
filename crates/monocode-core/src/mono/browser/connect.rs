@@ -17,7 +17,7 @@ use super::links::manager::{
 use super::links::manifest_install::{self, Browser, InstallEnv, Registry, Target, V1_BROWSERS};
 use super::links::pairing::{pair_page_url, PairingState, ProfileChoice};
 use super::links::profiles::{read_profiles, valid_profile_dir};
-use super::peer::{self, Flavor, PeerPolicy};
+use super::peer::{self, Flavor};
 use super::MonoBrowserStore;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -335,7 +335,7 @@ impl BrowserConnect {
 
     /// Stops accepting and releases the single-instance lock.
     pub fn stop(&self) {
-        drop(lock(&self.server).take());
+        let _ = lock(&self.server).take();
     }
 
     fn unavailable(&self) -> Option<String> {
@@ -571,6 +571,7 @@ fn start_server(
         return (None, None);
     };
     // Only a debug build may relax the peer policy (the policy ignores the relaxation otherwise).
+    use super::peer::PeerPolicy;
     let policy = if cfg!(debug_assertions) && flavor == Flavor::Dev {
         #[cfg(debug_assertions)]
         {

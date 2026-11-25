@@ -125,6 +125,7 @@ impl Card {
             .map(|mut d| d.next().is_some())
             .unwrap_or(false)
     }
+    #[cfg(unix)]
     fn nonce(&self) -> String {
         let url = self.opener.opened.lock().unwrap().last().unwrap().1.clone();
         let encoded = url.split("#n=").nth(1).unwrap().to_owned();
@@ -144,6 +145,7 @@ impl Card {
     }
 }
 
+#[cfg(unix)]
 fn leak(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
 }

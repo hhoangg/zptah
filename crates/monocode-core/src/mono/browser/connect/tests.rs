@@ -1,6 +1,7 @@
 //! The Connect service over a temp home: no real browser folder, keychain or socket directory is
 //! touched, and no browser is launched.
 use super::*;
+#[cfg(unix)]
 use crate::mono::browser::link::auth::PairingKey;
 #[cfg(unix)]
 use crate::mono::browser::links::fake_extension::socket_pair;
@@ -9,6 +10,7 @@ use crate::mono::browser::peer::PeerReport;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 const INSTANCE: &str = "0123456789abcdef0123456789abcdef";
 const LOCAL_STATE: &str = r#"{"profile":{"info_cache":{
   "Default":{"name":"Personal"},"Profile 6":{"name":"Work"}}}}"#;
@@ -88,6 +90,7 @@ fn manifest_path(rig: &Rig) -> PathBuf {
         .join(format!("{}.json", manifest_install::DEV_HOST_NAME))
 }
 
+#[cfg(unix)]
 fn nonce_from(url: &str) -> String {
     let encoded = url.split("#n=").nth(1).expect("a nonce in the url");
     let mut out = Vec::new();
