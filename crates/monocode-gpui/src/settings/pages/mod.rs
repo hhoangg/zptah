@@ -42,10 +42,8 @@ impl SettingsView {
         match self.section {
             Section::General => self.general_page(cx),
             Section::Connections => {
-                // As on the earlier desktop and in the phone app's copy:
-                // Settings → Connections holds both machines and phones.
+                // Settings → Connections holds the machines and the web app.
                 let mut page = self.connections_page(cx);
-                page.extend(self.mobile_page(cx));
                 page.extend(self.web_app_page(cx));
                 page
             }

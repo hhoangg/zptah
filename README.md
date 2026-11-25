@@ -57,7 +57,7 @@ Install and sign in to at least one supported agent first. See [provider setup](
 ### Remote machines
 
 - Run sessions on another Windows, Linux or macOS machine over SSH with `zptah-host`, installed and paired from Settings > Connections. Host sessions keep running when you close the desktop. See [remote access](docs/remote-access.md).
-- Pair phones in Settings > Connections.
+- Pair the zptah web app (zptah.app) in Settings > Connections.
 
 ### App
 
