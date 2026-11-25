@@ -3,7 +3,7 @@
   "name": "zptah Browser",
   "description": "Lets your zptah Monos read and work in your browser tabs. Talks only to the zptah app on this computer.",
   "version": "1.0.0",
-  "minimum_chrome_version": "116",
+  "minimum_chrome_version": "120",
   "permissions": [
     "nativeMessaging",
     "tabs",
