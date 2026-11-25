@@ -12,7 +12,7 @@ use crate::mono::browser::gate::{
 use crate::mono::browser::{BrowserLevel, MonoBrowserStore, KNOWN_TOOLS};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -967,7 +967,7 @@ fn recipes_are_saved_private_versioned_and_hand_edits_do_not_load() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&store.path_of(&recipe)), 0o600);
         assert_eq!(mode(store.dir()), 0o700);
         assert_eq!(mode(store.path_of(&recipe).parent().unwrap()), 0o700);
