@@ -268,4 +268,35 @@ describe("<Markdown> pictures", () => {
     expect(links.map((link) => link.getAttribute("href"))).toEqual(["https://example.com/a", "https://example.com/b"]);
     expect(container.textContent).not.toMatch(/[\ue000-\uf8ff]/);
   });
+
+  describe("lists", () => {
+    it("renders a bullet list as ul/li", () => {
+      const { container } = render(<Markdown text={"- a\n- b"} />);
+      const list = container.querySelector("ul.md-list");
+      expect(list?.tagName).toBe("UL");
+      expect([...list!.querySelectorAll(":scope > li")].map((li) => li.textContent)).toEqual(["a", "b"]);
+    });
+
+    it("renders an ordered list as ol with its start number", () => {
+      const { container } = render(<Markdown text={"3. c\n4. d"} />);
+      const list = container.querySelector("ol.md-list");
+      expect(list?.getAttribute("start")).toBe("3");
+      expect(list?.querySelectorAll(":scope > li")).toHaveLength(2);
+      expect(render(<Markdown text={"1. a\n2. b"} />).container.querySelector("ol")?.hasAttribute("start")).toBe(false);
+    });
+
+    it("nests lists inside their item", () => {
+      const { container } = render(<Markdown text={"- a\n  - b\n    1. c\n- d"} />);
+      const outer = container.querySelector("ul.md-list")!;
+      expect(outer.querySelectorAll(":scope > li")).toHaveLength(2);
+      expect(outer.querySelector(":scope > li > ul.md-list > li > ol.md-list > li")?.textContent).toBe("c");
+    });
+
+    it("draws a box for task items and none for plain ones", () => {
+      const { container } = render(<Markdown text={"- [x] done\n- [ ] todo\n- plain"} />);
+      const items = [...container.querySelectorAll("li")];
+      expect(items.map((li) => li.querySelector(".md-task-box")?.getAttribute("aria-label") ?? null)).toEqual(["Done", "Not done", null]);
+      expect(items.map((li) => li.textContent?.replace(/[\u2610\u2611]/, ""))).toEqual(["done", "todo", "plain"]);
+    });
+  });
 });
