@@ -102,6 +102,19 @@ impl GrantBook {
         }
     }
 
+    /// Ends the Mono's grants for one site in every conversation (the overlay's Stop, a
+    /// take-back): the user took the tab, so no conversation keeps the right to act there.
+    pub fn end_site_everywhere(&mut self, site: &str) {
+        match &self.store {
+            Some(store) => {
+                let _ = store.revoke_grants(&self.mono_id, None, Some(site));
+            }
+            None => {
+                self.memory.remove(site);
+            }
+        }
+    }
+
     /// Ends every grant of this conversation (the conversation is closed or cleared).
     pub fn end_conversation(&mut self) {
         match &self.store {

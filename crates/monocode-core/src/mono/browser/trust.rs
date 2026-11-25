@@ -596,9 +596,10 @@ impl TrustState {
         BTreeSet::new()
     }
 
-    /// The overlay's Stop, or the user taking the task back, for one site: its grants end.
+    /// The overlay's Stop, or the user taking the task back, for one site: the Mono's grants for
+    /// it end in every conversation.
     pub fn take_back(&mut self, site: &str) {
-        self.grants.end_site(site);
+        self.grants.end_site_everywhere(site);
     }
 
     /// The conversation closed or was cleared: every grant of it ends, and so does the memory of

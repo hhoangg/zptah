@@ -836,3 +836,16 @@ fn new_payment_labels_are_payment() {
     assert!(classify("Trở về trang chủ").not_risky);
     assert!(classify("Tìm hiểu ngay").not_risky);
 }
+
+#[test]
+fn invisible_characters_and_lookalike_letters_do_not_hide_a_phrase() {
+    let pay = |t: &str| classify(t).categories.contains(&Category::Payment);
+    assert!(pay("pay"));
+    assert!(pay("p\u{200B}ay"));
+    assert!(pay("pa\u{FEFF}y"));
+    assert!(pay("p\u{00AD}ay"));
+    // Cyrillic a, Greek rho: look like Latin.
+    assert!(pay("p\u{0430}y"));
+    assert!(pay("\u{03C1}ay"));
+    assert_eq!(normalize("p\u{200B}ay").joined(true), "pay");
+}

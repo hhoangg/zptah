@@ -694,3 +694,74 @@ fn the_server_key_is_zptah_browser_and_the_old_prefix_still_parses() {
     }
     assert!(crate::mono::browser::audit_entry("mcp__other__browser_click", "{}", 1).is_none());
 }
+
+#[test]
+fn injection_tainted_and_soul_rule_are_never_covered_by_a_grant() {
+    let mut book = GrantBook::in_memory("mono-a", 1);
+    let all = set(&[
+        Category::Injection,
+        Category::Tainted,
+        Category::SoulRule,
+        Category::Sharing,
+    ]);
+    assert_eq!(book.grant("x.example", &all), set(&[Category::Sharing]));
+    // A stored row for one of them is ignored on read-back.
+    let f = fixture();
+    let conn = rusqlite::Connection::open(f.secrets.database()).unwrap();
+    for c in ["injection", "tainted", "soul_rule", "sharing"] {
+        conn.execute(
+            "INSERT INTO mono_browser_grants VALUES('mono-a',1,'y.example',?1,0)",
+            [c],
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        f.secrets.grants_for("mono-a", 1, "y.example"),
+        set(&[Category::Sharing])
+    );
+    // The decision asks even when a grant claims them.
+    let none = BTreeSet::new();
+    let gate = set(&[Category::Injection, Category::Tainted]);
+    let input = DecisionInput {
+        blocked: None,
+        read_only_level: false,
+        tool_read_ok: false,
+        gate: &gate,
+        declared: &none,
+        ext: &none,
+        soul: &none,
+        grants: &gate,
+    };
+    assert!(matches!(decide(&input), Decision::Ask(_)));
+}
+
+#[test]
+fn take_back_ends_the_grants_of_every_conversation_for_that_site() {
+    let f = fixture();
+    let mut a = TrustState::new(GrantBook::stored(f.secrets.clone(), "mono-a", 1));
+    let b = GrantBook::stored(f.secrets.clone(), "mono-a", 2);
+    let mut b_mut = b.clone();
+    a.grants_mut()
+        .grant("files.example", &set(&[Category::Destructive]));
+    b_mut.grant("files.example", &set(&[Category::Destructive]));
+    b_mut.grant("mail.example", &set(&[Category::Sharing]));
+    a.take_back("files.example");
+    assert!(b.covered("files.example").is_empty());
+    assert!(a.grants().covered("files.example").is_empty());
+    assert_eq!(b.covered("mail.example"), set(&[Category::Sharing]));
+}
+
+#[test]
+fn audit_has_an_index_on_mono_and_time() {
+    let f = fixture();
+    f.secrets.record_decision("mono-a", &row(1, None)).unwrap();
+    let conn = rusqlite::Connection::open(f.secrets.database()).unwrap();
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name='mono_browser_audit_mono_ts'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 1);
+}

@@ -40,6 +40,11 @@ pub(crate) fn migrate_audit_columns(conn: &Connection) -> rusqlite::Result<()> {
     if have.is_empty() {
         return Ok(());
     }
+    // Retention scans by age.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS mono_browser_audit_mono_ts ON mono_browser_audit(mono_id, ts)",
+        [],
+    )?;
     for (name, ty) in NEW_COLUMNS {
         if have.contains(name) {
             continue;

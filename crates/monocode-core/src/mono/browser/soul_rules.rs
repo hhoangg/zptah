@@ -418,8 +418,16 @@ pub fn reconcile(confirmed: Option<&[String]>, soul: &str) -> Reconciled {
             needs_confirmation: false,
         };
     }
-    // Keep the confirmed rules, but a broken current block still makes writes ask.
+    // The change is not a pure addition, so it is not confirmed. Until it is, the rules in force
+    // are the confirmed ones plus whatever the current soul adds or edits: always at least as
+    // strict as either, so mixing an edit with an addition cannot weaken anything.
     let mut active = parse_lines(confirmed);
+    for rule in current.rules {
+        if !active.rules.iter().any(|r| r.line == rule.line) {
+            active.lines.push(rule.line.clone());
+            active.rules.push(rule);
+        }
+    }
     active.errors.extend(current.errors);
     Reconciled {
         active,

@@ -210,7 +210,9 @@ fn weakening_a_rule_waits_for_confirmation_and_keeps_the_old_set() {
     ] {
         let r = reconcile(Some(&confirmed), &soul(changed));
         assert!(r.needs_confirmation, "{changed}");
-        assert_eq!(r.active.lines, confirmed, "{changed}");
+        for line in &confirmed {
+            assert!(r.active.lines.contains(line), "{changed}: {line}");
+        }
         assert_eq!(r.confirmed_lines, confirmed, "{changed}");
         // The block stays in force.
         assert!(r.active.rules.iter().any(|x| x.verb == Verb::Block));
@@ -235,4 +237,21 @@ fn a_broken_line_in_the_current_soul_still_fails_closed_while_a_change_waits() {
     let r = reconcile(Some(&confirmed), &soul("oops"));
     assert!(r.needs_confirmation);
     assert!(r.active.fail_closed());
+}
+
+#[test]
+fn an_edit_mixed_with_an_addition_keeps_the_old_rules_and_adds_the_new_ones() {
+    let confirmed = lines(&["block: post on *", "ask: click on a.com"]);
+    // The block is weakened to an ask and a new rule is added in the same save.
+    let r = reconcile(
+        Some(&confirmed),
+        &soul("ask: post on *\nask: click on a.com\nblock: navigate to evil.example"),
+    );
+    assert!(r.needs_confirmation);
+    assert_eq!(r.confirmed_lines, confirmed);
+    let has = |line: &str| r.active.rules.iter().any(|x| x.line == line);
+    assert!(has("block: post on *"), "the old block stays");
+    assert!(has("ask: post on *") && has("block: navigate to evil.example"));
+    assert!(has("ask: click on a.com"));
+    assert_eq!(r.active.rules.len(), 4);
 }
