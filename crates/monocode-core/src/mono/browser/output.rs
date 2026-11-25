@@ -1,9 +1,8 @@
-//! The folder Playwright writes into (`--output-dir`): page snapshots (`page-*.yml`), find
-//! results, screenshots, console logs and the files the Mono asks for with `filename`. They hold
-//! page content from the user's logged-in Chrome, so they are sensitive: the folder is private to
-//! the user (mode 0700), it is the server's working directory too (nothing lands in the app's own
-//! working directory or in `~/.playwright-mcp`), a `filename` the Mono gives is forced into it,
-//! and old files are removed.
+//! The Mono's browser output folder: page snapshots (`page-*.yml`), find results, screenshots,
+//! console logs and the files the Mono asks for with `filename`. The app writes them when it
+//! answers a tool call that came back from the zptah Browser extension. They hold page content
+//! from the user's logged-in Chrome, so they are sensitive: the folder is private to the user
+//! (mode 0700), a `filename` the Mono gives is forced into it, and old files are removed.
 //!
 //! Recipes are kept elsewhere (see `recipe::store`), so a sweep here can never touch them.
 use serde_json::Value;
@@ -15,7 +14,7 @@ use std::time::{Duration, SystemTime};
 pub const MAX_AGE: Duration = Duration::from_secs(2 * 60 * 60);
 /// At most this many files are kept by [`sweep`] (the newest).
 pub const MAX_FILES: usize = 60;
-/// Tools of `@playwright/mcp` that take a `filename` to save their output.
+/// Browser tools that take a `filename` to save their output into the output folder.
 pub const FILE_TOOLS: [&str; 6] = [
     "browser_snapshot",
     "browser_find",
@@ -153,10 +152,11 @@ pub fn safe_file_name(requested: &str) -> Option<String> {
     (!cleaned.is_empty()).then_some(cleaned)
 }
 
-/// Forces the `filename` argument of a file-writing tool into `dir`: Playwright resolves a plain
-/// name against its workspace, and a path outside the output folder would put page content
-/// somewhere the app does not manage. A call without `filename` is left as it is. A name that
-/// already exists as a symlink is refused (writing through it would leave the folder).
+/// Forces the `filename` argument of a file-writing tool into `dir`: a plain name would otherwise
+/// be resolved against the app's working directory, and a path outside the output folder would
+/// put page content somewhere the app does not manage. A call without `filename` is left as it
+/// is. A name that already exists as a symlink is refused (writing through it would leave the
+/// folder).
 pub fn confine_filename(tool: &str, args: &mut Value, dir: &Path) -> Result<(), String> {
     if !FILE_TOOLS.contains(&tool) {
         return Ok(());

@@ -2,8 +2,8 @@
 //! ordinary `browser_*` call that goes through the same policy as an agent call (trust level,
 //! blocked and finance origins, approval cards), via the [`Host`].
 //!
-//! Elements are found with one scoped probe per locator candidate (`browser_snapshot` with a
-//! Playwright `target` and a small `depth`, 20 to 140 tokens, 4 to 25 ms measured), never by
+//! Elements are found with one scoped probe per locator candidate (`browser_snapshot` with an
+//! element `target` and a small `depth`, 20 to 140 tokens, 4 to 25 ms measured), never by
 //! parsing a full-page snapshot; the first candidate that matches exactly one element wins. A
 //! locator is polled for a few seconds first (auto-wait), because a page may still be loading
 //! right after `browser_navigate`. Only the `extract` step reads a snapshot, and only of its
@@ -237,7 +237,7 @@ pub fn run(host: &dyn Host, recipe: &Recipe, given: &Map<String, Value>, opts: O
     };
     let failure = runner.run_all(given);
     runner.outcome.failure = failure.map(|mut f| {
-        // The browser echoes what it typed ("Ran Playwright code: fill('...')"): never pass a typed
+        // The browser echoes what it typed ("fill e12 with '...'"): never pass a typed
         // value on in a failure.
         let secrets = &runner.secrets;
         f.reason = risk::scrub(&f.reason, secrets);

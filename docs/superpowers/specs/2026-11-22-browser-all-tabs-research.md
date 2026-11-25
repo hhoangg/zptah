@@ -1,3 +1,5 @@
+> Superseded by [docs/superpowers/specs/2026-11-25-zptah-browser-extension.md](2026-11-25-zptah-browser-extension.md): the Playwright MCP backend was removed.
+
 # Mono Browser: agent access to all tabs of a profile - research
 
 Status: research, no code. Date: 2026-11-22. Builds on `2026-11-21-mono-browser-design.md`

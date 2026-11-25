@@ -42,7 +42,7 @@ Install and sign in to at least one supported agent first. See [provider setup](
 - Agents that work across your projects with a memory, a personality, a chosen provider and their own sessions.
 - Habits: scheduled tasks (hourly, daily, weekdays, weekly, every N hours), shareable as YAML.
 - Workflows: graphs of session, shell, ask-a-Mono, condition, for-each and loop steps, drawn as live run graphs, exported as YAML, and an imported file is reviewed before it runs.
-- Browser: a Mono can drive your real Chrome profile through Playwright MCP, with a prompt-injection gate.
+- Browser: zptah Browser, a Chrome extension that lets a Mono work in your real Chrome profile. Several Monos can share one profile, each in its own tab group. Risky actions (payments, sending, deleting, credentials) ask for your approval, in English and Vietnamese, and a Stop button on each tab takes it back at once. See [zptah Browser](docs/browser/zptah-browser.md).
 - Dashboard, overview, notifications, Today view and notes.
 
 ### Visuals
