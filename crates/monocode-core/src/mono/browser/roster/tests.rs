@@ -1,19 +1,6 @@
 use super::*;
-use crate::mono::browser::link::auth::{encode_bytes, PairingKey, NONCE_LEN};
-use crate::mono::browser::link::protocol::Method;
-use crate::mono::browser::links::fake_extension::socket_pair;
-use crate::mono::browser::links::keystore::MemoryKeyStore;
-use crate::mono::browser::links::manager::{Deps, LinkEvent, ManagerConfig, MemoryRecordStore};
-use crate::mono::browser::links::pairing::ProfileChoice;
-use crate::mono::browser::peer::{Flavor, PeerReport};
 use crate::mono::browser::{session_color, MonoBrowser};
 use crate::mono::COLORS_MONO;
-use std::path::PathBuf;
-use std::sync::Arc;
-
-const INSTANCE: &str = "aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb";
-const NONCE: [u8; NONCE_LEN] = [9; NONCE_LEN];
-const WAIT: Duration = Duration::from_secs(5);
 
 fn mono(id: &str, name: &str, color: u32, mascot: &str, profile: &str) -> Mono {
     Mono {
@@ -164,159 +151,181 @@ fn the_book_holds_the_roster_of_each_profile_apart() {
 
 // ---- sending ----
 
-struct Source(Arc<RosterBook>);
-impl RosterSource for Source {
-    fn snapshot(&self, instance_id: &str, profile_dir: &str) -> AuthResult {
-        self.0.snapshot(instance_id, profile_dir)
-    }
-}
+// The fake extension talks over a unix socket pair; the Windows pipe variant is not used here.
+#[cfg(unix)]
+mod sending {
+    use super::*;
+    use crate::mono::browser::link::auth::{encode_bytes, PairingKey, NONCE_LEN};
+    use crate::mono::browser::link::protocol::Method;
+    use crate::mono::browser::links::fake_extension::socket_pair;
+    use crate::mono::browser::links::keystore::MemoryKeyStore;
+    use crate::mono::browser::links::manager::{Deps, LinkEvent, ManagerConfig, MemoryRecordStore};
+    use crate::mono::browser::links::pairing::ProfileChoice;
+    use crate::mono::browser::peer::{Flavor, PeerReport};
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
-fn report() -> PeerReport {
-    PeerReport {
-        pid: 4242,
-        parent_pid: Some(100),
-        parent_exe: Some(PathBuf::from("/Applications/Google Chrome.app/chrome")),
-        user_data_dir: Some(PathBuf::from("/tmp/chrome-data")),
-    }
-}
+    const INSTANCE: &str = "aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb";
+    const NONCE: [u8; NONCE_LEN] = [9; NONCE_LEN];
+    const WAIT: Duration = Duration::from_secs(5);
 
-/// A paired and connected fake extension of the profile "Profile 1", plus the manager.
-fn connected(
-    book: &Arc<RosterBook>,
-) -> (
-    LinkManager,
-    crate::mono::browser::links::fake_extension::FakeExtension,
-    AuthResult,
-    std::sync::mpsc::Receiver<LinkEvent>,
-) {
-    let (manager, events) = LinkManager::new(
-        ManagerConfig::new(Flavor::Release, "9.9.9-test"),
-        Deps::new(
-            Arc::new(MemoryKeyStore::new()),
-            Arc::new(MemoryRecordStore::new()),
-        ),
-    );
-    manager.set_roster_source(Arc::new(Source(book.clone())));
-    manager.start_pairing_with(ProfileChoice::new("Profile 1", "Work").unwrap(), NONCE);
-    let serve = |key: PairingKey| {
-        let (conn, fake) = socket_pair(INSTANCE, key);
-        let m = manager.clone();
-        let handle = std::thread::spawn(move || m.serve(conn, &report()));
-        (fake, handle)
-    };
-    let (mut fake, handle) = serve(PairingKey::generate());
-    let key = fake.pair(&encode_bytes(&NONCE)).expect("pairing works");
-    handle.join().unwrap();
-    let (mut fake, _serving) = serve(key);
-    let auth = fake.connect().expect("connect works");
-    loop {
-        if let LinkEvent::Connected { .. } = events.recv_timeout(WAIT).expect("a connected event") {
-            break;
+    struct Source(Arc<RosterBook>);
+    impl RosterSource for Source {
+        fn snapshot(&self, instance_id: &str, profile_dir: &str) -> AuthResult {
+            self.0.snapshot(instance_id, profile_dir)
         }
     }
-    (manager, fake, auth, events)
-}
 
-#[test]
-fn the_extension_gets_the_roster_in_auth_and_roster_set_when_it_changes() {
-    let book = Arc::new(RosterBook::default());
-    book.set_monos(&[
-        mono(MIRA, "Mira", 0xd93025, "frog", "Profile 1"),
-        mono(KAI, "Kai", 0x2060f0, "cat", "Profile 2"),
-    ]);
-    let (manager, mut fake, auth, _events) = connected(&book);
-    // Link up: only this profile's Monos, with the emoji, the exact color and the group color.
-    assert_eq!(auth.roster.len(), 1, "{:?}", auth.roster);
-    assert_eq!(auth.roster[0].name, "Mira");
-    assert_eq!(auth.roster[0].emoji, "\u{1F438}");
-    assert_eq!(auth.roster[0].group_color, ChromeGroupColor::Red);
+    fn report() -> PeerReport {
+        PeerReport {
+            pid: 4242,
+            parent_pid: Some(100),
+            parent_exe: Some(PathBuf::from("/Applications/Google Chrome.app/chrome")),
+            user_data_dir: Some(PathBuf::from("/tmp/chrome-data")),
+        }
+    }
 
-    // Nothing changed since auth: nothing is sent.
-    book.publish_with(&manager);
-    // A Mono is renamed and a second one joins this profile.
-    let mut renamed = mono(MIRA, "Mira R", 0xd93025, "frog", "Profile 1");
-    renamed.badge_emoji = Some("\u{1F984}".into());
-    book.set_monos(&[renamed, mono(KAI, "Kai", 0x2060f0, "cat", "Profile 1")]);
-    let publisher = {
-        let book = book.clone();
-        let manager = manager.clone();
-        std::thread::spawn(move || book.publish_with(&manager))
-    };
-    let request = fake.next_request().expect("a request");
-    assert_eq!(request.method.as_deref(), Some(Method::RosterSet.as_str()));
-    assert_eq!(request.mono, None, "roster.set is not Mono-scoped");
-    let monos = request.params.as_ref().unwrap()["monos"]
-        .as_array()
-        .unwrap();
-    assert_eq!(monos.len(), 2);
-    assert_eq!(monos[0]["name"], "Mira R");
-    assert_eq!(monos[0]["emoji"], "\u{1F984}");
-    assert_eq!(monos[1]["id"], KAI);
-    fake.respond_ok(&request, json!({}));
-    publisher.join().unwrap();
+    /// A paired and connected fake extension of the profile "Profile 1", plus the manager.
+    fn connected(
+        book: &Arc<RosterBook>,
+    ) -> (
+        LinkManager,
+        crate::mono::browser::links::fake_extension::FakeExtension,
+        AuthResult,
+        std::sync::mpsc::Receiver<LinkEvent>,
+    ) {
+        let (manager, events) = LinkManager::new(
+            ManagerConfig::new(Flavor::Release, "9.9.9-test"),
+            Deps::new(
+                Arc::new(MemoryKeyStore::new()),
+                Arc::new(MemoryRecordStore::new()),
+            ),
+        );
+        manager.set_roster_source(Arc::new(Source(book.clone())));
+        manager.start_pairing_with(ProfileChoice::new("Profile 1", "Work").unwrap(), NONCE);
+        let serve = |key: PairingKey| {
+            let (conn, fake) = socket_pair(INSTANCE, key);
+            let m = manager.clone();
+            let handle = std::thread::spawn(move || m.serve(conn, &report()));
+            (fake, handle)
+        };
+        let (mut fake, handle) = serve(PairingKey::generate());
+        let key = fake.pair(&encode_bytes(&NONCE)).expect("pairing works");
+        handle.join().unwrap();
+        let (mut fake, _serving) = serve(key);
+        let auth = fake.connect().expect("connect works");
+        loop {
+            if let LinkEvent::Connected { .. } =
+                events.recv_timeout(WAIT).expect("a connected event")
+            {
+                break;
+            }
+        }
+        (manager, fake, auth, events)
+    }
 
-    // The same roster again is not sent: the next request the app makes is the status poll.
-    book.publish_with(&manager);
-    let handle = manager.handle(INSTANCE).expect("a live link");
-    let poll = std::thread::spawn(move || handle.request(Method::StatusGet, None, json!({}), WAIT));
-    let next = fake.next_request().expect("a request");
-    assert_eq!(next.method.as_deref(), Some(Method::StatusGet.as_str()));
-    fake.respond_ok(
-        &next,
-        json!({"stopped": false, "debugger_attached": [], "monos_active": 0}),
-    );
-    poll.join().unwrap().expect("status answered");
-}
+    #[test]
+    fn the_extension_gets_the_roster_in_auth_and_roster_set_when_it_changes() {
+        let book = Arc::new(RosterBook::default());
+        book.set_monos(&[
+            mono(MIRA, "Mira", 0xd93025, "frog", "Profile 1"),
+            mono(KAI, "Kai", 0x2060f0, "cat", "Profile 2"),
+        ]);
+        let (manager, mut fake, auth, _events) = connected(&book);
+        // Link up: only this profile's Monos, with the emoji, the exact color and the group color.
+        assert_eq!(auth.roster.len(), 1, "{:?}", auth.roster);
+        assert_eq!(auth.roster[0].name, "Mira");
+        assert_eq!(auth.roster[0].emoji, "\u{1F438}");
+        assert_eq!(auth.roster[0].group_color, ChromeGroupColor::Red);
 
-#[test]
-fn a_roster_set_the_extension_refuses_is_sent_again_next_time() {
-    let book = Arc::new(RosterBook::default());
-    let (manager, mut fake, _auth, _events) = connected(&book);
-    book.set_monos(&[mono(MIRA, "Mira", 0xd93025, "frog", "Profile 1")]);
-    for attempt in 0..2 {
+        // Nothing changed since auth: nothing is sent.
+        book.publish_with(&manager);
+        // A Mono is renamed and a second one joins this profile.
+        let mut renamed = mono(MIRA, "Mira R", 0xd93025, "frog", "Profile 1");
+        renamed.badge_emoji = Some("\u{1F984}".into());
+        book.set_monos(&[renamed, mono(KAI, "Kai", 0x2060f0, "cat", "Profile 1")]);
         let publisher = {
             let book = book.clone();
             let manager = manager.clone();
             std::thread::spawn(move || book.publish_with(&manager))
         };
         let request = fake.next_request().expect("a request");
-        assert_eq!(request.method.as_deref(), Some("roster.set"), "{attempt}");
-        if attempt == 0 {
-            fake.respond_err(
-                &request,
-                &crate::mono::browser::link::protocol::ProtocolError::new(
-                    crate::mono::browser::link::protocol::ErrorCode::Invalid,
-                    "no",
-                ),
-            );
-        } else {
-            fake.respond_ok(&request, json!({}));
-        }
+        assert_eq!(request.method.as_deref(), Some(Method::RosterSet.as_str()));
+        assert_eq!(request.mono, None, "roster.set is not Mono-scoped");
+        let monos = request.params.as_ref().unwrap()["monos"]
+            .as_array()
+            .unwrap();
+        assert_eq!(monos.len(), 2);
+        assert_eq!(monos[0]["name"], "Mira R");
+        assert_eq!(monos[0]["emoji"], "\u{1F984}");
+        assert_eq!(monos[1]["id"], KAI);
+        fake.respond_ok(&request, json!({}));
         publisher.join().unwrap();
-    }
-}
 
-#[test]
-fn a_lowered_level_that_timed_out_still_reaches_the_extension() {
-    let book = Arc::new(RosterBook::default());
-    let act = mono(MIRA, "Mira", 0xd93025, "frog", "Profile 1");
-    book.set_monos(std::slice::from_ref(&act));
-    let (manager, mut fake, auth, _events) = connected(&book);
-    assert_eq!(auth.roster[0].level, AccessLevel::Act);
-    // The level goes down, and the extension does not answer in time.
-    let mut read_only = act;
-    read_only.browser.as_mut().unwrap().trust = BrowserTrust::ReadOnly;
-    book.set_monos(&[read_only]);
-    assert!(!book.publish_timeout(&manager, Duration::from_millis(50)));
-    // Nothing else changed in the book, yet the next publish sends it again.
-    let retry = {
-        let (book, manager) = (book.clone(), manager.clone());
-        std::thread::spawn(move || book.publish_retrying(&manager, &[Duration::from_millis(1)]))
-    };
-    let stale = fake.next_request().expect("the timed out request");
-    fake.respond_ok(&stale, json!({}));
-    let again = fake.next_request().expect("the retry");
-    assert_eq!(again.params.as_ref().unwrap()["monos"][0]["level"], "read");
-    fake.respond_ok(&again, json!({}));
-    assert!(retry.join().unwrap());
+        // The same roster again is not sent: the next request the app makes is the status poll.
+        book.publish_with(&manager);
+        let handle = manager.handle(INSTANCE).expect("a live link");
+        let poll =
+            std::thread::spawn(move || handle.request(Method::StatusGet, None, json!({}), WAIT));
+        let next = fake.next_request().expect("a request");
+        assert_eq!(next.method.as_deref(), Some(Method::StatusGet.as_str()));
+        fake.respond_ok(
+            &next,
+            json!({"stopped": false, "debugger_attached": [], "monos_active": 0}),
+        );
+        poll.join().unwrap().expect("status answered");
+    }
+
+    #[test]
+    fn a_roster_set_the_extension_refuses_is_sent_again_next_time() {
+        let book = Arc::new(RosterBook::default());
+        let (manager, mut fake, _auth, _events) = connected(&book);
+        book.set_monos(&[mono(MIRA, "Mira", 0xd93025, "frog", "Profile 1")]);
+        for attempt in 0..2 {
+            let publisher = {
+                let book = book.clone();
+                let manager = manager.clone();
+                std::thread::spawn(move || book.publish_with(&manager))
+            };
+            let request = fake.next_request().expect("a request");
+            assert_eq!(request.method.as_deref(), Some("roster.set"), "{attempt}");
+            if attempt == 0 {
+                fake.respond_err(
+                    &request,
+                    &crate::mono::browser::link::protocol::ProtocolError::new(
+                        crate::mono::browser::link::protocol::ErrorCode::Invalid,
+                        "no",
+                    ),
+                );
+            } else {
+                fake.respond_ok(&request, json!({}));
+            }
+            publisher.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn a_lowered_level_that_timed_out_still_reaches_the_extension() {
+        let book = Arc::new(RosterBook::default());
+        let act = mono(MIRA, "Mira", 0xd93025, "frog", "Profile 1");
+        book.set_monos(std::slice::from_ref(&act));
+        let (manager, mut fake, auth, _events) = connected(&book);
+        assert_eq!(auth.roster[0].level, AccessLevel::Act);
+        // The level goes down, and the extension does not answer in time.
+        let mut read_only = act;
+        read_only.browser.as_mut().unwrap().trust = BrowserTrust::ReadOnly;
+        book.set_monos(&[read_only]);
+        assert!(!book.publish_timeout(&manager, Duration::from_millis(50)));
+        // Nothing else changed in the book, yet the next publish sends it again.
+        let retry = {
+            let (book, manager) = (book.clone(), manager.clone());
+            std::thread::spawn(move || book.publish_retrying(&manager, &[Duration::from_millis(1)]))
+        };
+        let stale = fake.next_request().expect("the timed out request");
+        fake.respond_ok(&stale, json!({}));
+        let again = fake.next_request().expect("the retry");
+        assert_eq!(again.params.as_ref().unwrap()["monos"][0]["level"], "read");
+        fake.respond_ok(&again, json!({}));
+        assert!(retry.join().unwrap());
+    }
 }
