@@ -83,6 +83,33 @@ test("only our own content script in the top frame of a tab can ask for Stop", (
   assert.equal(overlayStopSender({ id: "ext", frameId: 0, tab: { id: -1 } }, "ext"), null);
 });
 
+test("a stop the app could not receive is kept in session storage and sent when the link is ready", async () => {
+  const store = {};
+  const area = { get: async (k) => ({ [k]: store[k] }), set: async (o) => void Object.assign(store, o) };
+  const sent = [];
+  let up = false;
+  const stop = createStop({
+    ownerOf: () => MIRA,
+    stopTab: async () => {},
+    clearEffects: async () => {},
+    takeBack: async () => {},
+    emit: (m, p) => (up ? (sent.push([m, p]), true) : false),
+    area,
+  });
+  await stop.stopTab(4);
+  assert.deepEqual(sent, []);
+  assert.equal(store["zptah.pending_stops"].length, 1);
+  await stop.flush();
+  assert.deepEqual(sent, [], "still down: kept");
+  assert.equal(store["zptah.pending_stops"].length, 1);
+  up = true;
+  await stop.flush();
+  assert.deepEqual(sent, [["tab.stopped", { tab: 4, mono: MIRA, by: "overlay" }]]);
+  assert.deepEqual(store["zptah.pending_stops"], []);
+  await stop.flush();
+  assert.equal(sent.length, 1, "sent once");
+});
+
 // ---- the badge (spec 11.2) ----
 
 test("badge states", () => {

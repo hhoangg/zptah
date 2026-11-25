@@ -679,12 +679,12 @@ fn call_tool(gate: &Gate, route: &str, name: &str, args: Value) -> Value {
 }
 
 fn tab_stopped_event(instance: &str, mono: &str, tab: u64) {
-    let mut envelope = Envelope::event(
+    // Shaped like the extension's: no envelope `mono`, the Mono is in the params.
+    let envelope = Envelope::event(
         "x-2",
         Event::TabStopped,
         json!({"tab": tab, "mono": mono, "by": "overlay"}),
     );
-    envelope.mono = Some(mono.to_owned());
     dispatch_event(instance, &envelope);
 }
 
@@ -737,6 +737,70 @@ fn the_overlay_stop_of_one_mono_does_not_stop_another() {
         !text_of(&reply).contains("The user stopped you"),
         "{}",
         text_of(&reply)
+    );
+    two.rig.finish();
+}
+
+#[test]
+fn a_tab_stopped_event_needs_its_mono_and_ownership_and_touches_no_other_mono() {
+    let two = two(vec![]);
+    let route = two.a.route_for(Some(11));
+    two.a.begin_turn(&route, "look");
+    ok_text(call_gate(&two.a, &route, json!({"action": "list"})));
+    let route_b = said_b(&two, "look");
+    ok_text(call_gate(&two.b, &route_b, json!({"action": "list"})));
+
+    // No Mono in the params: ignored.
+    let bare = Envelope::event("x-3", Event::TabStopped, json!({"tab": 3, "by": "overlay"}));
+    dispatch_event(&two.instance, &bare);
+    assert_eq!(mirror_owner(&two, 3).as_deref(), Some(MONO));
+    // Kai names a tab that is Mira's: ignored, nothing changes for either.
+    tab_stopped_event(&two.instance, OTHER_MONO, 3);
+    assert_eq!(mirror_owner(&two, 3).as_deref(), Some(MONO));
+    // Mira names a tab that is Kai's (4): ignored.
+    tab_stopped_event(&two.instance, MONO, 4);
+    assert_eq!(mirror_owner(&two, 4).as_deref(), Some(OTHER_MONO));
+    let fine = call_tool(&two.a, &route, "browser_snapshot", json!({"tab": 3}));
+    assert!(
+        !text_of(&fine).contains("The user stopped you"),
+        "{}",
+        text_of(&fine)
+    );
+
+    // The real one: only Mira's tab 3 is taken back, Kai keeps tab 4 and can still use it.
+    tab_stopped_event(&two.instance, MONO, 3);
+    assert_eq!(mirror_owner(&two, 3), None);
+    assert_eq!(mirror_owner(&two, 4).as_deref(), Some(OTHER_MONO));
+    let kai = call_tool(&two.b, &route_b, "browser_snapshot", json!({"tab": 4}));
+    assert!(
+        !text_of(&kai).contains("The user stopped you"),
+        "{}",
+        text_of(&kai)
+    );
+    two.rig.finish();
+}
+
+#[test]
+fn only_the_user_dragging_a_stopped_tab_back_ends_the_mark() {
+    let two = two(vec![]);
+    let route = two.a.route_for(Some(11));
+    two.a.begin_turn(&route, "look");
+    ok_text(call_gate(&two.a, &route, json!({"action": "list"})));
+    tab_stopped_event(&two.instance, MONO, 3);
+    // A popup or any other claim does not clear it.
+    ownership_event(&two.instance, 3, Some(MONO), "popup");
+    let still = call_tool(&two.a, &route, "browser_snapshot", json!({"tab": 3}));
+    assert!(
+        text_of(&still).contains("The user stopped you"),
+        "{}",
+        text_of(&still)
+    );
+    ownership_event(&two.instance, 3, Some(MONO), "user_drag");
+    let again = call_tool(&two.a, &route, "browser_snapshot", json!({"tab": 3}));
+    assert!(
+        !text_of(&again).contains("The user stopped you"),
+        "{}",
+        text_of(&again)
     );
     two.rig.finish();
 }

@@ -67,3 +67,16 @@ test("dev id derived from the dev key is stable", () => {
   assert.match(id, /^[a-p]{32}$/);
   assert.equal(id, "bmmfejkhajglhijajgdgfckhonddijjh");
 });
+
+test("the test hook exists only in the dev build", () => {
+  const out = mkdtempSync(join(tmpdir(), "zptah-ext-h-"));
+  try {
+    build({ outRoot: out });
+    assert.ok(readdirSync(join(out, "dev/src/worker")).includes("test-hook.js"));
+    assert.match(readFileSync(join(out, "dev/src/worker/main.js"), "utf8"), /installTestHook/);
+    assert.equal(readdirSync(join(out, "store/src/worker")).includes("test-hook.js"), false);
+    assert.doesNotMatch(readFileSync(join(out, "store/src/worker/main.js"), "utf8"), /installTestHook|__zptah/);
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});

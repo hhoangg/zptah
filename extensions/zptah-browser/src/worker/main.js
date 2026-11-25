@@ -41,7 +41,10 @@ let badge = null;
 export const link = new BrowserLink({
   // A connection brings its roster in `auth`: the groups take the Monos' titles and colors.
   onStatus: (status) => {
-    if (status === "ready") void ownership?.syncRoster();
+    if (status === "ready") {
+      void ownership?.syncRoster();
+      void stop.flush();
+    }
     badge?.update();
   },
   hostName: HOST_NAME,
@@ -98,7 +101,8 @@ const stop = createStop({
     ownership?.takeBack(tab);
     await ownership?.groups.ungroup(tab);
   },
-  emit: (method, params) => void link.sendEvent(method, params),
+  emit: (method, params) => link.sendEvent(method, params),
+  area: chrome.storage.session,
 });
 
 // Messages: from our own pair and options pages (nonce to pair with, a status poll, unpair) and
@@ -169,6 +173,7 @@ function keepAlive() {
   void link.tick();
   void acts.sweep();
   void effects?.sweep();
+  void stop.flush();
   badge?.update();
 }
 setInterval(keepAlive, PING_INTERVAL_MS);

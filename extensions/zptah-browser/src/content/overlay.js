@@ -100,8 +100,8 @@
     const doc = root.document;
     const el = doc.createElement("div");
     el.setAttribute("popover", "manual");
-    el.setAttribute("aria-hidden", "true");
-    el.setAttribute("inert", "");
+    // No `inert` or `aria-hidden` here: both reach into the shadow tree and would make the Stop
+    // button unclickable. Only the glow layer is inert.
     applyStyle(el, true);
     const shadow = el.attachShadow({ mode: "closed" });
     const style = doc.createElement("style");
@@ -114,6 +114,8 @@
       ".i{width:12px;height:12px;display:inline-block;border-radius:2px}";
     const glow = doc.createElement("div");
     glow.className = "g";
+    glow.setAttribute("inert", "");
+    glow.setAttribute("aria-hidden", "true");
     const wrap = doc.createElement("div");
     wrap.className = "w";
     const button = doc.createElement("button");
@@ -213,7 +215,11 @@
       watcher.observe(doc.documentElement, { childList: true });
       watcher.observe(host, { attributes: true });
       doc.addEventListener?.("fullscreenchange", () => ensure(true), true);
-      doc.addEventListener?.("toggle", () => ensure(true), true);
+      // A popover or dialog of the page opened: show again on top. Our own host's toggle is ignored,
+      // or showing it would trigger itself in a loop.
+      doc.addEventListener?.("toggle", (/** @type {any} */ e) => {
+        if (e?.target !== host) ensure(true);
+      }, true);
       timer = root.setInterval(() => ensure(), TICK_MS);
     }
     mode = pageMode();

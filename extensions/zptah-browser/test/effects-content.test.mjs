@@ -167,3 +167,24 @@ test("hiding the overlay removes the host and stops the timers", () => {
   page.tick();
   assert.equal(hostOf(page), undefined, "the dead tick does not bring it back");
 });
+
+test("the overlay host is not inert (inert would reach the Stop button); only the glow is", () => {
+  const page = load();
+  page.ns.run("overlay_show", MIRA);
+  const host = hostOf(page);
+  assert.equal(host.getAttribute("inert"), null);
+  assert.equal(host.getAttribute("aria-hidden"), null);
+  assert.equal(host.find((n) => n.className === "g")[0].getAttribute("inert"), "");
+  assert.equal(buttonOf(page).getAttribute("inert"), null);
+});
+
+test("the toggle event of our own host does not hide and show it again in a loop", () => {
+  const page = load();
+  page.ns.run("overlay_show", MIRA);
+  const host = hostOf(page);
+  const before = page.state.shown.length;
+  page.doc.dispatch("toggle", { target: host });
+  assert.equal(page.state.shown.length, before);
+  page.doc.dispatch("toggle", { target: page.doc.body });
+  assert.equal(page.state.shown.length, before + 1, "another popover of the page does re-show it");
+});

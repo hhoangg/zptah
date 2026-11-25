@@ -26,6 +26,8 @@ const CACHE = process.env.ZPTAH_E2E_CACHE ?? join(REPO, ".cache", "zptah-e2e");
 const PAGES = {
   "/": `<!doctype html><title>Fixture shop</title><h1>Fixture shop</h1><p>Hello from the fixture page.</p>
 <button id="buy">Buy now</button> <a href="/article">Read the article</a>`,
+  "/s1": `<!doctype html><title>Stop page one</title><h1>Stop page one</h1><p>A page the Mono works in.</p>`,
+  "/s2": `<!doctype html><title>Stop page two</title><h1>Stop page two</h1><p>Another page the Mono works in.</p>`,
   "/article": `<!doctype html><title>Quiet harbors</title><article><h1>Quiet harbors</h1>
 <p>The harbor was quiet at dawn, and the boats rocked slowly against the old stone pier.</p>
 <p>Fishermen mended their nets while gulls circled the empty market square above them.</p></article>`,
@@ -260,6 +262,101 @@ async function main() {
 
   const activeAfter = await activeTabs();
   check("no tab became active during the reads", activeBefore === activeAfter, `${activeBefore} -> ${activeAfter}`);
+
+  // ---- the overlay's Stop (spec 10a). The dev-only hook puts the worker where a Mono's first
+  // action leaves it; the clicks are real input events sent through CDP (trusted), and the
+  // synthetic one is made by page-world script (untrusted).
+  const MONO = /** @type {string} */ ((/** @type {any} */ (await app.ready)).mono);
+  const hook = (/** @type {string} */ expr) => cdp.evaluate(worker.targetId, `globalThis.__zptahTest.${expr}`);
+  const tabOf = async (/** @type {string} */ path) => {
+    const t = await app.tool("browser_tabs", { action: "list", all: true });
+    return tabId(t.text.split("\n").find((/** @type {string} */ l) => l.includes(`${fixture}${path}`)));
+  };
+  /** The Stop button of a page, found through the closed shadow root with a piercing DOM walk. */
+  const findStop = async (/** @type {string} */ sid) => {
+    const { root } = await cdp.send("DOM.getDocument", { depth: -1, pierce: true }, sid);
+    /** @type {any} */
+    let found = null;
+    const walk = (/** @type {any} */ n) => {
+      if (found) return;
+      if (n.nodeName === "BUTTON" && (n.attributes ?? []).includes("b")) found = n;
+      for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? []), ...(n.contentDocument ? [n.contentDocument] : [])]) walk(c);
+    };
+    walk(root);
+    return found;
+  };
+  const waitFor = async (/** @type {() => Promise<any>} */ fn, ms = 8000) => {
+    const end = Date.now() + ms;
+    for (;;) {
+      const v = await fn();
+      if (v || Date.now() > end) return v;
+      await sleep(250);
+    }
+  };
+  const sawEvent = async (/** @type {string} */ name) => {
+    for (let i = 0; i < 12; i += 1) {
+      const r = /** @type {any} */ (await app.call({ cmd: "wait", kind: "extension", timeout_ms: 1500 }));
+      if (r.ok && r.event?.event === name) return true;
+      if (!r.ok) return false;
+    }
+    return false;
+  };
+
+  const page1 = await cdp.openTab(`${fixture}/s1`);
+  await sleep(1200);
+  const t1 = await tabOf("/s1");
+  const begun = /** @type {any} */ (await hook(`begin(${t1}, ${JSON.stringify(MONO)})`));
+  check("the dev hook puts the Mono on the tab with its overlay drawn", begun?.owner === MONO && begun?.overlay === true, JSON.stringify(begun));
+  await tabOf("/s1"); // lists again: the app's ownership mirror learns the owner
+  const { sessionId: sid1 } = await cdp.send("Target.attachToTarget", { targetId: page1, flatten: true });
+  await cdp.send("DOM.enable", {}, sid1);
+  const stopButton = await waitFor(() => findStop(sid1));
+  check("the Stop button is in the page, inside a closed shadow root", Boolean(stopButton));
+  const host = /** @type {any} */ (await cdp.send("Runtime.evaluate", { expression: "document.documentElement.lastElementChild.shadowRoot === null", returnByValue: true }, sid1));
+  check("page script cannot see into the overlay (closed root)", host.result?.value === true, JSON.stringify(host.result));
+
+  // A synthetic click made by a page script does nothing.
+  const resolved = await cdp.send("DOM.resolveNode", { nodeId: stopButton.nodeId }, sid1);
+  await cdp.send(
+    "Runtime.callFunctionOn",
+    { objectId: resolved.object.objectId, functionDeclaration: "function(){ this.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,composed:true})); this.dispatchEvent(new MouseEvent('click',{bubbles:true,composed:true})); this.click(); }" },
+    sid1,
+  );
+  await sleep(1000);
+  const afterSynthetic = /** @type {any} */ (await hook(`state(${t1})`));
+  check("a synthetic click on Stop does nothing", afterSynthetic.owner === MONO && afterSynthetic.overlay === true && !afterSynthetic.takenBack, JSON.stringify(afterSynthetic));
+
+  // A real click stops the Mono on that tab.
+  const box = await cdp.send("DOM.getBoxModel", { nodeId: stopButton.nodeId }, sid1);
+  const q = box.model.content;
+  const cx = (q[0] + q[2] + q[4] + q[6]) / 4;
+  const cy = (q[1] + q[3] + q[5] + q[7]) / 4;
+  for (const [type, extra] of /** @type {[string, Record<string, unknown>][]} */ ([["mouseMoved", {}], ["mousePressed", { button: "left", clickCount: 1 }], ["mouseReleased", { button: "left", clickCount: 1 }]])) {
+    await cdp.send("Input.dispatchMouseEvent", { type, x: cx, y: cy, ...extra }, sid1);
+  }
+  const stopped1 = await waitFor(async () => {
+    const st = /** @type {any} */ (await hook(`state(${t1})`));
+    return st.owner === null ? st : null;
+  });
+  check("a real click on Stop gives the tab back to the user", Boolean(stopped1) && stopped1.takenBack === true && stopped1.overlay === false, JSON.stringify(stopped1));
+  check("the overlay is gone from the page", (await waitFor(async () => !(await findStop(sid1)))) === true);
+  check("the app is told with tab.stopped", await sawEvent("tab.stopped"));
+  const afterStop = await app.tool("browser_snapshot", { tab: t1 });
+  check("the Mono's next call on that tab is the 'user stopped you' error", afterStop.isError && /The user stopped you on the tab "Stop page one"/.test(afterStop.text), afterStop.text);
+  await cdp.send("Target.detachFromTarget", { sessionId: sid1 }).catch(() => {});
+
+  // The hook stops a second tab the same way (what a click does, without a pointer).
+  await cdp.openTab(`${fixture}/s2`);
+  await sleep(1200);
+  const t2 = await tabOf("/s2");
+  await hook(`begin(${t2}, ${JSON.stringify(MONO)})`);
+  await tabOf("/s2");
+  const viaHook = /** @type {any} */ (await hook(`stopTab(${t2})`));
+  const st2 = /** @type {any} */ (await hook(`state(${t2})`));
+  check("the test hook stops the Mono on a tab", viaHook?.stopped === true && st2.owner === null && st2.takenBack === true, JSON.stringify([viaHook, st2]));
+  check("the app is told about the hook stop too", await sawEvent("tab.stopped"));
+  const stopped2 = await app.tool("browser_read", { tab: t2 });
+  check("a read on that tab is refused with the stop text", stopped2.isError && /The user stopped you on the tab/.test(stopped2.text), stopped2.text);
 
   // Teardown of the dev browser before the store build check.
   await app.call({ cmd: "quit" }, 5000).catch(() => {});

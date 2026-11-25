@@ -11,12 +11,48 @@
  * @param {(tab: number) => Promise<void>} deps.stopTab cancels the tab's prepares, detaches the debugger
  * @param {(tab: number) => Promise<void>} deps.clearEffects removes the cursor and the overlay
  * @param {(tab: number) => Promise<unknown>} deps.takeBack the tab becomes the user's (marked, ungrouped)
- * @param {(method: string, params: Record<string, unknown>) => unknown} deps.emit event to the app
+ * @param {(method: string, params: Record<string, unknown>) => unknown} deps.emit event to the app; returns false when the link is not ready
+ * @param {{ get(key: string): Promise<Record<string, any>>, set(items: Record<string, unknown>): Promise<void> }} [deps.area] chrome.storage.session, for events the app has not received yet
  * @param {(tab: number) => void} [deps.onStopped]
  */
 export function createStop(deps) {
   /** @type {Map<number, Promise<{ stopped: boolean }>>} */
   const running = new Map();
+  const PENDING = "zptah.pending_stops";
+
+  /** @returns {Promise<Record<string, unknown>[]>} */
+  async function pending() {
+    try {
+      const v = (await deps.area?.get(PENDING))?.[PENDING];
+      return Array.isArray(v) ? v : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Sends the stops the app has not seen (the link was down when the user pressed Stop). */
+  async function flush() {
+    const list = await pending();
+    if (list.length === 0) return;
+    const left = [];
+    for (const p of list) if (deps.emit("tab.stopped", p) === false) left.push(p);
+    try {
+      await deps.area?.set({ [PENDING]: left });
+    } catch {
+      // The events were sent; a stale list is resent at most once more.
+    }
+  }
+
+  /** @param {Record<string, unknown>} params */
+  async function send(params) {
+    if (deps.emit("tab.stopped", params) !== false) return;
+    const list = await pending();
+    try {
+      await deps.area?.set({ [PENDING]: [...list, params].slice(-50) });
+    } catch {
+      // No storage: the stop still happened in the browser.
+    }
+  }
 
   /**
    * Stops the owner Mono on the tab. Does nothing when nobody owns it (already stopped, or the
@@ -41,7 +77,7 @@ export function createStop(deps) {
         // The page may have navigated away.
       }
       await deps.takeBack(tab);
-      deps.emit("tab.stopped", { tab, mono, by: "overlay" });
+      await send({ tab, mono, by: "overlay" });
       deps.onStopped?.(tab);
       return { stopped: true };
     })().finally(() => running.delete(tab));
@@ -49,7 +85,7 @@ export function createStop(deps) {
     return work;
   }
 
-  return { stopTab, isStopping: (/** @type {number} */ tab) => running.has(tab) };
+  return { stopTab, flush, isStopping: (/** @type {number} */ tab) => running.has(tab) };
 }
 
 /**

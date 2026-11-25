@@ -255,10 +255,9 @@ impl ExtensionUpstream {
         mut params: Value,
         deadline_ms: u64,
     ) -> Result<Value, RequestError> {
-        if let Some(tab) = params["tab"].as_u64() {
-            if let Some(error) = self.stopped_tab_error(tab) {
-                return Err(error);
-            }
+        let tab = params["tab"].as_u64();
+        if let Some(error) = tab.and_then(|t| self.stopped_tab_error(t)) {
+            return Err(error);
         }
         let Some(link) = (self.link)().filter(LinkHandle::is_open) else {
             return Err(RequestError::Closed);
@@ -267,7 +266,12 @@ impl ExtensionUpstream {
             map.insert("deadline_ms".into(), json!(deadline_ms));
         }
         let wait = Duration::from_millis(deadline_ms) + LINK_GRACE;
-        link.request(method, Some(&self.mono_id), params, wait)
+        let result = link.request(method, Some(&self.mono_id), params, wait);
+        // The user pressed Stop while the call ran (a snapshot, a wait): that is the answer.
+        match tab.and_then(|t| self.stopped_tab_error(t)) {
+            Some(error) => Err(error),
+            None => result,
+        }
     }
 
     /// The error every call on a tab gets after the user pressed the in-page Stop there.

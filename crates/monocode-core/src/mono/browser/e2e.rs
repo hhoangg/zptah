@@ -110,7 +110,24 @@ fn run_app(args: &[String]) -> Result<(), String> {
     };
     reply(&json!({"event": "ready", "mono": MONO, "extension_id": DEV_EXTENSION_ID}));
 
-    let mut events = Events::new(events);
+    // The pump of the real app: every extension event goes to the gate (Stop, tab.stopped, ...)
+    // before the runner can wait for it.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok(event) = events.recv() {
+            if let LinkEvent::Extension {
+                instance_id,
+                envelope,
+            } = &event
+            {
+                super::gate::extension::act::dispatch_event(instance_id, envelope);
+            }
+            if tx.send(event).is_err() {
+                break;
+            }
+        }
+    });
+    let mut events = Events::new(rx);
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let line = line.map_err(|e| e.to_string())?;
@@ -212,7 +229,7 @@ impl Events {
             ),
             LinkEvent::Extension { envelope, .. } => (
                 "extension".into(),
-                json!({"kind": "extension", "event": format!("{:?}", envelope.method)}),
+                json!({"kind": "extension", "event": envelope.method.clone().unwrap_or_default()}),
             ),
         }
     }

@@ -163,7 +163,9 @@ pub(crate) fn dispatch_event(instance_id: &str, envelope: &Envelope) {
         let change = ownership::with_table(instance_id, |table| {
             table.apply_event(&params, crate::time::now_ms())
         });
-        if let Some(change) = change.as_ref() {
+        // Only the user dragging the tab back into the group ends the Stop mark.
+        let dragged_back = params["by"].as_str() == Some("user_drag");
+        if let Some(change) = change.as_ref().filter(|_| dragged_back) {
             for upstream in all.iter().filter(|u| {
                 change.to.as_deref() == Some(u.mono_id.as_str())
                     && (u.link)().is_some_and(|l| l.instance_id() == instance_id)
@@ -181,6 +183,24 @@ pub(crate) fn dispatch_event(instance_id: &str, envelope: &Envelope) {
                     && (u.link)().is_some_and(|l| l.instance_id() == instance_id)
             }) {
                 upstream.tab_taken_back(change.tab);
+            }
+        }
+        return;
+    }
+    // The overlay's Stop names its Mono in the params (`tab.stopped {tab, mono, by}`). Only that
+    // Mono's upstream acts, and only when the mirror says it owns the tab; an event without a
+    // Mono, or for a tab the Mono does not own, changes nothing.
+    if envelope.method.as_deref() == Some(Event::TabStopped.as_str()) {
+        let params = envelope.params.clone().unwrap_or(Value::Null);
+        let (Some(mono), Some(tab)) = (params["mono"].as_str(), params["tab"].as_u64()) else {
+            return;
+        };
+        for upstream in all.iter().filter(|u| {
+            u.mono_id == mono && (u.link)().is_some_and(|l| l.instance_id() == instance_id)
+        }) {
+            let owns = ownership::with_table(instance_id, |t| t.owner_of(tab) == Some(mono));
+            if owns {
+                upstream.tab_stopped_by_user(tab);
             }
         }
         return;
@@ -379,11 +399,6 @@ impl ExtensionUpstream {
                         profile: None,
                     },
                 );
-            }
-            e if e == Event::TabStopped.as_str() => {
-                if let Some(tab) = params["tab"].as_u64() {
-                    self.tab_stopped_by_user(tab);
-                }
             }
             e if e == Event::DialogOpened.as_str() => {
                 if let Some(tab) = params["tab"].as_u64() {
