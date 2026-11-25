@@ -12,8 +12,8 @@
 //!   `"zptah-browser/1 session"`, 32 bytes of output.
 //! - frame MAC: `HMAC-SHA256(S, direction || seq || canonical)` where `direction` is one byte
 //!   (1 extension to app, 2 app to extension), `seq` is 8 bytes big endian, and `canonical` is the
-//!   UTF-8 of the envelope without `mac`, keys sorted, no whitespace, integers only (an integral
-//!   float such as `1.0` counts as `1`).
+//!   UTF-8 of the envelope without `mac`, ASCII keys sorted, no whitespace, plain integers only
+//!   (`1.0` is refused). The MAC covers the parsed envelope, not the received bytes.
 
 use super::protocol::{
     negotiate, AuthParams, Envelope, ErrorCode, HelloParams, HelloResult, PairBeginParams,
@@ -257,8 +257,9 @@ impl Direction {
     }
 }
 
-/// Canonical JSON for MACs: object keys sorted, no whitespace, integers only (no fractions, so the
-/// bytes match `JSON.stringify` with sorted keys on the JavaScript side).
+/// Canonical JSON for MACs: object keys sorted, no whitespace, plain integers in the safe range and
+/// ASCII object keys, so the bytes match `JSON.stringify` with sorted keys in JavaScript. It runs on
+/// untrusted frames before the MAC check, so it must never panic.
 pub fn canonical_json(value: &Value) -> Result<String, ProtocolError> {
     let mut out = String::new();
     write_canonical(value, &mut out)?;
@@ -270,20 +271,17 @@ fn write_canonical(value: &Value, out: &mut String) -> Result<(), ProtocolError>
         Value::Null => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Value::Number(n) => {
+            // Only values JSON writes as plain integers: `1.0` and `1e2` are refused, so the
+            // MAC input never depends on how a float was spelled.
             let bad = || ProtocolError::invalid("numbers must be safe integers");
             let int = if let Some(i) = n.as_i64() {
                 i
             } else if let Some(u) = n.as_u64() {
                 i64::try_from(u).map_err(|_| bad())?
             } else {
-                // `1.0` and `1` are the same number to JavaScript, so an integral float is fine.
-                let f = n.as_f64().ok_or_else(bad)?;
-                if f.fract() != 0.0 {
-                    return Err(bad());
-                }
-                f as i64
+                return Err(bad());
             };
-            if int.abs() > MAX_SAFE_INT {
+            if int.unsigned_abs() > MAX_SAFE_INT as u64 {
                 return Err(bad());
             }
             out.push_str(&int.to_string());
@@ -302,6 +300,10 @@ fn write_canonical(value: &Value, out: &mut String) -> Result<(), ProtocolError>
             out.push(']');
         }
         Value::Object(map) => {
+            // ASCII keys sort the same by byte (Rust) and by UTF-16 unit (JavaScript).
+            if map.keys().any(|k| !k.is_ascii()) {
+                return Err(ProtocolError::invalid("object keys must be ASCII"));
+            }
             let mut keys: Vec<&String> = map.keys().collect();
             keys.sort();
             out.push('{');
@@ -371,7 +373,7 @@ impl Session {
         Ok(())
     }
 
-    /// Verifies an incoming frame: MAC first, then the counter. State changes only on success.
+    /// Verifies an incoming frame: MAC first, then the counter, which must be exactly the next one. State changes only on success.
     pub fn open(&mut self, envelope: &Envelope) -> Result<(), AuthError> {
         let (Some(seq), Some(mac)) = (envelope.seq, envelope.mac.as_deref()) else {
             return Err(AuthError::Replay);
@@ -380,7 +382,7 @@ impl Session {
         if !verify_b64(self.key.as_bytes(), &[&input], mac) {
             return Err(AuthError::BadFrameMac);
         }
-        if seq <= self.received {
+        if seq != self.received + 1 {
             return Err(AuthError::Replay);
         }
         self.received = seq;
@@ -493,6 +495,9 @@ impl AppHandshake {
         }
         // Whatever happens next, this connection does not get a second hello.
         self.state = AppState::Done;
+        if !super::protocol::is_hex32(&hello.instance_id) {
+            return Err(ProtocolError::invalid("`instance_id` is not 32 hex").into());
+        }
         let protocol = negotiate(hello.protocol)?;
         let ext = decode_challenge(&hello.challenge)?;
         if !hello.paired {
@@ -565,12 +570,17 @@ impl AppHandshake {
         let AppState::AwaitPair { instance_id } = state else {
             return Err(AuthError::OutOfOrder);
         };
+        if !super::protocol::is_hex32(&params.instance_id) {
+            return Err(ProtocolError::invalid("`instance_id` is not 32 hex").into());
+        }
         if instance_id != params.instance_id {
             return Err(AuthError::PairingBadNonce);
         }
         window.consume(&params.nonce, now_ms)?;
         let key = PairingKey::generate();
-        let result = PairBeginResult { key: key.to_b64() };
+        let result = PairBeginResult {
+            key: super::protocol::SecretString::new(key.to_b64()),
+        };
         Ok((result, key))
     }
 }

@@ -470,7 +470,12 @@ fn typed_payloads_round_trip_through_the_schema() {
             instance_id: INSTANCE.into(),
         },
     );
-    assert_round_trip("PairBeginResult", &PairBeginResult { key: b64_of(32) });
+    assert_round_trip(
+        "PairBeginResult",
+        &PairBeginResult {
+            key: SecretString::new(b64_of(32)),
+        },
+    );
     assert_round_trip("TabInfo", &tab_info());
     assert_round_trip(
         "TabInfo",
@@ -1072,9 +1077,39 @@ fn a_replayed_or_reordered_frame_is_refused() {
     app.seal(&mut second).unwrap();
     let mut third = Envelope::request("a-3", Method::StatusGet, json!({}));
     app.seal(&mut third).unwrap();
+    // A gap (seq 3 before seq 2) is refused: a dropped frame is not silently skipped.
+    assert_eq!(ext.open(&third).unwrap_err(), AuthError::Replay);
+    ext.open(&second).unwrap();
     ext.open(&third).unwrap();
-    // Delivered late: seq 2 is now below the last accepted seq 3.
+    // Delivered again: seq 2 is below the next expected seq 4.
     assert_eq!(ext.open(&second).unwrap_err(), AuthError::Replay);
+}
+
+#[test]
+fn instance_ids_are_revalidated_in_the_handshake() {
+    let k = key(12);
+    let mut hello = ExtHandshake::new(k.clone(), INSTANCE).hello(true, "1.0.0", "Chrome");
+    hello.instance_id = "NOT-HEX".into();
+    let error = AppHandshake::new()
+        .on_hello(&hello, &ctx(Some(&k), false), &mut ChallengeLog::default())
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::Invalid);
+
+    let (mut window, nonce) = PairingWindow::open(0);
+    let mut app = AppHandshake::new();
+    app.on_hello(
+        &paired_hello(),
+        &ctx(None, true),
+        &mut ChallengeLog::default(),
+    )
+    .unwrap();
+    let params = PairBeginParams {
+        nonce,
+        instance_id: "x".into(),
+    };
+    let error = app.on_pair_begin(&params, &mut window, 1).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::Invalid);
+    assert!(window.is_open(1));
 }
 
 #[test]
@@ -1111,14 +1146,25 @@ fn frames_from_another_session_do_not_verify() {
 
 #[test]
 fn canonical_json_is_stable_and_integer_only() {
-    let value = json!({"b": [1, true, null, "x\"y\n"], "a": {"z": 1, "y": -2}, "é": "ü\u{1f600}"});
+    let value = json!({"b": [1, true, null, "x\"y\n"], "a": {"z": 1, "y": -2}, "e": "ü\u{1f600}"});
     assert_eq!(
         canonical_json(&value).unwrap(),
-        "{\"a\":{\"y\":-2,\"z\":1},\"b\":[1,true,null,\"x\\\"y\\n\"],\"é\":\"ü\u{1f600}\"}"
+        "{\"a\":{\"y\":-2,\"z\":1},\"b\":[1,true,null,\"x\\\"y\\n\"],\"e\":\"ü\u{1f600}\"}"
     );
-    let from_text: Value = serde_json::from_str("{\"n\": 1.0, \"m\": 12}").unwrap();
-    assert_eq!(canonical_json(&from_text).unwrap(), "{\"m\":12,\"n\":1}");
-    for bad in ["1.5", "9007199254740992", "-9007199254740992", "1e300"] {
+    for bad in [
+        "1.5",
+        "1.0",
+        "1e2",
+        "-0.0",
+        "9007199254740992",
+        "-9007199254740992",
+        "1e300",
+        "-1e19",
+        "1e19",
+        "-9223372036854775808",
+        "9223372036854775807",
+        "18446744073709551615",
+    ] {
         let value: Value = serde_json::from_str(&format!("{{\"n\":{bad}}}")).unwrap();
         assert_eq!(
             error_of(canonical_json(&value)),
@@ -1126,6 +1172,8 @@ fn canonical_json_is_stable_and_integer_only() {
             "{bad}"
         );
     }
+    let non_ascii: Value = serde_json::from_str("{\"\u{e9}\":1}").unwrap();
+    assert_eq!(error_of(canonical_json(&non_ascii)), ErrorCode::Invalid);
     let safe: Value = serde_json::from_str("{\"n\":9007199254740991}").unwrap();
     assert_eq!(canonical_json(&safe).unwrap(), "{\"n\":9007199254740991}");
 }
@@ -1134,6 +1182,16 @@ fn canonical_json_is_stable_and_integer_only() {
 fn keys_never_print() {
     let k = key(10);
     assert!(!format!("{k:?}").contains("10"));
+    // The pairing key on the wire never shows in Debug output, typed or as an envelope.
+    let secret = b64_of(32);
+    let result = PairBeginResult {
+        key: SecretString::new(secret.clone()),
+    };
+    assert!(!format!("{result:?}").contains(&secret));
+    let envelope = Envelope::response_ok("x-1", serde_json::to_value(&result).unwrap());
+    assert!(!format!("{envelope:?}").contains(&secret));
+    let request = Envelope::request("a-1", Method::PairBegin, json!({"nonce": secret}));
+    assert!(!format!("{request:?}").contains(&secret));
     let (app, _) = connect(&k);
     assert!(format!("{app:?}").contains("redacted"));
 }
@@ -1160,7 +1218,7 @@ fn pairing_hands_out_a_key_once_and_the_normal_handshake_then_works() {
     };
     let (reply, stored) = app.on_pair_begin(&params, &mut window, 2_000).unwrap();
     assert_eq!(
-        PairingKey::from_b64(&reply.key).unwrap().as_bytes(),
+        PairingKey::from_b64(reply.key.expose()).unwrap().as_bytes(),
         stored.as_bytes()
     );
     assert!(!window.is_open(2_000));
@@ -1312,7 +1370,7 @@ fn vector_frames() -> Vec<(Direction, Envelope)> {
         json!({"tab": 1, "time_ms": 9007199254740991i64, "load": true}),
     )
     .with_mono(MONO);
-    four.seq = Some(9007199254740990);
+    four.seq = Some(2);
     vec![
         (Direction::AppToExtension, one),
         (Direction::ExtensionToApp, two),
@@ -1373,15 +1431,14 @@ fn build_vectors() -> Value {
             "ext_mac": "HMAC-SHA256(key, \"zptah-browser/1|ext|\" || app_challenge || ext_challenge || utf8(instance_id))",
             "session_key": "HKDF-SHA256(ikm = key, salt = ext_challenge || app_challenge, info = \"zptah-browser/1 session\", length 32)",
             "frame_mac": "HMAC-SHA256(session_key, direction_byte || seq_u64_big_endian || utf8(canonical)); direction 1 = extension to app, 2 = app to extension",
-            "canonical": "envelope without mac, object keys sorted by code point, no whitespace, integers only (safe range), JSON string escaping as JSON.stringify"
+            "canonical": "envelope without mac, object keys sorted by code point, no whitespace, plain integers only (safe range; 1.0 and 1e2 are rejected), ASCII object keys only, JSON string escaping as JSON.stringify"
         },
         "frames": frames,
         "canonical_cases": [
             {"json": "{\"b\":1,\"a\":{\"d\":[1,2],\"c\":null}}", "canonical": "{\"a\":{\"c\":null,\"d\":[1,2]},\"b\":1}"},
-            {"json": "{\"n\": 1.0}", "canonical": "{\"n\":1}"},
             {"json": "{\"s\":\"\\u00e9\\n\\\"\"}", "canonical": "{\"s\":\"\u{e9}\\n\\\"\"}"}
         ],
-        "canonical_rejects": ["{\"n\":1.5}", "{\"n\":9007199254740992}", "{\"n\":1e300}"]
+        "canonical_rejects": ["{\"n\":1.5}", "{\"n\":1.0}", "{\"n\":1e2}", "{\"n\":9007199254740992}", "{\"n\":-1e19}", "{\"n\":1e300}", "{\"\\u00e9\":1}"]
     })
 }
 

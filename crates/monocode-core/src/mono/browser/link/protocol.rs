@@ -353,7 +353,7 @@ impl Event {
 
 /// Every message. Unknown fields are ignored on read (spec 5.2), so a newer peer may add fields.
 /// `seq` and `mac` are present on every frame after `auth` (spec 5.3).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
     pub v: u32,
     #[serde(rename = "type")]
@@ -375,6 +375,24 @@ pub struct Envelope {
     pub seq: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
+}
+
+/// `params` and `result` can carry the pairing key (`pair.begin`), so Debug never prints them.
+impl std::fmt::Debug for Envelope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Envelope")
+            .field("v", &self.v)
+            .field("type", &self.kind)
+            .field("id", &self.id)
+            .field("method", &self.method)
+            .field("mono", &self.mono)
+            .field("params", &self.params.as_ref().map(|_| "<redacted>"))
+            .field("ok", &self.ok)
+            .field("result", &self.result.as_ref().map(|_| "<redacted>"))
+            .field("error", &self.error.as_ref().map(|e| e.code))
+            .field("seq", &self.seq)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Envelope {
@@ -721,10 +739,30 @@ pub struct PairBeginParams {
     pub instance_id: String,
 }
 
+/// A secret string (the pairing key on the wire). Serializes as a plain string; Debug redacts it.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SecretString(String);
+
+impl SecretString {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self(text.into())
+    }
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretString(<redacted>)")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PairBeginResult {
     /// The pairing key K (32 bytes, standard base64), sent exactly once.
-    pub key: String,
+    pub key: SecretString,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
