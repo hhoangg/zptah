@@ -33,10 +33,13 @@ if (name === 'tar') {
   fs.writeFileSync(args[1], fs.existsSync(plist) ? fs.readFileSync(plist) : 'archive bytes');
 }
 if (name === 'codesign' && args[0] === '-dv') {
-  process.stderr.write(process.env.FAKE_SIGNATURE || 'Identifier=app.zptah.desktop\\n');
+  process.stderr.write(process.env.FAKE_SIGNATURE || 'Identifier=app.zptah.desktop\\nCodeDirectory v=20500 flags=0x10000(runtime) hashes=1+7\\n');
 }
 if (name === 'codesign' && args[0] === '-d' && args[1] === '-r-') {
   process.stderr.write(process.env.FAKE_REQUIREMENT ?? ('designated => identifier "app.zptah.desktop" and certificate leaf = H"' + '${SHA.toLowerCase()}' + '"\\n'));
+}
+if (name === 'codesign' && args[0] === '-d' && args[1] === '--entitlements') {
+  process.stdout.write(process.env.FAKE_ENTITLEMENTS ?? '<?xml version="1.0"?><plist><dict><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/></dict></plist>');
 }
 if (name === 'security') {
   process.stdout.write(process.env.FAKE_IDENTITIES ?? ('  1) ${SHA} "Monoptah Native Release Signing" (CSSMERR_TP_NOT_TRUSTED)\\n     1 identities found\\n'));
@@ -69,8 +72,9 @@ async function setup(t, { binaryVersion = "0.34.0" } = {}) {
   delete process.env.MONOPTAH_NATIVE_SIGNING_KEYCHAIN;
   delete process.env.FAKE_IDENTITIES;
   delete process.env.FAKE_REQUIREMENT;
+  delete process.env.FAKE_ENTITLEMENTS;
   t.after(() => {
-    for (const key of ["PATH", "FAKE_TOOL_LOG", "FAKE_ARCH", "FAKE_SIGNATURE", "FAKE_IDENTITIES", "FAKE_REQUIREMENT", "MONOPTAH_NATIVE_SIGNING_IDENTITY", "MONOPTAH_NATIVE_SIGNING_KEYCHAIN"]) {
+    for (const key of ["PATH", "FAKE_TOOL_LOG", "FAKE_ARCH", "FAKE_SIGNATURE", "FAKE_IDENTITIES", "FAKE_REQUIREMENT", "FAKE_ENTITLEMENTS", "MONOPTAH_NATIVE_SIGNING_IDENTITY", "MONOPTAH_NATIVE_SIGNING_KEYCHAIN"]) {
       if (saved[key] === undefined) delete process.env[key];
       else process.env[key] = saved[key];
     }
@@ -102,11 +106,13 @@ test(
       ],
     );
     const made = await calls(log);
-    // Self-signed: the identity, no timestamp, no hardened runtime, no entitlements.
+    // Self-signed: the identity, hardened runtime, the audited entitlements, no timestamp.
     const signed = made.find(([n, ...a]) => n === "codesign" && a[0] === "--force");
     assert.ok(signed, "bundle was signed");
-    assert.deepEqual(signed.slice(1, 5), ["--force", "--sign", SHA, "--timestamp=none"]);
-    assert.ok(!signed.includes("--options") && !signed.includes("--entitlements"));
+    assert.deepEqual(signed.slice(1, 8), [
+      "--force", "--sign", SHA, "--options", "runtime", "--timestamp=none", "--entitlements",
+    ]);
+    assert.equal(signed[8], "assets/native/Entitlements.plist");
     assert.ok(!signed.includes("--keychain"));
     assert.ok(made.some(([n, ...a]) => n === "codesign" && a[0] === "-d" && a[1] === "-r-"));
     assert.ok(made.some(([n, ...a]) => n === "codesign" && a[0] === "--verify" && a.includes("--deep") && a.includes("--strict")));
@@ -179,7 +185,8 @@ test(
     const made = await calls(log);
     const signed = made.find(([n, ...a]) => n === "codesign" && a[0] === "--force");
     assert.deepEqual(signed.slice(1), [
-      "--force", "--sign", SHA, "--timestamp=none",
+      "--force", "--sign", SHA, "--options", "runtime", "--timestamp=none",
+      "--entitlements", "assets/native/Entitlements.plist",
       "--keychain", "/tmp/test.keychain-db", signed.at(-1),
     ]);
     const find = made.find(([n]) => n === "security");
@@ -221,6 +228,23 @@ test(
     await assert.rejects(packageMonoptahNative({ binary, out, version: "0.34.0" }), /not exactly the expected stable form/);
     process.env.FAKE_REQUIREMENT = 'designated => identifier "com.other" and certificate leaf = H"' + SHA.toLowerCase() + '"\n';
     await assert.rejects(packageMonoptahNative({ binary, out, version: "0.34.0" }), /not exactly the expected stable form/);
+    assert.ok(!existsSync(join(binary, "../zptah.app")), "bundle removed after failure");
+  },
+);
+
+test(
+  "packaging fails without the hardened runtime flag or with unexpected entitlements",
+  { skip: process.platform !== "darwin" },
+  async (t) => {
+    const { binary, out } = await setup(t);
+    process.env.FAKE_SIGNATURE = "CodeDirectory v=20500 flags=0x0(none) hashes=1+7\n";
+    await assert.rejects(packageMonoptahNative({ binary, out, version: "0.34.0" }), /not signed with the hardened runtime/);
+    delete process.env.FAKE_SIGNATURE;
+    process.env.FAKE_ENTITLEMENTS = "";
+    await assert.rejects(packageMonoptahNative({ binary, out, version: "0.34.0" }), /entitlements are not exactly/);
+    process.env.FAKE_ENTITLEMENTS =
+      "<dict><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/><key>com.apple.security.cs.disable-library-validation</key><true/></dict>";
+    await assert.rejects(packageMonoptahNative({ binary, out, version: "0.34.0" }), /entitlements are not exactly/);
     assert.ok(!existsSync(join(binary, "../zptah.app")), "bundle removed after failure");
   },
 );
