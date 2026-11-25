@@ -2,6 +2,7 @@
 // dispatcher arrive in later tickets and register on `link.handlers`.
 import { ALARM_NAME, HOST_NAME, PING_INTERVAL_MS } from "./config.js";
 import { BrowserLink } from "./link.js";
+import { registerReadPath } from "./readpath.js";
 import { createStore, trustedArea } from "./store.js";
 
 /** Brand and version as the browser reports them; Chrome only exposes the major here. */
@@ -27,6 +28,8 @@ export const link = new BrowserLink({
   extVersion: (manifest.version_name ?? manifest.version).slice(0, 32),
   browser: browserInfo(),
 });
+
+registerReadPath(link);
 
 // Messages from our own pair page: the nonce to pair with, and a status poll. Anything else
 // (content scripts, other extensions) is ignored.
