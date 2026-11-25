@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 pub mod defense;
 pub mod gate;
+pub mod link;
 pub mod output;
 pub mod recipe;
 pub mod server;
