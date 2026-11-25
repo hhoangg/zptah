@@ -1,0 +1,590 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zptah.app/schemas/browser-protocol-1.json",
+  "title": "zptah Browser link protocol, version 1",
+  "description": "Shared by the Rust core and the extension tests. Validators need only: type, enum, const, required, properties, items, minLength, maxLength, minimum, maximum, pattern, oneOf, $ref to #/$defs. Unknown fields are ignored. Every number is an integer (canonical JSON for frame MACs has no floats). x-methods and x-events map a name to the schema of its params and result.",
+  "$ref": "#/$defs/Envelope",
+  "$defs": {
+    "Hex32": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "B64Bytes": { "type": "string", "minLength": 1, "maxLength": 1048576, "pattern": "^[A-Za-z0-9+/]*={0,2}$" },
+    "Challenge": { "type": "string", "minLength": 44, "maxLength": 44, "pattern": "^[A-Za-z0-9+/]{43}=$" },
+    "Mac": { "type": "string", "minLength": 44, "maxLength": 44, "pattern": "^[A-Za-z0-9+/]{43}=$" },
+    "Empty": { "type": "object" },
+    "ErrorCode": {
+      "enum": [
+        "E_PROTOCOL", "E_AUTH", "E_NOT_PAIRED", "E_UNKNOWN_MONO", "E_NOT_OWNER", "E_BUSY",
+        "E_TAB_GONE", "E_RESTRICTED_URL", "E_ORIGIN_BLOCKED", "E_STALE_REF", "E_STALE_PREPARE",
+        "E_STOPPED", "E_PASSWORD_FIELD", "E_INCOGNITO", "E_DEBUGGER_DENIED", "E_DEBUGGER_BUSY",
+        "E_NEEDS_APPROVAL", "E_TOO_LARGE", "E_TIMEOUT", "E_INVALID", "E_UNSUPPORTED",
+        "E_DIALOG_SUSPECTED"
+      ]
+    },
+    "ErrorBody": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/ErrorCode" },
+        "message": { "type": "string", "maxLength": 4096 },
+        "detail": { "type": "object" }
+      }
+    },
+    "Envelope": {
+      "type": "object",
+      "required": ["v", "type", "id"],
+      "properties": {
+        "v": { "const": 1 },
+        "type": { "enum": ["req", "res", "evt"] },
+        "id": { "type": "string", "minLength": 3, "maxLength": 32, "pattern": "^[ax]-[0-9]+$" },
+        "method": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "mono": { "$ref": "#/$defs/Hex32" },
+        "params": { "type": "object" },
+        "ok": { "type": "boolean" },
+        "result": { "type": "object" },
+        "error": { "$ref": "#/$defs/ErrorBody" },
+        "seq": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "mac": { "$ref": "#/$defs/Mac" }
+      }
+    },
+    "Browser": {
+      "type": "object",
+      "required": ["brand", "version"],
+      "properties": {
+        "brand": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "HelloParams": {
+      "type": "object",
+      "required": ["protocol", "ext_version", "browser", "instance_id", "paired", "challenge"],
+      "properties": {
+        "protocol": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } },
+        "ext_version": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "browser": { "$ref": "#/$defs/Browser" },
+        "instance_id": { "$ref": "#/$defs/Hex32" },
+        "paired": { "type": "boolean" },
+        "challenge": { "$ref": "#/$defs/Challenge" }
+      }
+    },
+    "HelloResult": {
+      "type": "object",
+      "required": ["protocol", "app_version", "challenge"],
+      "properties": {
+        "protocol": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "app_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "challenge": { "$ref": "#/$defs/Challenge" },
+        "mac": { "$ref": "#/$defs/Mac" }
+      }
+    },
+    "AuthParams": {
+      "type": "object",
+      "required": ["mac"],
+      "properties": { "mac": { "$ref": "#/$defs/Mac" } }
+    },
+    "ChromeGroupColor": {
+      "enum": ["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]
+    },
+    "RosterEntry": {
+      "type": "object",
+      "required": ["id", "name", "emoji", "color", "group_color", "level", "allowed_origins", "blocked_origins", "cursor"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Hex32" },
+        "name": { "type": "string", "maxLength": 256 },
+        "emoji": { "type": "string", "maxLength": 32 },
+        "color": { "type": "string", "pattern": "^#[0-9a-f]{6}$" },
+        "group_color": { "$ref": "#/$defs/ChromeGroupColor" },
+        "level": { "enum": ["read", "act"] },
+        "allowed_origins": { "type": "array", "items": { "type": "string", "maxLength": 2048 } },
+        "blocked_origins": { "type": "array", "items": { "type": "string", "maxLength": 2048 } },
+        "cursor": { "type": "boolean" }
+      }
+    },
+    "Roster": { "type": "array", "items": { "$ref": "#/$defs/RosterEntry" } },
+    "AuthResult": {
+      "type": "object",
+      "required": ["roster", "stopped"],
+      "properties": {
+        "roster": { "$ref": "#/$defs/Roster" },
+        "stopped": { "type": "boolean" }
+      }
+    },
+    "PairBeginParams": {
+      "type": "object",
+      "required": ["nonce", "instance_id"],
+      "properties": {
+        "nonce": { "type": "string", "minLength": 24, "maxLength": 24, "pattern": "^[A-Za-z0-9+/]{22}==$" },
+        "instance_id": { "$ref": "#/$defs/Hex32" }
+      }
+    },
+    "PairBeginResult": {
+      "type": "object",
+      "required": ["key"],
+      "properties": { "key": { "$ref": "#/$defs/Challenge" } }
+    },
+    "TabId": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "TabInfo": {
+      "type": "object",
+      "required": ["tab", "window", "url", "title", "owner", "active_in_window", "audible", "loading"],
+      "properties": {
+        "tab": { "$ref": "#/$defs/TabId" },
+        "window": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "url": { "type": "string", "maxLength": 8192 },
+        "title": { "type": "string", "maxLength": 8192 },
+        "owner": { "oneOf": [{ "$ref": "#/$defs/Hex32" }, { "const": null }] },
+        "group_title": { "type": "string", "maxLength": 512 },
+        "active_in_window": { "type": "boolean" },
+        "audible": { "type": "boolean" },
+        "loading": { "type": "boolean" }
+      }
+    },
+    "TabParam": {
+      "type": "object",
+      "required": ["tab"],
+      "properties": { "tab": { "$ref": "#/$defs/TabId" } }
+    },
+    "GrantRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "quote", "message_ms"],
+          "properties": {
+            "kind": { "const": "user_reference" },
+            "quote": { "type": "string", "maxLength": 4096 },
+            "message_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "approval_id"],
+          "properties": {
+            "kind": { "const": "user_approved" },
+            "approval_id": { "type": "string", "minLength": 1, "maxLength": 64 }
+          }
+        }
+      ]
+    },
+    "Ref": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "Action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "ref"],
+          "properties": {
+            "kind": { "const": "click" },
+            "ref": { "$ref": "#/$defs/Ref" },
+            "button": { "enum": ["left", "right", "middle"] },
+            "double": { "type": "boolean" },
+            "modifiers": { "type": "array", "items": { "type": "string", "maxLength": 16 } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "ref", "text"],
+          "properties": {
+            "kind": { "const": "type" },
+            "ref": { "$ref": "#/$defs/Ref" },
+            "text": { "type": "string", "maxLength": 1048576 },
+            "submit": { "type": "boolean" },
+            "slowly": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "fill" },
+            "fields": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["ref", "value", "type"],
+                "properties": {
+                  "ref": { "$ref": "#/$defs/Ref" },
+                  "value": { "type": "string", "maxLength": 1048576 },
+                  "type": { "enum": ["text", "checkbox", "radio", "combobox", "slider"] }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "ref", "values"],
+          "properties": {
+            "kind": { "const": "select" },
+            "ref": { "$ref": "#/$defs/Ref" },
+            "values": { "type": "array", "items": { "type": "string", "maxLength": 4096 } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "key"],
+          "properties": {
+            "kind": { "const": "press" },
+            "key": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "ref": { "$ref": "#/$defs/Ref" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "ref"],
+          "properties": { "kind": { "const": "hover" }, "ref": { "$ref": "#/$defs/Ref" } }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "from_ref", "to_ref"],
+          "properties": {
+            "kind": { "const": "drag" },
+            "from_ref": { "$ref": "#/$defs/Ref" },
+            "to_ref": { "$ref": "#/$defs/Ref" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "ref", "upload_id", "names"],
+          "properties": {
+            "kind": { "const": "upload" },
+            "ref": { "$ref": "#/$defs/Ref" },
+            "upload_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "names": { "type": "array", "items": { "type": "string", "maxLength": 1024 } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "dx", "dy"],
+          "properties": {
+            "kind": { "const": "scroll" },
+            "ref": { "$ref": "#/$defs/Ref" },
+            "dx": { "type": "integer", "minimum": -1000000, "maximum": 1000000 },
+            "dy": { "type": "integer", "minimum": -1000000, "maximum": 1000000 }
+          }
+        }
+      ]
+    },
+    "ApprovalRef": {
+      "type": "object",
+      "required": ["approval_id", "categories", "digest"],
+      "properties": {
+        "approval_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "categories": { "type": "array", "items": { "type": "string", "maxLength": 64 } },
+        "digest": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "Prepared": {
+      "type": "object",
+      "required": ["prepare_id", "expires_ms", "digest", "url", "title", "frame_url", "element", "ext_risk"],
+      "properties": {
+        "prepare_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "expires_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "digest": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "url": { "type": "string", "maxLength": 8192 },
+        "title": { "type": "string", "maxLength": 8192 },
+        "frame_url": { "type": "string", "maxLength": 8192 },
+        "element": { "type": "object" },
+        "form": { "type": "object" },
+        "ext_risk": { "type": "array", "items": { "type": "string", "maxLength": 64 } },
+        "screenshot": { "type": "object" }
+      }
+    },
+    "UrlTitle": {
+      "type": "object",
+      "required": ["url", "title"],
+      "properties": {
+        "url": { "type": "string", "maxLength": 8192 },
+        "title": { "type": "string", "maxLength": 8192 }
+      }
+    }
+  },
+  "x-methods": {
+    "hello": { "params": { "$ref": "#/$defs/HelloParams" }, "result": { "$ref": "#/$defs/HelloResult" } },
+    "auth": { "params": { "$ref": "#/$defs/AuthParams" }, "result": { "$ref": "#/$defs/AuthResult" } },
+    "pair.begin": { "params": { "$ref": "#/$defs/PairBeginParams" }, "result": { "$ref": "#/$defs/PairBeginResult" } },
+    "roster.set": {
+      "params": { "type": "object", "required": ["monos"], "properties": { "monos": { "$ref": "#/$defs/Roster" } } },
+      "result": { "$ref": "#/$defs/Empty" }
+    },
+    "status.get": {
+      "params": { "$ref": "#/$defs/Empty" },
+      "result": {
+        "type": "object",
+        "required": ["stopped", "debugger_attached", "monos_active"],
+        "properties": {
+          "stopped": { "type": "boolean" },
+          "debugger_attached": { "type": "array", "items": { "$ref": "#/$defs/TabId" } },
+          "monos_active": { "type": "integer", "minimum": 0, "maximum": 65535 }
+        }
+      }
+    },
+    "stop.resume": { "params": { "$ref": "#/$defs/Empty" }, "result": { "$ref": "#/$defs/Empty" } },
+    "tabs.list": {
+      "params": { "type": "object", "required": ["all"], "properties": { "all": { "type": "boolean" } } },
+      "result": { "type": "object", "required": ["tabs"], "properties": { "tabs": { "type": "array", "items": { "$ref": "#/$defs/TabInfo" } } } }
+    },
+    "tab.open": {
+      "params": { "type": "object", "required": ["url"], "properties": { "url": { "type": "string", "minLength": 1, "maxLength": 8192 }, "after_tab": { "$ref": "#/$defs/TabId" } } },
+      "result": { "$ref": "#/$defs/TabInfo" }
+    },
+    "tab.close": { "params": { "$ref": "#/$defs/TabParam" }, "result": { "$ref": "#/$defs/Empty" } },
+    "tab.adopt": {
+      "params": { "type": "object", "required": ["tab", "grant"], "properties": { "tab": { "$ref": "#/$defs/TabId" }, "grant": { "$ref": "#/$defs/GrantRef" } } },
+      "result": { "$ref": "#/$defs/TabInfo" }
+    },
+    "tab.release": { "params": { "$ref": "#/$defs/TabParam" }, "result": { "$ref": "#/$defs/Empty" } },
+    "page.snapshot": {
+      "params": {
+        "type": "object",
+        "required": ["tab", "mode"],
+        "properties": {
+          "tab": { "$ref": "#/$defs/TabId" },
+          "mode": { "enum": ["full", "interactive"] },
+          "scope_ref": { "$ref": "#/$defs/Ref" },
+          "depth": { "type": "integer", "minimum": 0, "maximum": 1000 },
+          "max_bytes": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+          "from": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+        }
+      },
+      "result": {
+        "type": "object",
+        "required": ["text", "url", "title", "generation", "truncated", "hidden_dropped"],
+        "properties": {
+          "text": { "type": "string" },
+          "url": { "type": "string", "maxLength": 8192 },
+          "title": { "type": "string", "maxLength": 8192 },
+          "generation": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "truncated": { "type": "boolean" },
+          "hidden_dropped": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+        }
+      }
+    },
+    "page.read": {
+      "params": {
+        "type": "object",
+        "required": ["tab"],
+        "properties": {
+          "tab": { "$ref": "#/$defs/TabId" },
+          "max_bytes": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+          "from": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+        }
+      },
+      "result": {
+        "type": "object",
+        "required": ["markdown", "url", "title", "truncated"],
+        "properties": {
+          "markdown": { "type": "string" },
+          "url": { "type": "string", "maxLength": 8192 },
+          "title": { "type": "string", "maxLength": 8192 },
+          "truncated": { "type": "boolean" }
+        }
+      }
+    },
+    "page.find": {
+      "params": {
+        "type": "object",
+        "required": ["tab", "query"],
+        "properties": {
+          "tab": { "$ref": "#/$defs/TabId" },
+          "query": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "max": { "type": "integer", "minimum": 1, "maximum": 1000 }
+        }
+      },
+      "result": {
+        "type": "object",
+        "required": ["matches"],
+        "properties": {
+          "matches": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["ref", "role", "name", "context"],
+              "properties": {
+                "ref": { "$ref": "#/$defs/Ref" },
+                "role": { "type": "string", "maxLength": 64 },
+                "name": { "type": "string", "maxLength": 4096 },
+                "context": { "type": "string", "maxLength": 4096 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "page.screenshot": {
+      "params": {
+        "type": "object",
+        "required": ["tab"],
+        "properties": {
+          "tab": { "$ref": "#/$defs/TabId" },
+          "ref": { "$ref": "#/$defs/Ref" },
+          "full_page": { "type": "boolean" }
+        }
+      },
+      "result": {
+        "type": "object",
+        "required": ["png_b64", "width", "height", "method"],
+        "properties": {
+          "png_b64": { "$ref": "#/$defs/B64Bytes" },
+          "width": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "height": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "method": { "enum": ["visible", "debugger"] }
+        }
+      }
+    },
+    "page.wait": {
+      "params": {
+        "type": "object",
+        "required": ["tab"],
+        "properties": {
+          "tab": { "$ref": "#/$defs/TabId" },
+          "text": { "type": "string", "maxLength": 4096 },
+          "text_gone": { "type": "string", "maxLength": 4096 },
+          "ref": { "$ref": "#/$defs/Ref" },
+          "load": { "type": "boolean" },
+          "time_ms": { "type": "integer", "minimum": 0, "maximum": 600000 }
+        }
+      },
+      "result": {
+        "type": "object",
+        "required": ["met", "url"],
+        "properties": { "met": { "type": "boolean" }, "url": { "type": "string", "maxLength": 8192 } }
+      }
+    },
+    "nav.go": {
+      "params": { "type": "object", "required": ["tab", "url"], "properties": { "tab": { "$ref": "#/$defs/TabId" }, "url": { "type": "string", "minLength": 1, "maxLength": 8192 } } },
+      "result": { "$ref": "#/$defs/UrlTitle" }
+    },
+    "nav.history": {
+      "params": { "type": "object", "required": ["tab", "dir"], "properties": { "tab": { "$ref": "#/$defs/TabId" }, "dir": { "enum": ["back", "forward"] } } },
+      "result": { "$ref": "#/$defs/UrlTitle" }
+    },
+    "act.prepare": {
+      "params": { "type": "object", "required": ["tab", "action"], "properties": { "tab": { "$ref": "#/$defs/TabId" }, "action": { "$ref": "#/$defs/Action" } } },
+      "result": { "$ref": "#/$defs/Prepared" }
+    },
+    "act.commit": {
+      "params": {
+        "type": "object",
+        "required": ["prepare_id"],
+        "properties": {
+          "prepare_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "approval": { "$ref": "#/$defs/ApprovalRef" },
+          "input": { "enum": ["auto", "trusted"] }
+        }
+      },
+      "result": {
+        "type": "object",
+        "required": ["url", "title", "effects"],
+        "properties": {
+          "url": { "type": "string", "maxLength": 8192 },
+          "title": { "type": "string", "maxLength": 8192 },
+          "effects": { "type": "object" }
+        }
+      }
+    },
+    "act.extend": {
+      "params": {
+        "type": "object",
+        "required": ["prepare_id", "until_ms"],
+        "properties": {
+          "prepare_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "until_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+        }
+      },
+      "result": {
+        "type": "object",
+        "required": ["expires_ms"],
+        "properties": { "expires_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 } }
+      }
+    },
+    "act.cancel": {
+      "params": { "type": "object", "required": ["prepare_id"], "properties": { "prepare_id": { "type": "string", "minLength": 1, "maxLength": 64 } } },
+      "result": { "$ref": "#/$defs/Empty" }
+    },
+    "dialog.respond": {
+      "params": {
+        "type": "object",
+        "required": ["tab", "accept"],
+        "properties": {
+          "tab": { "$ref": "#/$defs/TabId" },
+          "accept": { "type": "boolean" },
+          "prompt_text": { "type": "string", "maxLength": 65536 }
+        }
+      },
+      "result": { "$ref": "#/$defs/Empty" }
+    },
+    "upload.put": {
+      "params": {
+        "type": "object",
+        "required": ["upload_id", "seq", "bytes_b64", "last"],
+        "properties": {
+          "upload_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "seq": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "bytes_b64": { "$ref": "#/$defs/B64Bytes" },
+          "last": { "type": "boolean" }
+        }
+      },
+      "result": { "$ref": "#/$defs/Empty" }
+    },
+    "cursor.prefs": {
+      "params": { "$ref": "#/$defs/Empty" },
+      "result": {
+        "type": "object",
+        "required": ["enabled", "off_sites"],
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "off_sites": { "type": "array", "items": { "type": "string", "maxLength": 2048 } }
+        }
+      }
+    }
+  },
+  "x-events": {
+    "tab.updated": { "params": { "$ref": "#/$defs/TabInfo" } },
+    "tab.removed": { "params": { "$ref": "#/$defs/TabParam" } },
+    "tab.ownership": {
+      "params": {
+        "type": "object",
+        "required": ["tab", "owner", "by"],
+        "properties": {
+          "tab": { "$ref": "#/$defs/TabId" },
+          "owner": { "oneOf": [{ "$ref": "#/$defs/Hex32" }, { "const": null }] },
+          "by": { "enum": ["user_drag", "user_ungroup", "popup", "group_closed"] }
+        }
+      }
+    },
+    "stop": {
+      "params": { "type": "object", "required": ["by"], "properties": { "by": { "const": "toolbar" } } }
+    },
+    "tab.stopped": {
+      "params": {
+        "type": "object",
+        "required": ["tab", "mono", "by"],
+        "properties": { "tab": { "$ref": "#/$defs/TabId" }, "mono": { "$ref": "#/$defs/Hex32" }, "by": { "const": "overlay" } }
+      }
+    },
+    "dialog.opened": {
+      "params": {
+        "type": "object",
+        "required": ["tab", "kind", "message"],
+        "properties": {
+          "tab": { "$ref": "#/$defs/TabId" },
+          "kind": { "type": "string", "maxLength": 32 },
+          "message": { "type": "string", "maxLength": 65536 }
+        }
+      }
+    },
+    "debugger.detached": {
+      "params": {
+        "type": "object",
+        "required": ["tab", "reason"],
+        "properties": { "tab": { "$ref": "#/$defs/TabId" }, "reason": { "type": "string", "maxLength": 128 } }
+      }
+    },
+    "cursor.changed": {
+      "params": {
+        "type": "object",
+        "required": ["enabled", "off_sites"],
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "off_sites": { "type": "array", "items": { "type": "string", "maxLength": 2048 } }
+        }
+      }
+    }
+  }
+}
