@@ -67,3 +67,16 @@ test("stripComments keeps comment markers inside strings and line numbers", () =
   assert.equal(stripComments("a('//x'); // c\nb"), "a('//x'); \nb");
   assert.equal(stripComments("a /* x\ny */ b").split("\n").length, 2);
 });
+
+test("only the front guard may bring the user's own tab and window back to the front", () => {
+  const restore = "api.tabs.update(id, { active: true });\napi.windows.update(w, { focused: true });";
+  assert.deepEqual(scanSource("src/worker/front-guard.js", restore), []);
+  assert.deepEqual(scanSource("src\\worker\\front-guard.js", restore), []);
+  for (const name of ["src/worker/act.js", "src/worker/ownership.js", "front-guard.js", "src/other/front-guard.js"]) {
+    const found = scanSource(name, restore);
+    assert.ok(found.some((m) => m.includes("forbidden tabs-update-active")), `${name}: ${found.join("\n")}`);
+    assert.ok(found.some((m) => m.includes("forbidden windows-update-focus")), name);
+  }
+  // The exemption is for those two rules only.
+  assert.ok(scanSource("src/worker/front-guard.js", "eval('1')").length > 0);
+});

@@ -236,13 +236,14 @@ impl LinkRecordStore for FileRecordStore {
 
 /// The Monos' roster and the stop switch, sent in the `auth` result.
 pub(crate) trait RosterSource: Send + Sync {
-    fn snapshot(&self) -> AuthResult;
+    /// The roster of the link `instance_id`, which belongs to the Chrome profile `profile_dir`.
+    fn snapshot(&self, instance_id: &str, profile_dir: &str) -> AuthResult;
 }
 
 pub(crate) struct EmptyRoster;
 
 impl RosterSource for EmptyRoster {
-    fn snapshot(&self) -> AuthResult {
+    fn snapshot(&self, _instance_id: &str, _profile_dir: &str) -> AuthResult {
         AuthResult {
             roster: Roster::new(),
             stopped: false,
@@ -577,7 +578,7 @@ struct Inner {
     config: ManagerConfig,
     keys: Arc<dyn LinkKeyStore>,
     records: Arc<dyn LinkRecordStore>,
-    roster: Arc<dyn RosterSource>,
+    roster: Mutex<Arc<dyn RosterSource>>,
     clock: Arc<dyn Fn() -> u64 + Send + Sync>,
     known: KnownBuilds,
     challenges: Mutex<ChallengeLog>,
@@ -607,7 +608,7 @@ impl LinkManager {
             config,
             keys: deps.keys,
             records: deps.records,
-            roster: deps.roster,
+            roster: Mutex::new(deps.roster),
             clock: deps.clock,
             known,
             challenges: Mutex::new(ChallengeLog::default()),
@@ -629,6 +630,11 @@ impl LinkManager {
             .expect("set known builds before sharing the manager")
             .known = known;
         self
+    }
+
+    /// Replaces where the `auth` roster comes from (the app installs the Mono roster).
+    pub(crate) fn set_roster_source(&self, source: Arc<dyn RosterSource>) {
+        *lock(&self.inner.roster) = source;
     }
 
     fn now(&self) -> u64 {
@@ -994,7 +1000,8 @@ impl LinkManager {
             Ok(r) => r,
             Err(refusal) => return Self::reject(writer, &req.id, refusal),
         };
-        let result = self.inner.roster.snapshot();
+        let source = lock(&self.inner.roster).clone();
+        let result = source.snapshot(&record.instance_id, &record.profile_dir);
         let mut reply = Envelope::response_ok(
             req.id.clone(),
             serde_json::to_value(&result).expect("a result serializes"),

@@ -3,9 +3,11 @@
 import { registerActPath } from "./act.js";
 import { ALARM_NAME, HOST_NAME, PING_INTERVAL_MS } from "./config.js";
 import { createDebugger } from "./debugger.js";
+import { createFrontGuard } from "./front-guard.js";
 import { Lexicon } from "./lexicon.js";
 import { LEXICON_DATA } from "./lexicon-data.js";
 import { BrowserLink } from "./link.js";
+import { registerOwnership } from "./ownership.js";
 import { registerReadPath } from "./readpath.js";
 import { createStore, trustedArea } from "./store.js";
 
@@ -25,7 +27,14 @@ const storageArea = trustedArea(chrome.storage.local);
 
 const manifest = chrome.runtime.getManifest();
 
+/** @type {ReturnType<typeof registerOwnership> | null} */
+let ownership = null;
+
 export const link = new BrowserLink({
+  // A connection brings its roster in `auth`: the groups take the Monos' titles and colors.
+  onStatus: (status) => {
+    if (status === "ready") void ownership?.syncRoster();
+  },
   hostName: HOST_NAME,
   connectNative: (name) => chrome.runtime.connectNative(name),
   store: createStore(storageArea),
@@ -41,7 +50,14 @@ const dbg = createDebugger({
   emit: (method, params) => void link.sendEvent(method, params),
   isStopped: () => link.stopped === true,
 });
-const read = registerReadPath(link, { dbg });
+const front = createFrontGuard({ api: /** @type {any} */ (chrome), now: Date.now });
+const read = registerReadPath(link, {
+  dbg,
+  ownerOf: (tab) => ownership?.ownerOf(tab) ?? null,
+  onRoster: () => void ownership?.syncRoster(),
+  groupTitle: (mono) => ownership?.titleOfMono(mono),
+});
+ownership = registerOwnership(link, { read, front });
 const acts = registerActPath(link, {
   read,
   dbg,

@@ -200,6 +200,52 @@ fn the_switch_and_the_frequency_are_saved_on_the_mono(cx: &mut TestAppContext) {
     assert!(!emoji_dir(&s).join("emoji.json").exists());
 }
 
+/// What the roster holds on disk for the open Mono's badge.
+fn saved_badge(s: &Setup) -> Option<String> {
+    let db = locked(&s.store).unwrap();
+    mono::Roster::load(&db)
+        .unwrap()
+        .get(&s.id)
+        .unwrap()
+        .badge_emoji
+        .clone()
+}
+
+#[gpui::test]
+fn the_badge_row_picks_an_emoji_and_the_mascot_is_the_default(cx: &mut TestAppContext) {
+    let (s, mut visual) = open(cx);
+    visual.run_until_parked();
+    show(&s, &mut visual);
+    assert_eq!(saved_badge(&s), None);
+    // The default is the mascot's emoji.
+    let mascot = s
+        .manager
+        .read_with(&visual, |m, _| m.roster.get(&s.id).unwrap().badge());
+    assert_eq!(
+        mascot,
+        monocode_core::project_appearance::mascot_emoji(
+            &s.manager
+                .read_with(&visual, |m, _| m.roster.get(&s.id).unwrap().mascot.clone())
+        )
+    );
+    click(&mut visual, "mono-badge-emoji");
+    visual.refresh().unwrap();
+    // Entry 0 is the mascot, then the list in `BADGES` order: 3 is the robot.
+    click(&mut visual, "menu-action-3");
+    visual.run_until_parked();
+    assert_eq!(saved_badge(&s).as_deref(), Some("\u{1F916}"));
+    let shown = s
+        .manager
+        .read_with(&visual, |m, _| m.roster.get(&s.id).unwrap().badge());
+    assert_eq!(shown, "\u{1F916}");
+    // Back to the mascot's own.
+    click(&mut visual, "mono-badge-emoji");
+    visual.refresh().unwrap();
+    click(&mut visual, "menu-action-0");
+    visual.run_until_parked();
+    assert_eq!(saved_badge(&s), None);
+}
+
 #[gpui::test]
 fn packs_are_chosen_per_mono_and_a_new_pack_is_not_selected(cx: &mut TestAppContext) {
     let (s, mut visual) = open(cx);

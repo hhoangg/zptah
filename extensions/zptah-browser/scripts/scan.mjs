@@ -38,6 +38,15 @@ const HTML_RULES = [
   { id: "inline-handler", re: /<[a-z][^>]*\son[a-z]+\s*=/i, why: "inline event handler" },
 ];
 
+/**
+ * The one place that may bring the user's own tab and window back to the front after a Mono's tab
+ * opened a popup (spec 6.5 rule 1). Nothing else may set `active` or `focused`.
+ * @type {Record<string, string[]>}
+ */
+const EXEMPT = {
+  "src/worker/front-guard.js": ["tabs-update-active", "windows-update-focus"],
+};
+
 /** Test hooks must exist only in the dev build. */
 const STORE_RULES = [{ id: "test-hook", re: /__zptah/, why: "test symbol in a store build" }];
 
@@ -97,7 +106,10 @@ export function scanSource(name, text, opts = {}) {
   const code = isJs ? stripComments(text) : text;
   /** @type {{ id: string, re: RegExp, why: string }[]} */
   const rules = [];
-  if (isJs) rules.push(...JS_RULES);
+  if (isJs) {
+    const exempt = EXEMPT[name.replaceAll("\\", "/")] ?? [];
+    rules.push(...JS_RULES.filter((rule) => !exempt.includes(rule.id)));
+  }
   if (isHtml) rules.push(...HTML_RULES);
   if (opts.store && (isJs || isHtml || isCss)) rules.push(...STORE_RULES);
   /** @type {string[]} */

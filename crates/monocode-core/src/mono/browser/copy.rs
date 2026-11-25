@@ -101,6 +101,11 @@ pub enum ActionDesc {
     Dialog {
         accept: bool,
     },
+    /// Take over a tab another Mono owns (spec 9.3 "tab transfer").
+    TabTransfer {
+        title: String,
+        from: String,
+    },
     /// An action the Mono described itself with `browser_request_approval`.
     Other,
 }
@@ -313,6 +318,16 @@ fn verb_phrase(lang: Lang, facts: &CardFacts) -> String {
                 "bấm Hủy trong hộp thoại".into()
             }
         }
+        (ActionDesc::TabTransfer { title, from }, Lang::En) => format!(
+            "take over the tab {} from {}",
+            quoted(title, MAX_LABEL),
+            clean(from, MAX_LABEL)
+        ),
+        (ActionDesc::TabTransfer { title, from }, Lang::Vi) => format!(
+            "tiếp quản thẻ {} từ {}",
+            quoted(title, MAX_LABEL),
+            clean(from, MAX_LABEL)
+        ),
         (ActionDesc::Other, Lang::En) => "do something that needs your OK".into(),
         (ActionDesc::Other, Lang::Vi) => "làm một việc cần bạn đồng ý".into(),
     }

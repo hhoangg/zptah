@@ -293,6 +293,8 @@ const MIN_TAINT_TOKEN: usize = 8;
 pub struct TrustState {
     grants: GrantBook,
     user_messages: Vec<String>,
+    /// When each of `user_messages` was written (ms), in step with it.
+    user_message_ms: Vec<u64>,
     task_domains: BTreeSet<String>,
     /// Reached by a link and not approved: reading is free, any write asks (7.4).
     read_only_domains: BTreeSet<String>,
@@ -308,6 +310,7 @@ impl TrustState {
         Self {
             grants,
             user_messages: Vec::new(),
+            user_message_ms: Vec::new(),
             task_domains: BTreeSet::new(),
             read_only_domains: BTreeSet::new(),
             seen_sensitive: BTreeSet::new(),
@@ -336,6 +339,19 @@ impl TrustState {
     pub fn note_user_message(&mut self, text: &str) {
         self.task_domains.extend(domains_in_text(text));
         self.user_messages.push(text.to_owned());
+        self.user_message_ms.push(crate::time::now_ms());
+    }
+
+    /// What the user typed in this conversation, for the adopt reference (spec 9.3). With `after`
+    /// only messages written after that time (ms) count: a tab the user took back needs words
+    /// written after the stop (spec 10a).
+    pub fn user_texts(&self, after: Option<u64>) -> Vec<(String, u64)> {
+        self.user_messages
+            .iter()
+            .zip(&self.user_message_ms)
+            .filter(|(_, ms)| after.is_none_or(|a| **ms > a))
+            .map(|(text, ms)| (text.clone(), *ms))
+            .collect()
     }
 
     /// A domain the user referenced (a tab they dragged into the group, an allowed origin).
@@ -612,6 +628,7 @@ impl TrustState {
         self.task_domains.clear();
         self.read_only_domains.clear();
         self.user_messages.clear();
+        self.user_message_ms.clear();
         self.read_tokens.clear();
         self.injection = false;
     }

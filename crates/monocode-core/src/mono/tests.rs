@@ -829,3 +829,84 @@ fn a_monos_rules_ask_for_absolute_paths_outside_its_projects() {
     assert!(rules.contains(crate::files::links::MENTION_RULE), "{rules}");
     assert!(rules.contains("absolute path if it lies outside the project"));
 }
+
+#[test]
+fn a_mono_without_a_badge_wears_its_mascots_emoji_and_the_field_is_not_saved() {
+    let mono = Mono {
+        mascot: "frog".into(),
+        ..Mono::default()
+    };
+    assert_eq!(mono.badge(), "\u{1F438}");
+    let json = serde_json::to_value(&mono).unwrap();
+    assert!(json.get("badgeEmoji").is_none(), "{json}");
+    // An old roster has no field and loads with the mascot's emoji.
+    let old: Mono = serde_json::from_str(r#"{"id":"abc","mascot":"ghost"}"#).unwrap();
+    assert_eq!(old.badge_emoji, None);
+    assert_eq!(old.badge(), "\u{1F47B}");
+    for (mascot, emoji) in [
+        ("invader", "\u{1F47E}"),
+        ("ghost", "\u{1F47B}"),
+        ("robot", "\u{1F916}"),
+        ("cat", "\u{1F431}"),
+        ("skull", "\u{1F480}"),
+        ("crab", "\u{1F980}"),
+        ("mushroom", "\u{1F344}"),
+        ("rocket", "\u{1F680}"),
+        ("dino", "\u{1F996}"),
+        ("frog", "\u{1F438}"),
+    ] {
+        assert_eq!(project_appearance::mascot_emoji(mascot), emoji, "{mascot}");
+    }
+}
+
+#[test]
+fn a_badge_is_one_emoji_and_survives_a_round_trip() {
+    let mut mono = Mono {
+        badge_emoji: Some("  \u{1F984} ".into()),
+        ..Mono::default()
+    };
+    mono.normalize();
+    assert_eq!(mono.badge_emoji.as_deref(), Some("\u{1F984}"));
+    assert_eq!(mono.badge(), "\u{1F984}");
+    let json = serde_json::to_string(&mono).unwrap();
+    assert!(json.contains("\"badgeEmoji\""), "{json}");
+    let back: Mono = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.badge_emoji.as_deref(), Some("\u{1F984}"));
+}
+
+#[test]
+fn text_that_is_not_one_emoji_is_not_a_badge() {
+    use project_appearance::clean_badge_emoji;
+    for ok in [
+        "\u{1F438}",
+        "\u{2764}\u{FE0F}",
+        "\u{1F44D}\u{1F3FD}",
+        "\u{1F1FB}\u{1F1F3}",
+        "1\u{FE0F}\u{20E3}",
+        "\u{1F469}\u{200D}\u{1F4BB}",
+        "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+    ] {
+        assert_eq!(clean_badge_emoji(ok).as_deref(), Some(ok), "{ok:?}");
+    }
+    for bad in [
+        "",
+        "   ",
+        "a",
+        "ab",
+        "7",
+        "\u{1F438}\u{1F431}",
+        "\u{1F438}x",
+        "\u{1F469}\u{200D}",
+        "\u{1F1FB}",
+        "hello",
+        "\u{1F438}\u{1F431}\u{1F436}\u{1F98A}\u{1F43C}\u{1F984}\u{1F419}\u{1F989}\u{1F41D}",
+    ] {
+        assert_eq!(clean_badge_emoji(bad), None, "{bad:?}");
+    }
+    let mut mono = Mono {
+        badge_emoji: Some("not an emoji".into()),
+        ..Mono::default()
+    };
+    mono.normalize();
+    assert_eq!(mono.badge_emoji, None, "falls back to the mascot");
+}

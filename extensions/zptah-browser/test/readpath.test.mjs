@@ -561,9 +561,12 @@ test("no worker source activates a tab or focuses a window", () => {
   const dir = new URL("../src/worker/", import.meta.url);
   for (const name of readdirSync(dir)) {
     const text = readFileSync(new URL(name, dir), "utf8");
-    // focus-guard.js names these properties only to refuse them (see act.test.mjs).
-    if (name !== "focus-guard.js") assert.ok(!/active\s*:\s*true|focused\s*:\s*true|highlighted\s*:|drawAttention|bringToFront|activateTarget/.test(text), name);
-    assert.ok(!/tabs\s*\.\s*update|windows\s*\.\s*update/.test(text.replace(/\/\/.*$/gm, "")) || name === "main.js" || name === "focus-guard.js", name);
+    // focus-guard.js names these properties only to refuse them (see act.test.mjs). front-guard.js
+    // is the one file that gives the user's own tab and window back after a Mono's popup took the
+    // front (spec 6.5 rule 1); scripts/scan.mjs lists it by name and test/ownership.test.mjs
+    // covers it.
+    if (name !== "focus-guard.js" && name !== "front-guard.js") assert.ok(!/active\s*:\s*true|focused\s*:\s*true|highlighted\s*:|drawAttention|bringToFront|activateTarget/.test(text), name);
+    assert.ok(!/tabs\s*\.\s*update|windows\s*\.\s*update/.test(text.replace(/\/\/.*$/gm, "")) || name === "main.js" || name === "focus-guard.js" || name === "front-guard.js", name);
   }
 });
 

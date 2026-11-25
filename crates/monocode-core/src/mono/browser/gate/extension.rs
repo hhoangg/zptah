@@ -273,6 +273,10 @@ impl ExtensionUpstream {
         let result = self.ask(Method::TabsList, json!({"all": all}), DEFAULT_DEADLINE_MS)?;
         let tabs: Vec<TabInfo> = serde_json::from_value(result["tabs"].clone())
             .map_err(|_| "The extension sent a tab list that could not be read.".to_owned())?;
+        if let Some(link) = (self.link)() {
+            let now = crate::time::now_ms();
+            super::super::ownership::with_table(link.instance_id(), |t| t.sync(&tabs, all, now));
+        }
         let origins = self.origins();
         let visible: Vec<TabInfo> = tabs
             .into_iter()
@@ -370,10 +374,7 @@ impl ExtensionUpstream {
                 let listed = self.state().listed.clone();
                 Ok(self.list_result(&listed, true))
             }
-            "new" | "close" | "adopt" | "release" => Err(format!(
-                "browser_tabs {} is not available with the zptah Browser extension yet: the read tools work on tabs that are already open (list, select).",
-                args["action"].as_str().unwrap_or("")
-            )),
+            action @ ("new" | "close" | "adopt" | "release") => self.own_tabs_tool(action, args),
             other => Err(format!("Unknown browser_tabs action `{other}`.")),
         }
     }
@@ -938,14 +939,17 @@ fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "browser_tabs",
-            "title": "List or select browser tabs",
-            "description": "List the tabs, or choose the tab the other browser tools use. `list` shows this Mono's own tabs; with all true it shows every open tab of the user's browser profile that this Mono may use (the user's tabs are read only). `select` takes the index from the last list; it never brings a tab to the front.",
+            "title": "List, open, close, select or adopt browser tabs",
+            "description": "List the tabs, choose the tab the other browser tools use, open a tab of your own, close or release one of your own, or adopt a tab of the user's. `list` shows this Mono's own tabs; with all true it shows every open tab of the user's browser profile that this Mono may use (the user's tabs are read only until adopted). `select` takes the index from the last list; it never brings a tab to the front. `new` opens a tab in your group without showing it. `close` closes one of your tabs; a tab of the user's is never closed. `release` gives a tab of yours back to the user. `adopt` takes a tab of the user's into your group, but only with `user_reference`: the words the user wrote that name the tab. If the user did not name the tab, ask them to name it or to drag it into your group.",
             "inputSchema": object(json!({
-                "action": {"type": "string", "enum": ["list", "select"], "description": "list or select"},
+                "action": {"type": "string", "enum": ["list", "select", "new", "close", "release", "adopt"], "description": "list, select, new, close, release or adopt"},
                 "all": {"type": "boolean", "description": "With list: show all open tabs of the profile, not only this Mono's tabs."},
-                "index": {"type": "integer", "description": "With select: the number at the start of a line of the last list."},
+                "index": {"type": "integer", "description": "With select, close, release or adopt: the number at the start of a line of the last list."},
+                "tab": {"type": "integer", "description": "With close, release or adopt: the tab id (the number after tab=)."},
+                "url": {"type": "string", "description": "With new: the address to open (http or https)."},
+                "user_reference": {"type": "string", "description": "With adopt: words the user wrote in this task that name the tab, copied exactly (at least 2 words or 8 characters)."},
             }), json!(["action"])),
-            "annotations": {"readOnlyHint": true},
+            "annotations": {"readOnlyHint": false},
         }),
         json!({
             "name": "browser_snapshot",

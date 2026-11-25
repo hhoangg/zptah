@@ -24,7 +24,7 @@ pub(crate) use desktop::codex_home;
 mod tests;
 
 use crate::{
-    project_appearance::{Background, COLORS, MASCOTS},
+    project_appearance::{self, Background, COLORS, MASCOTS},
     store::Store,
     transcript::Row,
 };
@@ -82,6 +82,10 @@ pub struct Mono {
     /// The switch, frequency and selected packs of the shared emoji library.
     #[serde(skip_serializing_if = "emoji::MonoEmoji::is_default")]
     pub emoji: emoji::MonoEmoji,
+    /// The one emoji that stands for this Mono in its browser tab group, cursor label and overlay
+    /// (spec 9.1). Not the emoji-library setting above. `None`: the mascot's emoji.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub badge_emoji: Option<String>,
     /// Real Chrome through Playwright MCP. The token is not here, see `browser::MonoBrowserStore`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub browser: Option<browser::MonoBrowser>,
@@ -220,6 +224,7 @@ impl Default for Mono {
             heartbeat_minutes: heartbeat::DEFAULT_MINUTES,
             subsessions: None,
             emoji: emoji::MonoEmoji::default(),
+            badge_emoji: None,
             browser: None,
         }
     }
@@ -239,6 +244,12 @@ impl Mono {
                 .unwrap_or_default()
         };
         format!("Mono{name}")
+    }
+    /// The emoji that stands for this Mono: its own pick, else its mascot's.
+    pub fn badge(&self) -> String {
+        self.badge_emoji
+            .clone()
+            .unwrap_or_else(|| project_appearance::mascot_emoji(&self.mascot).to_owned())
     }
     pub fn works_on(&self, project: &str) -> bool {
         self.projects
@@ -260,6 +271,10 @@ impl Mono {
             browser.normalize();
         }
         self.name = self.name.trim().chars().take(40).collect();
+        self.badge_emoji = self
+            .badge_emoji
+            .take()
+            .and_then(|e| project_appearance::clean_badge_emoji(&e));
         if !MASCOTS.contains(&self.mascot.as_str()) {
             self.mascot = MASCOTS[0].into();
         }
@@ -355,13 +370,17 @@ impl Roster {
         for mono in &mut roster.monos {
             mono.normalize();
         }
+        browser::roster::monos_changed(&roster.monos);
         Ok(roster)
     }
     pub fn save(&self, store: &Store) -> Result<(), String> {
         store.save_setting(
             "mono-roster",
             &serde_json::to_string(self).map_err(|e| e.to_string())?,
-        )
+        )?;
+        // The browser extension is told about a change of name, color, emoji, level or origins.
+        browser::roster::monos_changed(&self.monos);
+        Ok(())
     }
     pub fn create(&mut self, projects: Vec<String>) -> &Mono {
         let mut mono = Mono {
