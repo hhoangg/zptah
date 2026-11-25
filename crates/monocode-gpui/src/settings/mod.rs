@@ -189,6 +189,8 @@ pub(crate) enum SettingsEvent {
     WebCancelPair,
     /// Revoke the desktop token and remove every web device.
     WebUnpair,
+    /// Wipe the local pairing without asking the server (it was unreachable).
+    WebForgetLocal,
     /// Refuse a device that waits for confirmation, by key fingerprint.
     WebDenyDevice(String),
     WebSetPermission {

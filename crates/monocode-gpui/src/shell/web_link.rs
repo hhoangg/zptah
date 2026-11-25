@@ -333,6 +333,10 @@ impl Shell {
                 self.web_cancel_pair(cx);
                 self.web_action("Unpair", cx, |host| host.web_unpair());
             }
+            SettingsEvent::WebForgetLocal => {
+                self.web_cancel_pair(cx);
+                self.web_action("Unpair", cx, |host| host.web_unpair_local());
+            }
             SettingsEvent::WebDenyDevice(fingerprint) => {
                 let fingerprint = fingerprint.clone();
                 self.web_action("Deny", cx, move |host| host.web_deny(&fingerprint));

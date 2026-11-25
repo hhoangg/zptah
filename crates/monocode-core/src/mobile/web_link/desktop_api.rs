@@ -439,17 +439,51 @@ pub fn report_grant_state(
     ok_body(answer).map(|_| Reported::Accepted)
 }
 
+/// What `DELETE /api/desktop/me` achieved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unpaired {
+    /// The server deleted the desktop's tokens.
+    Deleted,
+    /// The server says the token is already dead (unknown or revoked), so the
+    /// desktop is unpaired there and only the local state is left.
+    AlreadyGone,
+}
+
+/// Whether an answer to a token route proves the token is already dead.
+///
+/// The worker answers 401 `unauthorized` for a missing or unknown token and
+/// 403 `forbidden` "Desktop token revoked" for a revoked token or desktop. A
+/// 404 means the desktop row is gone. Other 403s are different problems and
+/// do NOT count: `blocked` (the account is blocked, the token is still live)
+/// and "Token scope not allowed" (the token is live, only this route is
+/// refused). Anything else (5xx, 429, 409, network) is transient or unknown.
+fn token_is_gone(answer: &Answer) -> bool {
+    match answer.status {
+        401 | 404 => true,
+        403 => {
+            let code = answer.body.get("code").and_then(Value::as_str);
+            let message = answer.body.get("error").and_then(Value::as_str);
+            code == Some("forbidden")
+                && message.is_some_and(|m| m.to_ascii_lowercase().contains("revoked"))
+        }
+        _ => false,
+    }
+}
+
 /// `DELETE /api/desktop/me`: the desktop unpairs itself.
-pub fn delete_me(base: &str, token: &str, timeout: Duration) -> Result<(), String> {
-    ok_body(call(
+pub fn delete_me(base: &str, token: &str, timeout: Duration) -> Result<Unpaired, String> {
+    let answer = call(
         "DELETE",
         base,
         "/api/desktop/me",
         Some(token),
         None,
         timeout,
-    )?)
-    .map(|_| ())
+    )?;
+    if token_is_gone(&answer) {
+        return Ok(Unpaired::AlreadyGone);
+    }
+    ok_body(answer).map(|_| Unpaired::Deleted)
 }
 
 /// Why `POST /api/push/notify` failed.

@@ -308,6 +308,7 @@ impl Shell {
                 SettingsEvent::WebPair { .. }
                 | SettingsEvent::WebCancelPair
                 | SettingsEvent::WebUnpair
+                | SettingsEvent::WebForgetLocal
                 | SettingsEvent::WebDenyDevice(_)
                 | SettingsEvent::WebSetPermission { .. }
                 | SettingsEvent::WebRevokeDevice(_)

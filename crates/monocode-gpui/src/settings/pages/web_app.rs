@@ -285,14 +285,8 @@ impl SettingsView {
             return page;
         };
         page.push(self.web_app_controls(&status, cx));
-        if status.state == WebState::Revoked {
-            page.push(banner("web-revoked", "Web app: access revoked, pair again"));
-        }
-        if let Some(error) = &status.error {
-            page.push(banner("web-error", error.clone()));
-        }
-        if let Some(notice) = self.ctx.web_notice.clone() {
-            page.push(banner("web-notice", notice));
+        for (id, text) in web_banners(&status, self.ctx.web_notice.as_deref()) {
+            page.push(banner(id, text));
         }
         if status.paired {
             page.push(self.web_app_remote_actions(cx));
@@ -546,6 +540,17 @@ impl SettingsView {
                                     cx.notify();
                                 })),
                         )
+                        .when(unpair_failed(self.ctx.web_notice.as_deref()), |d| {
+                            d.child(
+                                secondary_button("web-forget-local", "Forget locally", true, false)
+                                    .debug_selector(|| "web-forget-local".into())
+                                    .child("Forget locally")
+                                    .on_click(cx.listener(|_, _, _, cx| {
+                                        cx.emit(SettingsEvent::WebForgetLocal);
+                                        cx.notify();
+                                    })),
+                            )
+                        })
                         .child(
                             secondary_button(
                                 "web-verify",
@@ -592,6 +597,36 @@ impl SettingsView {
         }));
         cx.notify();
     }
+}
+
+/// The banners above the controls, each text at most once: the relay sets the
+/// revoked text as the status error too, so it would otherwise show twice.
+pub(in crate::settings) fn web_banners(
+    status: &WebStatus,
+    notice: Option<&str>,
+) -> Vec<(&'static str, String)> {
+    let mut banners: Vec<(&'static str, String)> = Vec::new();
+    let candidates = [
+        (
+            "web-revoked",
+            (status.state == WebState::Revoked).then(|| relay::REVOKED_TEXT.to_owned()),
+        ),
+        ("web-error", status.error.clone()),
+        ("web-notice", notice.map(str::to_owned)),
+    ];
+    for (id, text) in candidates {
+        if let Some(text) = text
+            && !banners.iter().any(|(_, seen)| *seen == text)
+        {
+            banners.push((id, text));
+        }
+    }
+    banners
+}
+
+/// Whether the notice is a failed Unpair, which offers "Forget locally".
+pub(in crate::settings) fn unpair_failed(notice: Option<&str>) -> bool {
+    notice.is_some_and(|notice| notice.starts_with("Web app: Unpair:"))
 }
 
 /// A red banner for an error or a revoked link.

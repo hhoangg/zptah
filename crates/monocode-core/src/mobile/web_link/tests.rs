@@ -1563,6 +1563,79 @@ mod seam {
         assert!(error.contains("429") && !error.contains(TOKEN), "{error}");
     }
 
+    fn answering(status: u16, body: &'static str) -> Handler {
+        Arc::new(move |_| (status, body.into()))
+    }
+
+    const REVOKED_BODY: &str = r#"{"error":"Desktop token revoked","code":"forbidden"}"#;
+
+    #[test]
+    fn unpair_treats_a_dead_token_as_already_unpaired() {
+        for (status, body) in [
+            (
+                401,
+                r#"{"error":"Desktop token required","code":"unauthorized"}"#,
+            ),
+            (404, r#"{"error":"Not found","code":"not_found"}"#),
+            (403, REVOKED_BODY),
+        ] {
+            let world = world(answering(status, body), true);
+            world
+                .host
+                .web_unpair()
+                .unwrap_or_else(|e| panic!("{status}: {e}"));
+            assert_eq!(world.host.load_web_identity(), Ok(None), "{status}");
+            assert!(!world.host.web_status().paired, "{status}");
+        }
+    }
+
+    #[test]
+    fn unpair_keeps_the_identity_when_the_token_may_still_be_live() {
+        for (status, body) in [
+            (403, r#"{"error":"Account blocked","code":"blocked"}"#),
+            (
+                403,
+                r#"{"error":"Token scope not allowed","code":"forbidden"}"#,
+            ),
+            (403, "{}"),
+            (409, "{}"),
+            (429, "{}"),
+            (500, "{}"),
+            (503, "{}"),
+        ] {
+            let world = world(answering(status, body), true);
+            let error = world.host.web_unpair().unwrap_err();
+            assert!(error.contains("did not confirm"), "{status}: {error}");
+            assert!(
+                world.host.load_web_identity().unwrap().is_some(),
+                "{status}"
+            );
+            // The explicit local path still gets the user out.
+            world.host.web_unpair_local().unwrap();
+            assert_eq!(world.host.load_web_identity(), Ok(None), "{status}");
+        }
+    }
+
+    #[test]
+    fn a_revoked_link_unpairs_only_when_the_server_confirms_the_token_is_dead() {
+        // Relay says revoked and the server agrees: Unpair succeeds, state and error clear.
+        let world = world(answering(403, REVOKED_BODY), true);
+        world.host.web_unpair().unwrap();
+        assert_eq!(world.host.load_web_identity(), Ok(None));
+        let status = world.host.web_status();
+        assert!(!status.paired);
+        assert_eq!(status.state, WebState::Off);
+        assert_eq!(status.error, None);
+        // A blocked account also ends in the relay's revoked state (close 4011),
+        // but its token is live: the identity must stay.
+        let world = self::world(
+            answering(403, r#"{"error":"Account blocked","code":"blocked"}"#),
+            true,
+        );
+        assert!(world.host.web_unpair().is_err());
+        assert!(world.host.load_web_identity().unwrap().is_some());
+    }
+
     #[test]
     fn pairing_seals_the_identity_switches_the_link_on_and_hides_the_token() {
         let polls = Arc::new(Mutex::new(0usize));

@@ -2604,7 +2604,11 @@ impl MobileHost {
     /// answered an error), nothing is wiped and this fails: the token is still
     /// valid on the server, so the identity stays sealed for another try, and
     /// the text tells the user the other way to revoke it. A server that says
-    /// the token is already unknown (401 or 404) counts as done.
+    /// the token is already unknown or revoked (401, 404, or the 403 "Desktop
+    /// token revoked", see `desktop_api::delete_me`) counts as done: the server
+    /// side is unpaired, so only the local state is left to wipe. The relay's
+    /// "revoked" state is not trusted for this (it also covers a blocked
+    /// account, where the token is still live): the server is always asked.
     pub fn web_unpair(&self) -> Result<(), String> {
         self.unpair(true)
     }
@@ -2628,10 +2632,9 @@ impl MobileHost {
                     )
                 });
             if let Err(error) = deleted {
-                let gone = error.contains("answered 401") || error.contains("answered 404");
-                if require_server && !gone {
+                if require_server {
                     return Err(format!(
-                        "The web server did not confirm the unpairing ({error}), so this desktop's token is still valid there. Try again, or delete this desktop in the web app to revoke it."
+                        "The web server did not confirm the unpairing ({error}), so this desktop's token is still valid there. Try again, use Forget locally to clear this desktop only, or delete this desktop in the web app to revoke it."
                     ));
                 }
             }

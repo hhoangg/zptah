@@ -44,6 +44,7 @@ fn tag(event: &SettingsEvent) -> Option<String> {
         SettingsEvent::WebPair { host_url } => format!("pair:{host_url}"),
         SettingsEvent::WebCancelPair => "cancel-pair".into(),
         SettingsEvent::WebUnpair => "unpair".into(),
+        SettingsEvent::WebForgetLocal => "forget-local".into(),
         SettingsEvent::WebDenyDevice(fp) => format!("deny:{fp}"),
         SettingsEvent::WebSetPermission {
             device_id,
@@ -1307,4 +1308,35 @@ fn a_toggle_that_is_on_emits_off(cx: &mut TestAppContext) {
     });
     click(visual, "settings-toggle-web-policy-cloud-start");
     assert_eq!(events(&window, visual), ["policy:CloudStart:false"]);
+}
+
+#[test]
+fn the_revoked_text_is_shown_once_even_when_it_is_also_the_error() {
+    let status = WebStatus {
+        state: WebState::Revoked,
+        error: Some(monocode_core::mobile::web_link::relay::REVOKED_TEXT.into()),
+        ..paired()
+    };
+    let banners = super::pages::web_app::web_banners(&status, None);
+    assert_eq!(banners.len(), 1, "{banners:?}");
+    assert_eq!(banners[0].0, "web-revoked");
+    // A different error and the same text as a notice still dedupe by text.
+    let status = WebStatus {
+        error: Some("The web server is unreachable".into()),
+        ..status
+    };
+    let banners =
+        super::pages::web_app::web_banners(&status, Some("The web server is unreachable"));
+    let ids: Vec<_> = banners.iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids, ["web-revoked", "web-error"]);
+}
+
+#[test]
+fn a_failed_unpair_offers_forget_locally() {
+    use super::pages::web_app::unpair_failed;
+    assert!(unpair_failed(Some(
+        "Web app: Unpair: The web server did not confirm"
+    )));
+    assert!(!unpair_failed(Some("Web app: Deny: nope")));
+    assert!(!unpair_failed(None));
 }
