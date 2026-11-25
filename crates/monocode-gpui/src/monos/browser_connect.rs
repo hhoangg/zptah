@@ -96,7 +96,8 @@ impl Monos {
             return;
         };
         let status = service.status();
-        let busy = matches!(status.phase, Phase::Pairing | Phase::WaitingForInstall);
+        let busy =
+            status.starting || matches!(status.phase, Phase::Pairing | Phase::WaitingForInstall);
         self.browser_ui.connect.status = Some(status);
         if busy {
             self.browser_connect_watch(cx);
@@ -115,9 +116,11 @@ impl Monos {
                 let done = this
                     .update(cx, |this, cx| {
                         this.browser_connect_refresh_quiet(cx);
-                        let phase = this.browser_ui.connect.status.as_ref().map(|s| s.phase);
-                        !matches!(phase, Some(Phase::Pairing | Phase::WaitingForInstall))
-                            || this.settings != Some(SettingsSection::Browser)
+                        let busy = this.browser_ui.connect.status.as_ref().is_some_and(|s| {
+                            s.starting
+                                || matches!(s.phase, Phase::Pairing | Phase::WaitingForInstall)
+                        });
+                        !busy || this.settings != Some(SettingsSection::Browser)
                     })
                     .unwrap_or(true);
                 if done {
@@ -263,7 +266,9 @@ impl Monos {
             _ => "Connect extension",
         };
         let mut buttons = div().px_3().py_2().flex().items_center().gap_2();
-        if phase != Phase::NoBrowser {
+        let can_connect =
+            phase != Phase::NoBrowser && !status.starting && status.unavailable.is_none();
+        if can_connect {
             buttons = buttons.child(
                 action("mono-connect-start", label)
                     .on_click(cx.listener(|this, _, _, cx| this.browser_connect_start(cx))),
@@ -276,6 +281,20 @@ impl Monos {
             );
         }
         card_ = card_.child(buttons);
+        if status.starting {
+            card_ = card_.child(div().px_3().pb_2().child(note(
+                "mono-connect-starting",
+                "Starting the browser link...",
+                0.6,
+            )));
+        }
+        if let Some(reason) = &status.unavailable {
+            card_ = card_.child(div().px_3().pb_2().child(note(
+                "mono-connect-unavailable",
+                reason.clone(),
+                0.7,
+            )));
+        }
         if status.keys_in_fallback {
             card_ = card_.child(div().px_3().pb_2().child(note(
                 "mono-connect-fallback",

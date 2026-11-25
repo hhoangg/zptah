@@ -67,7 +67,7 @@ fn rig(with_chrome: bool) -> Rig {
         local_app_data: Some(home.join("local")),
         app_data_dir: home.join("app"),
         exe: std::env::current_exe().unwrap(),
-        flavor_dev: false,
+        flavor_dev: true,
         storage: Storage::Memory,
         opener: opener.clone(),
         socket_dir: None,
@@ -82,7 +82,7 @@ fn rig(with_chrome: bool) -> Rig {
 fn manifest_path(rig: &Rig) -> PathBuf {
     data_dir(&rig.home)
         .join("NativeMessagingHosts")
-        .join(format!("{}.json", manifest_install::HOST_NAME))
+        .join(format!("{}.json", manifest_install::DEV_HOST_NAME))
 }
 
 fn nonce_from(url: &str) -> String {
@@ -154,13 +154,13 @@ fn connect_writes_the_manifest_and_opens_the_pair_page_in_that_profile() {
     let rig = rig(true);
     rig.connect.connect("Profile 6", "Work").unwrap();
     let text = std::fs::read_to_string(manifest_path(&rig)).unwrap();
-    assert!(text.contains(manifest_install::HOST_NAME));
+    assert!(text.contains(manifest_install::DEV_HOST_NAME));
     let opened = rig.opener.opened.lock().unwrap().clone();
     assert_eq!(opened.len(), 1);
     assert_eq!(opened[0].0, "Profile 6");
     assert!(opened[0].1.starts_with(&format!(
         "chrome-extension://{}/src/pair/pair.html#n=",
-        manifest_install::STORE_EXTENSION_IDS[0]
+        manifest_install::DEV_EXTENSION_ID
     )));
     let status = rig.connect.status();
     assert_eq!(status.phase, Phase::Pairing);
@@ -244,4 +244,52 @@ fn disconnect_all_removes_the_manifest_and_resets_the_card() {
     rig.connect.disconnect_all().unwrap();
     assert!(!manifest_path(&rig).exists());
     assert_eq!(rig.connect.status().phase, Phase::Ready);
+}
+
+#[test]
+fn the_release_flavor_refuses_connect_until_the_store_listing_exists() {
+    let mut rig = rig(true);
+    rig.connect = BrowserConnect::new(ConnectOptions {
+        app_version: "9.9.9-test".into(),
+        home: rig.home.clone(),
+        local_app_data: Some(rig.home.join("local")),
+        app_data_dir: rig.home.join("app"),
+        exe: std::env::current_exe().unwrap(),
+        flavor_dev: false,
+        storage: Storage::Memory,
+        opener: rig.opener.clone(),
+        socket_dir: None,
+    });
+    assert_eq!(
+        rig.connect.status().unavailable.as_deref(),
+        Some(NOT_IN_STORE_YET)
+    );
+    assert_eq!(
+        rig.connect.connect("Default", "Personal").unwrap_err(),
+        NOT_IN_STORE_YET
+    );
+    assert!(rig.opener.opened.lock().unwrap().is_empty());
+    assert!(!data_dir(&rig.home).join("NativeMessagingHosts").exists());
+}
+
+#[test]
+fn a_socket_dir_error_is_shown_as_the_server_error() {
+    let mut rig = rig(true);
+    rig.connect = BrowserConnect::new(ConnectOptions {
+        app_version: "9.9.9-test".into(),
+        home: rig.home.clone(),
+        local_app_data: Some(rig.home.join("local")),
+        app_data_dir: rig.home.join("app"),
+        exe: std::env::current_exe().unwrap(),
+        flavor_dev: true,
+        storage: Storage::Memory,
+        opener: rig.opener.clone(),
+        socket_dir: Some(Err("The browser link could not start: no dir.".into())),
+    });
+    let status = rig.connect.status();
+    assert_eq!(
+        status.server_error.as_deref(),
+        Some("The browser link could not start: no dir.")
+    );
+    assert!(rig.connect.connect("Default", "Personal").is_err());
 }

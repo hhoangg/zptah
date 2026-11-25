@@ -14,9 +14,7 @@ use super::links::manager::{
     Deps, FileRecordStore, LinkEvent, LinkManager, LinkRecordStore, ManagerConfig,
     MemoryRecordStore, Refusal,
 };
-use super::links::manifest_install::{
-    self, Browser, Change, InstallEnv, Registry, Target, V1_BROWSERS,
-};
+use super::links::manifest_install::{self, Browser, InstallEnv, Registry, Target, V1_BROWSERS};
 use super::links::pairing::{pair_page_url, PairingState, ProfileChoice};
 use super::links::profiles::{read_profiles, valid_profile_dir};
 use super::peer::{self, Flavor, PeerPolicy};
@@ -74,6 +72,10 @@ pub struct ConnectStatus {
     pub keys_in_fallback: bool,
     /// Why the listener is not running (a second app copy, an unsupported OS), when it is not.
     pub server_error: Option<String>,
+    /// The listener is still starting (the app image is being hashed first).
+    pub starting: bool,
+    /// Why Connect is off (the release extension has no store listing yet).
+    pub unavailable: Option<String>,
     /// The last thing worth telling the user (a refused connection, a failed open).
     pub alert: Option<String>,
     /// When the open pairing window closes, in ms since the epoch.
@@ -116,8 +118,9 @@ pub struct ConnectOptions {
     pub flavor_dev: bool,
     pub storage: Storage,
     pub opener: Arc<dyn PageOpener>,
-    /// Where the listener's socket and lock go. `None` starts no listener (tests).
-    pub socket_dir: Option<PathBuf>,
+    /// Where the listener's socket and lock go. `None` starts no listener (tests); an `Err` is
+    /// shown as the reason the listener is off.
+    pub socket_dir: Option<Result<PathBuf, String>>,
 }
 
 /// What the event watcher learned. Not security state: only what the card says.
@@ -169,8 +172,24 @@ pub struct BrowserConnect {
     exe: PathBuf,
     opener: Arc<dyn PageOpener>,
     observed: Arc<Mutex<Observed>>,
-    server: Mutex<Option<Server>>,
-    server_error: Option<String>,
+    server: Arc<Mutex<Option<Server>>>,
+    server_state: Arc<Mutex<ServerState>>,
+}
+
+#[derive(Default)]
+struct ServerState {
+    starting: bool,
+    error: Option<String>,
+}
+
+/// The message shown while the release extension has no Chrome Web Store listing.
+pub const NOT_IN_STORE_YET: &str = "Available after the Chrome Web Store listing is published.";
+
+/// The placeholder id is `p` repeated; a real store id is never that.
+fn store_listing_exists() -> bool {
+    manifest_install::STORE_EXTENSION_IDS
+        .iter()
+        .any(|id| id.bytes().any(|b| b != b'p'))
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -187,32 +206,37 @@ pub fn start_app(
     app_data_dir: &Path,
     app_version: &str,
 ) -> Option<Arc<BrowserConnect>> {
-    // Hash the running image before anything can connect: an updater may replace the file later.
-    let _ = peer::own_exe_hash();
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())?;
     let exe = std::env::current_exe().ok()?;
     #[cfg(unix)]
-    let socket_dir = peer::dir::socket_dir().ok();
+    let socket_dir = Some(
+        peer::dir::socket_dir().map_err(|e| format!("The browser link could not start: {e}.")),
+    );
     #[cfg(not(unix))]
     let socket_dir = None;
-    let connect = Arc::new(BrowserConnect::new(ConnectOptions {
-        app_version: app_version.to_owned(),
-        home,
-        local_app_data: std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
-        app_data_dir: app_data_dir.to_owned(),
-        exe,
-        flavor_dev: cfg!(debug_assertions),
-        storage: Storage::Real {
-            database: database.to_owned(),
-        },
-        opener: Arc::new(SystemOpener),
-        socket_dir,
-    }));
-    GLOBAL.set(connect.clone()).ok();
-    GLOBAL.get().cloned()
+    // A second call is a no-op: only the first one builds (and starts) a service.
+    Some(
+        GLOBAL
+            .get_or_init(|| {
+                Arc::new(BrowserConnect::new(ConnectOptions {
+                    app_version: app_version.to_owned(),
+                    home,
+                    local_app_data: std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+                    app_data_dir: app_data_dir.to_owned(),
+                    exe,
+                    flavor_dev: cfg!(debug_assertions),
+                    storage: Storage::Real {
+                        database: database.to_owned(),
+                    },
+                    opener: Arc::new(SystemOpener),
+                    socket_dir,
+                }))
+            })
+            .clone(),
+    )
 }
 
 /// The app's link layer, once [`start_app`] ran.
@@ -258,7 +282,40 @@ impl BrowserConnect {
         );
         let observed = Arc::new(Mutex::new(Observed::default()));
         watch_events(events, observed.clone());
-        let (server, server_error) = start_server(&manager, flavor, options.socket_dir.as_deref());
+        let server: Arc<Mutex<Option<Server>>> = Arc::new(Mutex::new(None));
+        let server_state = Arc::new(Mutex::new(ServerState::default()));
+        match options.socket_dir {
+            None => {}
+            Some(Err(reason)) => lock(&server_state).error = Some(reason),
+            Some(Ok(dir)) => {
+                lock(&server_state).starting = true;
+                let (manager, server, state) =
+                    (manager.clone(), server.clone(), server_state.clone());
+                let spawned = std::thread::Builder::new()
+                    .name("zptah-browser-start".into())
+                    .spawn(move || {
+                        // Hashing the running image takes a moment, so it stays off the UI thread.
+                        // It still happens before the listener exists, so before any connect.
+                        let (started, error) = if peer::own_exe_hash().is_some() {
+                            start_server(&manager, flavor, Some(&dir))
+                        } else {
+                            (
+                                None,
+                                Some("The browser link could not read the app.".to_string()),
+                            )
+                        };
+                        *lock(&server) = started;
+                        let mut state = lock(&state);
+                        state.starting = false;
+                        state.error = error;
+                    });
+                if spawned.is_err() {
+                    let mut state = lock(&server_state);
+                    state.starting = false;
+                    state.error = Some("The browser link could not start.".into());
+                }
+            }
+        }
         Self {
             manager,
             flavor,
@@ -271,14 +328,19 @@ impl BrowserConnect {
             exe: options.exe,
             opener: options.opener,
             observed,
-            server: Mutex::new(server),
-            server_error,
+            server,
+            server_state,
         }
     }
 
     /// Stops accepting and releases the single-instance lock.
     pub fn stop(&self) {
         drop(lock(&self.server).take());
+    }
+
+    fn unavailable(&self) -> Option<String> {
+        (self.flavor == Flavor::Release && !store_listing_exists())
+            .then(|| NOT_IN_STORE_YET.to_string())
     }
 
     fn extension_id(&self) -> &'static str {
@@ -340,6 +402,13 @@ impl BrowserConnect {
 
     pub fn status(&self) -> ConnectStatus {
         let browsers = self.browser_views();
+        let state = {
+            let s = lock(&self.server_state);
+            ServerState {
+                starting: s.starting,
+                error: s.error.clone(),
+            }
+        };
         let links: Vec<LinkView> = self
             .manager
             .links()
@@ -383,7 +452,9 @@ impl BrowserConnect {
             browsers,
             links,
             keys_in_fallback: self.manager.keys_in_fallback(),
-            server_error: self.server_error.clone(),
+            server_error: state.error.clone(),
+            starting: state.starting,
+            unavailable: self.unavailable(),
             alert,
             pairing_expires_ms: match pairing {
                 PairingState::Waiting { expires_ms } => Some(expires_ms),
@@ -396,16 +467,24 @@ impl BrowserConnect {
     /// window for `profile_dir` and opens the pair page in that profile. `profile_name` is the
     /// label shown on the card (the profile's own name when empty).
     pub fn connect(&self, profile_dir: &str, profile_name: &str) -> Result<(), String> {
+        if let Some(reason) = self.unavailable() {
+            return Err(reason);
+        }
         if !valid_profile_dir(profile_dir) {
             return Err("Choose a browser profile first.".into());
         }
         if self.detected().is_empty() {
             return Err("Install Google Chrome first.".into());
         }
-        if let Some(reason) = &self.server_error {
+        let state = lock(&self.server_state);
+        if state.starting {
+            return Err("The browser link is still starting. Try again in a moment.".into());
+        }
+        if let Some(reason) = &state.error {
             return Err(reason.clone());
         }
-        let installed = manifest_install::install(
+        drop(state);
+        manifest_install::install(
             &self.env,
             self.flavor,
             &self.exe,
@@ -426,7 +505,6 @@ impl BrowserConnect {
                 "The browser host could not be installed.".to_string()
             }
         })?;
-        let _changed = installed.iter().any(|i| i.change == Change::Written);
         lock(&self.observed).manifest_written = true;
         let profile = ProfileChoice::new(profile_dir, profile_name)?;
         let ticket = self.manager.start_pairing(profile);

@@ -79,7 +79,7 @@ fn open(cx: &mut TestAppContext, with_chrome: bool) -> Card {
         local_app_data: Some(home.0.join("local")),
         app_data_dir: home.0.join("app"),
         exe: std::env::current_exe().unwrap(),
-        flavor_dev: false,
+        flavor_dev: true,
         storage: Storage::Memory,
         opener: opener.clone(),
         socket_dir: None,

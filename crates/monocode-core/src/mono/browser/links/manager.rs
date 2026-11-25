@@ -317,8 +317,6 @@ impl From<ProtocolError> for Refusal {
 }
 
 /// What the Connect card and the extension upstream listen to.
-// Events are rare and short lived, so the size gap between variants costs nothing.
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub(crate) enum LinkEvent {
     /// A pairing finished; the extension reconnects with the normal handshake next.
