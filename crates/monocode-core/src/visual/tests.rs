@@ -324,3 +324,187 @@ fn dashboard_components_render_and_reject_invalid_data() {
         assert!(check(source).is_err(), "accepted {source}");
     }
 }
+
+fn flow_error(source: &str) -> String {
+    check(source).unwrap_err()
+}
+
+#[test]
+fn flow_builds_a_validated_graph() {
+    let tree = check(
+        "return () => visual.flow({direction:'TB',title:'Approval',nodes:[
+            {id:'a',label:'Request',kind:'start'},{id:'b',label:'Risk?',kind:'decision'},
+            {id:'c',label:'Auto act',color:'positive'},{id:'d'}],
+          edges:[{from:'a',to:'b'},{from:'b',to:'c',label:'safe'},{from:'b',to:'d',dashed:true},{from:'d',to:'a'}]});",
+    )
+    .unwrap();
+    let Node::Flow {
+        graph,
+        title,
+        height,
+    } = tree
+    else {
+        panic!("expected a flow")
+    };
+    assert_eq!(graph.direction, crate::diagram::Direction::TB);
+    assert_eq!(graph.nodes.len(), 4);
+    assert_eq!(graph.nodes[3].label, "d");
+    assert_eq!(graph.nodes[1].kind, crate::diagram::NodeKind::Decision);
+    assert_eq!(graph.nodes[2].color, Some(ThemeColor::Positive));
+    assert!(graph.edges[2].dashed && graph.edges[0].arrow);
+    assert_eq!(title.as_deref(), Some("Approval"));
+    assert_eq!(height, None);
+    // The default direction is left to right.
+    let tree =
+        check("return () => visual.flow({nodes:[{id:1},{id:2}],edges:[{from:1,to:2}]});").unwrap();
+    assert!(
+        matches!(tree, Node::Flow { graph, .. } if graph.direction == crate::diagram::Direction::LR && graph.edges[0].to == "2")
+    );
+}
+
+#[test]
+fn flow_rejects_invalid_input_with_clear_errors() {
+    let unknown =
+        flow_error("return () => visual.flow({nodes:[{id:'a'}],edges:[{from:'a',to:'ghost'}]});");
+    assert!(
+        unknown.contains("unknown node id 'ghost'") && unknown.contains("to"),
+        "{unknown}"
+    );
+    let unknown =
+        flow_error("return () => visual.flow({nodes:[{id:'a'}],edges:[{from:'nope',to:'a'}]});");
+    assert!(
+        unknown.contains("'nope'") && unknown.contains("from"),
+        "{unknown}"
+    );
+    assert!(
+        flow_error("return () => visual.flow({nodes:[{id:'a'},{id:'a'}]});")
+            .contains("Duplicate flow node id 'a'")
+    );
+    assert!(
+        flow_error("return () => visual.flow({nodes:[{id:'a'}],direction:'sideways'});")
+            .contains("Flow direction must be one of LR, TB")
+    );
+    assert!(
+        flow_error("return () => visual.flow({nodes:[{id:'a',kind:'hexagon'}]});")
+            .contains("unknown kind 'hexagon'")
+    );
+    assert!(flow_error("return () => visual.flow({nodes:[]});").contains("non-empty nodes"));
+    assert!(
+        flow_error("return () => visual.flow({nodes:[{id:'a',oops:1}]});")
+            .contains("Unsupported style or option: oops")
+    );
+    assert!(flow_error(
+        "return () => visual.flow({nodes:Array.from({length:121},(_, i)=>({id:'n'+i}))});"
+    )
+    .contains("1-120 nodes"));
+    assert!(
+        flow_error("return () => visual.flow({nodes:[{id:'a'}],height:5});")
+            .contains("flow height")
+    );
+}
+
+#[test]
+fn canvas_label_rect_and_line_options_validate() {
+    let tree = check(
+        "return () => visual.canvas([
+            visual.rect(10,10,100,36,{color:'accent',radius:8,stroke:'ink',strokeWidth:2}),
+            visual.label(60,28,'Hi',{align:'center',baseline:'middle'}),
+            visual.line(0,0,50,0,{arrow:'end',dashed:true}),
+            visual.polyline([[0,0],[5,5],[9,0]],{arrow:true}),
+            visual.label(5,5,'chip',{chip:true,baseline:'alphabetic',align:'end'})]);",
+    )
+    .unwrap();
+    let Node::Canvas { shapes, .. } = tree else {
+        panic!()
+    };
+    assert!(
+        matches!(&shapes[0], Shape::Rect { radius, stroke: Some(ThemeColor::Ink), fill: true, .. } if *radius == 8.)
+    );
+    assert!(matches!(
+        &shapes[1],
+        Shape::Label {
+            color: None,
+            align: crate::diagram::TextAlign::Center,
+            baseline: crate::diagram::Baseline::Middle,
+            chip: false,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &shapes[2],
+        Shape::Line {
+            arrow: ArrowEnds::End,
+            dashed: true,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &shapes[3],
+        Shape::Polyline {
+            arrow: ArrowEnds::End,
+            ..
+        }
+    ));
+    // A plain label keeps the original top-left anchoring.
+    let plain = check("return () => visual.canvas([visual.label(1,2,'x')]);").unwrap();
+    let Node::Canvas { shapes, .. } = plain else {
+        panic!()
+    };
+    assert!(matches!(
+        &shapes[0],
+        Shape::Label {
+            align: crate::diagram::TextAlign::Start,
+            baseline: crate::diagram::Baseline::Top,
+            ..
+        }
+    ));
+    for bad in [
+        "visual.label(0,0,'x',{align:'middle'})",
+        "visual.label(0,0,'x',{baseline:'center'})",
+        "visual.line(0,0,1,1,{arrow:'both-ways'})",
+        "visual.rect(0,0,1,1,{radius:-1})",
+        "visual.rect(0,0,1,1,{strokeWidth:99})",
+    ] {
+        assert!(
+            check(&format!("return () => visual.canvas([{bad}]);")).is_err(),
+            "accepted {bad}"
+        );
+    }
+}
+
+#[test]
+fn label_backdrop_finds_the_fill_under_the_anchor() {
+    let tree = check(
+        "return () => visual.canvas([
+            visual.rect(0,0,100,40,{color:'warning'}),
+            visual.rect(0,0,100,40,{color:'accent',fill:false,stroke:'ink'}),
+            visual.circle(200,20,10,{color:'positive'}),
+            visual.label(50,20,'inside',{align:'center',baseline:'middle'}),
+            visual.label(200,20,'dot'),
+            visual.label(300,300,'outside')]);",
+    )
+    .unwrap();
+    let Node::Canvas { shapes, .. } = tree else {
+        panic!()
+    };
+    assert_eq!(label_backdrop(&shapes, 3), Some(ThemeColor::Warning));
+    assert_eq!(label_backdrop(&shapes, 4), Some(ThemeColor::Positive));
+    assert_eq!(label_backdrop(&shapes, 5), None);
+    assert_eq!(label_backdrop(&shapes, 0), None);
+}
+
+#[test]
+fn visual_docs_describe_labels_and_flow() {
+    let docs = crate::visual_bridge::documentation_text();
+    for needle in [
+        "visual.flow(",
+        "baseline",
+        "align",
+        "arrow",
+        "dashed",
+        "chip",
+        "radius",
+    ] {
+        assert!(docs.contains(needle), "docs miss {needle}");
+    }
+}

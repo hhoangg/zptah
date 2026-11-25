@@ -629,7 +629,7 @@ mod tests {
     #[gpui::test]
     fn mermaid_completion_updates_retained_document_heights(cx: &mut TestAppContext) {
         let window = fixture(
-            "```mermaid\ngraph LR; A-->B-->C-->D\n```\n".into(),
+            "```mermaid\nsequenceDiagram\n Alice->>Bob: Hello\n```\n".into(),
             None,
             cx,
         );

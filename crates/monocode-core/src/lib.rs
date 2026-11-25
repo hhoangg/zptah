@@ -14,6 +14,7 @@ pub mod context;
 pub mod contributors;
 pub(crate) mod credential_guard;
 pub mod desktop_preferences;
+pub mod diagram;
 pub mod diff;
 pub mod docker_accounts;
 pub mod external_editor;

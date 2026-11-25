@@ -42,6 +42,16 @@
       ...(kind === "grid" ? {columns: o.columns ?? 2} : {})};
   };
   const color = o => o.color ?? "accent";
+  const ALIGNS = ["start", "center", "end"];
+  const BASELINES = ["top", "middle", "bottom", "alphabetic"];
+  const FLOW_KINDS = ["box", "decision", "start", "end"];
+  const oneOf = (value, list, what) => assert(list.includes(value), `${what} must be one of ${list.join(", ")}, got '${value}'`);
+  const arrow = value => {
+    if (value === undefined || value === false) return "none";
+    if (value === true) return "end";
+    oneOf(value, ["none", "start", "end", "both"], "Arrow");
+    return value;
+  };
   const api = {
     state(initial) {
       assert(initial && typeof initial === "object" && !Array.isArray(initial), "State must be an object");
@@ -140,19 +150,59 @@
       return {kind: "canvas", shapes, width: o.width ?? 640, height: o.height ?? 320};
     },
     rect(x, y, width, height, o) {
-      o = options(o, ["color"]); return {kind: "rect", x, y, width, height, color: color(o)};
+      o = options(o, ["color", "radius", "stroke", "strokeWidth", "fill"]);
+      return {kind: "rect", x, y, width, height, color: color(o), radius: o.radius ?? 0,
+        stroke: o.stroke ?? null, stroke_width: o.strokeWidth ?? 1.5, fill: o.fill ?? true};
     },
     circle(x, y, radius, o) {
-      o = options(o, ["color"]); return {kind: "circle", x, y, radius, color: color(o)};
+      o = options(o, ["color", "stroke", "strokeWidth", "fill"]);
+      return {kind: "circle", x, y, radius, color: color(o),
+        stroke: o.stroke ?? null, stroke_width: o.strokeWidth ?? 1.5, fill: o.fill ?? true};
     },
     line(x1, y1, x2, y2, o) {
-      o = options(o, ["width", "color"]); return {kind: "line", x1, y1, x2, y2, width: o.width ?? 2, color: color(o)};
+      o = options(o, ["width", "color", "arrow", "dashed"]);
+      return {kind: "line", x1, y1, x2, y2, width: o.width ?? 2, color: color(o), arrow: arrow(o.arrow), dashed: o.dashed ?? false};
     },
     polyline(points, o) {
-      o = options(o, ["width", "color"]); return {kind: "polyline", points, width: o.width ?? 2, color: color(o)};
+      o = options(o, ["width", "color", "arrow", "dashed"]);
+      return {kind: "polyline", points, width: o.width ?? 2, color: color(o), arrow: arrow(o.arrow), dashed: o.dashed ?? false};
     },
     label(x, y, value, o) {
-      o = options(o, ["color"]); return {kind: "label", x, y, text: text(value), color: o.color ?? "ink"};
+      o = options(o, ["color", "align", "baseline", "chip"]);
+      oneOf(o.align ?? "start", ALIGNS, "Label align");
+      oneOf(o.baseline ?? "top", BASELINES, "Label baseline");
+      return {kind: "label", x, y, text: text(value), color: o.color ?? null,
+        align: o.align ?? "start", baseline: o.baseline ?? "top", chip: o.chip ?? false};
+    },
+    flow(spec) {
+      spec = options(spec, ["nodes", "edges", "direction", "title", "height"]);
+      assert(Array.isArray(spec.nodes) && spec.nodes.length > 0, "visual.flow needs a non-empty nodes array");
+      assert(spec.edges === undefined || Array.isArray(spec.edges), "visual.flow edges must be an array");
+      const direction = spec.direction ?? "LR";
+      oneOf(direction, ["LR", "TB"], "Flow direction");
+      const ids = new Set();
+      const nodes = spec.nodes.map((n, i) => {
+        n = options(n, ["id", "label", "kind", "color"]);
+        assert(typeof n.id === "string" || typeof n.id === "number", `Flow node ${i} needs an id (string or number)`);
+        const id = String(n.id);
+        assert(id.length > 0, `Flow node ${i} has an empty id`);
+        assert(!ids.has(id), `Duplicate flow node id '${id}'`);
+        ids.add(id);
+        const kind = n.kind ?? "box";
+        assert(FLOW_KINDS.includes(kind), `Flow node '${id}' has unknown kind '${kind}'; use ${FLOW_KINDS.join(", ")}`);
+        return {id, label: n.label == null ? id : text(n.label), kind, color: n.color ?? null};
+      });
+      const edges = (spec.edges ?? []).map((e, i) => {
+        e = options(e, ["from", "to", "label", "dashed", "arrow"]);
+        for (const side of ["from", "to"]) {
+          assert(e[side] !== undefined && ids.has(String(e[side])),
+            `Flow edge ${i} has unknown node id '${e[side]}' in ${side}; known ids: ${[...ids].slice(0, 8).join(", ")}`);
+        }
+        return {from: String(e.from), to: String(e.to), label: e.label == null ? null : text(e.label),
+          dashed: e.dashed ?? false, arrow: e.arrow ?? true};
+      });
+      return {kind: "flow", graph: {direction, nodes, edges},
+        title: spec.title == null ? null : text(spec.title), height: spec.height ?? null};
     },
     object(geometry, o) {
       o = options(o, ["position", "rotation", "scale", "color"]);
