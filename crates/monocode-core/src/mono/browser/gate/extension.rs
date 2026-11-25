@@ -36,6 +36,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+pub(crate) mod act;
+
 /// The session id the gate sees: there is no real MCP session, the link is the session.
 const SESSION_ID: &str = "zptah-extension";
 /// Default and largest `max_bytes` asked of the extension for the text of a snapshot.
@@ -164,17 +166,51 @@ pub struct ExtensionUpstream {
     /// Where `filename` arguments may write (the gate's private output folder); none: ignored.
     output_dir: Mutex<Option<PathBuf>>,
     state: Mutex<State>,
+    /// What the act tools need beyond the read path (see [`act`]).
+    act: act::ActShared,
 }
 
 impl ExtensionUpstream {
     pub(crate) fn new(mono_id: impl Into<String>, link: LinkSource) -> Arc<Self> {
-        Arc::new(Self {
-            mono_id: mono_id.into(),
+        let mono_id = mono_id.into();
+        let upstream = Arc::new(Self {
+            act: act::ActShared::new(&mono_id),
+            mono_id,
             link,
             origins: Mutex::new(Origins::default()),
             output_dir: Mutex::new(None),
             state: Mutex::new(State::default()),
-        })
+        });
+        act::register(&upstream);
+        upstream
+    }
+
+    /// The link of the paired profile whose Chrome profile directory is `profile_dir`: found
+    /// through `manager` for every request (the browser may connect after the Mono starts), and
+    /// remembered while it stays connected.
+    pub(crate) fn for_profile(
+        mono_id: impl Into<String>,
+        manager: LinkManager,
+        profile_dir: &str,
+    ) -> Arc<Self> {
+        let profile_dir = profile_dir.to_owned();
+        let cached: Mutex<Option<String>> = Mutex::new(None);
+        Self::new(
+            mono_id,
+            Arc::new(move || {
+                let mut cached = lock(&cached);
+                if let Some(handle) = cached.as_deref().and_then(|id| manager.handle(id)) {
+                    return Some(handle);
+                }
+                let found = manager
+                    .links()
+                    .ok()?
+                    .into_iter()
+                    .find(|l| l.connected && l.profile_dir == profile_dir)?;
+                *cached = Some(found.instance_id.clone());
+                manager.handle(&found.instance_id)
+            }),
+        )
     }
 
     /// The link of the paired profile `instance_id` in `manager`. The Mono wiring that calls it
@@ -204,16 +240,26 @@ impl ExtensionUpstream {
 
     // ---- one request to the extension ----
 
-    fn ask(&self, method: Method, mut params: Value, deadline_ms: u64) -> Result<Value, String> {
+    fn ask(&self, method: Method, params: Value, deadline_ms: u64) -> Result<Value, String> {
+        self.ask_raw(method, params, deadline_ms)
+            .map_err(|e| request_error_text(e, method))
+    }
+
+    /// [`Self::ask`] that keeps the error as the link gave it (the act path needs the code).
+    fn ask_raw(
+        &self,
+        method: Method,
+        mut params: Value,
+        deadline_ms: u64,
+    ) -> Result<Value, RequestError> {
         let Some(link) = (self.link)().filter(LinkHandle::is_open) else {
-            return Err(not_connected());
+            return Err(RequestError::Closed);
         };
         if let Some(map) = params.as_object_mut() {
             map.insert("deadline_ms".into(), json!(deadline_ms));
         }
         let wait = Duration::from_millis(deadline_ms) + LINK_GRACE;
         link.request(method, Some(&self.mono_id), params, wait)
-            .map_err(|e| request_error_text(e, method))
     }
 
     // ---- tab bookkeeping ----
@@ -292,6 +338,7 @@ impl ExtensionUpstream {
             "browser_find" => self.find_tool(args),
             "browser_take_screenshot" => self.screenshot_tool(args),
             "browser_wait_for" => self.wait_tool(args),
+            name if act::is_act_tool(name) => self.act_tool(name, args),
             other => Err(format!(
                 "{other} is not available with the zptah Browser extension yet."
             )),
@@ -394,6 +441,7 @@ impl ExtensionUpstream {
         let result = self.ask(Method::PageSnapshot, params, DEFAULT_DEADLINE_MS)?;
         let page = PageText::parse(&result, "text")?;
         self.check_reply_url(&page.url)?;
+        self.note_read(&page.url, &page.body);
         let generation = result["generation"].as_u64().unwrap_or(0);
         let dropped = result["hidden_dropped"].as_u64().unwrap_or(0);
 
@@ -426,6 +474,7 @@ impl ExtensionUpstream {
         let result = self.ask(Method::PageRead, params, DEFAULT_DEADLINE_MS)?;
         let page = PageText::parse(&result, "markdown")?;
         self.check_reply_url(&page.url)?;
+        self.note_read(&page.url, &page.body);
         let mut text = page.header();
         text.push_str("### Content\n");
         text.push_str(&page.body);
@@ -655,6 +704,18 @@ impl Upstream for ExtensionUpstream {
         // There is no server session to lose: the link comes and goes by itself.
         true
     }
+
+    fn run_started(&self, session: i64, user_message: &str) {
+        self.begin_run(session, user_message);
+    }
+
+    fn run_ended(&self, session: i64) {
+        self.end_run(session);
+    }
+
+    fn injection_found(&self, session: i64) {
+        self.flag_injection(session);
+    }
 }
 
 // ---- a page reply ----
@@ -779,6 +840,14 @@ fn remote_text(body: &ErrorBody) -> String {
         ErrorCode::Timeout => "The page did not answer in time.",
         ErrorCode::Unsupported => "That is not possible here.",
         ErrorCode::Incognito => "Private windows are never used.",
+        ErrorCode::NotOwner => "That tab is not yours. Act only in tabs of your own (browser_tabs list shows them); the user's tabs are read only.",
+        ErrorCode::StalePrepare => "The page changed before the action ran, so nothing was done. Take a new browser_snapshot and try again.",
+        ErrorCode::PasswordField => "Typing into a password field is never allowed. Stop and tell the user to sign in themselves.",
+        ErrorCode::NeedsApproval => "The browser wants the user's approval for this action. Nothing was done.",
+        ErrorCode::DebuggerDenied => "This action needs the browser's debugging permission, which the user has not given. Tell the user to allow it in the zptah Browser options page.",
+        ErrorCode::DebuggerBusy => "Another tool (such as DevTools) is attached to that tab. Tell the user to close it.",
+        ErrorCode::DialogSuspected => "The page may be showing a dialog (an alert or a confirm) that the browser cannot see. Tell the user to answer it in the tab; do not repeat the action.",
+        ErrorCode::Busy => "The browser is busy. Try again in a moment.",
         _ => "",
     };
     let message = clean_line(&body.message);
@@ -847,6 +916,23 @@ fn tab_property() -> Value {
     })
 }
 
+fn ref_property() -> Value {
+    json!({"type": "string", "description": "The [ref=eN] of the element from a browser_snapshot of the same tab."})
+}
+
+/// The properties every action tool takes, besides its own.
+fn act_props(own: Value) -> Value {
+    let mut props = json!({
+        "tab": tab_property(),
+        "purpose": {"type": "string", "description": "One sentence: why you do this. The user sees it, quoted as your words; it never lowers how carefully the action is checked."},
+        "declared_risk": {"type": "array", "items": {"type": "string", "enum": ["payment", "destructive", "account_security", "sharing", "send_unnamed", "post_public", "upload", "credential_entry", "terms"]}, "description": "Risks you know this action has. They can only add questions for the user."},
+    });
+    if let (Some(map), Some(own)) = (props.as_object_mut(), own.as_object()) {
+        map.extend(own.clone());
+    }
+    props
+}
+
 fn tool_definitions() -> Vec<Value> {
     let object = |properties: Value, required: Value| json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false});
     vec![
@@ -889,7 +975,7 @@ fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "browser_find",
             "title": "Find on the page",
-            "description": "Search a tab for text or a role (for example `button Buy`) and return matching elements with their refs.",
+            "description": "Search a tab for text and return matching elements with their refs. Start the query with a role word (button, link, textbox, checkbox, radio, combobox, heading, tab, menuitem, ...) to match only that role: `button Buy` finds buttons whose name holds \"buy\"; a role word alone lists every element of that role.",
             "inputSchema": object(json!({
                 "query": {"type": "string", "description": "Text or role to look for."},
                 "tab": tab_property(),
@@ -908,6 +994,128 @@ fn tool_definitions() -> Vec<Value> {
                 "filename": {"type": "string", "description": "Also save the picture to this file."},
             }), json!([])),
             "annotations": {"readOnlyHint": true},
+        }),
+        json!({
+            "name": "browser_click",
+            "title": "Click",
+            "description": "Click an element of a tab you own, by its ref from a browser_snapshot. The user is asked first when the click looks risky (payments, deleting, sharing, sending to someone they did not mention, and the like); a refusal is final.",
+            "inputSchema": object(act_props(json!({
+                "ref": ref_property(),
+                "button": {"type": "string", "enum": ["left", "right", "middle"]},
+                "doubleClick": {"type": "boolean"},
+                "modifiers": {"type": "array", "items": {"type": "string"}, "description": "Keys held during the click, such as Shift or Control."},
+            })), json!(["ref"])),
+            "annotations": {"destructiveHint": true},
+        }),
+        json!({
+            "name": "browser_type",
+            "title": "Type text",
+            "description": "Replace the value of a text field with `text`. Passwords are never typed: when a page needs one, stop and ask the user to sign in. One-time codes, card and ID numbers always ask the user.",
+            "inputSchema": object(act_props(json!({
+                "ref": ref_property(),
+                "text": {"type": "string", "description": "The text to put in the field."},
+                "submit": {"type": "boolean", "description": "Submit the form afterwards."},
+                "slowly": {"type": "boolean", "description": "Type key by key (for fields that react to each key)."},
+            })), json!(["ref", "text"])),
+            "annotations": {"destructiveHint": true},
+        }),
+        json!({
+            "name": "browser_fill_form",
+            "title": "Fill several fields",
+            "description": "Fill several fields of one form. Each field is judged on its own: passwords are refused, sensitive fields ask the user.",
+            "inputSchema": object(act_props(json!({
+                "fields": {"type": "array", "description": "The fields to fill.", "items": {"type": "object", "properties": {
+                    "ref": ref_property(),
+                    "type": {"type": "string", "enum": ["textbox", "checkbox", "radio", "combobox", "slider"]},
+                    "value": {"description": "The value: text, or true/false for a checkbox."},
+                }, "required": ["ref", "type", "value"]}},
+            })), json!(["fields"])),
+            "annotations": {"destructiveHint": true},
+        }),
+        json!({
+            "name": "browser_select_option",
+            "title": "Select an option",
+            "description": "Select option(s) of a dropdown by their text or value.",
+            "inputSchema": object(act_props(json!({
+                "ref": ref_property(),
+                "values": {"type": "array", "items": {"type": "string"}, "description": "The options to select."},
+            })), json!(["ref", "values"])),
+            "annotations": {"destructiveHint": true},
+        }),
+        json!({
+            "name": "browser_press_key",
+            "title": "Press a key",
+            "description": "Press a key (Enter, Tab, Escape, ArrowDown, PageDown, a letter ...). PageDown, PageUp, Home, End and the arrows scroll. Enter can submit a form, so it is judged like a click on the submit button.",
+            "inputSchema": object(act_props(json!({
+                "key": {"type": "string", "description": "The key name."},
+                "ref": ref_property(),
+            })), json!(["key"])),
+            "annotations": {"destructiveHint": true},
+        }),
+        json!({
+            "name": "browser_hover",
+            "title": "Hover",
+            "description": "Point at an element (to open a menu). Never changes anything and never asks.",
+            "inputSchema": object(act_props(json!({"ref": ref_property()})), json!(["ref"])),
+            "annotations": {"readOnlyHint": false},
+        }),
+        json!({
+            "name": "browser_drag",
+            "title": "Drag and drop",
+            "description": "Drag one element onto another. Needs the browser's debugging permission, which the user can give in the zptah Browser options page.",
+            "inputSchema": object(act_props(json!({
+                "startRef": ref_property(),
+                "endRef": ref_property(),
+            })), json!(["startRef", "endRef"])),
+            "annotations": {"destructiveHint": true},
+        }),
+        json!({
+            "name": "browser_mouse_wheel",
+            "title": "Scroll",
+            "description": "Scroll the page of a tab you own by deltaX and deltaY pixels (positive deltaY scrolls down).",
+            "inputSchema": object(act_props(json!({
+                "deltaX": {"type": "number"},
+                "deltaY": {"type": "number"},
+            })), json!([])),
+            "annotations": {"readOnlyHint": false},
+        }),
+        json!({
+            "name": "browser_navigate",
+            "title": "Open an address",
+            "description": "Open an http or https address in a tab you own. A site the user did not mention, or a bank or other sensitive site, asks the user first.",
+            "inputSchema": object(act_props(json!({"url": {"type": "string", "description": "The address to open."}})), json!(["url"])),
+        }),
+        json!({
+            "name": "browser_navigate_back",
+            "title": "Go back",
+            "description": "Go back one page in a tab you own.",
+            "inputSchema": object(act_props(json!({})), json!([])),
+        }),
+        json!({
+            "name": "browser_navigate_forward",
+            "title": "Go forward",
+            "description": "Go forward one page in a tab you own.",
+            "inputSchema": object(act_props(json!({})), json!([])),
+        }),
+        json!({
+            "name": "browser_handle_dialog",
+            "title": "Answer a dialog",
+            "description": "Accept or dismiss a JavaScript dialog (alert, confirm, prompt) of a tab you own. Needs the browser's debugging permission.",
+            "inputSchema": object(act_props(json!({
+                "accept": {"type": "boolean"},
+                "promptText": {"type": "string", "description": "The text for a prompt dialog."},
+            })), json!(["accept"])),
+            "annotations": {"destructiveHint": true},
+        }),
+        json!({
+            "name": "browser_file_upload",
+            "title": "Upload files",
+            "description": "Put files from the user's computer into a file input of a tab you own. The user is always asked first and sees the file names. Credential files are never uploaded.",
+            "inputSchema": object(act_props(json!({
+                "ref": ref_property(),
+                "paths": {"type": "array", "items": {"type": "string"}, "description": "Absolute paths of the files (at most 20, 32 MiB in all)."},
+            })), json!(["ref", "paths"])),
+            "annotations": {"destructiveHint": true},
         }),
         json!({
             "name": "browser_wait_for",

@@ -310,8 +310,9 @@ fn samples() -> Vec<(Method, Value, Value)> {
         (
             Method::UploadPut,
             json!({"upload_id": "u1", "seq": 0, "bytes_b64": b64_of(9), "last": true}),
-            empty,
+            empty.clone(),
         ),
+        (Method::TaskEnd, json!({}), empty),
         (
             Method::CursorPrefs,
             json!({}),

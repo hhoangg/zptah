@@ -218,6 +218,26 @@ impl MonoBrowserStore {
         prune_audit(&conn, mono_id, row.ts_ms).map_err(|_| UNAVAILABLE.to_owned())
     }
 
+    /// The screenshot file names that audit rows of the Mono still point to. A sweep of the output
+    /// folder keeps them (the sweep ignores the database otherwise).
+    pub fn audit_screenshots(&self, mono_id: &str) -> std::collections::HashSet<String> {
+        let Ok(Some(conn)) = self.open() else {
+            return Default::default();
+        };
+        if migrate_audit_columns(&conn).is_err() {
+            return Default::default();
+        }
+        let Ok(mut query) = conn.prepare(
+            "SELECT screenshot FROM mono_browser_audit WHERE mono_id=?1 AND screenshot IS NOT NULL",
+        ) else {
+            return Default::default();
+        };
+        query
+            .query_map([mono_id], |row| row.get::<_, String>(0))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
     /// Applies retention now (the Settings view can call it when it opens).
     pub fn prune_audit(&self, mono_id: &str, now_ms: u64) -> Result<Vec<String>, String> {
         Self::valid_id(mono_id)?;

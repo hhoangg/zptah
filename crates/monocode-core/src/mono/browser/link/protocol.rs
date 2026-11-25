@@ -204,11 +204,13 @@ pub enum Method {
     ActCancel,
     DialogRespond,
     UploadPut,
+    /// A run of the Mono ended (the debugger detaches 2 minutes later, decision 4).
+    TaskEnd,
     CursorPrefs,
 }
 
 impl Method {
-    pub const ALL: [Method; 25] = [
+    pub const ALL: [Method; 26] = [
         Method::Hello,
         Method::Auth,
         Method::PairBegin,
@@ -233,6 +235,7 @@ impl Method {
         Method::ActCancel,
         Method::DialogRespond,
         Method::UploadPut,
+        Method::TaskEnd,
         Method::CursorPrefs,
     ];
 
@@ -262,6 +265,7 @@ impl Method {
             Method::ActCancel => "act.cancel",
             Method::DialogRespond => "dialog.respond",
             Method::UploadPut => "upload.put",
+            Method::TaskEnd => "task.end",
             Method::CursorPrefs => "cursor.prefs",
         }
     }
@@ -301,6 +305,7 @@ impl Method {
                 | Method::ActCancel
                 | Method::DialogRespond
                 | Method::UploadPut
+                | Method::TaskEnd
         )
     }
 }

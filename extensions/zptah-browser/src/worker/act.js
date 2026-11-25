@@ -858,6 +858,15 @@ export function registerActPath(link, deps) {
     monos_active: new Set([...records.values()].map((r) => r.mono)).size,
   }));
 
+  /**
+   * A run of the Mono ended: its debugger sessions detach 2 minutes from now unless a new run uses
+   * the tab (decision 4). Only tabs the Mono owns are touched, so another Mono's task is not cut.
+   */
+  route("task.end", async (entry) => {
+    dbg.endTask(dbg.attachedTabs().filter((tab) => ownerOf(tab) === entry.id));
+    return {};
+  });
+
   open("stop.resume", () => {
     link.stopped = false;
     return {};

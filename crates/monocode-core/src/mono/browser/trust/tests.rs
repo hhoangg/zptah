@@ -765,3 +765,198 @@ fn audit_has_an_index_on_mono_and_time() {
         .unwrap();
     assert_eq!(n, 1);
 }
+
+// ---- the approval queue (the API of the card) ----
+
+mod queue {
+    use super::super::approval::{
+        all_pending, queue_for, ApprovalQueue, NoticeKind, Outcome, Request, UserAnswer,
+    };
+    use crate::mono::browser::copy::{ActionDesc, CardFacts, Lang};
+    use crate::mono::browser::risk::Category;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn request(session: i64, offer: bool) -> Request {
+        Request {
+            mono_id: "mono-q".into(),
+            session_id: session,
+            tool: "browser_click".into(),
+            tab: Some(3),
+            facts: CardFacts::new(
+                "Mira",
+                "shop.example",
+                ActionDesc::Click {
+                    label: "Delete".into(),
+                },
+                vec![Category::Destructive],
+            ),
+            screenshot: None,
+            offer_conversation: offer,
+        }
+    }
+
+    fn ask(
+        queue: &Arc<ApprovalQueue>,
+        request: Request,
+        timeout: Duration,
+    ) -> std::thread::JoinHandle<Outcome> {
+        let queue = queue.clone();
+        std::thread::spawn(move || {
+            queue
+                .ask(request, timeout, Duration::from_millis(20), || {})
+                .1
+        })
+    }
+
+    fn wait_for_card(queue: &ApprovalQueue) -> super::super::approval::PendingApproval {
+        for _ in 0..500 {
+            if let Some(card) = queue.pending().into_iter().next() {
+                return card;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("no card opened");
+    }
+
+    #[test]
+    fn a_card_waits_for_its_answer_and_notifies_the_front_end() {
+        let queue = ApprovalQueue::new("mono-q");
+        let changes = Arc::new(AtomicUsize::new(0));
+        let seen = changes.clone();
+        let _sub = queue.subscribe(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        let waiting = ask(&queue, request(1, true), Duration::from_secs(5));
+        let card = wait_for_card(&queue);
+        assert_eq!(card.mono_id, "mono-q");
+        assert_eq!(card.tab, Some(3));
+        let text = card.text_in(Lang::En);
+        assert_eq!(
+            text.headline,
+            "Mira wants to click \"Delete\" on shop.example."
+        );
+        assert!(text.allow_conversation.is_some());
+        assert!(queue.answer(&card.id, UserAnswer::AllowConversation));
+        assert_eq!(
+            waiting.join().unwrap(),
+            Outcome::Answered(UserAnswer::AllowConversation)
+        );
+        assert!(queue.pending().is_empty());
+        // A second answer to the same card is refused.
+        assert!(!queue.answer(&card.id, UserAnswer::Deny));
+        assert!(changes.load(Ordering::SeqCst) >= 2, "opened and closed");
+    }
+
+    #[test]
+    fn the_conversation_answer_is_once_when_the_card_does_not_offer_it() {
+        let queue = ApprovalQueue::new("mono-q");
+        let _sub = queue.subscribe(|| {});
+        let waiting = ask(&queue, request(1, false), Duration::from_secs(5));
+        let card = wait_for_card(&queue);
+        assert!(card.text_in(Lang::Vi).allow_conversation.is_none());
+        queue.answer(&card.id, UserAnswer::AllowConversation);
+        assert_eq!(
+            waiting.join().unwrap(),
+            Outcome::Answered(UserAnswer::AllowOnce)
+        );
+    }
+
+    #[test]
+    fn a_card_times_out_and_is_withdrawn() {
+        let queue = ApprovalQueue::new("mono-q");
+        let _sub = queue.subscribe(|| {});
+        let waiting = ask(&queue, request(1, true), Duration::from_millis(60));
+        assert_eq!(waiting.join().unwrap(), Outcome::TimedOut);
+        assert!(queue.pending().is_empty());
+    }
+
+    #[test]
+    fn nobody_to_answer_is_a_withdrawn_ask_at_once() {
+        let queue = ApprovalQueue::new("mono-q");
+        // No front end subscribed.
+        let (_, outcome) = queue.ask(
+            request(1, true),
+            Duration::from_secs(30),
+            Duration::from_secs(1),
+            || {},
+        );
+        assert_eq!(outcome, Outcome::Withdrawn);
+        // A front end, but the run cannot be answered (plan mode).
+        let _sub = queue.subscribe(|| {});
+        queue.set_can_answer(false);
+        let (_, outcome) = queue.ask(
+            request(1, true),
+            Duration::from_secs(30),
+            Duration::from_secs(1),
+            || {},
+        );
+        assert_eq!(outcome, Outcome::Withdrawn);
+        queue.set_can_answer(true);
+        assert!(queue.pending().is_empty());
+    }
+
+    #[test]
+    fn dropping_the_subscription_stops_the_front_end_and_withdrawing_ends_waiting_asks() {
+        let queue = ApprovalQueue::new("mono-q");
+        let sub = queue.subscribe(|| {});
+        assert!(queue.has_listener());
+        let a = ask(&queue, request(1, true), Duration::from_secs(5));
+        let b = ask(&queue, request(2, true), Duration::from_secs(5));
+        for _ in 0..500 {
+            if queue.pending().len() == 2 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        queue.withdraw_session(1);
+        assert_eq!(a.join().unwrap(), Outcome::Withdrawn);
+        assert_eq!(queue.pending().len(), 1);
+        queue.withdraw_all();
+        assert_eq!(b.join().unwrap(), Outcome::Withdrawn);
+        drop(sub);
+        assert!(!queue.has_listener());
+    }
+
+    #[test]
+    fn notices_are_listed_once_and_dismissed() {
+        let queue = ApprovalQueue::new("mono-q");
+        queue.post_notice(
+            NoticeKind::PasswordNeeded,
+            Some(3),
+            "Mira",
+            "accounts.google.com",
+        );
+        queue.post_notice(
+            NoticeKind::PasswordNeeded,
+            Some(3),
+            "Mira",
+            "accounts.google.com",
+        );
+        let notices = queue.notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(
+            notices[0].text_in(Lang::En).headline,
+            "Mira needs your password on accounts.google.com."
+        );
+        assert!(queue.dismiss_notice(&notices[0].id));
+        assert!(!queue.dismiss_notice(&notices[0].id));
+        assert!(queue.notices().is_empty());
+    }
+
+    #[test]
+    fn the_registry_has_one_queue_per_mono_and_lists_every_open_card() {
+        let a = queue_for("registry-a");
+        assert!(Arc::ptr_eq(&a, &queue_for("registry-a")));
+        assert!(!Arc::ptr_eq(&a, &queue_for("registry-b")));
+        let _sub = a.subscribe(|| {});
+        let mut req = request(1, true);
+        req.mono_id = "registry-a".into();
+        let waiting = ask(&a, req, Duration::from_secs(5));
+        let card = wait_for_card(&a);
+        assert!(all_pending().iter().any(|p| p.id == card.id));
+        a.answer(&card.id, UserAnswer::Deny);
+        assert_eq!(waiting.join().unwrap(), Outcome::Answered(UserAnswer::Deny));
+    }
+}

@@ -645,6 +645,32 @@ test("the debugger detaches 2 minutes after the last use, and use resets the tim
   finish(s);
 });
 
+test("task.end starts the 2 minute clock at the end of the run, and use after it keeps the session", async () => {
+  const s = setup({ debuggerPermission: true });
+  await s.dbg.attach(1);
+  s.advance(100000);
+  ok(await s.call("task.end", {}));
+  s.advance(100000);
+  await s.dbg.sweep();
+  assert.deepEqual(s.dbg.attachedTabs(), [1], "the clock restarted at task.end (it would have gone at 120 s from the last use)");
+  s.dbg.touch(1);
+  s.advance(100000);
+  await s.dbg.sweep();
+  assert.deepEqual(s.dbg.attachedTabs(), [1], "a new run using the tab keeps it");
+  ok(await s.call("task.end", {}));
+  s.advance(121000);
+  await s.dbg.sweep();
+  assert.deepEqual(s.dbg.attachedTabs(), []);
+  assert.deepEqual(s.events.at(-1), { method: "debugger.detached", params: { tab: 1, reason: "task_ended" } });
+  finish(s);
+});
+
+test("task.end is refused for a Mono that is not in the roster", async () => {
+  const s = setup({ debuggerPermission: true });
+  err(await s.call("task.end", {}, "f".repeat(32)), "E_UNKNOWN_MONO");
+  finish(s);
+});
+
 test("Stop detaches every session, drops prepares and tells the app", async () => {
   const s = setup({ debuggerPermission: true, build: (h) => [h("button", { id: "b", type: "button", rect: [10, 40, 80, 30] }, "Next")], url: "https://shop.test/" });
   const p = await prep(s, { kind: "click", ref: refOf(await snap(s), "button", "Next") });

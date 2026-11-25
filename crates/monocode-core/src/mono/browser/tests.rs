@@ -44,6 +44,7 @@ fn runtime(b: &MonoBrowser) -> Runtime {
         gate: None,
         route: gate::SHARED_ROUTE.into(),
         lease: None,
+        approvals: None,
     }
 }
 fn at(trust: BrowserTrust) -> MonoBrowser {
@@ -996,6 +997,7 @@ fn the_process_transport_talks_to_a_server_over_stdio() {
         gate: None,
         route: gate::SHARED_ROUTE.into(),
         lease: None,
+        approvals: None,
     };
     let env = PrereqEnv {
         chrome_binaries: vec![],
@@ -1342,4 +1344,133 @@ fn browser_read_is_a_known_read_tool() {
     assert!(READ_ONLY_TOOLS.contains(&"browser_read"));
     assert!(BrowserTrust::ReadOnly.offers("browser_read"));
     assert!(BrowserTrust::AskRisky.offers("browser_read"));
+}
+
+// ---- the extension backend at launch ----
+
+fn link_manager() -> links::manager::LinkManager {
+    links::manager::LinkManager::new(
+        links::manager::ManagerConfig::new(peer::Flavor::Release, "9.9.9-test"),
+        links::manager::Deps::new(
+            std::sync::Arc::new(links::keystore::MemoryKeyStore::new()),
+            std::sync::Arc::new(links::manager::MemoryRecordStore::new()),
+        ),
+    )
+    .0
+}
+
+#[test]
+fn a_mono_with_the_preview_switch_gets_the_extension_gate_and_one_without_keeps_playwright() {
+    let f = fixture();
+    let env_dir = tempfile::tempdir().unwrap();
+    // No Chrome and no node: the extension backend needs neither.
+    let env = env_in(env_dir.path(), false, false);
+    let mut settings = browser("Profile 6");
+    settings.use_extension = true;
+    let mono = Mono {
+        browser: Some(settings),
+        ..Default::default()
+    };
+    let ctx = context(&f, mono.clone());
+    let database = f.secrets.database().to_path_buf();
+    let servers = fake_servers();
+
+    // No link manager: unavailable with a reason, never a Playwright fallback.
+    match attach_extension_with(
+        &ctx,
+        ctx.mono.browser.as_ref().unwrap(),
+        database.clone(),
+        &servers,
+        None,
+    ) {
+        Attach::Unavailable(reason) => assert!(reason.contains("link is not running"), "{reason}"),
+        other => panic!("expected unavailable, got {other:?}"),
+    }
+
+    let runtime = match attach_extension_with(
+        &ctx,
+        ctx.mono.browser.as_ref().unwrap(),
+        database.clone(),
+        &servers,
+        Some(link_manager()),
+    ) {
+        Attach::Ready(runtime) => runtime,
+        other => panic!("expected ready, got {other:?}"),
+    };
+    assert_eq!(runtime.claude_server()["type"], "http");
+    assert!(runtime.approvals.is_some());
+    let gate = runtime.gate.clone().expect("a gate");
+    assert!(output_dir(&ctx.root, &mono.id).is_dir());
+    // The gate lists the act tools of the extension upstream.
+    let listed = gate
+        .handle(
+            &runtime.route,
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
+        )
+        .unwrap();
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(names.contains(&"browser_click") && names.contains(&"browser_request_approval"));
+    // The upstream carries the Mono's level, and the first rule set is confirmed.
+    let upstream = gate::upstream_for(&mono.id).expect("an upstream");
+    assert_eq!(upstream.act_config().level, trust::BrowserLevel::Act);
+    assert!(f.secrets.confirmed_rules(&mono.id).is_some());
+    // Without a link the tools say the extension is not connected.
+    let result = gate
+        .handle(
+            &runtime.route,
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "browser_snapshot", "arguments": {"tab": 1}}}),
+        )
+        .unwrap();
+    assert!(result["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("not connected"));
+
+    // The same Mono with the switch off goes the Playwright way again.
+    let mut off = ctx.clone();
+    off.mono.browser.as_mut().unwrap().use_extension = false;
+    assert!(matches!(
+        resolve_with(&off, &env, &servers),
+        Attach::Unavailable(reason) if reason.contains("Chrome")
+    ));
+}
+
+#[test]
+fn rule_changes_that_are_not_additions_wait_for_the_user() {
+    let f = fixture();
+    let soul = |lines: &[&str]| {
+        format!(
+            "## Browser rules\n\n```browser-rules\n{}\n```\n",
+            lines.join("\n")
+        )
+    };
+    let first = trust::rules::status(
+        &f.secrets,
+        "mono-a",
+        &soul(&["ask: click \"Book\" on airbnb.com"]),
+    );
+    assert!(!first.needs_confirmation);
+    assert_eq!(first.active.rules.len(), 1);
+    // A pure addition applies at once.
+    let added = soul(&[
+        "ask: click \"Book\" on airbnb.com",
+        "block: navigate to facebook.com",
+    ]);
+    let status = trust::rules::status(&f.secrets, "mono-a", &added);
+    assert!(!status.needs_confirmation && status.active.rules.len() == 2);
+    // The Mono edits the soul and drops the block: the confirmed set stays in force.
+    let edited = soul(&["ask: click \"Book\" on airbnb.com"]);
+    let status = trust::rules::status(&f.secrets, "mono-a", &edited);
+    assert!(status.needs_confirmation);
+    assert_eq!(status.active.rules.len(), 2, "the old rules still apply");
+    assert!(status.changed_lines.is_empty());
+    // The user confirms: the soul's rules are the rules.
+    trust::rules::confirm(&f.secrets, "mono-a", &edited).unwrap();
+    let status = trust::rules::status(&f.secrets, "mono-a", &edited);
+    assert!(!status.needs_confirmation && status.active.rules.len() == 1);
 }

@@ -364,6 +364,11 @@ fn level_1_lists_exactly_the_read_tools_and_all_of_them_are_known() {
         names,
         [
             "browser_find",
+            "browser_mouse_wheel",
+            "browser_navigate",
+            "browser_navigate_back",
+            "browser_navigate_forward",
+            "browser_press_key",
             "browser_read",
             "browser_snapshot",
             "browser_tabs",
@@ -478,13 +483,9 @@ fn opening_and_closing_tabs_is_not_available_yet_and_says_so() {
     assert!(rig.requests("tab.open").is_empty() && rig.requests("tab.close").is_empty());
     assert!(rig.requests("tabs.list").len() <= 2);
     // Tools the extension does not implement yet answer with an error too, never with success.
-    let click = call(
-        &gate,
-        "browser_click",
-        json!({"target": "e1", "element": "x"}),
-    );
-    assert!(is_error(&click));
-    assert!(text_of(&click).contains("not available"), "{click}");
+    let console = call(&gate, "browser_console_messages", json!({}));
+    assert!(is_error(&console));
+    assert!(text_of(&console).contains("not available"), "{console}");
     rig.finish();
 }
 
@@ -1133,7 +1134,7 @@ fn without_a_live_link_every_tool_says_the_extension_is_not_connected() {
             json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
         )
         .unwrap();
-    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 6);
+    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 11);
     for (tool, args) in [
         ("browser_tabs", json!({"action": "list"})),
         ("browser_snapshot", json!({"tab": 1})),
@@ -1229,3 +1230,5 @@ fn no_result_carries_structured_content_and_an_injection_in_a_find_match_is_fenc
     }
     rig.finish();
 }
+
+mod act_tests;

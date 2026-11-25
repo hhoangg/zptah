@@ -1556,6 +1556,13 @@ fn run_operation(
     // request text, never from anything a page returns.
     if let Some(runtime) = &browser {
         runtime.begin_turn(&request.prompt);
+        // The extension backend asks through its own cards (`mono::browser::trust::approval`):
+        // nobody can answer one in a plan run, at read-only access or without controls.
+        runtime.set_can_answer(
+            controls.is_some()
+                && !request.settings.plan
+                && request.settings.access != AccessMode::ReadOnly,
+        );
     }
     let mut command = Command::new(&request.binary);
     crate::scm::shell::apply_gui_env(&mut command);

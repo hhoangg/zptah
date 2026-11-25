@@ -37,12 +37,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-mod extension;
+pub(crate) mod extension;
 mod guard;
 mod http;
 pub mod overlay;
 mod stdio;
 pub mod tabs;
+pub use extension::act::{upstream_for, ActConfig, ExtensionStatus};
 pub use extension::{ExtensionUpstream, Origins};
 pub use http::HttpUpstream;
 pub use stdio::StdioUpstream;
@@ -222,6 +223,11 @@ pub struct Policy {
     /// Off for a policy built with [`Policy::new`]: a gate draws only when the Mono's setting says
     /// so, through [`Policy::with_show_actions`].
     pub show_actions: bool,
+    /// The backend is the zptah Browser extension: its upstream decides every action itself
+    /// (`trust::TrustState::evaluate`, spec 7.6) and asks through the approval queue
+    /// (`trust::approval`), so the Playwright-era finance, card, taint and injection cards are not
+    /// raised here a second time.
+    pub extension: bool,
 }
 impl Policy {
     /// The two-level view of the setting (spec 8.1) the extension backend decides with: both
@@ -234,7 +240,13 @@ impl Policy {
             trust,
             blocked_origins,
             show_actions: false,
+            extension: false,
         }
+    }
+    /// Marks the policy of a Mono that uses the extension backend.
+    pub fn with_extension(mut self, extension: bool) -> Self {
+        self.extension = extension;
+        self
     }
     pub fn with_show_actions(mut self, show: bool) -> Self {
         self.show_actions = show;
@@ -247,6 +259,14 @@ impl Policy {
             return Verdict::Deny(format!("{tool} is never available in this browser."));
         }
         if tool == APPROVAL_TOOL {
+            if self.extension {
+                // The upstream words the card and asks (tier K: always).
+                return if self.trust == BrowserTrust::ReadOnly {
+                    self.approval_tool(args, page_url)
+                } else {
+                    Verdict::Allow
+                };
+            }
             return self.approval_tool(args, page_url);
         }
         if !KNOWN_TOOLS.contains(&tool) {
@@ -277,6 +297,15 @@ impl Policy {
                 Verdict::Deny(format!(
                     "{tool} is not available: this browser is at Level 1 (read only). Tell the user what to do, or that the browser level must be raised."
                 ))
+            };
+        }
+        if self.extension {
+            // The extension upstream decides (finance pages, card numbers and the rest are
+            // categories of its classifier). Code tools do not exist there.
+            return if CODE_TOOLS.contains(&tool) {
+                Verdict::Deny(format!("{tool} is never available with the zptah Browser."))
+            } else {
+                Verdict::Allow
             };
         }
         if CODE_TOOLS.contains(&tool) {
@@ -670,11 +699,15 @@ impl Drop for Attached {
             .approvers
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if map
+        let mine = map
             .get(&self.route)
-            .is_some_and(|a| a.generation == self.generation)
-        {
+            .is_some_and(|a| a.generation == self.generation);
+        if mine {
             map.remove(&self.route);
+        }
+        drop(map);
+        if mine {
+            self.gate.run_ended(&self.route);
         }
     }
 }
@@ -701,6 +734,46 @@ pub trait Upstream: Send + Sync {
     /// on it, at the next run.
     fn session_survives(&self, _error: &str) -> bool {
         false
+    }
+    /// A run of app session `session` starts with the user's own message (never page content).
+    /// Only the extension upstream uses it: task domains and named recipients come from it.
+    fn run_started(&self, _session: i64, _user_message: &str) {}
+    /// The run of app session `session` ended (its approval channel was dropped).
+    fn run_ended(&self, _session: i64) {}
+    /// A page read in app session `session` carried an injection pattern.
+    fn injection_found(&self, _session: i64) {}
+}
+
+thread_local! {
+    static RUN: std::cell::RefCell<Option<RunContext>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Which app session the tool call running on this thread belongs to. The gate sets it for the
+/// length of a call, so an upstream that needs the conversation (grants, task domains) can read
+/// it without every `post` carrying it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunContext {
+    pub route: String,
+    /// The app session id (0 when the route has none).
+    pub session_id: i64,
+}
+
+impl RunContext {
+    /// The context of the tool call on this thread, if the gate set one.
+    pub fn current() -> Option<RunContext> {
+        RUN.with(|slot| slot.borrow().clone())
+    }
+}
+
+struct RunScope(Option<RunContext>);
+impl RunScope {
+    fn enter(context: RunContext) -> Self {
+        Self(RUN.with(|slot| slot.borrow_mut().replace(context)))
+    }
+}
+impl Drop for RunScope {
+    fn drop(&mut self) {
+        RUN.with(|slot| *slot.borrow_mut() = self.0.take());
     }
 }
 
@@ -769,6 +842,15 @@ pub struct Workspace {
     /// The store database (approved hashes, audit log).
     pub database: PathBuf,
     pub recipe_options: runner::Options,
+}
+
+impl Workspace {
+    /// Removes old files from the output folder, keeping the screenshots that audit rows still
+    /// point to (spec 8.5: they live as long as their row).
+    pub fn sweep(&self) -> usize {
+        let keep = MonoBrowserStore::at(self.database.clone()).audit_screenshots(&self.mono_id);
+        output::sweep_keeping(&self.output_dir, &keep)
+    }
 }
 
 /// One Mono's gate: its loopback server and its policy.
@@ -860,7 +942,7 @@ impl Gate {
     /// on and confines `filename` arguments to the output folder.
     pub fn set_workspace(&self, workspace: Workspace) {
         let _ = output::prepare(&workspace.output_dir);
-        output::sweep(&workspace.output_dir);
+        workspace.sweep();
         *self
             .inner
             .workspace
@@ -895,7 +977,7 @@ impl Gate {
             recipe_id,
             workspace.recipe_options.clone(),
         );
-        output::sweep(&workspace.output_dir);
+        workspace.sweep();
         result
     }
 
@@ -1103,7 +1185,12 @@ impl Inner {
             (state.policy.clone(), state.page.clone())
         };
         let verdict = policy.evaluate(name, args, &page_url);
-        let verdict = self.apply_taint(route, name, args, &page_url, verdict);
+        // The extension upstream raises its own taint and injection asks (spec 7.6).
+        let verdict = if policy.extension {
+            verdict
+        } else {
+            self.apply_taint(route, name, args, &page_url, verdict)
+        };
         match verdict {
             Verdict::Deny(reason) => return Err(tool_text(reason, true)),
             Verdict::Ask(request) => {
@@ -1159,7 +1246,38 @@ impl Inner {
         }
     }
 
+    /// The app session id a route was issued for (0: none).
+    fn session_of(&self, route: &str) -> i64 {
+        self.lock_state()
+            .routes
+            .iter()
+            .find(|(_, r)| r.as_str() == route)
+            .and_then(|(session, _)| *session)
+            .unwrap_or(0)
+    }
+
+    /// The run on `route` ended: the upstream may start its end-of-task clocks.
+    fn run_ended(&self, route: &str) {
+        let (session, upstream) = {
+            let state = self.lock_state();
+            (
+                state
+                    .routes
+                    .iter()
+                    .find(|(_, r)| r.as_str() == route)
+                    .and_then(|(session, _)| *session)
+                    .unwrap_or(0),
+                state.upstream.clone(),
+            )
+        };
+        upstream.run_ended(session);
+    }
+
     fn call_tool(&self, route: &str, name: &str, args: Value) -> Value {
+        let _scope = RunScope::enter(RunContext {
+            route: route.to_owned(),
+            session_id: self.session_of(route),
+        });
         if name == defense::DECLARE_TOOL {
             return self.declare_intent(route, &args);
         }
@@ -1199,7 +1317,7 @@ impl Inner {
                 return tool_text(reason, true);
             }
             if self.calls.fetch_add(1, Ordering::Relaxed) % 25 == 24 {
-                output::sweep(&workspace.output_dir);
+                workspace.sweep();
             }
         }
         let page_before = self.lock_state().page.clone();
@@ -1672,7 +1790,7 @@ impl Inner {
         let reply = recipe::tools::call(name, args, &context);
         if uses_browser {
             // A run reads many snapshots: sweep at the end of each one.
-            output::sweep(&workspace.output_dir);
+            workspace.sweep();
         }
         if name == recipe::tools::RECORD && !reply.is_error {
             if let Some(trace) = self

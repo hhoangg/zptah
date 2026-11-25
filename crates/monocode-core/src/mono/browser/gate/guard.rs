@@ -29,7 +29,11 @@ impl Inner {
 
     /// A new agent turn on `route`: nothing read, declared or suggested yet.
     pub(super) fn begin_turn(&self, route: &str, request: &str) {
-        let page = self.lock_state().page.clone();
+        let (page, upstream) = {
+            let state = self.lock_state();
+            (state.page.clone(), state.upstream.clone())
+        };
+        upstream.run_started(self.session_of(route), request);
         self.turns
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -140,6 +144,12 @@ impl Inner {
             );
         }
         if was_flagged {
+            return Ok(hits);
+        }
+        if self.lock_state().policy.extension {
+            // Reading stays allowed; every write of the run asks (category `injection`).
+            let upstream = self.lock_state().upstream.clone();
+            upstream.injection_found(self.session_of(route));
             return Ok(hits);
         }
         let request = ApprovalRequest {
