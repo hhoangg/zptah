@@ -14,10 +14,15 @@
 //! * [`parse`]: pure parsers (proc stat, command lines) and the browser allowlists, so they are
 //!   tested on every platform.
 //!
-//! Only a [`PeerPolicy::native_dev`] policy relaxes anything, and only the code signature check on
-//! macOS (replaced by the same-executable check). Release code must use [`PeerPolicy::release`].
+//! Only a [`PeerPolicy::native_dev`] policy relaxes anything, only in debug builds, and only the code
+//! signature check on macOS (replaced by the same-executable check). Release code uses [`PeerPolicy::release`].
 //! This module does the checks and exposes no listener: binding the socket, authentication and
 //! framing belong to the link layer.
+//!
+//! Known limits, accepted in spec 5.4: the parent checks read the parent by pid, so a tiny pid-reuse
+//! window remains; the executable check is made at connect time, so a process that connects and
+//! then replaces its own image is not caught; and none of this stops same-user code that debugs or
+//! injects into the signed app (spec 5.4a).
 #![allow(dead_code)] // consumed by the host mode and the link manager (spec tickets T5, T7)
 
 use std::fmt;
@@ -80,15 +85,21 @@ impl Flavor {
     }
 }
 
-/// How strict the peer checks are. The caller picks it from the build (the `native-dev` profile is
-/// not visible to this crate), release code must always pass [`PeerPolicy::release`].
+/// How strict the peer checks are. Release code must pass [`PeerPolicy::release`]. The relaxed
+/// dev policy only exists in debug builds (the `native-dev` profile inherits `dev`, so it has
+/// `debug_assertions`), and even a hand-built relaxed policy is ignored by [`PeerPolicy::relaxed`]
+/// in a release build.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PeerPolicy {
-    /// Replace the macOS code-signature check with the same-executable check (unsigned dev builds).
-    pub relax_signature: bool,
-    /// Extra browser executables accepted as the host's parent, for tests with Chrome for Testing.
-    /// Ignored unless `relax_signature` is set.
-    pub extra_browser_exes: Vec<PathBuf>,
+    relax_signature: bool,
+    extra_browser_exes: Vec<PathBuf>,
+}
+
+/// Relaxing is allowed only in test and debug builds.
+const RELAX_ENABLED: bool = cfg!(any(test, debug_assertions));
+
+fn relax_allowed(requested: bool, enabled: bool) -> bool {
+    requested && enabled
 }
 
 impl PeerPolicy {
@@ -96,6 +107,8 @@ impl PeerPolicy {
         Self::default()
     }
 
+    /// Replace the macOS code-signature check with the same-executable check (unsigned dev builds).
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn native_dev() -> Self {
         Self {
             relax_signature: true,
@@ -103,10 +116,61 @@ impl PeerPolicy {
         }
     }
 
+    /// Also accept this browser executable as the host's parent (tests with Chrome for Testing).
+    /// Only honored by a relaxed policy.
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn with_extra_browser(mut self, exe: PathBuf) -> Self {
         self.extra_browser_exes.push(exe);
         self
     }
+
+    /// Whether the dev relaxation is in force. Always false in a release build.
+    pub(crate) fn relaxed(&self) -> bool {
+        relax_allowed(self.relax_signature, RELAX_ENABLED)
+    }
+
+    /// Extra accepted browser executables, empty unless [`Self::relaxed`].
+    pub(crate) fn extra_browsers(&self) -> &[PathBuf] {
+        if self.relaxed() {
+            &self.extra_browser_exes
+        } else {
+            &[]
+        }
+    }
+}
+
+/// SHA-256 of a file, streamed.
+pub(crate) fn sha256_file(path: &std::path::Path) -> std::io::Result<[u8; 32]> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize().into())
+}
+
+static OWN_EXE_HASH: std::sync::OnceLock<Option<[u8; 32]>> = std::sync::OnceLock::new();
+
+/// Hash of this process's own executable, computed once. Call it at startup: an updater may replace
+/// the file on disk later, and the hash must describe the code that is running. `None` when the
+/// file cannot be read (every hash comparison then fails closed).
+pub(crate) fn own_exe_hash() -> Option<[u8; 32]> {
+    *OWN_EXE_HASH.get_or_init(|| {
+        let path = if cfg!(target_os = "linux") {
+            // Reads the running image even after the file was replaced or deleted.
+            PathBuf::from("/proc/self/exe")
+        } else {
+            std::env::current_exe().ok()?
+        };
+        sha256_file(&path).ok()
+    })
 }
 
 /// What the app observed about a verified connecting host.
@@ -128,6 +192,10 @@ pub(crate) enum PeerError {
     /// The socket path would not fit `sun_path`.
     PathTooLong(PathBuf),
     NotDirectory(PathBuf),
+    /// A file that must be a unix socket (a stale socket) is something else.
+    NotSocket(PathBuf),
+    /// A file that must be a regular file (the lock file) is something else.
+    NotRegularFile(PathBuf),
     Symlink(PathBuf),
     WrongOwner {
         path: PathBuf,
@@ -149,6 +217,8 @@ pub(crate) enum PeerError {
         peer: u32,
         expected: u32,
     },
+    /// The peer process runs as a different Windows user.
+    UserMismatch,
     /// The pid went away or was reused while we looked at it.
     PidReused(u32),
     /// The peer is not the same executable (file identity, or hash on Windows) as ours.
@@ -168,6 +238,8 @@ impl fmt::Display for PeerError {
             PeerError::Io(e) => write!(f, "io error: {e}"),
             PeerError::PathTooLong(p) => write!(f, "socket path too long: {}", p.display()),
             PeerError::NotDirectory(p) => write!(f, "not a directory: {}", p.display()),
+            PeerError::NotSocket(p) => write!(f, "not a socket: {}", p.display()),
+            PeerError::NotRegularFile(p) => write!(f, "not a regular file: {}", p.display()),
             PeerError::Symlink(p) => write!(f, "refusing symlink: {}", p.display()),
             PeerError::WrongOwner {
                 path,
@@ -191,6 +263,7 @@ impl fmt::Display for PeerError {
             PeerError::UidMismatch { peer, expected } => {
                 write!(f, "peer uid {peer} is not ours ({expected})")
             }
+            PeerError::UserMismatch => write!(f, "peer runs as a different user"),
             PeerError::PidReused(pid) => write!(f, "pid {pid} changed while it was verified"),
             PeerError::ExeMismatch(p) => {
                 write!(f, "peer executable is not ours: {}", p.display())

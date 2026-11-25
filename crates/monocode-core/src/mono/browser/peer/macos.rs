@@ -1,7 +1,7 @@
 //! macOS peer checks (spec 5.4). The audit token from `LOCAL_PEERTOKEN` identifies the peer
 //! without pid-reuse races; `SecCodeCopyGuestWithAttributes` turns it into a code object that
 //! `SecCodeCheckValidity` checks against this app's own designated requirement. The host's parent
-//! must be Google Chrome (checked by code signature too). A policy with `relax_signature` swaps the
+//! must be Google Chrome (checked by code signature too). A policy with a relaxed policy swaps the
 //! signature check for the same-executable check, for unsigned `native-dev` builds only.
 //!
 //! The Security and CoreFoundation calls are declared here instead of pulling in a crate: the
@@ -299,7 +299,7 @@ fn verify_peer_identity(fd: RawFd, policy: &PeerPolicy) -> Result<u32, PeerError
         });
     }
     let pid = token[5];
-    if policy.relax_signature {
+    if policy.relaxed() {
         let exe = proc_path(pid).ok_or(PeerError::PidReused(pid))?;
         let own = std::env::current_exe()?;
         if !same_file(&exe, &own)? {
@@ -316,10 +316,10 @@ fn verify_peer_identity(fd: RawFd, policy: &PeerPolicy) -> Result<u32, PeerError
 fn parent_report(pid: u32, policy: &PeerPolicy) -> Result<PeerReport, PeerError> {
     let ppid = parent_pid(pid).ok_or(PeerError::ParentNotBrowser(None))?;
     let parent_exe = proc_path(ppid);
-    let extra = policy.relax_signature
+    let extra = policy.relaxed()
         && parent_exe
             .as_ref()
-            .is_some_and(|exe| policy.extra_browser_exes.iter().any(|e| e == exe));
+            .is_some_and(|exe| policy.extra_browsers().iter().any(|e| e == exe));
     if !extra {
         let ok = requirement_from_text(CHROME_REQUIREMENT)
             .and_then(|req| guest_by_pid(ppid).and_then(|code| check_validity(&code, &req)))

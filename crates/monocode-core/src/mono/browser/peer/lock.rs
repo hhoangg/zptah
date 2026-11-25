@@ -68,7 +68,7 @@ pub(crate) fn lock_holder_pid(dir: &Path, flavor: Flavor) -> Result<Option<u32>,
 fn check_lock_file(file: &File, path: &Path) -> Result<(), PeerError> {
     let meta = file.metadata()?;
     if !meta.is_file() {
-        return Err(PeerError::NotDirectory(path.to_path_buf()));
+        return Err(PeerError::NotRegularFile(path.to_path_buf()));
     }
     let uid = dir::current_uid();
     if meta.uid() != uid {

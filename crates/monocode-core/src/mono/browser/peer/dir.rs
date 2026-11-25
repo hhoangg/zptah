@@ -121,7 +121,7 @@ pub(crate) fn remove_stale_socket(path: &Path) -> Result<(), PeerError> {
         return Err(PeerError::Symlink(path.to_path_buf()));
     }
     if !meta.file_type().is_socket() {
-        return Err(PeerError::NotDirectory(path.to_path_buf()));
+        return Err(PeerError::NotSocket(path.to_path_buf()));
     }
     if meta.uid() != current_uid() {
         return Err(PeerError::WrongOwner {

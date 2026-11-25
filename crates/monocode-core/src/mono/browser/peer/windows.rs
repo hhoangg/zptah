@@ -7,10 +7,10 @@
 //! Not done yet: reading the parent's `--user-data-dir` from its PEB, so `PeerReport::user_data_dir`
 //! is always `None` here.
 use super::parse::{is_chrome_windows_exe, is_windows_shim, pipe_name_for_sid};
+use super::{own_exe_hash, sha256_file};
 use super::{Flavor, PeerError, PeerPolicy, PeerReport};
-use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-use std::io::{self, Read};
+use std::io;
 use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
@@ -47,9 +47,15 @@ fn wide(text: &str) -> Vec<u16> {
 
 /// The string form of the current user's SID (`S-1-5-21-...`).
 fn current_user_sid() -> io::Result<String> {
+    // SAFETY: the pseudo handle is always valid.
+    process_user_sid(unsafe { GetCurrentProcess() })
+}
+
+/// The user SID of the process behind `process` (needs `PROCESS_QUERY_LIMITED_INFORMATION`).
+fn process_user_sid(process: HANDLE) -> io::Result<String> {
     let mut token: HANDLE = ptr::null_mut();
-    // SAFETY: the pseudo handle is always valid and `token` is a valid out pointer.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+    // SAFETY: `process` is a live process handle and `token` is a valid out pointer.
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: OpenProcessToken returned a new handle that nothing else owns.
@@ -167,36 +173,39 @@ fn image_path(pid: u32) -> io::Result<PathBuf> {
     Ok(PathBuf::from(OsString::from_wide(&buf[..len as usize])))
 }
 
-fn file_sha256(path: &Path) -> io::Result<[u8; 32]> {
-    let mut file = std::fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 64 * 1024];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
+/// The user SID of the process `pid`.
+fn pid_user_sid(pid: u32) -> io::Result<String> {
+    // SAFETY: plain call; a null result is handled below.
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if h.is_null() {
+        return Err(io::Error::last_os_error());
     }
-    Ok(hasher.finalize().into())
+    // SAFETY: OpenProcess returned a new handle that nothing else owns.
+    let h = unsafe { OwnedHandle::from_raw_handle(h as RawHandle) };
+    process_user_sid(h.as_raw_handle() as HANDLE)
 }
 
-/// The process is our own executable: same install path, same file hash.
+/// The process is us: same user SID, same install path, and the file hash equals the hash of the
+/// running app taken once at startup ([`own_exe_hash`]). The peer file is read once.
 fn verify_same_exe(pid: u32) -> Result<(), PeerError> {
+    // The pipe DACL already limits clients to our user; this also covers a squatted server pipe.
+    if pid_user_sid(pid)? != current_user_sid()? {
+        return Err(PeerError::UserMismatch);
+    }
     let peer = image_path(pid)?;
     let own = std::env::current_exe()?;
     let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let (peer_c, own_c) = (canon(&peer), canon(&own));
+    let peer_c = canon(&peer);
     if !peer_c
         .to_string_lossy()
-        .eq_ignore_ascii_case(&own_c.to_string_lossy())
+        .eq_ignore_ascii_case(&canon(&own).to_string_lossy())
     {
         return Err(PeerError::ExeMismatch(peer));
     }
-    if file_sha256(&peer_c)? != file_sha256(&own_c)? {
-        return Err(PeerError::ExeMismatch(peer));
+    match (own_exe_hash(), sha256_file(&peer_c)) {
+        (Some(own), Ok(theirs)) if own == theirs => Ok(()),
+        _ => Err(PeerError::ExeMismatch(peer)),
     }
-    Ok(())
 }
 
 /// `(pid, parent pid)` for every running process.
@@ -234,9 +243,9 @@ fn browser_ancestor(pid: u32, policy: &PeerPolicy) -> Result<PeerReport, PeerErr
         let path = image_path(parent).map_err(|_| PeerError::ParentNotBrowser(None))?;
         let text = path.to_string_lossy();
         let allowed = is_chrome_windows_exe(&text)
-            || (policy.relax_signature
+            || (policy.relaxed()
                 && policy
-                    .extra_browser_exes
+                    .extra_browsers()
                     .iter()
                     .any(|e| e.to_string_lossy().eq_ignore_ascii_case(&text)));
         if allowed {

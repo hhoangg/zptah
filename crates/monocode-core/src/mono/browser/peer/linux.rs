@@ -4,6 +4,7 @@
 use super::dir::current_uid;
 use super::lock::lock_holder_pid;
 use super::parse::{is_chrome_linux_exe, parse_proc_stat, user_data_dir_from_cmdline};
+use super::{own_exe_hash, sha256_file};
 use super::{Flavor, PeerError, PeerPolicy, PeerReport};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -83,6 +84,20 @@ fn same_file(a: &Path, b: &Path) -> io::Result<bool> {
     Ok(a.dev() == b.dev() && a.ino() == b.ino())
 }
 
+/// The peer runs our executable: the same file (device and inode), or a file with the same
+/// content (SHA-256 of `/proc/<pid>/exe` against our own hash, taken once from `/proc/self/exe`).
+/// The content rule is what makes an AppImage work: each run mounts the image at a new place, so
+/// the app and the host it starts can see the same bytes under different inodes.
+///
+/// Limit: after a deb or rpm update the new host is a different file with different content, so
+/// the old running app rejects it until the app is restarted.
+fn peer_runs_our_exe(exe: &Path) -> io::Result<bool> {
+    if same_file(exe, Path::new("/proc/self/exe"))? {
+        return Ok(true);
+    }
+    Ok(matches!((own_exe_hash(), sha256_file(exe)), (Some(own), Ok(theirs)) if own == theirs))
+}
+
 /// The peer is our uid, a live process and the same executable file as this process.
 fn identify_same_exe_peer(fd: RawFd) -> Result<Identified, PeerError> {
     let cred = peer_cred(fd)?;
@@ -102,7 +117,7 @@ fn identify_same_exe_peer(fd: RawFd) -> Result<Identified, PeerError> {
     }
     let (_, start_before) = proc_stat(pid)?;
     let exe = PathBuf::from(format!("/proc/{pid}/exe"));
-    if !same_file(&exe, Path::new("/proc/self/exe"))? {
+    if !peer_runs_our_exe(&exe)? {
         return Err(PeerError::ExeMismatch(
             std::fs::read_link(&exe).unwrap_or(exe),
         ));
@@ -119,7 +134,7 @@ fn parent_report(pid: u32, policy: &PeerPolicy) -> Result<PeerReport, PeerError>
     let parent_exe = std::fs::read_link(format!("/proc/{ppid}/exe")).ok();
     let allowed = parent_exe.as_deref().is_some_and(|exe| {
         is_chrome_linux_exe(exe)
-            || (policy.relax_signature && policy.extra_browser_exes.iter().any(|e| e == exe))
+            || (policy.relaxed() && policy.extra_browsers().iter().any(|e| e == exe))
     });
     if !allowed {
         return Err(PeerError::ParentNotBrowser(parent_exe));

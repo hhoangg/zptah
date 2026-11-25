@@ -85,6 +85,33 @@ fn pipe_name_is_stable_per_user_and_separates_dev() {
 }
 
 #[test]
+fn relaxing_needs_a_debug_or_test_build() {
+    use super::{relax_allowed, PeerPolicy};
+    // What a release build computes: a requested relaxation is dropped.
+    assert!(!relax_allowed(true, false));
+    assert!(!relax_allowed(false, true));
+    assert!(relax_allowed(true, true));
+    assert!(!PeerPolicy::release().relaxed());
+    assert!(PeerPolicy::release().extra_browsers().is_empty());
+    // This test build allows it.
+    let dev = PeerPolicy::native_dev().with_extra_browser(PathBuf::from("/x"));
+    assert!(dev.relaxed());
+    assert_eq!(dev.extra_browsers(), [PathBuf::from("/x")]);
+}
+
+#[cfg(windows)]
+#[test]
+fn second_first_pipe_instance_is_refused() {
+    use super::create_pipe_instance;
+    let name = format!(r"\\.\pipe\zptah-peer-test-{}", std::process::id());
+    let first = create_pipe_instance(&name, true).expect("first instance");
+    assert!(create_pipe_instance(&name, true).is_err());
+    // A later instance without the first flag is allowed for the same user.
+    create_pipe_instance(&name, false).expect("next instance");
+    drop(first);
+}
+
+#[test]
 fn chrome_requirement_lists_the_google_team_and_chrome_identifiers() {
     assert!(CHROME_REQUIREMENT.contains("EQHXZ8M8AV"));
     assert!(CHROME_REQUIREMENT.contains("identifier \"com.google.Chrome\""));
@@ -221,6 +248,21 @@ mod unix_tests {
             }
         }
         Helper { child, stdin }
+    }
+
+    /// A copy of this test binary that is a different file with different content where the OS lets
+    /// us (appending a byte breaks a macOS code signature, and macOS compares inodes in the relaxed
+    /// check, so there a plain copy is already a different file).
+    fn make_other_exe(dest: &Path) {
+        std::fs::copy(own_exe(), dest).expect("copy exe");
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(dest)
+                .expect("open copy");
+            f.write_all(b"\0").expect("append");
+        }
     }
 
     fn own_exe() -> PathBuf {
@@ -411,7 +453,7 @@ mod unix_tests {
         let dir = parent.path().join("d");
         ensure_dir(&dir).expect("dir");
         let copy = parent.path().join("other-exe");
-        std::fs::copy(own_exe(), &copy).expect("copy exe");
+        make_other_exe(&copy);
         let (_helper, stream) = accept_from_helper(&dir, &copy);
         let err = verify_host_peer(&stream, &test_browser_policy()).expect_err("refused");
         assert!(matches!(err, PeerError::ExeMismatch(_)), "{err:?}");
@@ -455,7 +497,7 @@ mod unix_tests {
         let dir = parent.path().join("d");
         ensure_dir(&dir).expect("dir");
         let copy = parent.path().join("other-exe");
-        std::fs::copy(own_exe(), &copy).expect("copy exe");
+        make_other_exe(&copy);
         let sock = socket_path(&dir, Flavor::Dev).expect("path");
         let _server = spawn_helper(&copy, "serve_lock", &dir);
         let stream = UnixStream::connect(&sock).expect("connect");
@@ -463,6 +505,20 @@ mod unix_tests {
         let err = verify_app_peer(&stream, &dir, Flavor::Dev, &PeerPolicy::native_dev())
             .expect_err("refused");
         assert!(matches!(err, PeerError::ExeMismatch(_)), "{err:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_accepts_a_peer_with_identical_content_in_another_file() {
+        // The AppImage case: same bytes, different inode.
+        let parent = private_dir();
+        let dir = parent.path().join("d");
+        ensure_dir(&dir).expect("dir");
+        let copy = parent.path().join("same-content");
+        std::fs::copy(own_exe(), &copy).expect("copy exe");
+        let (helper, stream) = accept_from_helper(&dir, &copy);
+        let report = verify_host_peer(&stream, &test_browser_policy()).expect("accepted");
+        assert_eq!(report.pid, helper.pid());
     }
 
     #[test]
