@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "comment": "Site categories (spec 7.4). A domain covers itself and its subdomains. Seeded from DEFAULT_BLOCKED_ORIGINS and FINANCE_HOST_PARTS plus Vietnamese banks and wallets. checkout_segments and action_segments are URL path segments; registrable_suffixes lists the multi-label public suffixes that registrable_domain knows.",
+  "categories": {
+    "banking": [
+      "vietcombank.com.vn", "techcombank.com.vn", "techcombank.com", "mbbank.com.vn", "bidv.com.vn",
+      "vietinbank.vn", "vpbank.com.vn", "tpb.vn", "tpbank.com.vn", "acb.com.vn", "sacombank.com.vn",
+      "agribank.com.vn", "hdbank.com.vn", "ocb.com.vn", "msb.com.vn", "shb.com.vn", "vib.com.vn",
+      "seabank.com.vn", "eximbank.com.vn", "scb.com.vn", "lpbank.com.vn", "abbank.vn", "namabank.com.vn",
+      "chase.com", "bankofamerica.com", "wellsfargo.com", "citi.com", "americanexpress.com",
+      "capitalone.com", "hsbc.com", "barclays.co.uk", "lloydsbank.com", "santander.com", "ing.com"
+    ],
+    "brokerage": [
+      "schwab.com", "fidelity.com", "vanguard.com", "robinhood.com", "interactivebrokers.com",
+      "etrade.com", "ssi.com.vn", "vndirect.com.vn", "hsc.com.vn", "vcbs.com.vn", "tcbs.com.vn"
+    ],
+    "crypto": [
+      "coinbase.com", "binance.com", "kraken.com", "bybit.com", "okx.com", "kucoin.com",
+      "gemini.com", "crypto.com", "bitfinex.com"
+    ],
+    "wallet": [
+      "paypal.com", "stripe.com", "venmo.com", "cash.app", "wise.com", "revolut.com", "payoneer.com",
+      "skrill.com", "klarna.com", "affirm.com", "pay.google.com", "payments.google.com",
+      "pay.amazon.com", "momo.vn", "zalopay.vn", "vnpay.vn", "shopeepay.vn", "viettelmoney.vn"
+    ],
+    "government": [
+      "gov.vn", "dichvucong.gov.vn", "gov", "gov.uk", "gov.au", "gc.ca", "europa.eu", "irs.gov", "ssa.gov"
+    ]
+  },
+  "checkout_segments": [
+    "checkout", "payment", "payments", "pay", "billing", "subscribe", "wallet", "transfer",
+    "thanh-toan", "dat-hang"
+  ],
+  "action_segments": ["delete", "remove", "unsubscribe", "logout", "confirm", "huy", "xoa"],
+  "registrable_suffixes": [
+    "com.vn", "net.vn", "org.vn", "edu.vn", "gov.vn", "co.uk", "org.uk", "ac.uk", "gov.uk",
+    "com.au", "net.au", "org.au", "co.jp", "co.kr", "com.br", "com.cn", "co.in", "co.nz", "com.sg", "com.tw", "com.hk"
+  ]
+}

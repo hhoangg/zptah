@@ -24,6 +24,7 @@ pub mod gate;
 pub mod link;
 pub mod output;
 pub mod recipe;
+pub mod risk;
 pub mod server;
 
 /// Name of the MCP server. Distinct from a user-level `playwright` server.
