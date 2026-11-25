@@ -357,13 +357,21 @@ impl ExtensionUpstream {
                 }
             }
         };
+        // The words above came after the stop, so the tab may be asked for again; if the
+        // extension still refuses, the mark comes back.
+        let stop_mark = self.state().stopped_tabs.remove(&target.tab);
         let result = self
             .ask_raw(
                 Method::TabAdopt,
                 json!({"tab": target.tab, "grant": grant}),
                 DEFAULT_DEADLINE_MS,
             )
-            .map_err(|e| self.note_tab_error(e, Method::TabAdopt))?;
+            .map_err(|e| {
+                if let Some(title) = stop_mark {
+                    self.state().stopped_tabs.insert(target.tab, title);
+                }
+                self.note_tab_error(e, Method::TabAdopt)
+            })?;
         let info: TabInfo = serde_json::from_value(result)
             .map_err(|_| "The extension sent a tab that could not be read.".to_owned())?;
         let now = crate::time::now_ms();
@@ -482,6 +490,48 @@ impl ExtensionUpstream {
         }
         self.approvals().withdraw_all();
         self.forget_tab(tab);
+    }
+
+    /// The user pressed Stop in the page overlay on one of this Mono's tabs (spec 10a): the
+    /// Mono's grants for that site end in every conversation, its open cards go, the tab is the
+    /// user's again (newer words are needed to adopt it) and every call on it fails.
+    pub(in super::super) fn tab_stopped_by_user(&self, tab: u64) {
+        let known = self.state().known.get(&tab).cloned();
+        let title = known.as_ref().map_or_else(String::new, |t| t.title.clone());
+        let url = known.as_ref().map_or_else(String::new, |t| t.url.clone());
+        if let (Some(site), Some(store)) = (registrable_domain_of(&url), self.act_config().store) {
+            let _ = store.revoke_grants(&self.mono_id, None, Some(&site));
+        }
+        self.approvals().withdraw_all();
+        self.mirror(|t| t.mark_taken_back(tab, crate::time::now_ms()));
+        self.forget_tab(tab);
+        self.state().stopped_tabs.insert(tab, title);
+        self.write_row(
+            0,
+            DecisionAudit {
+                ts_ms: crate::time::now_ms(),
+                session_id: 0,
+                tool: "stop".into(),
+                url: audit_url(&url),
+                summary: format!("overlay Stop on tab {tab}"),
+                tab_id: i64::try_from(tab).ok(),
+                tab_owner: Some(self.mono_id.clone()),
+                tier: "A".into(),
+                categories: Vec::new(),
+                decision: AuditDecision::Stopped,
+                reason: "the user pressed Stop on the tab and took it back".into(),
+                approval_id: None,
+                screenshot: None,
+                actor: "user_stop".into(),
+                input: None,
+                profile: None,
+            },
+        );
+    }
+
+    /// The user dragged the tab back into this Mono's group: calls on it work again.
+    pub(in super::super) fn tab_given_back(&self, tab: u64) {
+        self.state().stopped_tabs.remove(&tab);
     }
 }
 

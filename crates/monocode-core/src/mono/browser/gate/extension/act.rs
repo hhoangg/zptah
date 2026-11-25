@@ -172,6 +172,16 @@ pub(crate) fn dispatch_event(instance_id: &str, envelope: &Envelope) {
         let change = ownership::with_table(instance_id, |table| {
             table.apply_event(&params, crate::time::now_ms())
         });
+        // Only the user dragging the tab back into the group ends the Stop mark.
+        let dragged_back = params["by"].as_str() == Some("user_drag");
+        if let Some(change) = change.as_ref().filter(|_| dragged_back) {
+            for upstream in all.iter().filter(|u| {
+                change.to.as_deref() == Some(u.mono_id.as_str())
+                    && (u.link)().is_some_and(|l| l.instance_id() == instance_id)
+            }) {
+                upstream.tab_given_back(change.tab);
+            }
+        }
         // A tab the user took back, or dragged into another Mono's group, is no longer the old
         // Mono's: what it was allowed on that site ends.
         if let Some(change) =
@@ -182,6 +192,26 @@ pub(crate) fn dispatch_event(instance_id: &str, envelope: &Envelope) {
                     && (u.link)().is_some_and(|l| l.instance_id() == instance_id)
             }) {
                 upstream.tab_taken_back(change.tab);
+            }
+        }
+        return;
+    }
+    // The overlay's Stop names its Mono in the params (`tab.stopped {tab, mono, by}`). Only that
+    // Mono's upstream acts, and only when the mirror says it owns the tab; an event without a
+    // Mono, or for a tab the Mono does not own, changes nothing.
+    if envelope.method.as_deref() == Some(Event::TabStopped.as_str()) {
+        let params = envelope.params.clone().unwrap_or(Value::Null);
+        let (Some(mono), Some(tab)) = (params["mono"].as_str(), params["tab"].as_u64()) else {
+            return;
+        };
+        for upstream in all.iter().filter(|u| {
+            u.mono_id == mono && (u.link)().is_some_and(|l| l.instance_id() == instance_id)
+        }) {
+            // A Stop that reached the app late (the extension was offline) finds the tab already
+            // listed as the user's: it still counts when this Mono owned it last.
+            let owns = ownership::with_table(instance_id, |t| t.owned_or_last_by(tab, mono));
+            if owns {
+                upstream.tab_stopped_by_user(tab);
             }
         }
         return;
@@ -380,18 +410,6 @@ impl ExtensionUpstream {
                     },
                 );
             }
-            e if e == Event::TabStopped.as_str() => {
-                // The overlay's Stop: the Mono's grants for that tab's site end in every
-                // conversation, and its open cards go.
-                let site = params["tab"]
-                    .as_u64()
-                    .and_then(|tab| self.state().known.get(&tab).cloned())
-                    .and_then(|tab| registrable_domain_of(&tab.url));
-                if let (Some(site), Some(store)) = (site, self.act_config().store) {
-                    let _ = store.revoke_grants(&self.mono_id, None, Some(&site));
-                }
-                self.approvals().withdraw_all();
-            }
             e if e == Event::DialogOpened.as_str() => {
                 if let Some(tab) = params["tab"].as_u64() {
                     lock(&self.act.state).dialogs.insert(
@@ -474,6 +492,8 @@ impl GrantBook {
 
 /// What `act.prepare` answered.
 struct Prepared {
+    /// The tab the action was prepared on (set by `prepare`, the extension does not echo it).
+    tab: u64,
     id: String,
     digest: String,
     url: String,
@@ -494,6 +514,7 @@ impl Prepared {
             .filter_map(|v| v.as_str().and_then(Category::parse))
             .collect();
         Ok(Self {
+            tab: 0,
             id: result["prepare_id"].as_str().ok_or_else(bad)?.to_owned(),
             digest: result["digest"].as_str().ok_or_else(bad)?.to_owned(),
             url: str_field(result, "url"),
@@ -822,7 +843,9 @@ impl ExtensionUpstream {
             params["needs_screenshot"] = json!(true);
         }
         match self.ask_raw(Method::ActPrepare, params, DEFAULT_DEADLINE_MS) {
-            Ok(result) => Prepared::parse(&result).map_err(PrepareFail::Text),
+            Ok(result) => Prepared::parse(&result)
+                .map(|p| Prepared { tab, ..p })
+                .map_err(PrepareFail::Text),
             Err(RequestError::Remote(body)) if body.code == ErrorCode::PasswordField => {
                 Err(PrepareFail::Password(remote_text(&body)))
             }
@@ -1191,14 +1214,20 @@ impl ExtensionUpstream {
         if let Some(input) = input {
             params["input"] = json!(input);
         }
-        self.ask_raw(Method::ActCommit, params, DEFAULT_DEADLINE_MS)
-            .map_err(|e| {
-                let code = match &e {
-                    RequestError::Remote(body) => Some(body.code),
-                    _ => None,
-                };
-                (request_error_text(e, Method::ActCommit), code)
-            })
+        let result = self.ask_raw(Method::ActCommit, params, DEFAULT_DEADLINE_MS);
+        // The user pressed Stop on the tab while the action was in flight: that is the answer,
+        // whatever the extension said about the cancelled prepare.
+        let result = match (result, self.stopped_tab_error(prepared.tab)) {
+            (Err(_), Some(stopped)) => Err(stopped),
+            (other, _) => other,
+        };
+        result.map_err(|e| {
+            let code = match &e {
+                RequestError::Remote(body) => Some(body.code),
+                _ => None,
+            };
+            (request_error_text(e, Method::ActCommit), code)
+        })
     }
 
     fn keep_alive(&self, prepare_id: &str) {

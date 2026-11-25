@@ -275,7 +275,9 @@ pub struct MonoBrowser {
     pub trust: BrowserTrust,
     /// Show the Mono's actions on the page: a highlight and a cursor appear on the target for
     /// about half a second before a click, a typed value and the like. Default on. Not part of
-    /// the server's shape: the gate reads it live (see [`MonoBrowser::policy`]).
+    /// the server's shape: the gate reads it live (see [`MonoBrowser::policy`]). For the
+    /// extension backend it is the Mono's own virtual cursor switch ("Show cursor", spec 10):
+    /// the roster sends it as `cursor`, and the glow and Stop button do not depend on it.
     pub show_actions: bool,
     /// Preview: use the zptah Browser extension instead of the Playwright server for this Mono
     /// ("Use zptah Browser (preview)", spec 15.1). Off by default, and part of no other setting:

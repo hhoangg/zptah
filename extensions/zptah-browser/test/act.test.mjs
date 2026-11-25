@@ -130,7 +130,7 @@ function setup(opts = {}) {
   const read = registerReadPath(link, { api, now: () => clock, sleep, ownerOf: () => owner.value, imaging: { render: async () => assert.fail("no imaging") } });
   // Inert timers: the idle sweep is driven by hand so the process can exit.
   const dbg = createDebugger({ api, now: () => clock, sleep, emit: (m, p) => link.sendEvent(m, p), setTimer: () => 0, clearTimer: () => {}, isStopped: () => link.stopped });
-  const acts = registerActPath(link, { api, now: () => clock, sleep, read, dbg, lexicon: opts.noLexicon ? null : lexicon });
+  const acts = registerActPath(link, { api, now: () => clock, sleep, read, dbg, lexicon: opts.noLexicon ? null : lexicon, effects: opts.effects, onStopState: opts.onStopState });
   const call = async (method, params, mono = MONO) => link.handlers.get(method)({ v: 1, type: "req", id: "a-1", method, mono, params });
   return { world, api, link, call, calls, events, tabs, acts, dbg, read, listeners, owner, advance: (ms) => (clock += ms), now: () => clock, h };
 }
@@ -1047,5 +1047,34 @@ test("paste shortcuts ask like credential entry; a fill checkbox behind a cover 
   const up = await prep(s, { kind: "upload", ref: refOf(text, "button", "Photo"), upload_id: "u9", names: ["a.txt"] });
   ok(await s.call("act.commit", { prepare_id: up.prepare_id, approval: { approval_id: "x", categories: ["upload"], digest: up.digest } }));
   assert.equal(s.acts.uploads.has("u9"), false);
+  finish(s);
+});
+
+// ---- in-page effects and the overlay Stop (T17) ----
+
+test("commit shows the effects before the action runs, and the toolbar stop clears them", async () => {
+  const seen = [];
+  const effects = { beforeAct: async (entry, rec, key) => seen.push(["before", entry.id, rec.tab, rec.action.kind, typeof key]), clearAll: async () => seen.push(["clearAll"]), taskEnd: async (m) => seen.push(["taskEnd", m]), forget() {}, clear: async () => {}, reapply: async () => {} };
+  const states = [];
+  const s = setup({ effects, onStopState: () => states.push(s.link.stopped) });
+  const text = await snap(s);
+  const p = await prep(s, { kind: "click", ref: refOf(text, "link", "Help") });
+  ok(await s.call("act.commit", { prepare_id: p.prepare_id }));
+  assert.deepEqual(seen, [["before", MONO, 1, "click", "string"]]);
+  ok(await s.call("task.end", {}));
+  assert.deepEqual(seen.at(-1), ["taskEnd", MONO]);
+  s.listeners.clicked[0]();
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(states, [true]);
+  assert.ok(seen.some((x) => x[0] === "clearAll"));
+  finish(s);
+});
+
+test("the overlay's stopTab drops the tab's prepared actions and detaches the debugger", async () => {
+  const s = setup({ debuggerPermission: true });
+  const text = await snap(s);
+  const p = await prep(s, { kind: "click", ref: refOf(text, "link", "Help") });
+  await s.acts.stopTab(1);
+  err(await s.call("act.commit", { prepare_id: p.prepare_id }), "E_STALE_PREPARE");
   finish(s);
 });

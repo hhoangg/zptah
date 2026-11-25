@@ -53,6 +53,8 @@ const uniq = (list) => [...new Set(list)];
  * @param {(ms: number) => Promise<void>} [deps.sleep]
  * @param {ReturnType<typeof createDebugger>} [deps.dbg]
  * @param {string[]} [deps.trustedHosts] sites known to ignore untrusted clicks
+ * @param {ReturnType<typeof import("./effects.js").createEffects>} [deps.effects] cursor and overlay
+ * @param {() => void} [deps.onStopState] the toolbar stop was set or resumed (the badge)
  */
 export function registerActPath(link, deps) {
   const api = deps.api ?? /** @type {any} */ (globalThis).chrome;
@@ -427,6 +429,9 @@ export function registerActPath(link, deps) {
       if (!p.approval || !sig.ext_risk.every((c) => covered.has(c))) throw new ZptahError("E_NEEDS_APPROVAL", `This action needs the user's approval for: ${sig.ext_risk.join(", ")}.`);
     }
 
+    // The overlay and the cursor (which moves to the target first); never a reason to fail.
+    await deps.effects?.beforeAct(entry, rec, first.key);
+    assertLive(rec);
     const action = rec.action;
     const files = action.kind === "upload" ? takeUpload(action, rec.mono) : undefined;
     const useDebugger = input === "trusted" || dbg.isSticky(tab.id) || action.kind === "drag" || trustedHosts.has(hostOf(rec.url));
@@ -872,11 +877,13 @@ export function registerActPath(link, deps) {
    */
   route("task.end", async (entry) => {
     dbg.endTask(dbg.attachedTabs().filter((tab) => ownerOf(tab) === entry.id));
+    await deps.effects?.taskEnd(entry.id);
     return {};
   });
 
   open("stop.resume", () => {
     link.stopped = false;
+    deps.onStopState?.();
     return {};
   });
 
@@ -886,6 +893,7 @@ export function registerActPath(link, deps) {
     suspected.clear();
     uploads.clear();
     await dbg.detachAll(reason);
+    await deps.effects?.clearAll();
   }
 
   /** The overlay's Stop for one tab. @param {number} tabId */
@@ -898,6 +906,7 @@ export function registerActPath(link, deps) {
 
   /** A tab went away. @param {number} tabId */
   function tabGone(tabId) {
+    deps.effects?.forget(tabId);
     forgetPage(tabId);
     suspected.delete(tabId);
     dbg.forget(tabId);
@@ -914,6 +923,7 @@ export function registerActPath(link, deps) {
     dropWhere((r) => r.tab === tabId && (r.url !== url || (entry !== null && checkUrl(entry, url) !== "ok")));
     if (entry && checkUrl(entry, url) !== "ok") {
       suspected.delete(tabId);
+      await deps.effects?.clear(tabId);
       await dbg.detach(tabId, "origin_left");
     }
   }
@@ -923,6 +933,10 @@ export function registerActPath(link, deps) {
   api.tabs?.onRemoved?.addListener((/** @type {number} */ tabId) => tabGone(tabId));
   api.webNavigation?.onCommitted?.addListener((/** @type {{ tabId: number, frameId: number, url: string }} */ d) => {
     if (d.frameId === 0) void navigated(d.tabId, d.url);
+  });
+  // A new document has no overlay yet: draw it again for a tab the Mono still controls.
+  api.webNavigation?.onDOMContentLoaded?.addListener((/** @type {{ tabId: number, frameId: number }} */ d) => {
+    if (d.frameId === 0) void deps.effects?.reapply(d.tabId);
   });
   // chrome.debugger only exists once the optional permission is granted.
   let debuggerWired = false;
@@ -936,6 +950,7 @@ export function registerActPath(link, deps) {
   api.permissions?.onAdded?.addListener(wireDebuggerEvents);
   api.action?.onClicked?.addListener(() => {
     link.stopped = true;
+    deps.onStopState?.();
     void stopAll("stopped");
     link.sendEvent("stop", { by: "toolbar" });
   });

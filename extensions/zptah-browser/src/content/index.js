@@ -70,6 +70,19 @@
           return ns.act.observed(args);
         case "act_mutations":
           return ns.act.mutationsSince(args);
+        case "act_point":
+          return ns.act.point(args);
+        case "cursor_move":
+          return ns.cursor.move(args);
+        case "cursor_hide":
+          return ns.cursor.hide();
+        case "effects_suspend":
+          ns.cursor.suspend(args?.on === true);
+          return ns.overlay.suspend(args?.on === true);
+        case "overlay_show":
+          return ns.overlay.show(args);
+        case "overlay_hide":
+          return ns.overlay.hide();
         default:
           return { error: `unknown op ${op}` };
       }

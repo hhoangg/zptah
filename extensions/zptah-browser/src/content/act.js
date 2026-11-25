@@ -567,5 +567,23 @@
     return { mutations: rec ? (rec.mutations ?? 0) - (rec.mark ?? 0) : 0 };
   }
 
-  ns.act = { prepare, revalidate, perform, locate, focusTarget, active, release, mutationsSince, observe, observed, ActError, prepared };
+  /**
+   * Where the cursor goes: the prepared element's centre in this frame's viewport and its
+   * accessible name (never a value the user typed). @param {{ token: string }} a
+   */
+  function point(a) {
+    const { els } = sameNodes(a.token);
+    const el = els[0];
+    if (!el) return null;
+    const vw = root.innerWidth || 0;
+    const vh = root.innerHeight || 0;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return null;
+    // Nothing is scrolled for the cursor: an element out of view gets no cursor.
+    if (r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw) return null;
+    const text = String(el.getAttribute?.("aria-label") || el.innerText || el.getAttribute?.("title") || el.getAttribute?.("placeholder") || "");
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, name: text.replace(/\s+/g, " ").trim().slice(0, 80) };
+  }
+
+  ns.act = { point, prepare, revalidate, perform, locate, focusTarget, active, release, mutationsSince, observe, observed, ActError, prepared };
 })();

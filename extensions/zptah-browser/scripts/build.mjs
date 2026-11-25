@@ -64,6 +64,13 @@ function buildVariant(variant, outDir) {
     const text = readFileSync(cfg, "utf8");
     if (!text.includes(`"${HOST_NAME}"`)) throw new Error("config.js does not hold the store host name");
     writeFileSync(cfg, text.replace(`"${HOST_NAME}"`, `"${DEV_HOST_NAME}"`));
+    // The test hook exists only in the dev build: the file and the line that installs it.
+    cpSync(join(ROOT, "dev/test-hook.js"), join(outDir, "src/worker/test-hook.js"));
+    const main = join(outDir, "src/worker/main.js");
+    writeFileSync(
+      main,
+      `${readFileSync(main, "utf8")}\nimport { installTestHook } from "./test-hook.js";\ninstallTestHook({ link, read, ownership, effects, stop });\n`,
+    );
   } else if ("key" in manifest || "update_url" in manifest) {
     throw new Error("the store manifest must not have key or update_url");
   }

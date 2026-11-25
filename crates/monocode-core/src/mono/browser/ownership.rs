@@ -70,6 +70,9 @@ pub struct Table {
     owned: HashMap<u64, Owned>,
     /// Tabs the user took back, with the time (ms). Cleared when the tab is owned again.
     taken_back: HashMap<u64, u64>,
+    /// Who owned a tab that is nobody's now, until someone owns it again. Lets a Stop that the app
+    /// received late (the extension was offline) still be matched to its Mono.
+    last_owner: HashMap<u64, String>,
 }
 
 impl Table {
@@ -103,6 +106,20 @@ impl Table {
         self.count_of(mono) < super::gate::tabs::MAX_TABS
     }
 
+    /// Whether the Mono owns the tab, or owned it last and nobody has since (a late Stop).
+    pub fn owned_or_last_by(&self, tab: u64, mono: &str) -> bool {
+        match self.owned.get(&tab) {
+            Some(o) => o.mono == mono,
+            None => self.last_owner.get(&tab).is_some_and(|m| m == mono),
+        }
+    }
+
+    /// Marks a tab as taken back by the user even when the mirror had already dropped its owner.
+    pub fn mark_taken_back(&mut self, tab: u64, now_ms: u64) {
+        self.owned.remove(&tab);
+        self.taken_back.entry(tab).or_insert(now_ms);
+    }
+
     /// The Mono takes a tab nobody else owns (a new tab, an adopted one, a popup, a user drag).
     /// A tab the Mono already owns stays as it is.
     pub fn claim(&mut self, tab: u64, mono: &str, how: How, now_ms: u64) -> Result<(), Conflict> {
@@ -112,6 +129,7 @@ impl Table {
             None => {}
         }
         self.taken_back.remove(&tab);
+        self.last_owner.remove(&tab);
         self.owned.insert(
             tab,
             Owned {
@@ -130,6 +148,7 @@ impl Table {
     pub fn transfer(&mut self, tab: u64, to: &str, now_ms: u64) -> Option<String> {
         let from = self.owned.remove(&tab).map(|o| o.mono);
         self.taken_back.remove(&tab);
+        self.last_owner.remove(&tab);
         self.owned.insert(
             tab,
             Owned {
@@ -144,7 +163,11 @@ impl Table {
 
     /// The tab becomes the user's. Returns who owned it.
     pub fn release(&mut self, tab: u64) -> Option<Owned> {
-        self.owned.remove(&tab)
+        let was = self.owned.remove(&tab);
+        if let Some(o) = &was {
+            self.last_owner.insert(tab, o.mono.clone());
+        }
+        was
     }
 
     /// Every tab of a Mono becomes the user's (the Mono was disabled, deleted or moved to another
@@ -160,6 +183,7 @@ impl Table {
     /// The user took the tab out of the Mono's group: it is the user's, and the time is kept.
     pub fn take_back(&mut self, tab: u64, now_ms: u64) -> Option<Owned> {
         let owned = self.owned.remove(&tab)?;
+        self.last_owner.insert(tab, owned.mono.clone());
         self.taken_back.insert(tab, now_ms);
         Some(owned)
     }
@@ -182,6 +206,7 @@ impl Table {
                 (Some(owner), Some(o)) if &o.mono == owner => {}
                 (Some(owner), _) => {
                     self.taken_back.remove(&tab.tab);
+                    self.last_owner.remove(&tab.tab);
                     self.owned.insert(
                         tab.tab,
                         Owned {
@@ -194,7 +219,9 @@ impl Table {
                     );
                 }
                 (None, Some(_)) if all => {
-                    self.owned.remove(&tab.tab);
+                    if let Some(o) = self.owned.remove(&tab.tab) {
+                        self.last_owner.insert(tab.tab, o.mono);
+                    }
                 }
                 (None, _) => {}
             }

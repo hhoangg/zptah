@@ -8,7 +8,39 @@
   <body>
     <main>
       <h1>zptah Browser</h1>
-      <p id="version"></p>
+
+      <section>
+        <h2>Connection</h2>
+        <p id="status">Checking...</p>
+        <p id="advice" class="muted"></p>
+        <p><button id="unpair" type="button" hidden>Unpair this browser</button></p>
+      </section>
+
+      <section>
+        <h2>Cursor</h2>
+        <label><input id="cursor" type="checkbox" /> Show the Mono's cursor while it works on a page</label>
+        <h3>Sites without in-page effects</h3>
+        <p class="muted">No cursor and no Stop button on these sites. Use <code>example.com</code> or <code>*.example.com</code>. The toolbar icon still stops every Mono.</p>
+        <form id="site-form">
+          <input id="site" type="text" autocomplete="off" spellcheck="false" placeholder="example.com" />
+          <button type="submit">Add</button>
+        </form>
+        <p id="site-error" class="error" role="alert"></p>
+        <ul id="sites"></ul>
+      </section>
+
+      <section>
+        <h2>Debugger fallback</h2>
+        <p class="muted">Some pages ignore clicks made by a script. With this permission zptah can use the browser's debugger on a tab it works in; Chrome then shows a bar saying so for a few seconds.</p>
+        <p><button id="debugger" type="button">Allow the debugger</button> <span id="debugger-state"></span></p>
+      </section>
+
+      <section>
+        <h2>About</h2>
+        <p id="version"></p>
+        <p id="ext-id" class="muted"></p>
+        <p><a href="https://zptah.app/privacy" target="_blank" rel="noopener noreferrer">Privacy policy</a></p>
+      </section>
     </main>
     <script src="options.js" type="module"></script>
   </body>
