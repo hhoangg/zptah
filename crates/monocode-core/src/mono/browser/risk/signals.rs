@@ -178,7 +178,7 @@ pub fn sites() -> &'static Sites {
     CELL.get_or_init(|| serde_json::from_str(SITES_JSON).expect("shared/risk-sites.json is valid"))
 }
 
-fn host_of(url: &str) -> Option<String> {
+pub(crate) fn host_of(url: &str) -> Option<String> {
     url::Url::parse(url)
         .ok()?
         .host_str()
@@ -478,6 +478,12 @@ fn classify_element(el: &ElementSignals, task: &TaskContext) -> (ControlInput, C
         class.informational &= second.informational;
     }
     (input, class)
+}
+
+/// What the lexicon says about the element alone (send, post and the categories of its name), for
+/// the soul rules that match on "send" and "post".
+pub fn element_classification(el: &ElementSignals, task: &TaskContext) -> Classification {
+    classify_element(el, task).1
 }
 
 fn send_is_unnamed(form: &FormSignals, task: &TaskContext) -> bool {

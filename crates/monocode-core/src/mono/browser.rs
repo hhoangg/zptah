@@ -28,9 +28,14 @@ pub(crate) mod peer;
 pub mod recipe;
 pub mod risk;
 pub mod server;
+pub mod soul_rules;
+pub mod trust;
 
-/// Name of the MCP server. Distinct from a user-level `playwright` server.
-pub const MCP_SERVER: &str = "playwright_browser";
+/// Name of the MCP server the gate offers. Distinct from a user-level `playwright` server.
+pub const MCP_SERVER: &str = "zptah_browser";
+/// The server name before the extension backend. Still parsed in tool names, so audit rows and
+/// saved sessions that used it keep their meaning.
+pub const LEGACY_MCP_SERVER: &str = "playwright_browser";
 /// The version of `@playwright/mcp` this app was tested with. Bump deliberately; the flags and
 /// environment names below were read from this version's code.
 pub const PLAYWRIGHT_MCP_VERSION: &str = "0.0.86";
@@ -683,7 +688,12 @@ pub(crate) const BROWSER_TABLES: &str = "CREATE TABLE IF NOT EXISTS mono_secrets
 CREATE TABLE IF NOT EXISTS mono_browser_audit(
   id INTEGER PRIMARY KEY AUTOINCREMENT, mono_id TEXT NOT NULL, session_id INTEGER NOT NULL,
   ts INTEGER NOT NULL, tool TEXT NOT NULL, url TEXT NOT NULL, summary TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS mono_browser_audit_mono ON mono_browser_audit(mono_id, id);";
+CREATE INDEX IF NOT EXISTS mono_browser_audit_mono ON mono_browser_audit(mono_id, id);
+CREATE TABLE IF NOT EXISTS mono_browser_grants(
+  mono_id TEXT NOT NULL, conversation INTEGER NOT NULL, site TEXT NOT NULL, category TEXT NOT NULL,
+  granted_at INTEGER NOT NULL, PRIMARY KEY(mono_id, conversation, site, category));
+CREATE TABLE IF NOT EXISTS mono_browser_rules(
+  mono_id TEXT PRIMARY KEY, lines TEXT NOT NULL, hash TEXT NOT NULL, confirmed_at INTEGER NOT NULL);";
 
 const UNAVAILABLE: &str = "Browser storage is unavailable.";
 
@@ -721,6 +731,7 @@ pub struct AuditEntry {
 }
 
 /// Secrets and the audit log of the Monos, in the native store database.
+#[derive(Clone, Debug)]
 pub struct MonoBrowserStore {
     database: PathBuf,
 }
@@ -845,6 +856,8 @@ impl MonoBrowserStore {
         for sql in [
             "DELETE FROM mono_secrets WHERE mono_id=?1",
             "DELETE FROM mono_browser_audit WHERE mono_id=?1",
+            "DELETE FROM mono_browser_grants WHERE mono_id=?1",
+            "DELETE FROM mono_browser_rules WHERE mono_id=?1",
             "DELETE FROM mono_browser_recipe_approvals WHERE mono_id=?1",
             "DELETE FROM mono_browser_recipe_hashes WHERE mono_id=?1",
             "DELETE FROM mono_browser_recipe_verified WHERE mono_id=?1",
@@ -886,12 +899,14 @@ impl MonoBrowserStore {
         let conn = self.open()?.ok_or(UNAVAILABLE)?;
         conn.execute_batch(BROWSER_TABLES)
             .map_err(|_| UNAVAILABLE)?;
+        trust::audit::migrate_audit_columns(&conn).map_err(|_| UNAVAILABLE)?;
         conn.execute(
             "INSERT INTO mono_browser_audit(mono_id,session_id,ts,tool,url,summary) VALUES(?1,?2,?3,?4,?5,?6)",
             params![mono_id, entry.session_id, entry.ts_ms as i64, entry.tool, entry.url, entry.summary],
         )
-        .map(|_| ())
-        .map_err(|_| UNAVAILABLE.into())
+        .map_err(|_| UNAVAILABLE)?;
+        trust::audit::prune_audit(&conn, mono_id, entry.ts_ms).map_err(|_| UNAVAILABLE)?;
+        Ok(())
     }
     /// The newest `limit` entries, newest first.
     pub fn recent(&self, mono_id: &str, limit: usize) -> Vec<AuditEntry> {
@@ -921,9 +936,13 @@ impl MonoBrowserStore {
 /// The audit entry for a tool call of this Mono's browser server, or None for any other tool.
 /// Typed text, field values and selected options are never kept.
 pub fn audit_entry(tool_name: &str, input: &str, session_id: i64) -> Option<AuditEntry> {
-    let short = tool_name
-        .strip_prefix(&format!("mcp__{MCP_SERVER}__"))
-        .or_else(|| tool_name.strip_prefix(&format!("{MCP_SERVER}:")))?;
+    let short = [MCP_SERVER, LEGACY_MCP_SERVER]
+        .into_iter()
+        .find_map(|server| {
+            tool_name
+                .strip_prefix(&format!("mcp__{server}__"))
+                .or_else(|| tool_name.strip_prefix(&format!("{server}:")))
+        })?;
     let input: Value = serde_json::from_str(input).unwrap_or(Value::Null);
     let text = |key: &str| input[key].as_str().unwrap_or("").trim().to_owned();
     let element = text("element");
