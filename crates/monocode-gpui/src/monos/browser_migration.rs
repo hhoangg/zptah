@@ -52,7 +52,7 @@ fn text(lang: Lang) -> Text {
             suggest_title: "New defaults for banking and payment sites",
             suggest_line: |mono| {
                 format!(
-                    "zptah now asks before risky steps on banking and payment sites instead of blocking them. Switch {mono} to the new defaults?"
+                    "zptah now asks before risky steps on banking and payment sites instead of blocking them. Switch {mono} to the new defaults? Sites you added stay blocked."
                 )
             },
             switch: "Switch to the new defaults",
@@ -69,7 +69,7 @@ fn text(lang: Lang) -> Text {
             suggest_title: "Mặc định mới cho trang ngân hàng và thanh toán",
             suggest_line: |mono| {
                 format!(
-                    "zptah giờ hỏi trước các bước rủi ro trên trang ngân hàng và thanh toán thay vì chặn. Chuyển {mono} sang mặc định mới? Danh sách trang web bị chặn của bạn sẽ không bị xóa nếu bạn chọn giữ."
+                    "zptah giờ hỏi trước các bước rủi ro trên trang ngân hàng và thanh toán thay vì chặn. Chuyển {mono} sang mặc định mới? Các trang bạn tự thêm vẫn bị chặn."
                 )
             },
             switch: "Chuyển sang mặc định mới",
