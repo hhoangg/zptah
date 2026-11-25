@@ -74,10 +74,6 @@ pub(crate) struct SettingsContext {
     pub quick_error: Option<String>,
     pub catalogs: HashMap<String, Vec<(String, String)>>,
     pub inbox_connections: HashMap<String, (bool, String)>,
-    /// Mobile access, or `None` when this desktop cannot offer it.
-    pub mobile: Option<monocode_core::mobile::Status>,
-    /// The pairing code on show.
-    pub mobile_invite: Option<monocode_core::mobile::Invite>,
     /// The web app link, or `None` when this desktop cannot offer it.
     pub web: Option<monocode_core::mobile::WebStatus>,
     /// The web pairing on show: the code and link the browser needs.
@@ -119,8 +115,6 @@ impl PartialEq for SettingsContext {
             && self.quick_error == other.quick_error
             && self.catalogs == other.catalogs
             && self.inbox_connections == other.inbox_connections
-            && self.mobile == other.mobile
-            && self.mobile_invite == other.mobile_invite
             && self.web == other.web
             && self.web_pairing == other.web_pairing
             && self.web_notice == other.web_notice
@@ -170,17 +164,8 @@ pub(crate) enum SettingsEvent {
     },
     ResetMono(String),
     MonoSidebar(String, bool, bool),
-    /// Read mobile access again: the router and pairing change on their own.
+    /// Read the web pairing status again: it changes on its own.
     MobileRefresh,
-    MobileConfigure {
-        enabled: bool,
-        open_router: bool,
-        remote_address: String,
-    },
-    /// Start listening when needed, then make a new pairing code.
-    MobilePair,
-    MobileCancelInvite,
-    MobileRevoke(String),
     /// Start pairing with the web server at `host_url` (already validated).
     WebPair {
         host_url: String,
@@ -205,11 +190,6 @@ pub(crate) enum SettingsEvent {
         permission: monocode_core::mobile::Permission,
         projects: Option<Vec<String>>,
         monos: Option<Vec<String>>,
-    },
-    /// The projects a paired phone may see (`None` is all), permission kept.
-    PhoneSetProjects {
-        device_id: String,
-        projects: Option<Vec<String>>,
     },
     /// The projects and Monos a paired web device may see (`None` is all),
     /// permission kept.
@@ -599,7 +579,6 @@ impl SettingsView {
             };
             self.ctx = ctx;
             self.refresh_import();
-            self.mobile_context_changed(cx);
             self.web_context_changed(cx);
             if remote_changed {
                 self.leave_connections(cx);

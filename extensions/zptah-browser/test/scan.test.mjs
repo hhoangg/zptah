@@ -77,6 +77,9 @@ test("only the front guard may bring the user's own tab and window back to the f
     assert.ok(found.some((m) => m.includes("forbidden tabs-update-active")), `${name}: ${found.join("\n")}`);
     assert.ok(found.some((m) => m.includes("forbidden windows-update-focus")), name);
   }
-  // The exemption is for those two rules only.
+  // The exemption covers `active:` and `focused:` only.
   assert.ok(scanSource("src/worker/front-guard.js", "eval('1')").length > 0);
+  for (const src of ["api.tabs.update(id, { highlighted: true });", "api.tabs.update(id, { selected: true });", "api.windows.update(w, { drawAttention: true });"]) {
+    assert.ok(scanSource("src/worker/front-guard.js", src).length > 0, src);
+  }
 });

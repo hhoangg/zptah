@@ -689,11 +689,15 @@ impl UsageFooter {
     fn window_card(&self, w: &usage::Window, now: i64) -> gpui::Div {
         let used = w.used_percent.clamp(0., 100.);
         let shown = self.display_percent(used);
-        let label = match w.minutes {
+        let limit = match w.minutes {
             1_440 => "Daily limit",
             10_080 => "Weekly limit",
             43_200 => "Monthly limit",
             _ => "5-hour limit",
+        };
+        let label = match &w.group {
+            Some(group) => format!("{limit} · {group}"),
+            None => limit.to_string(),
         };
         div()
             .rounded_lg()
@@ -710,6 +714,8 @@ impl UsageFooter {
                     .gap_3()
                     .child(
                         div()
+                            .min_w_0()
+                            .truncate()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(content(0.65))
                             .child(label),
@@ -852,10 +858,79 @@ impl UsageFooter {
     }
 }
 use crate::accounts::ui::bar_color as usage_color;
+
+/// One model group in the compact chip: its mark and its windows' percentages.
+#[derive(Debug, PartialEq)]
+struct GroupSegment {
+    /// The provider mark of the model picker that matches the group, if any.
+    icon: Option<&'static str>,
+    name: String,
+    /// The group's windows as "5h% | weekly%", "--%" for a missing one.
+    text: String,
+}
+
+/// The provider mark for an Antigravity model group: Gemini models are
+/// Antigravity's own, Claude and GPT models use Claude's mark.
+fn group_icon(group: &str) -> Option<&'static str> {
+    usage::group_family(group).map(|family| match family {
+        usage::GroupFamily::Gemini => "antigravity",
+        usage::GroupFamily::Claude => "claude",
+    })
+}
+/// A group without a known mark shows its name, cut short so the chip stays compact.
+fn short_group_name(name: &str) -> String {
+    if name.chars().count() > 12 {
+        format!("{}…", name.chars().take(11).collect::<String>())
+    } else {
+        name.to_string()
+    }
+}
+
+/// Splits grouped windows (Antigravity) into chip segments in snapshot order.
+/// Returns nothing when no window names a group, so other providers keep the plain chip.
+fn group_segments(windows: &[usage::Window], percent: impl Fn(f64) -> f64) -> Vec<GroupSegment> {
+    if windows.iter().all(|w| w.group.is_none()) {
+        return Vec::new();
+    }
+    let mut groups: Vec<(&str, Vec<&usage::Window>)> = Vec::new();
+    for window in windows {
+        let group = window.group.as_deref().unwrap_or("");
+        match groups.iter_mut().find(|(name, _)| *name == group) {
+            Some((_, members)) => members.push(window),
+            None => groups.push((group, vec![window])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(name, members)| {
+            // Fixed 5h then weekly slots, so a missing window never takes the other's place.
+            let slot = |minutes| {
+                members
+                    .iter()
+                    .find(|w| w.minutes == minutes)
+                    .map_or("--%".to_string(), |w| {
+                        format!("{:.0}%", percent(w.used_percent))
+                    })
+            };
+            GroupSegment {
+                icon: group_icon(name),
+                name: name.to_string(),
+                text: format!("{} | {}", slot(300), slot(10_080)),
+            }
+        })
+        .collect()
+}
+
 impl Render for UsageFooter {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = &self.cache[index(self.kind)];
         let now = usage::now_ms();
+        let segments = state
+            .snapshot
+            .as_ref()
+            .map(|s| group_segments(&s.windows, |used| self.display_percent(used)))
+            .unwrap_or_default();
+        let grouped = !segments.is_empty();
         let label = if let Some(snapshot) = &state.snapshot {
             snapshot
                 .windows
@@ -890,11 +965,15 @@ impl Render for UsageFooter {
                 s.windows
                     .iter()
                     .map(|w| {
-                        format!(
+                        let usage = format!(
                             "{} · {}",
                             self.percent_label(w.used_percent),
                             w.reset_label(now)
-                        )
+                        );
+                        match &w.group {
+                            Some(group) => format!("{group} {usage}"),
+                            None => usage,
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join(" · ")
@@ -947,8 +1026,23 @@ impl Render for UsageFooter {
                     .cursor_pointer()
                     .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
                     .child(self.anchor.probe())
-                    .child(provider_icon(self.kind.id(), 12.))
-                    .when_some(tightest, |d, percent| {
+                    .when(grouped, |d| {
+                        let count = segments.len();
+                        d.children(segments.into_iter().enumerate().map(|(i, segment)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .map(|d| match segment.icon {
+                                    Some(icon) => d.child(provider_icon(icon, 12.)),
+                                    None => d.child(short_group_name(&segment.name)),
+                                })
+                                .child(segment.text)
+                                .when(i + 1 < count, |d| d.child(div().pl(px(2.)).child("-")))
+                        }))
+                    })
+                    .when(!grouped, |d| d.child(provider_icon(self.kind.id(), 12.)))
+                    .when_some(tightest.filter(|_| !grouped), |d, percent| {
                         d.child(
                             div()
                                 .w(px(32.))
@@ -965,7 +1059,7 @@ impl Render for UsageFooter {
                                 ),
                         )
                     })
-                    .child(label)
+                    .when(!grouped, |d| d.child(label))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx)))
                     .on_action(
                         cx.listener(|this, _: &ToggleUsage, window, cx| this.toggle(window, cx)),
@@ -1023,6 +1117,57 @@ impl Render for UsageFooter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grouped_windows_become_one_chip_segment_per_group() {
+        let window = |group: Option<&str>, minutes, used_percent| usage::Window {
+            used_percent,
+            minutes,
+            resets_at: None,
+            group: group.map(str::to_string),
+        };
+        let windows = [
+            window(Some("Gemini Models"), 300, 0.),
+            window(Some("Gemini Models"), 10_080, 1.),
+            window(Some("Claude and GPT models"), 10_080, 17.),
+            window(Some("Claude and GPT models"), 300, 4.),
+            window(Some("Other models in a long group"), 300, 50.),
+            window(None, 10_080, 30.),
+        ];
+        let remaining = group_segments(&windows, |used| 100. - used);
+        assert_eq!(
+            remaining,
+            [
+                GroupSegment {
+                    icon: Some("antigravity"),
+                    name: "Gemini Models".into(),
+                    text: "100% | 99%".into(),
+                },
+                GroupSegment {
+                    icon: Some("claude"),
+                    name: "Claude and GPT models".into(),
+                    text: "96% | 83%".into(),
+                },
+                GroupSegment {
+                    icon: None,
+                    name: "Other models in a long group".into(),
+                    text: "50% | --%".into(),
+                },
+                GroupSegment {
+                    icon: None,
+                    name: String::new(),
+                    text: "--% | 70%".into(),
+                },
+            ]
+        );
+        assert_eq!(
+            short_group_name("Other models in a long group"),
+            "Other model…"
+        );
+        assert_eq!(short_group_name("Models"), "Models");
+        let ungrouped = [window(None, 300, 10.), window(None, 10_080, 20.)];
+        assert!(group_segments(&ungrouped, |used| used).is_empty());
+    }
     #[gpui::test]
     fn details_open_with_keyboard_escape_restores_focus_and_provider_caches_stay_separate(
         cx: &mut gpui::TestAppContext,
@@ -1041,6 +1186,7 @@ mod tests {
                         used_percent: 28.,
                         minutes: 300,
                         resets_at: None,
+                        group: None,
                     }],
                     updated_at: usage::now_ms(),
                     ..Default::default()
@@ -1072,6 +1218,7 @@ mod tests {
                         used_percent: 42.,
                         minutes: 300,
                         resets_at: None,
+                        group: None,
                     }],
                     updated_at: usage::now_ms(),
                     ..Default::default()

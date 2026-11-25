@@ -885,6 +885,8 @@ fn text_that_is_not_one_emoji_is_not_a_badge() {
         "1\u{FE0F}\u{20E3}",
         "\u{1F469}\u{200D}\u{1F4BB}",
         "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+        "\u{2B50}",
+        "\u{2B06}\u{FE0F}",
     ] {
         assert_eq!(clean_badge_emoji(ok).as_deref(), Some(ok), "{ok:?}");
     }
@@ -899,6 +901,10 @@ fn text_that_is_not_one_emoji_is_not_a_badge() {
         "\u{1F469}\u{200D}",
         "\u{1F1FB}",
         "hello",
+        "\u{2192}",
+        "\u{2B06}",
+        "\u{2B1D}",
+        "\u{1F3FD}",
         "\u{1F438}\u{1F431}\u{1F436}\u{1F98A}\u{1F43C}\u{1F984}\u{1F419}\u{1F989}\u{1F41D}",
     ] {
         assert_eq!(clean_badge_emoji(bad), None, "{bad:?}");

@@ -376,28 +376,6 @@ impl Shell {
                         .map(|_| ())
                 });
             }
-            SettingsEvent::PhoneSetProjects {
-                device_id,
-                projects,
-            } => {
-                let (device_id, projects) = (device_id.clone(), projects.clone());
-                self.web_action("Projects", cx, move |host| {
-                    let device = host
-                        .status()
-                        .devices
-                        .into_iter()
-                        .find(|device| device.id == device_id && device.kind == DeviceKind::Phone)
-                        .ok_or("That device is no longer paired")?;
-                    host.set_device_access(
-                        &device_id,
-                        DeviceKind::Phone,
-                        device.permission,
-                        projects,
-                        device.monos,
-                    )
-                    .map(|_| ())
-                });
-            }
             SettingsEvent::WebSetSelection {
                 device_id,
                 projects,

@@ -295,3 +295,28 @@ fn a_roster_set_the_extension_refuses_is_sent_again_next_time() {
         publisher.join().unwrap();
     }
 }
+
+#[test]
+fn a_lowered_level_that_timed_out_still_reaches_the_extension() {
+    let book = Arc::new(RosterBook::default());
+    let act = mono(MIRA, "Mira", 0xd93025, "frog", "Profile 1");
+    book.set_monos(std::slice::from_ref(&act));
+    let (manager, mut fake, auth, _events) = connected(&book);
+    assert_eq!(auth.roster[0].level, AccessLevel::Act);
+    // The level goes down, and the extension does not answer in time.
+    let mut read_only = act;
+    read_only.browser.as_mut().unwrap().trust = BrowserTrust::ReadOnly;
+    book.set_monos(&[read_only]);
+    assert!(!book.publish_timeout(&manager, Duration::from_millis(50)));
+    // Nothing else changed in the book, yet the next publish sends it again.
+    let retry = {
+        let (book, manager) = (book.clone(), manager.clone());
+        std::thread::spawn(move || book.publish_retrying(&manager, &[Duration::from_millis(1)]))
+    };
+    let stale = fake.next_request().expect("the timed out request");
+    fake.respond_ok(&stale, json!({}));
+    let again = fake.next_request().expect("the retry");
+    assert_eq!(again.params.as_ref().unwrap()["monos"][0]["level"], "read");
+    fake.respond_ok(&again, json!({}));
+    assert!(retry.join().unwrap());
+}

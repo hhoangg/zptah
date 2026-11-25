@@ -566,6 +566,7 @@ test("no worker source activates a tab or focuses a window", () => {
     // front (spec 6.5 rule 1); scripts/scan.mjs lists it by name and test/ownership.test.mjs
     // covers it.
     if (name !== "focus-guard.js" && name !== "front-guard.js") assert.ok(!/active\s*:\s*true|focused\s*:\s*true|highlighted\s*:|drawAttention|bringToFront|activateTarget/.test(text), name);
+    if (name === "front-guard.js") assert.ok(!/highlighted\s*:|drawAttention|bringToFront|activateTarget/.test(text), name);
     assert.ok(!/tabs\s*\.\s*update|windows\s*\.\s*update/.test(text.replace(/\/\/.*$/gm, "")) || name === "main.js" || name === "focus-guard.js" || name === "front-guard.js", name);
   }
 });

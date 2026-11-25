@@ -230,7 +230,7 @@ impl Table {
                 })
             }
             None => {
-                let taken_back = matches!(by, "user_drag" | "user_ungroup");
+                let taken_back = matches!(by, "user_drag" | "user_ungroup" | "group_closed");
                 if taken_back {
                     self.take_back(tab, now_ms);
                 } else {

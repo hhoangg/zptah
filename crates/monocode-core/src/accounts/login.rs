@@ -502,6 +502,16 @@ fn safe_detail(value: &str) -> String {
 pub(crate) fn cli_output(kind: Kind, args: &[&str], profile: &Profile) -> Result<String, String> {
     let binary =
         provider::resolve(kind).ok_or_else(|| format!("{} CLI not found", kind.label()))?;
+    binary_output(kind, binary, args, profile)
+}
+/// Runs an already resolved provider binary with stdin closed and returns its stdout,
+/// killing the process tree after 15 s.
+pub(crate) fn binary_output(
+    kind: Kind,
+    binary: std::path::PathBuf,
+    args: &[&str],
+    profile: &Profile,
+) -> Result<String, String> {
     let mut command = Command::new(binary);
     crate::scm::shell::apply_gui_env(&mut command);
     profile.apply(kind, &mut command)?;

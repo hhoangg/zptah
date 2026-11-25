@@ -39,12 +39,16 @@ const HTML_RULES = [
 ];
 
 /**
- * The one place that may bring the user's own tab and window back to the front after a Mono's tab
- * opened a popup (spec 6.5 rule 1). Nothing else may set `active` or `focused`.
- * @type {Record<string, string[]>}
+ * The one place that may bring the user's own tab and window back to the front after a Mono's
+ * popup took it (spec 6.5 rule 1): only `active:` and `focused:` are allowed there. The same
+ * rules still apply to it for `highlighted`, `selected` and `drawAttention`.
+ * @type {Record<string, Record<string, RegExp>>}
  */
 const EXEMPT = {
-  "src/worker/front-guard.js": ["tabs-update-active", "windows-update-focus"],
+  "src/worker/front-guard.js": {
+    "tabs-update-active": /\btabs\s*\.\s*update\s*\([^;]*?\b(?:highlighted|selected)\s*:/s,
+    "windows-update-focus": /\bwindows\s*\.\s*update\s*\([^;]*?\bdrawAttention\s*:/s,
+  },
 };
 
 /** Test hooks must exist only in the dev build. */
@@ -107,8 +111,8 @@ export function scanSource(name, text, opts = {}) {
   /** @type {{ id: string, re: RegExp, why: string }[]} */
   const rules = [];
   if (isJs) {
-    const exempt = EXEMPT[name.replaceAll("\\", "/")] ?? [];
-    rules.push(...JS_RULES.filter((rule) => !exempt.includes(rule.id)));
+    const exempt = EXEMPT[name.replaceAll("\\", "/")] ?? {};
+    rules.push(...JS_RULES.map((rule) => (exempt[rule.id] ? { ...rule, re: exempt[rule.id] } : rule)));
   }
   if (isHtml) rules.push(...HTML_RULES);
   if (opts.store && (isJs || isHtml || isCss)) rules.push(...STORE_RULES);

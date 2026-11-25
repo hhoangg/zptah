@@ -59,7 +59,7 @@ const dbg = createDebugger({
   emit: (method, params) => void link.sendEvent(method, params),
   isStopped: () => link.stopped === true,
 });
-const front = createFrontGuard({ api: /** @type {any} */ (chrome), now: Date.now });
+const front = createFrontGuard({ api: /** @type {any} */ (chrome), now: Date.now, ownerOf: (tab) => ownership?.ownerOf(tab) ?? null });
 const read = registerReadPath(link, {
   dbg,
   around: (tab, fn) => (effects ? effects.around(tab, fn) : fn()),

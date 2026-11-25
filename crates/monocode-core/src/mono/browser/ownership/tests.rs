@@ -135,12 +135,12 @@ fn events_follow_the_users_drags_and_report_a_take_back() {
     t.apply_event(&json!({"tab": 2, "owner": B, "by": "popup"}), 70)
         .unwrap();
     assert_eq!(t.get(2).unwrap().how, How::Popup);
-    // A closed group releases without a take back.
+    // A closed group is a take back too: the old reference does not adopt the tab again.
     let change = t
         .apply_event(&json!({"tab": 2, "owner": null, "by": "group_closed"}), 80)
         .unwrap();
-    assert!(!change.taken_back);
-    assert_eq!(t.taken_back_at(2), None);
+    assert!(change.taken_back);
+    assert_eq!(t.taken_back_at(2), Some(80));
     // Ungrouping is a take back too; an unknown tab or a malformed event changes nothing.
     t.claim(3, A, How::Created, 1).unwrap();
     assert!(

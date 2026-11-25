@@ -35,7 +35,7 @@ function longEnough(quote) {
  * @param {ReturnType<import("./readpath.js").registerReadPath>} deps.read
  * @param {any} [deps.api]
  * @param {() => number} [deps.now]
- * @param {{ opening(): void }} [deps.front] the front guard, told when an owned tab opens something
+ * @param {{ opening(tab: number): void | Promise<void> }} [deps.front] the front guard, told when an owned tab opens something
  */
 export function registerOwnership(link, deps) {
   const api = deps.api ?? /** @type {any} */ (globalThis).chrome;
@@ -286,9 +286,18 @@ export function registerOwnership(link, deps) {
       if (stop !== undefined && grant.message_ms <= stop) {
         throw new ZptahError("E_NOT_OWNER", "The user took this tab back. Only words they wrote after that count, or they can drag it back.");
       }
-    } else if (!grant || grant.kind !== "user_approved" || typeof grant.approval_id !== "string" || grant.approval_id === "") {
-      // A tab another Mono owns moves only with the user's yes.
-      throw new ZptahError("E_NOT_OWNER", "That tab belongs to another Mono. Taking it over needs the user's approval.");
+    } else {
+      // A tab another Mono owns moves only with the user's yes, and the user's words as well.
+      if (!grant || grant.kind !== "user_approved" || typeof grant.approval_id !== "string" || grant.approval_id === "") {
+        throw new ZptahError("E_NOT_OWNER", "That tab belongs to another Mono. Taking it over needs the user's approval.");
+      }
+      if (typeof grant.quote !== "string" || !longEnough(grant.quote) || !Number.isSafeInteger(grant.message_ms)) {
+        throw new ZptahError("E_NOT_OWNER", "Taking over another Mono's tab needs the words the user wrote that name it, as well as their approval.");
+      }
+      const stop = takenBack.get(tab.id);
+      if (stop !== undefined && grant.message_ms <= stop) {
+        throw new ZptahError("E_NOT_OWNER", "The user took this tab back. Only words they wrote after that count.");
+      }
     }
     claim(tab.id, entry.id, "adopted");
     const groupId = await groups.place(tab.id, entry);
@@ -336,7 +345,7 @@ export function registerOwnership(link, deps) {
     await ready;
     const mono = ownerOf(sourceTab);
     if (mono === null || ownerOf(tabId) === mono) return;
-    deps.front?.opening();
+    void deps.front?.opening(tabId);
     claim(tabId, mono, "popup");
     const entry = roster().find((m) => m.id === mono);
     if (entry) {
@@ -365,7 +374,8 @@ export function registerOwnership(link, deps) {
         if (mono === null) return;
         for (const [tab, g] of [...groupOfTab]) {
           if (g !== group.id || ownerOf(tab) !== mono) continue;
-          release(tab);
+          // Closing the group is a take back: the old reference does not adopt the tab again.
+          takeBack(tab);
           emit("tab.ownership", { tab, owner: null, by: "group_closed" });
         }
       })(),

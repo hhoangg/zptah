@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
+pub mod connect;
 pub mod copy;
 pub mod defense;
 pub mod gate;
@@ -1353,7 +1354,10 @@ fn attach_extension_with(
     output::sweep_keeping(&dir, &store.audit_screenshots(&ctx.mono.id));
 
     // The extension may have connected after the Monos were saved: make sure it knows this one.
-    if roster::book().upsert(&ctx.mono) {
+    roster::book().upsert(&ctx.mono);
+    // Before the first tool call: a link that is behind (a change that did not arrive) gets the
+    // roster now, with a short wait. A link that does not answer is retried in the background.
+    if !roster::book().publish_timeout(&manager, std::time::Duration::from_secs(3)) {
         roster::book().publish_soon();
     }
     let upstream = gate::upstream_for(&ctx.mono.id).unwrap_or_else(|| {
