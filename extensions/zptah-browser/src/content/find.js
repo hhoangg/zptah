@@ -7,6 +7,25 @@
   /** @param {string} s */
   const fold = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").toLowerCase();
 
+  /** ARIA roles a query may start with: `button Buy` finds buttons whose text has "buy". */
+  const ROLE_WORDS = new Set([
+    "button", "link", "textbox", "checkbox", "radio", "combobox", "listbox", "option", "heading",
+    "tab", "menuitem", "switch", "slider", "searchbox", "spinbutton", "img", "dialog", "row", "cell",
+  ]);
+
+  /**
+   * Splits a role-prefixed query ("button Buy") into its role and the rest ("buy"). A query that
+   * does not start with a role word has no role.
+   * @param {string} q the folded query
+   * @returns {{ role: string, rest: string }}
+   */
+  function splitRole(q) {
+    const space = q.indexOf(" ");
+    const first = space === -1 ? q : q.slice(0, space);
+    if (!ROLE_WORDS.has(first)) return { role: "", rest: q };
+    return { role: first, rest: space === -1 ? "" : q.slice(space + 1).trim() };
+  }
+
   /**
    * @param {any} modelRoot
    * @param {string} query
@@ -15,14 +34,28 @@
    */
   function findInModel(modelRoot, query, max, refOf) {
     const q = fold(ns.aria.clean(query, 1024));
+    if (!q) return [];
+    const { role: wanted, rest } = splitRole(q);
+    if (wanted) {
+      const byRole = search(modelRoot, rest, wanted, max, refOf);
+      if (byRole.length > 0) return byRole;
+      // "button settings" may also be plain text that happens to start with a role word.
+    }
+    return search(modelRoot, q, "", max, refOf);
+  }
+
+  /**
+   * Elements whose name, text, value or placeholder holds `q` (folded); with `wanted` only that role.
+   * @param {any} modelRoot @param {string} q @param {string} wanted @param {number} max @param {(el: any) => string} refOf
+   */
+  function search(modelRoot, q, wanted, max, refOf) {
     /** @type {{ ref: string, role: string, name: string, context: string }[]} */
     const matches = [];
-    if (!q) return matches;
     /** @param {any} node @param {any} parent */
     const walk = (node, parent) => {
       if (matches.length >= max || node.t !== "el" || node.hidden) return;
       const role = ns.aria.roleOf(node);
-      if (role && node.el) {
+      if (role && node.el && (!wanted || role === wanted)) {
         const name = ns.aria.nameOf(node, role);
         const own = ns.aria.flatText(node, 400);
         const value = node.value && !ns.aria.isSensitiveField(node) ? String(node.value) : "";
@@ -53,5 +86,5 @@
     return { matches, url: String(root.location?.href ?? ""), title: String(doc.title ?? "") };
   }
 
-  ns.find = { find, findInModel, fold };
+  ns.find = { find, findInModel, fold, splitRole };
 })();

@@ -25,6 +25,26 @@ pub(crate) mod pairing;
 pub(crate) mod profiles;
 pub(crate) mod server;
 
+/// The app's one link manager, installed by whoever starts the listener (the Connect card, T8).
+/// The act tools find their link through it; without one a Mono's extension browser is
+/// unavailable.
+pub(crate) mod registry {
+    use super::manager::LinkManager;
+    use std::sync::Mutex;
+
+    static MANAGER: Mutex<Option<LinkManager>> = Mutex::new(None);
+
+    /// Makes `manager` the one the Mono runtimes use. The extension events of its receiver must
+    /// reach `gate::extension::act::dispatch_event`.
+    pub(crate) fn install(manager: LinkManager) {
+        *MANAGER.lock().unwrap_or_else(|e| e.into_inner()) = Some(manager);
+    }
+
+    pub(crate) fn manager() -> Option<LinkManager> {
+        MANAGER.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod fake_extension;
 

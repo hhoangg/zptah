@@ -13,8 +13,10 @@
 //! Typed values are only read to look for a card number and are never stored: the audit keeps the
 //! field kind and the length ([`audit::typed_summary`]).
 
+pub mod approval;
 pub mod audit;
 pub mod grants;
+pub mod rules;
 
 use super::risk::decide::{decide, effective, never_granted, Decision, DecisionInput};
 use super::risk::signals::{

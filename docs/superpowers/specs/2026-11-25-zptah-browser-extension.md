@@ -412,6 +412,7 @@ inside the extension (section 6.5).
 | `act.cancel` | `{prepare_id}` | `{}` | |
 | `dialog.respond` | `{tab, accept, prompt_text?}` | `{}` | Needs the debugger (section 6.4) |
 | `upload.put` | `{upload_id, seq, bytes_b64, last}` | `{}` | Chunks of at most 512 KiB for an approved upload |
+| `task.end` | `{}` | `{}` | A run of the Mono ended. The extension keeps its debugger sessions 2 minutes more (a new run of the conversation may use them) and then detaches (decision 4) |
 | `cursor.prefs` | `{}` | `{enabled, off_sites}` | Read only for the app |
 
 ```ts

@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 pub mod connect;
+pub mod copy;
 pub mod defense;
 pub mod gate;
 pub mod host_mode;
@@ -1080,6 +1081,9 @@ pub struct Runtime {
     pub route: String,
     /// Keeps the Mono's server from being stopped as idle while the run that resolved this uses it.
     pub lease: Option<server::Lease>,
+    /// The approval cards of a Mono that uses the extension backend (`trust::approval`); None for
+    /// the Playwright backend, whose cards come through [`Runtime::attach_approver`].
+    pub approvals: Option<std::sync::Arc<trust::approval::ApprovalQueue>>,
 }
 impl Runtime {
     /// Claude's entry: the Mono's running server over HTTP, or for a stdio runtime a command
@@ -1115,6 +1119,14 @@ impl Runtime {
     /// without a gate. Dropping the result stops the run from receiving them.
     pub fn attach_approver(&self) -> Option<gate::Attached> {
         self.gate.as_ref().map(|gate| gate.attach(&self.route))
+    }
+    /// Whether a person can answer a card in this run (false in plan mode, at read-only access
+    /// or without controls): an ask of the extension backend is a deny then. No effect for the
+    /// Playwright backend.
+    pub fn set_can_answer(&self, can: bool) {
+        if let Some(queue) = &self.approvals {
+            queue.set_can_answer(can);
+        }
     }
     /// Tells the gate a new turn starts on this run's route, with the user's own request text
     /// (never page content): taint and intents are tracked per turn.
@@ -1192,6 +1204,7 @@ pub fn probe_runtime(
         gate: None,
         route: gate::SHARED_ROUTE.into(),
         lease: None,
+        approvals: None,
     }
 }
 
@@ -1269,6 +1282,9 @@ fn attach(
     if !valid_profile_dir(&browser.profile_dir) {
         return Attach::Unavailable("no Chrome profile is chosen".into());
     }
+    if browser.uses_extension() {
+        return attach_extension(ctx, browser, database, servers);
+    }
     if env.chrome().is_none() {
         return Attach::Unavailable("Google Chrome was not found".into());
     }
@@ -1323,8 +1339,96 @@ fn attach(
         gate: Some(gate),
         route,
         lease: Some(lease),
+        approvals: None,
     })
 }
+/// The launch for a Mono that uses the zptah Browser extension (the preview switch is on): no
+/// Playwright server and no Chrome check, the gate talks to the paired profile's extension
+/// through the link manager. Everything that needs the link is looked up per request, so the
+/// browser coming and going does not need a new launch.
+fn attach_extension(
+    ctx: &crate::agent::MonoContext,
+    browser: &MonoBrowser,
+    database: PathBuf,
+    servers: &server::BrowserServers,
+) -> Attach {
+    attach_extension_with(ctx, browser, database, servers, links::registry::manager())
+}
+
+/// [`attach_extension`] with the link manager given (`None`: the link is not running).
+fn attach_extension_with(
+    ctx: &crate::agent::MonoContext,
+    browser: &MonoBrowser,
+    database: PathBuf,
+    servers: &server::BrowserServers,
+    manager: Option<links::manager::LinkManager>,
+) -> Attach {
+    let Some(manager) = manager else {
+        return Attach::Unavailable("the zptah Browser link is not running".into());
+    };
+    let store = MonoBrowserStore::at(database.clone());
+    let dir = output_dir(&ctx.root, &ctx.mono.id);
+    let _ = output::prepare(&dir);
+    output::sweep_keeping(&dir, &store.audit_screenshots(&ctx.mono.id));
+
+    let upstream = gate::upstream_for(&ctx.mono.id).unwrap_or_else(|| {
+        gate::ExtensionUpstream::for_profile(&ctx.mono.id, manager, &browser.profile_dir)
+    });
+    upstream.set_output_dir(dir.clone());
+    // The rules the gate applies: the soul's, reconciled with what the user confirmed.
+    let soul = load_files_soul(ctx);
+    let status = trust::rules::status(&store, &ctx.mono.id, &soul);
+    let queue = trust::approval::queue_for(&ctx.mono.id);
+    upstream.configure_act(
+        gate::ActConfig {
+            level: browser.trust.into(),
+            rules: status.active,
+            store: Some(store),
+            mono_label: ctx.mono.label(),
+            profile: Some(browser.profile_name.clone()).filter(|n| !n.is_empty()),
+            approval_timeout: gate::APPROVAL_TIMEOUT,
+            queue: queue.clone(),
+        },
+        gate::Origins::new(&browser.allowed_origins, &browser.blocked_origins),
+    );
+    let policy = browser
+        .policy()
+        .with_extension(true)
+        .with_show_actions(false);
+    let gate = match servers.gate_for_extension(&ctx.mono.id, upstream, policy) {
+        Ok(gate) => gate,
+        Err(error) => {
+            return Attach::Unavailable(format!("the browser gate failed to start: {error}"))
+        }
+    };
+    gate.set_workspace(gate::Workspace {
+        mono_id: ctx.mono.id.clone(),
+        output_dir: dir.clone(),
+        recipes_dir: recipes_dir(&ctx.root, &ctx.mono.id),
+        database,
+        recipe_options: recipe::runner::Options::default(),
+    });
+    let route = gate.route_for(crate::process::owner());
+    Attach::Ready(Runtime {
+        spec: ServerSpec::new(browser, &dir, None),
+        token: Secret::new(String::new()),
+        trust: browser.trust,
+        endpoint: Some(gate.url_for(&route)),
+        gate: Some(gate),
+        route,
+        lease: None,
+        approvals: Some(queue),
+    })
+}
+
+/// The text of the Mono's `SOUL.md`, or nothing when it cannot be read (no rules then).
+fn load_files_soul(ctx: &crate::agent::MonoContext) -> String {
+    super::load_files(&ctx.root, &ctx.mono)
+        .ok()
+        .and_then(|files| files.soul)
+        .unwrap_or_default()
+}
+
 /// The title of the Mono's Chrome tab group: the Mono's name.
 pub fn group_name(mono: &super::Mono) -> String {
     let name = prompt_name(&mono.label());

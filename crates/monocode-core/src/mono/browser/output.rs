@@ -7,6 +7,7 @@
 //!
 //! Recipes are kept elsewhere (see `recipe::store`), so a sweep here can never touch them.
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -39,6 +40,18 @@ pub fn prepare(dir: &Path) -> std::io::Result<()> {
 /// then the oldest ones beyond `max_files`, then subfolders left empty. Symlinks are never
 /// followed or removed through. Returns how many files went.
 pub fn sweep_with(dir: &Path, now: SystemTime, max_age: Duration, max_files: usize) -> usize {
+    sweep_keeping_with(dir, now, max_age, max_files, &HashSet::new())
+}
+
+/// [`sweep_with`] that never removes a file whose name is in `keep` (the screenshots that audit
+/// rows still point to) and does not count it toward `max_files`.
+pub fn sweep_keeping_with(
+    dir: &Path,
+    now: SystemTime,
+    max_age: Duration,
+    max_files: usize,
+    keep: &HashSet<String>,
+) -> usize {
     fn collect(
         dir: &Path,
         files: &mut Vec<(SystemTime, PathBuf)>,
@@ -64,6 +77,12 @@ pub fn sweep_with(dir: &Path, now: SystemTime, max_age: Duration, max_files: usi
     let mut files = Vec::new();
     let mut folders = Vec::new();
     collect(dir, &mut files, &mut folders, now);
+    files.retain(|(_, path)| {
+        !path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| keep.contains(n))
+    });
     files.sort();
     let mut removed = 0;
     let total = files.len();
@@ -83,6 +102,28 @@ pub fn sweep_with(dir: &Path, now: SystemTime, max_age: Duration, max_files: usi
 }
 pub fn sweep(dir: &Path) -> usize {
     sweep_with(dir, SystemTime::now(), MAX_AGE, MAX_FILES)
+}
+
+/// [`sweep`] that keeps the files named in `keep`: the screenshots of audit rows (spec 8.5), which
+/// live as long as their row does. The sweep itself knows nothing of the database, so the caller
+/// passes the names (see `MonoBrowserStore::audit_screenshots`).
+pub fn sweep_keeping(dir: &Path, keep: &HashSet<String>) -> usize {
+    sweep_keeping_with(dir, SystemTime::now(), MAX_AGE, MAX_FILES, keep)
+}
+
+/// Removes the named plain files directly inside `dir` (the screenshots of audit rows that
+/// retention deleted). A name with a path, a link or a missing file is skipped. Returns how many
+/// went.
+pub fn delete_files(dir: &Path, names: &[String]) -> usize {
+    names
+        .iter()
+        .filter(|name| safe_file_name(name).as_deref() == Some(name.as_str()))
+        .filter(|name| {
+            let path = dir.join(name);
+            std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file())
+                && std::fs::remove_file(&path).is_ok()
+        })
+        .count()
 }
 
 /// Removes every regular file of `dir` (the browser was turned off or the Mono was removed).

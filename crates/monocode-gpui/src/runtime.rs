@@ -692,11 +692,18 @@ fn run_turn_using(
                 prompt = discovery.prepend(prompt);
             }
         }
-        // Which Mono's real-browser calls to log, if its browser is on.
+        // Which Mono's real-browser calls to log, if its browser is on. The extension backend logs
+        // its own decisions in the gate (spec 8.5: one row per decision, from the place that
+        // decided), so a second row from the provider event is not written for it.
         let browser_audit_mono = settings
             .mono
             .as_ref()
-            .filter(|m| m.mono.browser.as_ref().is_some_and(|b| b.enabled))
+            .filter(|m| {
+                m.mono
+                    .browser
+                    .as_ref()
+                    .is_some_and(|b| b.enabled && !b.use_extension)
+            })
             .map(|m| m.mono.id.clone());
         let request = Request {
             kind,

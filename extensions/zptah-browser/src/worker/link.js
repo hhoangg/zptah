@@ -37,7 +37,7 @@ const APP_METHODS = new Set([
   "roster.set", "status.get", "stop.resume", "tabs.list", "tab.open", "tab.close", "tab.adopt",
   "tab.release", "page.snapshot", "page.read", "page.find", "page.screenshot", "page.wait", "nav.go",
   "nav.history", "act.prepare", "act.commit", "act.extend", "act.cancel", "dialog.respond",
-  "upload.put", "cursor.prefs",
+  "upload.put", "task.end", "cursor.prefs",
 ]);
 
 /** @param {unknown} v @returns {v is Frame} */

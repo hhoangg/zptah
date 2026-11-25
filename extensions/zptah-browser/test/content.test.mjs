@@ -180,6 +180,23 @@ test("find is diacritic-insensitive, returns role, name, context and refs", () =
   assert.equal(ns.find.findInModel(page, "o", 1, refs()).length, 1);
 });
 
+test("find takes a role prefix: `button buy` finds only buttons, a bare role lists them, an unmatched prefix falls back to text", () => {
+  const ns = load();
+  const page = E("body", {}, [
+    E("a", { href: "/buy" }, [T("Buy guide")]),
+    E("button", {}, [T("Buy now")]),
+    E("button", {}, [T("Cancel")]),
+    E("p", {}, [T("link to the shop")]),
+  ]);
+  assert.deepEqual(J(ns.find.findInModel(page, "button Buy", 10, refs()).map((x) => x.name)), ["Buy now"]);
+  assert.deepEqual(J(ns.find.findInModel(page, "BUTTON", 10, refs()).map((x) => x.name)), ["Buy now", "Cancel"]);
+  assert.deepEqual(J(ns.find.findInModel(page, "link Buy", 10, refs()).map((x) => x.name)), ["Buy guide"]);
+  // No button holds "guide", so the whole query is looked up as plain text; nothing says "button guide".
+  assert.deepEqual(J(ns.find.findInModel(page, "button guide", 10, refs()).map((x) => x.name)), []);
+  assert.deepEqual(J(ns.find.splitRole("button buy")), { role: "button", rest: "buy" });
+  assert.deepEqual(J(ns.find.splitRole("buy button")), { role: "", rest: "buy button" });
+});
+
 // ---- the DOM adapter against a hand-made DOM ----
 function fakeEl(tag, attrs = {}, kids = [], box = {}) {
   const el = {

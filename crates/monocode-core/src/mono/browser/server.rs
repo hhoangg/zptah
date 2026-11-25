@@ -186,6 +186,26 @@ impl BrowserServers {
         gates.insert(mono_id.to_owned(), gate.clone());
         Ok(gate)
     }
+    /// This Mono's gate in front of the zptah Browser extension: the one it has (updated to the
+    /// current policy and upstream), or a new one. The extension upstream decides every action
+    /// itself, so the policy carries [`gate::Policy::with_extension`].
+    pub(crate) fn gate_for_extension(
+        &self,
+        mono_id: &str,
+        upstream: Arc<gate::ExtensionUpstream>,
+        policy: gate::Policy,
+    ) -> Result<Arc<Gate>, String> {
+        let key = format!("extension-{:p}", Arc::as_ptr(&upstream));
+        let upstream: Arc<dyn gate::Upstream> = upstream;
+        let mut gates = self.gates.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(gate) = gates.get(mono_id) {
+            gate.configure(policy, &key, upstream);
+            return Ok(gate.clone());
+        }
+        let gate = Gate::start(upstream, policy, &key)?;
+        gates.insert(mono_id.to_owned(), gate.clone());
+        Ok(gate)
+    }
     /// The Mono's gate, if its browser has been started in this app session.
     pub fn gate(&self, mono_id: &str) -> Option<Arc<Gate>> {
         self.gates

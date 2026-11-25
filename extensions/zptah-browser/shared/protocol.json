@@ -651,6 +651,11 @@
       },
       "result": { "$ref": "#/$defs/Empty" }
     },
+    "task.end": {
+      "description": "A run of the Mono ended. The extension keeps its debugger sessions for 2 minutes (a new run of the conversation may follow) and then detaches them (decision 4).",
+      "params": { "type": "object", "properties": { "deadline_ms": { "$ref": "#/$defs/DeadlineMs" } } },
+      "result": { "$ref": "#/$defs/Empty" }
+    },
     "cursor.prefs": {
       "params": { "$ref": "#/$defs/Empty" },
       "result": {
