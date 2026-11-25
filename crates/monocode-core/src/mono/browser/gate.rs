@@ -1328,7 +1328,7 @@ impl Inner {
                 return tool_text(reason, true);
             }
             if self.calls.fetch_add(1, Ordering::Relaxed) % 25 == 24 {
-                self.sweep_output(&workspace);
+                self.sweep_output(workspace);
             }
         }
         let page_before = self.lock_state().page.clone();

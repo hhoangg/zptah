@@ -1757,7 +1757,7 @@ impl ExtensionUpstream {
     // ---- uploads ----
 
     fn upload_tool(&self, args: &Value) -> Result<Value, String> {
-        let tab = self.act_tab(args)?;
+        let _tab = self.act_tab(args)?;
         if self.act_config().level == BrowserLevel::ReadOnly {
             return Err(
                 "browser_file_upload is not available: this Mono can only read the browser.".into(),
