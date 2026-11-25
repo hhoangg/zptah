@@ -81,6 +81,7 @@ fn open(cx: &mut TestAppContext, with_chrome: bool) -> Card {
         exe: std::env::current_exe().unwrap(),
         flavor_dev: true,
         storage: Storage::Memory,
+        real_registry: false,
         opener: opener.clone(),
         socket_dir: None,
     }));
@@ -120,7 +121,11 @@ impl Card {
         self.service.status().phase
     }
     fn manifest_exists(&self) -> bool {
-        let dir = chrome_dir(&self.home.0).join("NativeMessagingHosts");
+        let dir = if cfg!(windows) {
+            self.home.0.join("app/browser-host")
+        } else {
+            chrome_dir(&self.home.0).join("NativeMessagingHosts")
+        };
         std::fs::read_dir(dir)
             .map(|mut d| d.next().is_some())
             .unwrap_or(false)
