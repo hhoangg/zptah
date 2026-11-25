@@ -1,46 +1,42 @@
 //! Tests of the app side of the link. Nothing here touches a real keychain, browser directory or
 //! the user's Chrome: keys and records are in memory and installs go to temp directories.
-#[cfg(unix)]
+#[cfg_attr(windows, allow(unused_imports))]
 use super::super::link::auth::{NONCE_LEN, PAIRING_TTL_MS};
-#[cfg(unix)]
+#[cfg_attr(windows, allow(unused_imports))]
 use super::super::link::protocol::{AuthResult, ErrorCode, Event, Method, ProtocolError};
 use super::super::peer::Flavor;
-#[cfg(unix)]
+#[cfg_attr(windows, allow(unused_imports))]
 use super::super::peer::PeerReport;
 use super::keystore::{
     keyring_service, FallbackKeyStore, LinkKeyStore, MemoryKeyStore, MonoSecretsKeyStore,
 };
-#[cfg(unix)]
+#[cfg_attr(windows, allow(unused_imports))]
 use super::manager::{
     Deps, LinkEvent, LinkManager, ManagerConfig, MemoryRecordStore, Refusal, RequestError,
 };
 use super::manager::{FileRecordStore, LinkRecord, LinkRecordStore};
-#[cfg(unix)]
+#[cfg_attr(windows, allow(unused_imports))]
 use super::pairing::PairingState;
 use super::pairing::{open_in_profile_args, pair_page_url, ProfileChoice};
 use serde_json::{json, Value};
 use std::path::PathBuf;
-#[cfg(unix)]
+#[cfg_attr(windows, allow(unused_imports))]
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(unix)]
+#[cfg_attr(windows, allow(unused_imports))]
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
-#[cfg(unix)]
+#[cfg_attr(windows, allow(unused_imports))]
 use std::time::Duration;
 
 const INSTANCE: &str = "0123456789abcdef0123456789abcdef";
 const OTHER_INSTANCE: &str = "fedcba9876543210fedcba9876543210";
-#[cfg(unix)]
 const NONCE: [u8; NONCE_LEN] = [7; NONCE_LEN];
-#[cfg(unix)]
 const WAIT: Duration = Duration::from_secs(5);
 
-#[cfg(unix)]
 fn nonce_text() -> String {
     super::super::link::auth::encode_bytes(&NONCE)
 }
 
-#[cfg(unix)]
 fn report() -> PeerReport {
     PeerReport {
         pid: 4242,
@@ -54,7 +50,6 @@ fn profile() -> ProfileChoice {
     ProfileChoice::new("Profile 1", "Work").unwrap()
 }
 
-#[cfg(unix)]
 struct Rig {
     manager: LinkManager,
     events: Receiver<LinkEvent>,
@@ -63,7 +58,6 @@ struct Rig {
     clock: Arc<AtomicU64>,
 }
 
-#[cfg(unix)]
 fn rig_with(flavor: Flavor, tweak: impl FnOnce(&mut ManagerConfig)) -> Rig {
     let keys = Arc::new(MemoryKeyStore::new());
     let records = Arc::new(MemoryRecordStore::new());
@@ -83,7 +77,6 @@ fn rig_with(flavor: Flavor, tweak: impl FnOnce(&mut ManagerConfig)) -> Rig {
     }
 }
 
-#[cfg(unix)]
 fn rig() -> Rig {
     rig_with(Flavor::Release, |_| {})
 }
@@ -737,6 +730,185 @@ mod over_socket {
 
         use super::super::super::fake_extension::FakeExtension;
         use crate::mono::browser::link::auth::PairingKey;
+    }
+}
+
+// ---- server over a real named pipe (Windows) ----
+
+#[cfg(windows)]
+mod over_pipe {
+    use super::super::fake_extension::FakeExtension;
+    use super::super::server::{LinkServer, Verifier};
+    use super::*;
+    use crate::mono::browser::link::auth::PairingKey;
+    use crate::mono::browser::peer::windows_pipe::OverlappedPipe;
+    use crate::mono::browser::peer::{PeerError, PeerPolicy};
+    use std::sync::atomic::AtomicU32;
+
+    fn unique_name() -> String {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        format!(
+            r"\\.\pipe\zptah-links-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    fn fake_verifier() -> Verifier {
+        Arc::new(|_| Ok(report()))
+    }
+
+    /// Opens the pipe the way the host does: overlapped, read and write.
+    fn client(name: &str) -> OverlappedPipe {
+        use std::os::windows::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED)
+            .open(name)
+            .expect("open the pipe");
+        OverlappedPipe::new(std::os::windows::io::OwnedHandle::from(file))
+    }
+
+    fn next(rig: &Rig, mut pred: impl FnMut(&LinkEvent) -> bool) -> LinkEvent {
+        loop {
+            let event = rig
+                .events
+                .recv_timeout(WAIT)
+                .expect("an event within the timeout");
+            if pred(&event) {
+                return event;
+            }
+        }
+    }
+
+    fn is_peer_refusal(event: &LinkEvent) -> bool {
+        matches!(
+            event,
+            LinkEvent::Refused {
+                refusal: Refusal::Peer(_),
+                ..
+            }
+        )
+    }
+
+    fn pair(rig: &Rig, name: &str) -> PairingKey {
+        rig.manager.start_pairing_with(profile(), NONCE);
+        let mut fake = FakeExtension::new(client(name), INSTANCE, PairingKey::generate());
+        let key = fake
+            .pair(&nonce_text())
+            .expect("pairing works over the pipe");
+        next(rig, |e| matches!(e, LinkEvent::Paired { .. }));
+        key
+    }
+
+    #[test]
+    fn a_verified_client_pairs_and_then_connects_over_the_pipe() {
+        let rig = rig_with(Flavor::Dev, |_| {});
+        let name = unique_name();
+        let server = LinkServer::start_named(rig.manager.clone(), &name, fake_verifier())
+            .expect("server starts");
+        assert_eq!(server.pipe_name(), name);
+        let key = pair(&rig, &name);
+        assert_eq!(rig.keys.len(), 1);
+
+        let mut fake = FakeExtension::new(client(&name), INSTANCE, key);
+        let result: AuthResult = fake.connect().expect("paired handshake over the pipe");
+        assert!(!result.stopped);
+        next(&rig, |e| matches!(e, LinkEvent::Connected { .. }));
+        fake.close();
+        next(&rig, |e| matches!(e, LinkEvent::Disconnected { .. }));
+    }
+
+    #[test]
+    fn requests_and_answers_cross_on_one_pipe_without_blocking_each_other() {
+        // The app reads on one thread and writes on others; a synchronous pipe handle would
+        // serialize them and deadlock once both directions are busy.
+        let rig = rig_with(Flavor::Dev, |_| {});
+        let name = unique_name();
+        let _server = LinkServer::start_named(rig.manager.clone(), &name, fake_verifier()).unwrap();
+        let key = pair(&rig, &name);
+        let mut fake = FakeExtension::new(client(&name), INSTANCE, key);
+        fake.connect().expect("handshake");
+        next(&rig, |e| matches!(e, LinkEvent::Connected { .. }));
+        let echo = std::thread::spawn(move || fake.serve_echo());
+        let handle = rig.manager.handle(INSTANCE).expect("live link");
+        let callers: Vec<_> = (0..4)
+            .map(|_| {
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..10 {
+                        handle
+                            .request(Method::StatusGet, None, json!({}), WAIT)
+                            .expect("answered");
+                    }
+                })
+            })
+            .collect();
+        for caller in callers {
+            caller.join().unwrap();
+        }
+        handle.close();
+        echo.join().unwrap();
+    }
+
+    #[test]
+    fn a_peer_that_fails_verification_gets_no_protocol_bytes() {
+        let rig = rig_with(Flavor::Dev, |_| {});
+        let name = unique_name();
+        let deny: Verifier = Arc::new(|_| Err(PeerError::UserMismatch));
+        let _server = LinkServer::start_named(rig.manager.clone(), &name, deny).unwrap();
+        let mut fake = FakeExtension::new(client(&name), INSTANCE, PairingKey::generate());
+        assert!(fake.is_closed_by_app());
+        next(&rig, is_peer_refusal);
+    }
+
+    #[test]
+    fn the_real_peer_check_refuses_a_process_whose_parent_is_not_a_browser() {
+        let rig = rig_with(Flavor::Dev, |_| {});
+        let name = unique_name();
+        // Release policy: the test process is our own executable, but its parent is no browser.
+        let policy = PeerPolicy::release();
+        let verifier: Verifier =
+            Arc::new(move |pipe| crate::mono::browser::peer::verify_host_peer(pipe, &policy));
+        let _server = LinkServer::start_named(rig.manager.clone(), &name, verifier).unwrap();
+        let mut fake = FakeExtension::new(client(&name), INSTANCE, PairingKey::generate());
+        assert!(fake.is_closed_by_app());
+        next(&rig, is_peer_refusal);
+    }
+
+    #[test]
+    fn a_second_server_on_the_same_pipe_is_refused() {
+        let rig = rig_with(Flavor::Dev, |_| {});
+        let name = unique_name();
+        let _first = LinkServer::start_named(rig.manager.clone(), &name, fake_verifier()).unwrap();
+        let second = LinkServer::start_named(rig.manager.clone(), &name, fake_verifier());
+        assert!(
+            second.is_err(),
+            "the first-instance flag is the single-instance guard"
+        );
+    }
+
+    #[test]
+    fn clients_connecting_one_after_another_each_find_a_listening_instance() {
+        let rig = rig_with(Flavor::Dev, |_| {});
+        let name = unique_name();
+        let deny: Verifier = Arc::new(|_| Err(PeerError::UserMismatch));
+        let _server = LinkServer::start_named(rig.manager.clone(), &name, deny).unwrap();
+        for _ in 0..3 {
+            let mut fake = FakeExtension::new(client(&name), INSTANCE, PairingKey::generate());
+            assert!(fake.is_closed_by_app());
+            next(&rig, is_peer_refusal);
+        }
+    }
+
+    #[test]
+    fn dropping_the_server_frees_the_pipe_name() {
+        let rig = rig_with(Flavor::Dev, |_| {});
+        let name = unique_name();
+        drop(LinkServer::start_named(rig.manager.clone(), &name, fake_verifier()).unwrap());
+        LinkServer::start_named(rig.manager.clone(), &name, fake_verifier())
+            .expect("the name is free again");
     }
 }
 
