@@ -33,6 +33,8 @@ const PAGES = {
 
 /** @type {{ name: string, ok: boolean, detail?: string }[]} */
 const results = [];
+/** What to print when a check failed: the temp dir (browser logs) and the app side. @type {{ base?: string, app?: { stderr: string } }} */
+const diag = {};
 /**
  * @param {string} name
  * @param {boolean} ok
@@ -181,6 +183,7 @@ async function main() {
 
   // A short path: the unix socket path must fit sun_path.
   const base = realpathSync(mkdtempSync(join(platform() === "darwin" ? "/tmp" : tmpdir(), "zpe-")));
+  diag.base = base;
   cleanups.push(() => removeTemp(base));
   const profile = join(base, "p");
   const socketDir = join(base, "s");
@@ -204,6 +207,7 @@ async function main() {
   // The app side.
   const appChild = spawn(appExe, ["--socket-dir", socketDir, "--browser-exe", chrome], { stdio: ["pipe", "pipe", "pipe"] });
   const app = new App(appChild);
+  diag.app = app;
   cleanups.push(async () => {
     await app.call({ cmd: "quit" }, 5000).catch(() => {});
     await stop(appChild);
@@ -285,6 +289,17 @@ async function main() {
   await stop(storeBrowser);
 }
 
+/** Browser logs (extension console and native messaging lines) and the app's stderr. */
+function printDiagnostics() {
+  console.log("--- diagnostics ---");
+  console.log(`app stderr:\n${diag.app?.stderr ?? "(none)"}`);
+  if (!diag.base) return;
+  for (const name of readdirSync(diag.base).filter((n) => n.startsWith("browser-"))) {
+    const lines = readFileSync(join(diag.base, name), "utf8").split("\n").filter((l) => /CONSOLE|zptah|native|Native|host/i.test(l));
+    console.log(`${name} (${lines.length} matching lines, last 60):\n${lines.slice(-60).join("\n")}`);
+  }
+}
+
 let failure = null;
 try {
   await main();
@@ -292,6 +307,7 @@ try {
   failure = err;
   console.error(`e2e error: ${err instanceof Error ? err.stack : err}`);
 } finally {
+  if (results.some((r) => !r.ok) || failure) printDiagnostics();
   await cleanup();
 }
 const failed = results.filter((r) => !r.ok);
