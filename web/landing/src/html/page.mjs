@@ -32,7 +32,7 @@ const REPO = 'https://github.com/hhoangg/zptah';
 /** Where the web app lives for a target: relative on the official host, absolute on the beta host. */
 export function appLinks(target) {
   const base = target === 'beta' ? SITE : '';
-  return { login: `${base}/login`, register: `${base}/register` };
+  return { login: `${base}/login`, register: `${base}/register`, privacy: `${base}/privacy` };
 }
 
 /** The data the demo script reads (JSON in a data block, so no inline script is needed). */
@@ -126,7 +126,7 @@ ${feats.map(([k, t, d, v, id], i) => `<article class="frow2 reveal-grp${i % 2 ? 
 <div class="opanel" data-os="win"><p>x86_64 installer.</p><a class="dl-row" href="${RELEASES}"><b>zptah-setup.exe</b><em>Windows x64</em>${hic('download')}</a></div>
 <a class="webrow" href="${link.login}">${hic('globe')}<span><b>Prefer the browser?</b> Open the web app at zptah.app, pair your desktop and use it from a phone.</span></a></div></div></div></section>
 </main>
-<footer><div class="wrap fw"><div class="fl"><img src="${APP_ICON}" alt="" width="22" height="22"><b>zptah</b><span>MIT licensed</span></div><div class="fr"><a href="${REPO}">GitHub</a><a href="${RELEASES}">Releases</a><a href="${link.login}">Web app</a></div><p class="cr">Built on the work of the open source authors of the project zptah grew from. Thank you.</p></div></footer>
+<footer><div class="wrap fw"><div class="fl"><img src="${APP_ICON}" alt="" width="22" height="22"><b>zptah</b><span>MIT licensed</span></div><div class="fr"><a href="${REPO}">GitHub</a><a href="${RELEASES}">Releases</a><a href="${link.login}">Web app</a><a href="${link.privacy}">Privacy</a></div><p class="cr">Built on the work of the open source authors of the project zptah grew from. Thank you.</p></div></footer>
 ${changeTemplates()}
 <script type="application/json" id="landing-data">${demoData()}</script>
 <script type="module" src="/landing/js/main.js"></script>

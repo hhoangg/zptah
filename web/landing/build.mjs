@@ -5,6 +5,7 @@
 // Output under DIR (default landing/dist):
 //   landing/index.html        the page (served at /landing/ and, by the Worker, at / and /home; web/worker/src/landing.ts)
 //   landing/landing.css       src/styles/*.css, concatenated in file name order
+//   landing/privacy/index.html  the privacy policy of the zptah Browser extension (served at /privacy by web/worker/src/landing.ts)
 //   landing/js/*.js           src/js/*.js as native ES modules plus the blocking boot.js (no bundler)
 //   landing/app-icon.png, landing/og.png
 // `--target prod` also writes robots.txt and sitemap.xml at the root of DIR (the app's assets directory). `site` (the
@@ -47,12 +48,16 @@ export const BETA_ROBOTS = 'User-agent: *\nDisallow: /\n';
 export async function build({ target = 'prod', out, site = 'https://zptah.app' }) {
   if (target !== 'prod' && target !== 'beta') throw new Error(`unknown target ${target}`);
   const { renderPage } = await import('./src/html/page.mjs');
+  const { renderPrivacy } = await import('./src/html/privacy.mjs');
   const landing = path.join(out, 'landing');
   rmSync(landing, { recursive: true, force: true });
   mkdirSync(path.join(landing, 'js'), { recursive: true });
 
   const page = renderPage(target, site);
   writeFileSync(path.join(landing, 'index.html'), page);
+  const privacy = renderPrivacy(target, site);
+  mkdirSync(path.join(landing, 'privacy'), { recursive: true });
+  writeFileSync(path.join(landing, 'privacy', 'index.html'), privacy);
 
   const css = readdirSync(path.join(src, 'styles'))
     .filter((f) => f.endsWith('.css'))
@@ -71,10 +76,12 @@ export async function build({ target = 'prod', out, site = 'https://zptah.app' }
   if (target === 'prod') {
     // Served from the site root next to the app's own files (the Worker's assets directory).
     writeFileSync(path.join(out, 'robots.txt'), readFileSync(path.join(src, 'robots.txt'), 'utf8').replaceAll('__SITE__', site));
-    writeFileSync(path.join(out, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url>\n    <loc>${site}/</loc>\n  </url>\n</urlset>\n`);
+    writeFileSync(path.join(out, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url>\n    <loc>${site}/</loc>\n  </url>\n  <url>\n    <loc>${site}/privacy</loc>\n  </url>\n</urlset>\n`);
   }
   if (target === 'beta') {
     writeFileSync(path.join(out, 'index.html'), page);
+    mkdirSync(path.join(out, 'privacy'), { recursive: true });
+    writeFileSync(path.join(out, 'privacy', 'index.html'), privacy);
     writeFileSync(path.join(out, 'robots.txt'), BETA_ROBOTS);
     writeFileSync(path.join(out, '_headers'), await betaHeaders());
     for (const f of FAVICONS) copyFileSync(path.join(here, '..', 'app', 'public', f), path.join(out, f));
