@@ -213,7 +213,7 @@ async function loggingCodesign(t) {
   return { ...f, signLines: async () => (await readFile(log, "utf8").catch(() => "")).trim().split("\n").filter(Boolean) };
 }
 
-test("selfsigned mode signs with the identity, no timestamp, no runtime, no entitlements", { skip: process.platform === "win32" }, async (t) => {
+test("selfsigned mode signs with the identity, hardened runtime, entitlements and no timestamp", { skip: process.platform === "win32" }, async (t) => {
   const f = await loggingCodesign(t);
   const result = f.run("release", {
     MONOCODE_NATIVE_SIGNING_MODE: "selfsigned",
@@ -221,8 +221,7 @@ test("selfsigned mode signs with the identity, no timestamp, no runtime, no enti
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const [line] = await f.signLines();
-  assert.match(line, /^--force --sign ABCDEF0123456789ABCDEF0123456789ABCDEF01 --timestamp=none .*zptah\.app$/);
-  assert.ok(!/--options|--entitlements/.test(line));
+  assert.match(line, /^--force --sign ABCDEF0123456789ABCDEF0123456789ABCDEF01 --options runtime --timestamp=none --entitlements assets\/native\/Entitlements\.plist .*zptah\.app$/);
 });
 
 test("selfsigned mode passes the keychain to codesign", { skip: process.platform === "win32" }, async (t) => {
@@ -234,7 +233,7 @@ test("selfsigned mode passes the keychain to codesign", { skip: process.platform
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const [line] = await f.signLines();
-  assert.match(line, /--sign Some CN --timestamp=none --keychain \/tmp\/k\.keychain-db /);
+  assert.match(line, /--sign Some CN --options runtime --timestamp=none --entitlements assets\/native\/Entitlements\.plist --keychain \/tmp\/k\.keychain-db /);
 });
 
 test("selfsigned mode without an identity fails and never signs ad-hoc", { skip: process.platform === "win32" }, async (t) => {
