@@ -7,6 +7,7 @@ mod browser_approval_tests;
 mod browser_connect;
 #[cfg(test)]
 mod browser_connect_tests;
+mod browser_migration;
 #[cfg(test)]
 mod browser_tests;
 mod browser_ui;

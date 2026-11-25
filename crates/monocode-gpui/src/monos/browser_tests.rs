@@ -536,36 +536,154 @@ fn safety_rules_can_be_edited_and_invalid_origins_are_refused(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-fn the_trust_selector_shows_three_levels_with_an_explanation_each(cx: &mut TestAppContext) {
+fn the_trust_selector_offers_only_read_only_and_act_for_me(cx: &mut TestAppContext) {
     let mut page = open(cx);
     page.enable();
     // The old "ask before send, post, delete or pay" switch and its read-only note are gone.
     assert!(!page.on("mono-browser-confirm") && !page.on("mono-browser-full-access-note"));
-    for trust in BrowserTrust::ALL {
+    for trust in [BrowserTrust::ReadOnly, BrowserTrust::AskRisky] {
         let selector = browser_ui::trust_selector(trust);
         assert!(page.on(selector), "{selector}");
     }
+    assert!(!page.on(browser_ui::trust_selector(BrowserTrust::Autonomous)));
     // Each row has its own explanation, and one note says what is enforced and what is trusted.
     for selector in [
         "mono-browser-trust-read-only-text",
         "mono-browser-trust-ask-risky-text",
-        "mono-browser-trust-autonomous-text",
         "mono-browser-trust-note",
     ] {
         assert!(page.on(selector), "{selector}");
     }
+    assert!(!page.on("mono-browser-trust-autonomous-text"));
     assert_eq!(page.setting().unwrap().trust, BrowserTrust::AskRisky);
 
-    for trust in [
-        BrowserTrust::ReadOnly,
-        BrowserTrust::Autonomous,
-        BrowserTrust::AskRisky,
-    ] {
+    for trust in [BrowserTrust::ReadOnly, BrowserTrust::AskRisky] {
         // The rows are far below the fold of the test window, so the row's action is called
         // directly; the click calls the same method.
         page.manager(|m, cx| m.browser_set_trust(trust, cx));
         assert_eq!(page.setting().unwrap().trust, trust);
     }
+}
+
+#[gpui::test]
+fn a_stored_legacy_level_displays_as_act_for_me(cx: &mut TestAppContext) {
+    use super::browser_migration::{CHOICES, shows_as, trust_label};
+    use monocode_core::mono::browser::copy::Lang;
+    let mut page = open(cx);
+    page.enable();
+    page.manager(|m, cx| m.browser_edit(cx, |b| b.trust = BrowserTrust::Autonomous));
+    // Stored as is (the gate decides what it means), shown as the one acting choice.
+    let stored = page.setting().unwrap().trust;
+    assert_eq!(stored, BrowserTrust::Autonomous);
+    let shown: Vec<_> = CHOICES
+        .into_iter()
+        .filter(|c| shows_as(stored, *c))
+        .collect();
+    assert_eq!(shown, [BrowserTrust::AskRisky]);
+    assert_eq!(trust_label(BrowserTrust::AskRisky, Lang::En), "Act for me");
+    assert_eq!(trust_label(BrowserTrust::ReadOnly, Lang::En), "Read only");
+    assert_ne!(
+        trust_label(BrowserTrust::AskRisky, Lang::Vi),
+        trust_label(BrowserTrust::AskRisky, Lang::En)
+    );
+    assert!(page.on(browser_ui::trust_selector(BrowserTrust::AskRisky)));
+    let read_only = shows_as(BrowserTrust::ReadOnly, BrowserTrust::ReadOnly);
+    assert!(read_only && !shows_as(BrowserTrust::ReadOnly, BrowserTrust::AskRisky));
+}
+
+/// A migrated Mono: the notice, the offer and a profile with no connection.
+fn migrated() -> MonoBrowser {
+    MonoBrowser {
+        enabled: true,
+        profile_dir: "Default".into(),
+        migration_notice: true,
+        suggest_new_defaults: true,
+        migrated: 1,
+        ..MonoBrowser::default()
+    }
+}
+
+#[gpui::test]
+fn the_migration_notice_shows_until_dismissed_and_the_dismissal_is_saved(cx: &mut TestAppContext) {
+    let mut page = open(cx);
+    page.enable();
+    assert!(
+        !page.on("mono-browser-notice-dismiss"),
+        "a new Mono has no notice"
+    );
+    page.manager(|m, cx| m.browser_edit(cx, |b| *b = migrated()));
+    for id in [
+        "mono-browser-notice-dismiss",
+        "mono-browser-notice-trust",
+        "mono-browser-notice-tab-group",
+    ] {
+        assert!(page.on(id), "{id}");
+    }
+    page.click("mono-browser-notice-dismiss");
+    assert!(!page.setting().unwrap().migration_notice);
+    assert!(!page.on("mono-browser-notice-dismiss"));
+    // It is on disk: a fresh load of the roster does not bring it back.
+    for _ in 0..200 {
+        page.visual.run_until_parked();
+        let saved = mono::Roster::load(&locked(&page.s.store).unwrap()).unwrap();
+        if saved
+            .get(&page.s.id)
+            .and_then(|m| m.browser.as_ref())
+            .is_some_and(|b| !b.migration_notice)
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("the dismissal was not saved");
+}
+
+#[gpui::test]
+fn switch_and_keep_resolve_the_blocked_list_offer_once(cx: &mut TestAppContext) {
+    let mut page = open(cx);
+    page.enable();
+    let mut custom = migrated();
+    custom.blocked_origins.push("https://bank.example".into());
+    page.manager(|m, cx| m.browser_edit(cx, |b| *b = custom.clone()));
+    assert!(page.on("mono-browser-defaults-switch") && page.on("mono-browser-defaults-keep"));
+    page.manager(|m, cx| m.browser_switch_defaults(cx));
+    let after = page.setting().unwrap();
+    assert!(!after.suggest_new_defaults);
+    assert!(
+        after
+            .blocked_origins
+            .iter()
+            .any(|o| o == "https://bank.example")
+    );
+    assert!(
+        !after
+            .blocked_origins
+            .iter()
+            .any(|o| o == "https://www.paypal.com")
+    );
+    assert!(!page.on("mono-browser-defaults-switch"));
+
+    page.manager(|m, cx| m.browser_edit(cx, |b| *b = custom.clone()));
+    page.manager(|m, cx| m.browser_keep_list(cx));
+    let kept = page.setting().unwrap();
+    assert!(!kept.suggest_new_defaults);
+    assert_eq!(kept.blocked_origins, custom.blocked_origins);
+    assert!(!page.on("mono-browser-defaults-keep"));
+}
+
+#[gpui::test]
+fn a_migrated_mono_without_a_connection_shows_reconnect_needed(cx: &mut TestAppContext) {
+    let mut page = open(cx);
+    page.enable();
+    assert!(
+        !page.on("mono-browser-reconnect"),
+        "no profile, nothing to reconnect"
+    );
+    page.manager(|m, cx| m.browser_edit(cx, |b| *b = migrated()));
+    assert!(page.setting().unwrap().needs_reconnect());
+    assert!(page.on("mono-browser-reconnect"));
+    page.manager(|m, cx| m.browser_edit(cx, |b| b.connection = Some("link-1".into())));
+    assert!(!page.on("mono-browser-reconnect"));
 }
 
 #[gpui::test]
@@ -675,7 +793,8 @@ fn the_picker_changes_the_profile_when_profiles_are_listed(cx: &mut TestAppConte
     page.enable();
     page.choose("Default");
     assert_eq!(page.setting().unwrap().profile_dir, "Default");
-    page.click("mono-browser-profile");
+    // The "Reconnect needed" card above pushes the select down: scroll to it first.
+    page.tap("mono-browser-profile");
     assert!(page.ui(|u| u.select_is_open()));
     page.choose("Profile 6");
     let setting = page.setting().unwrap();

@@ -13,6 +13,7 @@ use crate::{
     popover::{Choice, ChoiceEvent, Choices, Popover},
 };
 use gpui::{Div, Stateful};
+use monocode_core::mono::browser::copy;
 use monocode_core::mono::browser::recipe::manage::DryRunReport;
 use monocode_core::mono::browser::{
     self, AuditEntry, BrowserTrust, Check, ChromeProfile, MonoBrowser, MonoBrowserStore, PrereqEnv,
@@ -32,6 +33,7 @@ pub(super) fn trust_selector(trust: BrowserTrust) -> &'static str {
     match trust {
         BrowserTrust::ReadOnly => "mono-browser-trust-read-only",
         BrowserTrust::AskRisky => "mono-browser-trust-ask-risky",
+        // Not a shown choice any more; the id stays so the match is complete.
         BrowserTrust::Autonomous => "mono-browser-trust-autonomous",
     }
 }
@@ -44,7 +46,10 @@ fn trust_row(trust: BrowserTrust, selected: bool, cx: &mut Context<Monos>) -> An
         .id(selector)
         .debug_selector(move || selector.into())
         .role(Role::RadioButton)
-        .aria_label(trust.label())
+        .aria_label(super::browser_migration::trust_label(
+            trust,
+            copy::app_language(),
+        ))
         .aria_selected(selected)
         .flex()
         .items_start()
@@ -82,7 +87,10 @@ fn trust_row(trust: BrowserTrust, selected: bool, cx: &mut Context<Monos>) -> An
                         .text_size(px(13.))
                         .line_height(px(20.))
                         .text_color(content(0.9))
-                        .child(trust.label()),
+                        .child(super::browser_migration::trust_label(
+                            trust,
+                            copy::app_language(),
+                        )),
                 )
                 .child(note(format!("{selector}-text"), trust.explanation(), 0.5)),
         )
@@ -895,6 +903,7 @@ impl Monos {
                 .into_any_element(),
             );
         }
+        sections.extend(self.browser_notice_card(&setting, cx));
         let toggle = switch_track("mono-browser-enabled", "Use the browser", setting.enabled)
             .debug_selector(|| "mono-browser-enabled".into())
             .cursor_pointer()
@@ -910,6 +919,7 @@ impl Monos {
                 .into_any_element(),
         );
         if setting.enabled {
+            sections.extend(self.browser_reconnect_card(&setting, cx));
             sections.extend(self.browser_connect_card(cx));
             sections.extend(self.browser_extension_cards(mono, &setting, cx));
             sections.push(self.browser_prerequisites(cx));
@@ -1316,10 +1326,14 @@ impl Monos {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let rows: Vec<AnyElement> = BrowserTrust::ALL
+        let rows: Vec<AnyElement> = super::browser_migration::CHOICES
             .into_iter()
-            .map(|trust| trust_row(trust, setting_.trust == trust, cx))
+            .map(|trust| {
+                let selected = super::browser_migration::shows_as(setting_.trust, trust);
+                trust_row(trust, selected, cx)
+            })
             .collect();
+        let suggest = self.browser_suggest_card(setting_, cx);
         let blocked = self.browser_origin_card(false, &setting_.blocked_origins, window, cx);
         let allowed = self.browser_origin_card(true, &setting_.allowed_origins, window, cx);
         div()
@@ -1337,6 +1351,7 @@ impl Monos {
                 .px_1()
                 .pb_2(),
             )
+            .children(suggest)
             .child(blocked)
             .child(allowed)
             .into_any_element()
