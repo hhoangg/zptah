@@ -39,6 +39,7 @@ const dbg = createDebugger({
   now: Date.now,
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   emit: (method, params) => void link.sendEvent(method, params),
+  isStopped: () => link.stopped === true,
 });
 const read = registerReadPath(link, { dbg });
 const acts = registerActPath(link, {

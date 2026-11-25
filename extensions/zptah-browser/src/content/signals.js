@@ -297,5 +297,8 @@
     };
   }
 
-  ns.signals = { gather, elementSignals, formSignals, isPassword, describe, submitControlOf, attr, clip, textOf };
+  /** Field attributes of an input-like element, else null. @param {any} el */
+  const fieldAttrsOf = (el) => (el && ["input", "textarea", "select"].includes(String(el.localName ?? "").toLowerCase()) ? fieldAttrs(el) : null);
+
+  ns.signals = { fieldAttrsOf, gather, elementSignals, formSignals, isPassword, describe, submitControlOf, attr, clip, textOf };
 })();

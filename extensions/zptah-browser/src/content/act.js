@@ -306,7 +306,10 @@
     const type = (attr(el, "type") ?? "").toLowerCase();
     if (f.type === "checkbox" || f.type === "radio") {
       const want = f.type === "radio" ? true : /^(true|1|on|yes|checked)$/i.test(f.value);
-      if ((el.checked === true) !== want) el.click();
+      if ((el.checked === true) !== want) {
+        requireVisibleTarget(el);
+        el.click();
+      }
       return el.checked === want;
     }
     if (f.type === "combobox" && tagOf(el) === "select") return doSelect(el, [f.value]);
@@ -532,20 +535,22 @@
     return { x, y, editable: isEditableHost(el), password: ns.signals.isPassword(el) };
   }
 
-  /** Focuses the prepared field for debugger typing and reports whether it is a password field. @param {{ token: string, key: string }} a */
+  /** Focuses the prepared field for debugger typing and reports whether it is a password field. @param {{ token: string, key: string, which?: number }} a */
   function focusTarget(a) {
     const { els } = recheck(a);
-    const el = els[0];
+    const el = els[a.which ?? 0] ?? els[0];
+    // The worker classifies the field attributes with the lexicon too (a text field labelled "Password").
+    const field = ns.signals.fieldAttrsOf(el);
     if (ns.signals.isPassword(el)) throw new ActError("E_PASSWORD_FIELD", "zptah Browser never types into password fields.");
     el.focus?.({ preventScroll: true });
-    return { focused: root.document.activeElement === el };
+    return { focused: root.document.activeElement === el, field };
   }
 
   /** The state of the focused element, for the password check before each key or text. */
   function active() {
     let el = root.document.activeElement;
     while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
-    return { password: ns.signals.isPassword(el), tag: tagOf(el), editable: el ? isEditableHost(el) : false };
+    return { password: ns.signals.isPassword(el), tag: tagOf(el), editable: el ? isEditableHost(el) : false, field: el ? ns.signals.fieldAttrsOf(el) : null };
   }
 
   /** @param {{ token: string }} a */

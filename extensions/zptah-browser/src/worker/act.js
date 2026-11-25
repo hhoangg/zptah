@@ -64,7 +64,7 @@ export function registerActPath(link, deps) {
   const dbg = deps.dbg ?? createDebugger({ api, now, sleep, emit: (m, p) => void link.sendEvent(m, p) });
   const trustedHosts = new Set(deps.trustedHosts ?? []);
 
-  /** @typedef {{ id: string, mono: string, tab: number, frameId: number, refs: string[], action: any, generation: number, url: string, frameUrl: string, digest: string, extRisk: string[], created: number, expires: number, state: "prepared" | "committed_once", afterUrl?: string, valid: boolean }} Prepare */
+  /** @typedef {{ id: string, mono: string, tab: number, frameId: number, refs: string[], action: any, generation: number, url: string, frameUrl: string, digest: string, extRisk: string[], created: number, expires: number, state: "prepared" | "committed_once", afterUrl?: string, valid: boolean, inFlight?: boolean, dispatched?: boolean }} Prepare */
   /** @type {Map<string, Prepare>} */
   const records = new Map();
   /** @type {Map<number, { since: number, prepare_id: string }>} */
@@ -146,6 +146,7 @@ export function registerActPath(link, deps) {
 
   /** The tab has not changed since the prepare. @param {Prepare} rec @param {RosterEntry} entry */
   async function sameTab(rec, entry) {
+    if (entry.level !== "act") throw new ZptahError("E_UNSUPPORTED", "This Mono can only read the browser.");
     const tab = await getReadableTab(api, entry, rec.tab);
     if (ownerOf(tab.id) !== entry.id) throw new ZptahError("E_NOT_OWNER", "This Mono does not own that tab.");
     if (tabUrl(tab) !== rec.url) throw new ZptahError("E_STALE_PREPARE", "The tab moved to another address since the prepare.");
@@ -197,8 +198,9 @@ export function registerActPath(link, deps) {
     } else if (kind === "upload") {
       for (const c of extRisk(lexicon, { kind: "upload" }, main.el, main.form, page)) risk.add(c);
     } else if (kind === "press") {
-      if (raw.password && keyInsertsText(action.key)) throw new ZptahError("E_PASSWORD_FIELD", PASSWORD_TEXT);
+      if ((raw.password || fieldKind === "password") && keyInsertsText(action.key)) throw new ZptahError("E_PASSWORD_FIELD", PASSWORD_TEXT);
     }
+    if (kind === "press" && isPaste(action.key)) risk.add("credential_entry");
     /** @type {{ e: any, f: any } | null} */
     let submit = null;
     const submits = (kind === "type" && action.submit === true) || (kind === "press" && /(^|\+)Enter$/.test(action.key));
@@ -218,7 +220,16 @@ export function registerActPath(link, deps) {
     const k = parts[parts.length - 1];
     const mods = parts.slice(0, -1);
     if (mods.some((m) => /^(Control|Ctrl|Meta|Command)$/.test(m))) return /^[vVxX]$/.test(k);
+    if (mods.includes("Shift") && k === "Insert") return true;
     return TEXT_KEYS.test(k);
+  }
+
+  /** Paste shortcuts put clipboard content into a field: they ask like other credential entry. @param {string} key */
+  function isPaste(key) {
+    const parts = key.split("+");
+    const k = parts[parts.length - 1];
+    const mods = parts.slice(0, -1);
+    return (/^[vV]$/.test(k) && mods.some((m) => /^(Control|Ctrl|Meta|Command)$/.test(m))) || (k === "Insert" && mods.includes("Shift"));
   }
 
   /** @param {any} action */
@@ -370,12 +381,20 @@ export function registerActPath(link, deps) {
     const rec = records.get(String(p.prepare_id));
     if (!rec || rec.mono !== entry.id || !rec.valid) throw new ZptahError("E_STALE_PREPARE", "That prepared action is unknown or has expired. Prepare it again.");
     const input = p.input === "trusted" ? "trusted" : "auto";
+    // One commit at a time per prepare: a commit that timed out outside keeps running here, and
+    // a second one must not run the action again.
+    if (rec.inFlight) throw new ZptahError("E_BUSY", "That prepared action is already being committed.");
+    rec.inFlight = true;
+    rec.dispatched = false;
     try {
       return await commitRecord(entry, rec, p, input);
     } catch (err) {
-      // A commit that failed before touching the page keeps its prepare, except when the page moved.
-      if (err instanceof ZptahError && err.code === "E_STALE_PREPARE") drop(rec);
+      // A commit that failed before touching the page keeps its prepare, except when the page
+      // moved, or when the input was already dispatched (the outcome is unknown: no second run).
+      if (rec.dispatched || (err instanceof ZptahError && err.code === "E_STALE_PREPARE")) drop(rec);
       throw err;
+    } finally {
+      rec.inFlight = false;
     }
   }
 
@@ -393,6 +412,7 @@ export function registerActPath(link, deps) {
     // Re-gather everything and compare. A hung answer here means a dialog is already open.
     const attachedBefore = dbg.isAttached(tab.id);
     const first = await withinDialogWait(content(tab.id, rec.frameId, "act_revalidate", { token: rec.id }), tab, attachedBefore);
+    assertLive(rec);
     if (first === TIMED_OUT) throw new ZptahError("E_DIALOG_SUSPECTED", `${DIALOG_TEXT} (Nothing was done.)`);
     vetFrame(entry, rec.frameId, first.url);
     if (rec.state === "committed_once" && (first.mutations ?? 0) > 0) throw new ZptahError("E_STALE_PREPARE", "The page changed after the first try, so it is not retried with trusted input.");
@@ -409,20 +429,26 @@ export function registerActPath(link, deps) {
     const action = rec.action;
     const files = action.kind === "upload" ? takeUpload(action, rec.mono) : undefined;
     const useDebugger = input === "trusted" || dbg.isSticky(tab.id) || action.kind === "drag" || trustedHosts.has(hostOf(rec.url));
+    assertLive(rec);
     const contentOnly = action.kind === "upload" || action.kind === "scroll" || action.kind === "select";
     /** @type {Record<string, any>} */
     let result;
     let attemptedUntrusted = false;
     if (contentOnly || !useDebugger) {
       attemptedUntrusted = true;
+      assertLive(rec);
+      rec.dispatched = true;
       const r = await runContent(rec, tab, first.key, files);
       if (r === NEEDS_DEBUGGER) {
         attemptedUntrusted = false;
+        rec.dispatched = false;
+        assertLive(rec);
         result = await runDebugger(entry, rec, tab, first.key, input);
       } else {
         result = r;
       }
     } else {
+      assertLive(rec);
       result = await runDebugger(entry, rec, tab, first.key, input);
     }
     // From here the action ran. A trusted run uses the prepare up; an untrusted one that did
@@ -437,9 +463,16 @@ export function registerActPath(link, deps) {
       effects.hint = effects.hint ?? "Nothing visibly changed. If the page ignored it, retry once with input: trusted.";
     } else {
       drop(rec);
+      if (action.kind === "upload") uploads.delete(action.upload_id);
     }
     dbg.touch(tab.id);
     return { url: String(fresh ? tabUrl(fresh) : result.url ?? rec.url).slice(0, 8192), title: String(fresh?.title ?? result.title ?? "").slice(0, 8192), effects };
+  }
+
+  /** Stop (or a cancel) while a commit runs: nothing more is dispatched. @param {Prepare} rec */
+  function assertLive(rec) {
+    if (link.stopped) throw new ZptahError("E_STOPPED", "zptah Browser is stopped.");
+    if (!records.has(rec.id)) throw new ZptahError("E_STALE_PREPARE", "That prepared action was cancelled.");
   }
 
   /** @param {string} url */
@@ -527,6 +560,12 @@ export function registerActPath(link, deps) {
     ];
   }
 
+  /** A content answer about a field: password by attribute, or by what the lexicon reads in its label and name. @param {any} r */
+  function isPasswordResult(r) {
+    if (r?.password === true) return true;
+    return Boolean(r?.field && lexicon && classifyField(lexicon, r.field) === "password");
+  }
+
   /**
    * The password rule on the focused element, right before each key or text goes out (6.5 rule 4).
    * @param {number} tabId @param {RosterEntry} entry
@@ -535,7 +574,7 @@ export function registerActPath(link, deps) {
     const ids = (await eligibleFrames(api, tabId, entry)).map((f) => f.frameId);
     if (!ids.includes(0)) ids.unshift(0);
     const answers = await runInFrames(api, tabId, ids, "act_active", {});
-    if (answers.some((a) => a.result?.password === true)) throw new ZptahError("E_PASSWORD_FIELD", PASSWORD_TEXT);
+    if (answers.some((a) => isPasswordResult(a.result))) throw new ZptahError("E_PASSWORD_FIELD", PASSWORD_TEXT);
   }
 
   /**
@@ -553,6 +592,8 @@ export function registerActPath(link, deps) {
     // The infobar changed the layout: the content script measures again for every point.
     await dbg.send(tab.id, "Emulation.setFocusEmulationEnabled", { enabled: true });
     await content(tab.id, rec.frameId, "act_observe", { token: rec.id });
+    assertLive(rec);
+    rec.dispatched = true;
     const ctx = { token: rec.id, key };
     const point = (/** @type {number} */ which) => content(tab.id, rec.frameId, "act_locate", { ...ctx, which });
     /** @type {string | undefined} */
@@ -587,10 +628,13 @@ export function registerActPath(link, deps) {
         }
         case "type":
         case "fill": {
-          const fields = action.kind === "type" ? [{ text: action.text }] : action.fields.filter((/** @type {any} */ f) => f.type === "text" || f.type === "combobox").map((/** @type {any} */ f) => ({ text: f.value }));
+          const fields = action.kind === "type"
+            ? [{ text: action.text, which: 0 }]
+            : action.fields.map((/** @type {any} */ f, /** @type {number} */ i) => ({ f, which: i })).filter((/** @type {any} */ x) => x.f.type === "text" || x.f.type === "combobox").map((/** @type {any} */ x) => ({ text: x.f.value, which: x.which }));
           if (action.kind === "fill" && fields.length !== action.fields.length) hint = "Checkboxes, radios and sliders are set without the debugger; only text fields were typed.";
           for (const f of fields) {
-            await content(tab.id, rec.frameId, "act_focus", ctx);
+            const focused = await content(tab.id, rec.frameId, "act_focus", { ...ctx, which: f.which });
+            if (isPasswordResult(focused)) throw new ZptahError("E_PASSWORD_FIELD", PASSWORD_TEXT);
             await refusePasswordFocus(tab.id, entry);
             await dbg.send(tab.id, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, commands: ["selectAll"] });
             await dbg.send(tab.id, "Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65 });
@@ -608,10 +652,12 @@ export function registerActPath(link, deps) {
           break;
         }
         case "press": {
-          if (action.ref !== undefined) await content(tab.id, rec.frameId, "act_focus", ctx).catch((e) => {
-            if (e instanceof ZptahError && e.code === "E_PASSWORD_FIELD" && !keyInsertsText(action.key)) return null;
-            throw e;
-          });
+          if (action.ref !== undefined) {
+            await content(tab.id, rec.frameId, "act_focus", ctx).catch((e) => {
+              if (e instanceof ZptahError && e.code === "E_PASSWORD_FIELD" && !keyInsertsText(action.key)) return null;
+              throw e;
+            });
+          }
           if (keyInsertsText(action.key)) await refusePasswordFocus(tab.id, entry);
           for (const ev of keyEvents(action.key)) await dbg.send(tab.id, "Input.dispatchKeyEvent", ev);
           break;
@@ -645,8 +691,9 @@ export function registerActPath(link, deps) {
     expire();
     const rec = records.get(String(p.prepare_id));
     if (!rec || rec.mono !== entry.id) throw new ZptahError("E_STALE_PREPARE", "That prepared action is unknown or has expired.");
+    if (!Number.isSafeInteger(p.until_ms)) throw new ZptahError("E_INVALID", "until_ms must be an integer.");
     const limit = rec.created + APPROVAL_TIMEOUT_MS;
-    rec.expires = Math.max(rec.expires, Math.min(Number(p.until_ms), limit));
+    rec.expires = Math.max(rec.expires, Math.min(p.until_ms, limit));
     dbg.touch(rec.tab);
     return { expires_ms: rec.expires };
   });

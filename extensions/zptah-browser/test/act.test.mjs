@@ -129,7 +129,7 @@ function setup(opts = {}) {
   const owner = { value: opts.owner === undefined ? MONO : opts.owner };
   const read = registerReadPath(link, { api, now: () => clock, sleep, ownerOf: () => owner.value, imaging: { render: async () => assert.fail("no imaging") } });
   // Inert timers: the idle sweep is driven by hand so the process can exit.
-  const dbg = createDebugger({ api, now: () => clock, sleep, emit: (m, p) => link.sendEvent(m, p), setTimer: () => 0, clearTimer: () => {} });
+  const dbg = createDebugger({ api, now: () => clock, sleep, emit: (m, p) => link.sendEvent(m, p), setTimer: () => 0, clearTimer: () => {}, isStopped: () => link.stopped });
   const acts = registerActPath(link, { api, now: () => clock, sleep, read, dbg, lexicon: opts.noLexicon ? null : lexicon });
   const call = async (method, params, mono = MONO) => link.handlers.get(method)({ v: 1, type: "req", id: "a-1", method, mono, params });
   return { world, api, link, call, calls, events, tabs, acts, dbg, read, listeners, owner, advance: (ms) => (clock += ms), now: () => clock, h };
@@ -864,4 +864,140 @@ test("the golden samples are valid against the schema and carry every ElementSig
   validateAgainst(SCHEMA, "ElementSignals", g.element_in_dialog);
   validateAgainst(SCHEMA, "FormSignals", g.form);
   validateAgainst(SCHEMA, "FormSignals", g.form_with_recipients);
+});
+
+// ---- review fixes ----
+
+test("Stop during a commit halts it before anything is dispatched, content or debugger path", async () => {
+  const build = (h) => [h("button", { id: "b", type: "button", rect: [10, 40, 80, 30] }, "Next")];
+  // Stop while the page is re-checked: no input event reaches the page.
+  let s = setup({ build, url: "https://shop.test/" });
+  let p = await prep(s, { kind: "click", ref: refOf(await snap(s), "button", "Next") });
+  const ctx = s.world.context.zptahContent;
+  const realRun = ctx.run;
+  ctx.run = (op, args) => {
+    const r = realRun(op, args);
+    if (op === "act_revalidate") s.listeners.clicked[0]();
+    return r;
+  };
+  s.world.log.length = 0;
+  err(await s.call("act.commit", { prepare_id: p.prepare_id }), "E_STOPPED");
+  assert.ok(!s.world.log.some((e) => e.type === "click"), "nothing was clicked");
+  finish(s);
+  // Stop while the debugger is mid-click: the next command is refused, so no mouseReleased goes out.
+  const holder = {};
+  s = setup({ build, url: "https://shop.test/", debuggerPermission: true, cdp: (m, params) => {
+    if (m === "Input.dispatchMouseEvent" && params.type === "mousePressed") holder.s.listeners.clicked[0]();
+    return {};
+  } });
+  holder.s = s;
+  p = await prep(s, { kind: "click", ref: refOf(await snap(s), "button", "Next") });
+  err(await s.call("act.commit", { prepare_id: p.prepare_id, input: "trusted" }), "E_STOPPED");
+  assert.ok(!s.calls.some((c) => c[0] === "cdp" && c[2]?.type === "mouseReleased"));
+  await assert.rejects(() => s.dbg.attach(1), (e) => e.code === "E_STOPPED");
+  finish(s);
+});
+
+test("a text field labelled as a password is refused for type, fill and press, and before each debugger key", async () => {
+  const build = (h) => [
+    h("input", { id: "pw", type: "text", "aria-label": "Mat khau", rect: [10, 10, 200, 30] }),
+    h("input", { id: "pw2", type: "text", "aria-label": "Password", rect: [10, 50, 200, 30] }),
+    h("input", { id: "u", type: "text", "aria-label": "User", rect: [10, 90, 200, 30] }),
+  ];
+  const s = setup({ build, url: "https://shop.test/login", debuggerPermission: true });
+  const text = await snap(s);
+  const doc = s.world.document;
+  for (const name of ["Mat khau", "Password"]) {
+    const ref = refOf(text, "textbox", name);
+    err(await s.call("act.prepare", { tab: 1, action: { kind: "type", ref, text: "x" } }), "E_PASSWORD_FIELD");
+    err(await s.call("act.prepare", { tab: 1, action: { kind: "fill", fields: [{ ref, value: "x", type: "text" }] } }), "E_PASSWORD_FIELD");
+    err(await s.call("act.prepare", { tab: 1, action: { kind: "press", key: "a", ref } }), "E_PASSWORD_FIELD");
+  }
+  doc.activeElement = doc.querySelector("#pw");
+  err(await s.call("act.prepare", { tab: 1, action: { kind: "press", key: "a" } }), "E_PASSWORD_FIELD");
+  // Focus moving into such a field after the checks is caught before the key goes out.
+  doc.activeElement = doc.querySelector("#u");
+  const q = await prep(s, { kind: "press", key: "a" });
+  const ctx = s.world.context.zptahContent;
+  const realRun = ctx.run;
+  ctx.run = (op, args) => {
+    if (op === "act_active") doc.activeElement = doc.querySelector("#pw2");
+    return realRun(op, args);
+  };
+  s.calls.length = 0;
+  err(await s.call("act.commit", { prepare_id: q.prepare_id, input: "trusted" }), "E_PASSWORD_FIELD");
+  assert.ok(!s.calls.some((c) => c[0] === "cdp" && /Input\.(dispatchKeyEvent|insertText)/.test(c[1])));
+  finish(s);
+});
+
+test("a multi-field fill over the debugger focuses each field in turn", async () => {
+  const build = (h) => [h("input", { id: "a", type: "text", "aria-label": "First", rect: [10, 10, 200, 30] }), h("input", { id: "b", type: "text", "aria-label": "Second", rect: [10, 50, 200, 30] })];
+  const holder = {};
+  const typed = [];
+  const s = setup({ build, url: "https://shop.test/", debuggerPermission: true, cdp: (m, params) => {
+    if (m === "Input.insertText") typed.push([holder.s.world.document.activeElement.id, params.text]);
+    return {};
+  } });
+  holder.s = s;
+  const text = await snap(s);
+  const p = await prep(s, { kind: "fill", fields: [
+    { ref: refOf(text, "textbox", "First"), value: "one", type: "text" },
+    { ref: refOf(text, "textbox", "Second"), value: "two", type: "text" },
+  ] });
+  ok(await s.call("act.commit", { prepare_id: p.prepare_id, input: "trusted" }));
+  assert.deepEqual(typed, [["a", "one"], ["b", "two"]]);
+  finish(s);
+});
+
+test("extend rejects a non-integer until_ms; commit rechecks the Mono is still act level", async () => {
+  const s = setup({ build: (h) => [h("button", { id: "b", type: "button", rect: [10, 40, 80, 30] }, "Next")], url: "https://shop.test/" });
+  const p = await prep(s, { kind: "click", ref: refOf(await snap(s), "button", "Next") });
+  for (const bad of ["x", null, 1.5, Number.MAX_SAFE_INTEGER + 2]) err(await s.call("act.extend", { prepare_id: p.prepare_id, until_ms: bad }), "E_INVALID");
+  s.link.roster[0].level = "read";
+  err(await s.call("act.commit", { prepare_id: p.prepare_id }), "E_UNSUPPORTED");
+  finish(s);
+});
+
+test("a commit already running refuses a second one, and a dispatched commit is never run twice", async () => {
+  const s = setup({ build: (h) => [h("button", { id: "b", type: "button", rect: [10, 40, 80, 30] }, "Next")], url: "https://shop.test/" });
+  let clicks = 0;
+  s.world.document.querySelector("#b").addEventListener("click", () => (clicks += 1));
+  const p = await prep(s, { kind: "click", ref: refOf(await snap(s), "button", "Next") });
+  const ctx = s.world.context.zptahContent;
+  const realRun = ctx.run;
+  let release;
+  ctx.run = (op, args) => (op === "act_perform" ? realRun(op, args).then((r) => new Promise((res) => (release = () => res(r)))) : realRun(op, args));
+  const first = s.call("act.commit", { prepare_id: p.prepare_id });
+  await new Promise((r) => setTimeout(r, 100));
+  err(await s.call("act.commit", { prepare_id: p.prepare_id }), "E_BUSY");
+  assert.equal((await first).error?.code, "E_DIALOG_SUSPECTED");
+  release();
+  await new Promise((r) => setTimeout(r, 50));
+  err(await s.call("act.commit", { prepare_id: p.prepare_id }), "E_STALE_PREPARE");
+  assert.equal(clicks, 1);
+  finish(s);
+});
+
+test("paste shortcuts ask like credential entry; a fill checkbox behind a cover is not clicked; an upload is used once", async () => {
+  const s = setup({ build: (h) => [
+    h("input", { id: "u", type: "text", "aria-label": "User", rect: [10, 10, 200, 30] }),
+    h("input", { id: "c", type: "checkbox", "aria-label": "Agree", rect: [10, 50, 20, 20] }),
+    h("input", { id: "f", type: "file", "aria-label": "Photo", rect: [10, 90, 100, 30] }),
+  ], url: "https://shop.test/" });
+  const text = await snap(s);
+  for (const key of ["Control+v", "Meta+V", "Shift+Insert"]) {
+    const p = await prep(s, { kind: "press", key, ref: refOf(text, "textbox", "User") });
+    assert.deepEqual(p.ext_risk, ["credential_entry"], key);
+  }
+  const p = await prep(s, { kind: "fill", fields: [{ ref: refOf(text, "checkbox", "Agree"), value: "true", type: "checkbox" }] });
+  s.world.hitOverride = s.world.h("div", { id: "overlay" }, "banner");
+  err(await s.call("act.commit", { prepare_id: p.prepare_id }), "E_INVALID");
+  assert.equal(s.world.document.querySelector("#c").checked, false);
+  s.world.hitOverride = null;
+  const bytes = new Uint8Array([0, 0, 0, 1, 7]);
+  ok(await s.call("upload.put", { upload_id: "u9", seq: 0, bytes_b64: b64encode(bytes), last: true }));
+  const up = await prep(s, { kind: "upload", ref: refOf(text, "button", "Photo"), upload_id: "u9", names: ["a.txt"] });
+  ok(await s.call("act.commit", { prepare_id: up.prepare_id, approval: { approval_id: "x", categories: ["upload"], digest: up.digest } }));
+  assert.equal(s.acts.uploads.has("u9"), false);
+  finish(s);
 });

@@ -32,6 +32,7 @@ export const isAllowedCdp = (method) => ALLOWED.has(method);
  * @property {(fn: () => void, ms: number) => unknown} [setTimer]
  * @property {(id: unknown) => void} [clearTimer]
  * @property {(method: string, params: Record<string, unknown>) => void} emit sends an event to the app
+ * @property {() => boolean} [isStopped] while true nothing attaches and no command is sent
  */
 
 /**
@@ -47,6 +48,10 @@ export const isAllowedCdp = (method) => ALLOWED.has(method);
 /** @param {DebuggerDeps} deps */
 export function createDebugger(deps) {
   const { api, now, sleep, emit } = deps;
+  const stopped = () => deps.isStopped?.() === true;
+  const refuseStopped = () => {
+    if (stopped()) throw new ZptahError("E_STOPPED", "zptah Browser is stopped.");
+  };
   const setTimer = deps.setTimer ?? setTimeout;
   const clearTimer = deps.clearTimer ?? /** @type {(id: unknown) => void} */ (clearTimeout);
   /** @type {Map<number, TabState>} */
@@ -102,6 +107,7 @@ export function createDebugger(deps) {
    * @param {number} tab
    */
   async function attach(tab) {
+    refuseStopped();
     const s = state(tab);
     if (s.declined) throw new ZptahError("E_DEBUGGER_DENIED", "You cancelled the debugging notice on this tab, so zptah Browser will not attach again in this task.");
     if (s.attached) {
@@ -143,6 +149,7 @@ export function createDebugger(deps) {
    * @param {number} tab @param {string} method @param {Record<string, unknown>} [params]
    */
   async function send(tab, method, params = {}) {
+    refuseStopped();
     if (!isAttached(tab)) throw new ZptahError("E_DEBUGGER_DENIED", "The debugger is not attached to this tab.");
     touch(tab);
     try {
