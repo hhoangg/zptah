@@ -145,6 +145,52 @@ describe('remote control, reveal and hero layout', () => {
   });
 });
 
+describe('privacy page (spec 13.3)', () => {
+  const privacy = (target) => readFileSync(path.join(out[target], 'landing', 'privacy', 'index.html'), 'utf8');
+
+  it('is built for both targets, CSP-safe and self-contained', () => {
+    for (const target of ['prod', 'beta']) {
+      const html = privacy(target);
+      assert.doesNotMatch(html, /<script|<style[\s>]|\son[a-z]+="/i);
+      assert.match(html, /<meta name="zptah-page" content="privacy">/);
+      assert.match(html, /href="\/landing\/landing\.css"/);
+      for (const m of html.matchAll(/\s(?:src|href)="(https?:)?\/\/[^"]+"/g)) {
+        const tag = html.slice(html.lastIndexOf('<', m.index), m.index + m[0].length);
+        assert.ok(/^<a\s/.test(tag) || /rel="canonical"/.test(tag), `external resource: ${tag}`);
+      }
+    }
+  });
+
+  it('discloses what spec 13.3 requires', () => {
+    const html = privacy('prod');
+    for (const re of [
+      /content of the pages a Mono reads/,
+      /titles and addresses \(URLs\) of your tabs/,
+      /Only to the zptah app on your computer/,
+      /AI provider you configured/,
+      /No analytics, no telemetry and no crash reports/,
+      /No sale and no transfer/,
+      /No advertising/,
+      /creditworthiness or for lending/,
+      /extension storage: the pairing key/,
+      /audit log/,
+      /Contact and change log/,
+      /Limited Use/,
+    ]) assert.match(html, re);
+  });
+
+  it('prod: canonical, in the sitemap, linked from the footer; beta: noindex and absolute link', () => {
+    assert.match(privacy('prod'), /<link rel="canonical" href="https:\/\/zptah\.app\/privacy">/);
+    assert.doesNotMatch(privacy('prod'), /noindex/);
+    assert.match(readFileSync(path.join(out.prod, 'sitemap.xml'), 'utf8'), /<loc>https:\/\/zptah\.app\/privacy<\/loc>/);
+    assert.match(page('prod'), /<a href="\/privacy">Privacy<\/a>/);
+    assert.match(page('beta'), /<a href="https:\/\/zptah\.app\/privacy">Privacy<\/a>/);
+    assert.match(privacy('beta'), /<meta name="robots" content="noindex, nofollow">/);
+    assert.equal(readFileSync(path.join(out.beta, 'privacy', 'index.html'), 'utf8'), privacy('beta'));
+    assert.ok(!existsSync(path.join(out.prod, 'privacy')), 'prod keeps everything under landing/');
+  });
+});
+
 // En dash and em dash, built from code points so this file does not contain them.
 const DASHES = new RegExp('[' + String.fromCharCode(0x2013, 0x2014) + ']');
 

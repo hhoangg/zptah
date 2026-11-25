@@ -37,6 +37,11 @@ pub(crate) mod registry {
     /// Makes `manager` the one the Mono runtimes use. The extension events of its receiver must
     /// reach `gate::extension::act::dispatch_event`.
     pub(crate) fn install(manager: LinkManager) {
+        // The roster the extension gets in `auth` is the Monos' (spec 9.1); a change goes out as
+        // `roster.set`.
+        manager.set_roster_source(std::sync::Arc::new(
+            crate::mono::browser::roster::GlobalRoster,
+        ));
         *MANAGER.lock().unwrap_or_else(|e| e.into_inner()) = Some(manager);
     }
 

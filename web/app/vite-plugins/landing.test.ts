@@ -11,8 +11,8 @@ const wranglerPath = path.resolve(import.meta.dirname, "../../wrangler.jsonc");
 describe("wrangler.jsonc routing of the landing page", () => {
   const config = JSON.parse(stripJsonc(readFileSync(wranglerPath, "utf8"))) as { assets: { run_worker_first: string[]; not_found_handling: string } };
 
-  it("runs the Worker first for / and /home (otherwise the assets layer answers them with the SPA), next to the API and the relay", () => {
-    expect(config.assets.run_worker_first).toEqual(expect.arrayContaining(["/", "/home", "/home/", "/api/*", "/relay/*"]));
+  it("runs the Worker first for / , /home and /privacy (otherwise the assets layer answers them with the SPA), next to the API and the relay", () => {
+    expect(config.assets.run_worker_first).toEqual(expect.arrayContaining(["/", "/home", "/home/", "/privacy", "/privacy/", "/api/*", "/relay/*"]));
   });
 
   it("keeps the SPA fallback for every other path", () => {

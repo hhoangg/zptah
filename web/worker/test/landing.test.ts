@@ -81,6 +81,20 @@ describe("GET /home", () => {
   });
 });
 
+describe("GET /privacy", () => {
+  it.each([{}, cookie("__Host-mc_session")])("is the privacy page for everyone (%j)", async (init) => {
+    for (const path of ["/privacy", "/privacy/"]) {
+      const res = await call(path, init);
+      expect(res.status, path).toBe(200);
+      expect(res.headers.get("Content-Type") ?? "").toContain("text/html");
+      const body = await res.text();
+      // The real build has the page; the placeholder assets of an unbuilt app have no privacy page and answer with the SPA.
+      expect(body.includes('<meta name="zptah-page" content="privacy">') || !body.includes(LANDING_META), path).toBe(true);
+      expect(res.headers.get("Vary") ?? "").not.toMatch(/\bCookie\b/);
+    }
+  });
+});
+
 describe("everything else is unchanged", () => {
   it.each(["/d/abc", "/d/abc/s/s1", "/settings", "/settings/notifications", "/pair/ABCD-1234", "/app", "/login", "/register"])(
     "%s is the SPA with or without a cookie, and not marked Vary: Cookie",

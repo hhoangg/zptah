@@ -32,8 +32,9 @@ export function tabInfo(tab, owner) {
  * @param {string} mono
  * @param {boolean} all
  * @param {(tab: number) => string | null} ownerOf
+ * @param {(mono: string) => string | undefined} [groupTitle] the title of a Mono's tab group
  */
-export async function listTabs(api, entry, mono, all, ownerOf) {
+export async function listTabs(api, entry, mono, all, ownerOf, groupTitle) {
   /** @type {any[]} */
   const tabs = await api.tabs.query({});
   /** @type {ReturnType<typeof tabInfo>[]} */
@@ -45,7 +46,9 @@ export async function listTabs(api, entry, mono, all, ownerOf) {
     const url = tabUrl(tab);
     const verdict = checkUrl(entry, url);
     if (verdict === "blocked" || verdict === "not_allowed") continue;
-    const info = tabInfo(tab, owner);
+    const info = /** @type {ReturnType<typeof tabInfo> & { group_title?: string }} */ (tabInfo(tab, owner));
+    const title = owner && groupTitle ? groupTitle(owner) : undefined;
+    if (title) info.group_title = title;
     if (verdict === "restricted") {
       info.title = "(browser page)";
       info.url = schemeOf(url);

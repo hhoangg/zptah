@@ -13,6 +13,7 @@ const HEX32 = /^[0-9a-f]{32}$/;
  * @param {import("./link.js").BrowserLink} link
  * @param {{ api?: any, now?: () => number, sleep?: (ms: number) => Promise<void>, imaging?: import("./screenshot.js").Imaging,
  *   ownerOf?: (tab: number) => string | null, captureTimeoutMs?: number,
+ *   onRoster?: () => void, groupTitle?: (mono: string) => string | undefined,
  *   dbg?: { send: (tab: number, method: string, params?: Record<string, unknown>) => Promise<any>, isAttached: (tab: number) => boolean } }} [deps]
  */
 export function registerReadPath(link, deps = {}) {
@@ -59,9 +60,10 @@ export function registerReadPath(link, deps = {}) {
     if (!Array.isArray(monos)) return errorReply(String(msg.id), new ZptahError("E_INVALID", "monos must be a list"));
     currentRoster(link, slot);
     slot.override = monos;
+    deps.onRoster?.();
     return okReply(String(msg.id), {});
   });
-  route("tabs.list", (entry, p) => listTabs(api, entry, entry.id, p.all === true, ownerOf));
+  route("tabs.list", (entry, p) => listTabs(api, entry, entry.id, p.all === true, ownerOf, deps.groupTitle));
   route("page.snapshot", (entry, p) => pages.snapshot(entry, p));
   route("page.read", (entry, p) => pages.read(entry, p));
   route("page.find", (entry, p) => pages.find(entry, p));

@@ -36,7 +36,11 @@ const MONO: &str = "0123456789abcdef0123456789abcdef";
 struct OneMono;
 
 impl RosterSource for OneMono {
-    fn snapshot(&self) -> super::link::protocol::AuthResult {
+    fn snapshot(
+        &self,
+        _instance_id: &str,
+        _profile_dir: &str,
+    ) -> super::link::protocol::AuthResult {
         super::link::protocol::AuthResult {
             roster: vec![RosterEntry {
                 id: MONO.into(),

@@ -1094,6 +1094,26 @@ mod builds {
         assert_eq!(dev.check("anything", None), BuildVerdict::Accepted);
         assert!(!KNOWN_BUILDS.is_empty());
     }
+    #[test]
+    fn the_manifest_is_canonicalized_like_the_release_script() {
+        const VECTORS: &str = include_str!(
+            "../../../../../../extensions/zptah-browser/shared/manifest-canon-vectors.json"
+        );
+        let v: serde_json::Value = serde_json::from_str(VECTORS).unwrap();
+        let cases = v["cases"].as_array().unwrap();
+        assert!(cases.len() >= 3);
+        for c in cases {
+            let got = crate::mono::browser::links::known_builds::strip_manifest(
+                c["input"].as_str().unwrap().as_bytes(),
+            );
+            assert_eq!(
+                String::from_utf8(got).unwrap(),
+                c["canonical"].as_str().unwrap(),
+                "{}",
+                c["name"]
+            );
+        }
+    }
 
     fn write_extension(dir: &std::path::Path, key: &str, script: &str) {
         std::fs::create_dir_all(dir.join("src")).unwrap();

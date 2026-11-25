@@ -154,7 +154,12 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) -> std::io::Result<()
     Ok(())
 }
 
-fn strip_manifest(bytes: &[u8]) -> Vec<u8> {
+/// `manifest.json` without `key` and `update_url`, written canonically: object keys sorted
+/// recursively, no whitespace. Independent of serde_json's `preserve_order` feature (which
+/// feature unification can switch on) so the JS release script computes the same bytes
+/// (`canonicalManifest` in extensions/zptah-browser/scripts/release.mjs; shared vectors in
+/// `shared/manifest-canon-vectors.json`).
+pub(crate) fn strip_manifest(bytes: &[u8]) -> Vec<u8> {
     let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
         return bytes.to_vec();
     };
@@ -162,5 +167,38 @@ fn strip_manifest(bytes: &[u8]) -> Vec<u8> {
         map.remove("key");
         map.remove("update_url");
     }
-    serde_json::to_vec(&value).unwrap_or_else(|_| bytes.to_vec())
+    let mut out = String::new();
+    write_canonical(&value, &mut out);
+    out.into_bytes()
+}
+
+fn write_canonical(value: &serde_json::Value, out: &mut String) {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (i, k) in keys.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&Value::String(k.clone()).to_string());
+                out.push(':');
+                write_canonical(&map[k], out);
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_canonical(item, out);
+            }
+            out.push(']');
+        }
+        scalar => out.push_str(&scalar.to_string()),
+    }
 }

@@ -161,7 +161,9 @@
           "required": ["kind", "approval_id"],
           "properties": {
             "kind": { "const": "user_approved" },
-            "approval_id": { "type": "string", "minLength": 1, "maxLength": 64 }
+            "approval_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "quote": { "type": "string", "maxLength": 4096 },
+            "message_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
           }
         }
       ]
