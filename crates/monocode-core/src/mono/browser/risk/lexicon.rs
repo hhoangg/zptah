@@ -21,6 +21,9 @@
 //!   name, not a phrase inside a longer name.
 //! * An ambiguous stripped word (`go`, `moi`, `dang`, `dong`, `co`) in an unaccented name on a
 //!   Vietnamese page counts as the Vietnamese word, so an English "Go" there is read as `Gỡ`.
+//! * Buttons are matched only in the first 4 words of each punctuation segment, so a risky
+//!   phrase placed after four words of a long button name is not seen (links and landmark text
+//!   have no window).
 //! * Matching is by words; a button whose meaning comes only from an icon or from script
 //!   behavior is judged by its accessible name and visible text, so a misleading name can hide
 //!   the action. The decision keeps the declared, extension, soul and taint sources for that.
@@ -444,13 +447,17 @@ impl Lexicon {
                     .into_iter()
                     .filter(|h| {
                         let e = &self.entries[h.entry];
+                        // A payment phrase after a policy prefix is informational only in the
+                        // first segment ("Chính sách thanh toán"); after a colon or dash
+                        // ("Điều khoản: Thanh toán ngay") it is its own phrase.
+                        let payment_ok = reason == Informational::Long || h.seg > 0;
                         h.start < self.window
                             && e.words.len() >= 2
                             && match e.class {
                                 Class::Category(
                                     Category::Destructive | Category::AccountSecurity,
                                 ) => true,
-                                Class::Category(Category::Payment) => reason == Informational::Long,
+                                Class::Category(Category::Payment) => payment_ok,
                                 _ => false,
                             }
                     })
@@ -564,8 +571,13 @@ impl Lexicon {
         }
         if input.in_dialog {
             // A consent-looking name skips the dialog text only inside a confirmed cookie banner.
+            // Any payment, account, sharing or terms signal in the dialog text disqualifies it
+            // (spec 7.3), whatever cookie words or markers it has.
             let in_banner = out.consent
-                && self.looks_like_consent_container(&input.dialog_text, &input.dialog_markers);
+                && self.looks_like_consent_container(&input.dialog_text, &input.dialog_markers)
+                && self
+                    .text_categories(&input.dialog_text, input.page_vi, true)
+                    .is_empty();
             if in_banner {
                 // keep the consent flag
             } else {

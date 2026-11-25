@@ -2256,6 +2256,53 @@
     ]
    },
    "note": "M4"
+  },
+  {
+   "name": "Điều khoản: Thanh toán ngay",
+   "kind": "link",
+   "note": "second segment keeps payment",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Hướng dẫn: Mua ngay",
+   "kind": "link",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Help - Pay now",
+   "kind": "link",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Chính sách thanh toán",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   }
+  },
+  {
+   "name": "Accept all",
+   "in_dialog": true,
+   "dialog_text": "Xác nhận thanh toán 5.000.000đ. Chúng tôi dùng cookie.",
+   "note": "cookie words do not make a payment dialog a banner",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
   }
  ]
 }
