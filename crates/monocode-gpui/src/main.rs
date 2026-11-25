@@ -214,6 +214,15 @@ fn plist_data_mode(plist: &str) -> Option<bool> {
     }
 }
 fn main() {
+    // Chrome starts the zptah binary as a native messaging host (`<exe> chrome-extension://<id>/`).
+    // This runs before anything else: host mode has no UI, no listener and writes only frames to
+    // stdout.
+    {
+        let host_args: Vec<String> = std::env::args().skip(1).collect();
+        if let Some(code) = monocode_core::mono::browser::host_mode::maybe_run(&host_args) {
+            std::process::exit(code);
+        }
+    }
     // A transform child of the mentioned-file preview: serves one request and exits, before
     // anything else starts. Otherwise the parent runs its HTML transforms in such children.
     monocode_core::mobile::mentioned_file::sandbox::maybe_run_child();
