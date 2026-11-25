@@ -117,6 +117,8 @@ pub struct ConnectOptions {
     pub exe: PathBuf,
     pub flavor_dev: bool,
     pub storage: Storage,
+    /// Windows only: write the real `HKCU` keys. Tests pass false.
+    pub real_registry: bool,
     pub opener: Arc<dyn PageOpener>,
     /// Where the listener's socket and lock go. `None` starts no listener (tests); an `Err` is
     /// shown as the reason the listener is off.
@@ -148,13 +150,26 @@ impl Registry for NoRegistry {
     }
 }
 
-fn registry() -> Box<dyn Registry> {
-    #[cfg(windows)]
-    {
-        Box::new(manifest_install::WindowsRegistry)
+/// Accepts every call and stores nothing: the registry of tests, which must not write HKCU.
+struct IgnoredRegistry;
+impl Registry for IgnoredRegistry {
+    fn set_default(&self, _: &str, _: &str) -> std::io::Result<()> {
+        Ok(())
     }
-    #[cfg(not(windows))]
-    {
+    fn delete_key(&self, _: &str) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn registry(real: bool) -> Box<dyn Registry> {
+    #[cfg(windows)]
+    if real {
+        return Box::new(manifest_install::WindowsRegistry);
+    }
+    let _ = real;
+    if cfg!(windows) {
+        Box::new(IgnoredRegistry)
+    } else {
         Box::new(NoRegistry)
     }
 }
@@ -170,6 +185,7 @@ pub struct BrowserConnect {
     flavor: Flavor,
     env: InstallEnv,
     exe: PathBuf,
+    real_registry: bool,
     opener: Arc<dyn PageOpener>,
     observed: Arc<Mutex<Observed>>,
     server: Arc<Mutex<Option<Server>>>,
@@ -231,6 +247,7 @@ pub fn start_app(
                     storage: Storage::Real {
                         database: database.to_owned(),
                     },
+                    real_registry: true,
                     opener: Arc::new(SystemOpener),
                     socket_dir,
                 }))
@@ -331,6 +348,7 @@ impl BrowserConnect {
                 app_data_dir: options.app_data_dir,
             },
             exe: options.exe,
+            real_registry: options.real_registry,
             opener: options.opener,
             observed,
             server,
@@ -494,7 +512,7 @@ impl BrowserConnect {
             self.flavor,
             &self.exe,
             V1_BROWSERS,
-            registry().as_ref(),
+            registry(self.real_registry).as_ref(),
         )
         .map_err(|e| match e {
             manifest_install::InstallError::BadExecutable(_) => {
@@ -543,9 +561,13 @@ impl BrowserConnect {
     /// Forgets every browser and removes the host manifests.
     pub fn disconnect_all(&self) -> Result<(), String> {
         let links = self.manager.disconnect_all();
-        let manifests =
-            manifest_install::remove(&self.env, self.flavor, V1_BROWSERS, registry().as_ref())
-                .map_err(|_| "The browser host could not be removed.".to_string());
+        let manifests = manifest_install::remove(
+            &self.env,
+            self.flavor,
+            V1_BROWSERS,
+            registry(self.real_registry).as_ref(),
+        )
+        .map_err(|_| "The browser host could not be removed.".to_string());
         {
             let mut o = lock(&self.observed);
             *o = Observed::default();

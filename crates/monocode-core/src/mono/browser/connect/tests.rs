@@ -74,6 +74,7 @@ fn rig(with_chrome: bool) -> Rig {
         exe: std::env::current_exe().unwrap(),
         flavor_dev: true,
         storage: Storage::Memory,
+        real_registry: false,
         opener: opener.clone(),
         socket_dir: None,
     });
@@ -85,9 +86,13 @@ fn rig(with_chrome: bool) -> Rig {
 }
 
 fn manifest_path(rig: &Rig) -> PathBuf {
-    data_dir(&rig.home)
-        .join("NativeMessagingHosts")
-        .join(format!("{}.json", manifest_install::DEV_HOST_NAME))
+    let file = format!("{}.json", manifest_install::DEV_HOST_NAME);
+    if cfg!(windows) {
+        // Windows keeps the file in the app data dir and points the registry at it.
+        rig.home.join("app").join("browser-host").join(file)
+    } else {
+        data_dir(&rig.home).join("NativeMessagingHosts").join(file)
+    }
 }
 
 #[cfg(unix)]
@@ -267,6 +272,7 @@ fn the_release_flavor_refuses_connect_until_the_store_listing_exists() {
         exe: std::env::current_exe().unwrap(),
         flavor_dev: false,
         storage: Storage::Memory,
+        real_registry: false,
         opener: rig.opener.clone(),
         socket_dir: None,
     });
@@ -279,7 +285,7 @@ fn the_release_flavor_refuses_connect_until_the_store_listing_exists() {
         NOT_IN_STORE_YET
     );
     assert!(rig.opener.opened.lock().unwrap().is_empty());
-    assert!(!data_dir(&rig.home).join("NativeMessagingHosts").exists());
+    assert!(!manifest_path(&rig).exists());
 }
 
 #[test]
@@ -293,6 +299,7 @@ fn a_socket_dir_error_is_shown_as_the_server_error() {
         exe: std::env::current_exe().unwrap(),
         flavor_dev: true,
         storage: Storage::Memory,
+        real_registry: false,
         opener: rig.opener.clone(),
         socket_dir: Some(Err("The browser link could not start: no dir.".into())),
     });

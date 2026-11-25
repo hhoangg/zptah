@@ -114,6 +114,7 @@ fn parse_headers(header: impl Fn(&str) -> Option<String>) -> Result<Snapshot, Fe
                 used_percent: (used * 100.).clamp(0., 100.),
                 minutes,
                 resets_at,
+                group: None,
             })
         })
         .collect();
