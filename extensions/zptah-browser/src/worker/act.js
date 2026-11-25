@@ -421,7 +421,8 @@ export function registerActPath(link, deps) {
     if (p.approval && p.approval.digest !== rec.digest) throw new ZptahError("E_STALE_PREPARE", "The approval is for a different state of the page.");
     const gained = sig.ext_risk.filter((c) => !rec.extRisk.includes(c));
     if (gained.length > 0) throw new ZptahError("E_STALE_PREPARE", "The risk of this action grew since the prepare.");
-    if (sig.ext_risk.length > 0) {
+    // Hovering does not activate the element, so its risk is not enforced (the app never asks for it).
+    if (sig.ext_risk.length > 0 && action0(rec).kind !== "hover") {
       const covered = new Set(Array.isArray(p.approval?.categories) ? p.approval.categories : []);
       if (!p.approval || !sig.ext_risk.every((c) => covered.has(c))) throw new ZptahError("E_NEEDS_APPROVAL", `This action needs the user's approval for: ${sig.ext_risk.join(", ")}.`);
     }
@@ -468,6 +469,9 @@ export function registerActPath(link, deps) {
     dbg.touch(tab.id);
     return { url: String(fresh ? tabUrl(fresh) : result.url ?? rec.url).slice(0, 8192), title: String(fresh?.title ?? result.title ?? "").slice(0, 8192), effects };
   }
+
+  /** @param {Prepare} rec */
+  const action0 = (rec) => rec.action;
 
   /** Stop (or a cancel) while a commit runs: nothing more is dispatched. @param {Prepare} rec */
   function assertLive(rec) {

@@ -432,6 +432,16 @@ test("hover fires the hover events and scroll scrolls", async () => {
   finish(s);
 });
 
+test("hovering a Delete button needs no approval, clicking it still does", async () => {
+  const s = setup({ build: (h) => [h("button", { id: "d", type: "button", rect: [10, 10, 120, 30] }, "Delete account")], url: "https://shop.test/" });
+  const ref = refOf(await snap(s), "button", "Delete account");
+  const hover = await prep(s, { kind: "hover", ref });
+  ok(await s.call("act.commit", { prepare_id: hover.prepare_id }));
+  const click = await prep(s, { kind: "click", ref });
+  err(await s.call("act.commit", { prepare_id: click.prepare_id }), "E_NEEDS_APPROVAL");
+  finish(s);
+});
+
 test("decoy inputs (readonly, hidden) are refused and a covered control is not clicked", async () => {
   const s = setup({
     build: (h) => [h("input", { id: "decoy", type: "text", readonly: "", "aria-label": "Search", rect: [10, 10, 200, 30] }), h("button", { id: "b", type: "button", rect: [10, 60, 80, 30] }, "Next")],
