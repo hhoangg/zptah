@@ -163,7 +163,11 @@ pub(crate) fn dispatch_event(instance_id: &str, envelope: &Envelope) {
         let change = ownership::with_table(instance_id, |table| {
             table.apply_event(&params, crate::time::now_ms())
         });
-        if let Some(change) = change.filter(|c| c.taken_back) {
+        // A tab the user took back, or dragged into another Mono's group, is no longer the old
+        // Mono's: what it was allowed on that site ends.
+        if let Some(change) =
+            change.filter(|c| c.taken_back || (c.from.is_some() && c.to != c.from))
+        {
             for upstream in all.iter().filter(|u| {
                 change.from.as_deref() == Some(u.mono_id.as_str())
                     && (u.link)().is_some_and(|l| l.instance_id() == instance_id)
@@ -1561,10 +1565,10 @@ impl ExtensionUpstream {
         let action_text = s(args, "action").ok_or("Describe the action in `action`.")?;
         s(args, "category")
             .ok_or("Give a category: payment, send_message, post_publish or other.")?;
-        let selected = self
-            .state()
-            .selected
-            .and_then(|id| self.state().known.get(&id).cloned());
+        let selected = {
+            let state = self.state();
+            state.selected.and_then(|id| state.known.get(&id).cloned())
+        };
         let url = s(args, "url")
             .map(str::to_owned)
             .or_else(|| selected.as_ref().map(|t| t.url.clone()))

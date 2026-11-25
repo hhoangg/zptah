@@ -296,6 +296,12 @@ impl ExtensionUpstream {
             _ => {}
         }
 
+        // The Mono's own tabs stay under the limit whatever way a tab comes in.
+        let own = self.refresh(false)?;
+        if own.len() >= tabs::MAX_TABS || !self.mirror(|t| t.may_open(&self.mono_id)) {
+            return Err(limit_text());
+        }
+
         let summary = format!("adopt tab {}", target.tab);
         let mut approval_id = None;
         let grant = match target.owner.clone() {
@@ -333,7 +339,7 @@ impl ExtensionUpstream {
                 ) {
                     Ok((_, id)) => {
                         approval_id = Some(id.clone());
-                        json!({"kind": "user_approved", "approval_id": id})
+                        json!({"kind": "user_approved", "approval_id": id, "quote": quote, "message_ms": message_ms})
                     }
                     Err((text, audit, id)) => {
                         self.write_tab_row(

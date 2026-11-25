@@ -596,3 +596,73 @@ fn a_tab_dragged_into_another_monos_group_changes_hands_without_a_prompt() {
     assert_eq!(mirror_owner(&two, 9).as_deref(), Some(OTHER_MONO));
     two.rig.finish();
 }
+
+#[test]
+fn adopting_is_refused_at_the_tab_limit_too() {
+    let two = two(vec![]);
+    {
+        let mut world = two.world.lock().unwrap();
+        for id in 10..(10 + tabs::MAX_TABS as u64 - 1) {
+            world.tabs.push(tab(
+                id,
+                &format!("https://own{id}.example/"),
+                "Own",
+                Some(MONO),
+            ));
+        }
+    }
+    let route = said(&two, "work in the Quarterly Report sheet");
+    let result = call_gate(
+        &two.a,
+        &route,
+        json!({"action": "adopt", "tab": 2, "user_reference": "Quarterly Report"}),
+    );
+    assert!(is_error(&result));
+    assert!(
+        text_of(&result).contains("tabs open"),
+        "{}",
+        text_of(&result)
+    );
+    assert!(two.rig.requests("tab.adopt").is_empty());
+    assert!(
+        two.front.cards().is_empty(),
+        "nobody is asked for a tab that cannot be taken"
+    );
+    two.rig.finish();
+}
+
+#[test]
+fn a_tab_dragged_to_another_mono_is_no_longer_the_old_monos_selection() {
+    let two = two(vec![]);
+    let route = said(&two, "look around");
+    call_gate(&two.a, &route, json!({"action": "list"}));
+    let listed = call_gate(&two.a, &route, json!({"action": "select", "index": 0}));
+    assert!(
+        text_of(&listed).contains("(current)"),
+        "{}",
+        text_of(&listed)
+    );
+    ownership_event(&two.instance, 3, Some(OTHER_MONO), "user_drag");
+    two.world.lock().unwrap().tabs[2].owner = Some(OTHER_MONO.into());
+    let after = ok_text(call_gate(&two.a, &route, json!({"action": "list"})));
+    assert!(!after.contains("(current)"), "{after}");
+    two.rig.finish();
+}
+
+#[test]
+fn a_selected_tab_does_not_deadlock_the_agents_own_approval_request() {
+    let two = two(vec![UserAnswer::AllowOnce]);
+    let route = said(&two, "look around");
+    call_gate(&two.a, &route, json!({"action": "list"}));
+    call_gate(&two.a, &route, json!({"action": "select", "index": 0}));
+    let reply = two
+        .a
+        .handle(
+            &route,
+            json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "browser_request_approval",
+                "arguments": {"action": "do a thing", "category": "other"}}}),
+        )
+        .expect("a reply");
+    assert!(reply.get("result").is_some(), "{reply}");
+    two.rig.finish();
+}

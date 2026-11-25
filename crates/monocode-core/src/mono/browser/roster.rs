@@ -200,10 +200,17 @@ impl RosterBook {
 
     /// Sends `roster.set` to every connected link whose roster differs from what it has. Waits for
     /// the answers; call [`Self::publish_soon`] from code that must not block.
-    pub(crate) fn publish_with(&self, manager: &LinkManager) {
+    pub(crate) fn publish_with(&self, manager: &LinkManager) -> bool {
+        self.publish_timeout(manager, SET_TIMEOUT)
+    }
+
+    /// [`Self::publish_with`] giving each `roster.set` `timeout`. True when every connected link
+    /// has the roster it should have afterwards.
+    pub(crate) fn publish_timeout(&self, manager: &LinkManager, timeout: Duration) -> bool {
         let _sending = lock(&self.sending);
+        let mut in_step = true;
         let Ok(links) = manager.links() else {
-            return;
+            return false;
         };
         for link in links.into_iter().filter(|l| l.connected) {
             let want = self.roster_for(&link.profile_dir);
@@ -213,12 +220,7 @@ impl RosterBook {
             let Some(handle) = manager.handle(&link.instance_id) else {
                 continue;
             };
-            let result = handle.request(
-                Method::RosterSet,
-                None,
-                json!({ "monos": want }),
-                SET_TIMEOUT,
-            );
+            let result = handle.request(Method::RosterSet, None, json!({ "monos": want }), timeout);
             let mut sent = lock(&self.sent);
             match result {
                 Ok(_) => {
@@ -226,9 +228,26 @@ impl RosterBook {
                 }
                 Err(_) => {
                     sent.remove(&link.instance_id);
+                    in_step = false;
                 }
             }
         }
+        in_step
+    }
+
+    /// Publishes until every link has its roster, waiting `delays` between tries. A link that did
+    /// not answer in time (a lowered level must still reach it) is tried again.
+    pub(crate) fn publish_retrying(&self, manager: &LinkManager, delays: &[Duration]) -> bool {
+        if self.publish_with(manager) {
+            return true;
+        }
+        for delay in delays {
+            std::thread::sleep(*delay);
+            if self.publish_with(manager) {
+                return true;
+            }
+        }
+        false
     }
 
     /// [`Self::publish_with`] on a thread, for the registered link manager (none: nothing to do).
@@ -236,7 +255,10 @@ impl RosterBook {
         let Some(manager) = super::links::registry::manager() else {
             return;
         };
-        std::thread::spawn(move || self.publish_with(&manager));
+        std::thread::spawn(move || {
+            let delays = [1, 2, 4, 8, 16].map(Duration::from_secs);
+            self.publish_retrying(&manager, &delays);
+        });
     }
 
     /// The name a Mono goes by in the roster, for text that names another Mono.

@@ -284,7 +284,10 @@ test("a tab of another Mono moves only with the user's approval", async () => {
   s.own.claim(2, KAI, "adopted");
   err(await s.call("tab.adopt", { tab: 2, grant: reference("the report sheet") }), "E_NOT_OWNER");
   assert.equal(s.own.ownerOf(2), KAI);
-  const res = await s.call("tab.adopt", { tab: 2, grant: { kind: "user_approved", approval_id: "0123" } });
+  // The approval alone is not enough: the user's words come with it.
+  err(await s.call("tab.adopt", { tab: 2, grant: { kind: "user_approved", approval_id: "0123" } }), "E_NOT_OWNER");
+  err(await s.call("tab.adopt", { tab: 2, grant: { kind: "user_approved", approval_id: "0123", quote: "x", message_ms: 5 } }), "E_NOT_OWNER");
+  const res = await s.call("tab.adopt", { tab: 2, grant: { kind: "user_approved", approval_id: "0123", quote: "the report sheet", message_ms: 5 } });
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.equal(s.own.ownerOf(2), MIRA);
   // Kai lost it: acting is refused by the owner check the act path uses.
@@ -364,13 +367,14 @@ test("a tab dragged into a Mono's group is adopted by the user without a prompt,
   assert.equal(s.own.takenBackAt(2), null);
 });
 
-test("closing the group releases its tabs and a closed tab is forgotten", async () => {
+test("closing the group takes its tabs back and a closed tab is forgotten", async () => {
   const s = setup({ tabs: USER_TABS });
   const { tab, group } = await mineWithGroup(s);
   s.ev.groupsRemoved.fire({ id: group });
   await s.wait();
   assert.equal(s.own.ownerOf(tab), null);
   assert.deepEqual(s.events, [["tab.ownership", { tab, owner: null, by: "group_closed" }]]);
+  assert.ok(s.own.takenBackAt(tab) > 0, "a take back: the old reference does not adopt it again");
   const second = await mineWithGroup(s);
   s.ev.tabsRemoved.fire(second.tab);
   assert.equal(s.own.ownerOf(second.tab), null);
@@ -442,58 +446,104 @@ test("the table survives a worker restart in session storage", async () => {
 
 // ---- the focus guard ----
 
-function fronts(clock) {
+/** A fake browser for the front guard: tabs 1 (window 1, the user's) and 50 (a popup, window 2). */
+function fronts(clock, opts = {}) {
   const calls = [];
+  const onActivated = event();
+  const onFocusChanged = event();
   const api = {
     tabs: {
-      query: async () => [{ id: 1, windowId: 1 }],
+      query: async (q) => (q.lastFocusedWindow ? [{ id: 1, windowId: 1 }] : [{ id: 1, windowId: 1 }]),
+      get: async (id) => ({ id, windowId: id === 50 ? (opts.popupWindow ?? 2) : 1 }),
       update: async (id, props) => void calls.push(["tab", id, props]),
-      onActivated: event(),
+      onActivated,
     },
-    windows: { update: async (id, props) => void calls.push(["window", id, props]), onFocusChanged: event() },
+    windows: { update: async (id, props) => void calls.push(["window", id, props]), onFocusChanged },
   };
-  const guard = createFrontGuard({ api, now: () => clock.t });
-  return { api, guard, calls };
+  const guard = createFrontGuard({ api, now: () => clock.t, ownerOf: (t) => (opts.owned?.includes(t) ? MIRA : null) });
+  return { api, guard, calls, onActivated, onFocusChanged };
 }
+const tick = () => new Promise((r) => setTimeout(r, 5));
 
-test("when a Mono's popup takes the front, the user's tab and window come back within 2 s", async () => {
+test("the popup took the front before the guard heard of it: the user's tab and window come back", async () => {
   const clock = { t: 0 };
   const f = fronts(clock);
-  await f.guard.init();
-  f.guard.opening();
-  clock.t = 400;
-  f.api.tabs.onActivated.fire({ tabId: 50, windowId: 2 });
-  f.api.windows.onFocusChanged.fire(2);
-  await new Promise((r) => setTimeout(r, 5));
+  await tick();
+  // The real order: Chrome activates the popup, then the navigation target event arrives.
+  clock.t = 100;
+  f.onActivated.fire({ tabId: 50, windowId: 2 });
+  f.onFocusChanged.fire(2);
+  clock.t = 150;
+  await f.guard.opening(50);
+  await tick();
   assert.deepEqual(f.calls, [["tab", 1, { active: true }], ["window", 1, { focused: true }]]);
-  // Restored once: the restore's own activation changes nothing more.
-  f.api.tabs.onActivated.fire({ tabId: 1, windowId: 1 });
-  await new Promise((r) => setTimeout(r, 5));
+  // Once: the restore's own activation changes nothing more.
+  f.onActivated.fire({ tabId: 1, windowId: 1 });
+  await tick();
   assert.equal(f.calls.length, 2);
 });
 
-test("the front is not touched when nothing was opened, or after 2 s, or when it did not move", async () => {
-  for (const scenario of ["never opened", "too late", "same front"]) {
+test("the popup takes the front after the opening event: restored when it does", async () => {
+  const clock = { t: 0 };
+  const f = fronts(clock);
+  await tick();
+  await f.guard.opening(50);
+  clock.t = 400;
+  f.onActivated.fire({ tabId: 50, windowId: 2 });
+  await tick();
+  assert.deepEqual(f.calls, [["tab", 1, { active: true }], ["window", 1, { focused: true }]]);
+});
+
+test("a tab a Mono owns is not a place to go back to", async () => {
+  const clock = { t: 0 };
+  const f = fronts(clock, { owned: [7] });
+  await tick();
+  f.onActivated.fire({ tabId: 7, windowId: 1 }); // the Mono's own tab was in front when it opened the popup
+  f.onActivated.fire({ tabId: 50, windowId: 2 });
+  await f.guard.opening(50);
+  await tick();
+  assert.deepEqual(f.calls[0], ["tab", 1, { active: true }]);
+});
+
+test("a switch the user makes by hand is never undone", async () => {
+  const clock = { t: 0 };
+  const f = fronts(clock);
+  await tick();
+  await f.guard.opening(50);
+  clock.t = 300;
+  // The user goes to another tab and window on purpose, inside the 2 s.
+  f.onActivated.fire({ tabId: 8, windowId: 3 });
+  f.onFocusChanged.fire(3);
+  f.onActivated.fire({ tabId: 9, windowId: 1 });
+  await tick();
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.guard.current(), { windowId: 1, tabId: 9 });
+});
+
+test("a window focus change is paired with that window's own tab", async () => {
+  const clock = { t: 0 };
+  const f = fronts(clock);
+  await tick();
+  f.onActivated.fire({ tabId: 20, windowId: 5 });
+  f.onActivated.fire({ tabId: 1, windowId: 1 });
+  f.onFocusChanged.fire(5);
+  assert.deepEqual(f.guard.current(), { windowId: 5, tabId: 20 });
+});
+
+test("nothing is restored when nothing was opened or after 2 s", async () => {
+  for (const scenario of ["never opened", "too late"]) {
     const clock = { t: 0 };
     const f = fronts(clock);
-    await f.guard.init();
-    if (scenario !== "never opened") f.guard.opening();
+    await tick();
+    if (scenario === "too late") await f.guard.opening(50);
     clock.t = scenario === "too late" ? RESTORE_WINDOW_MS + 1 : 100;
-    f.api.tabs.onActivated.fire(scenario === "same front" ? { tabId: 1, windowId: 1 } : { tabId: 50, windowId: 2 });
-    await new Promise((r) => setTimeout(r, 5));
+    f.onActivated.fire({ tabId: 50, windowId: 2 });
+    await tick();
     assert.deepEqual(f.calls, [], scenario);
   }
 });
 
-test("the user switching tabs by hand after the window is theirs", async () => {
-  const clock = { t: 0 };
-  const f = fronts(clock);
-  await f.guard.init();
-  f.api.tabs.onActivated.fire({ tabId: 7, windowId: 1 });
-  f.guard.opening();
-  clock.t = RESTORE_WINDOW_MS + 500;
-  f.api.tabs.onActivated.fire({ tabId: 8, windowId: 1 });
-  await new Promise((r) => setTimeout(r, 5));
-  assert.deepEqual(f.calls, []);
-  assert.deepEqual(f.guard.current(), { windowId: 1, tabId: 8 });
+test("the guard exposes no handlers of its own", () => {
+  const f = fronts({ t: 0 });
+  assert.deepEqual(Object.keys(f.guard).sort(), ["current", "opening"]);
 });
