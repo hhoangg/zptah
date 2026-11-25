@@ -2,8 +2,11 @@
 //! touched, and no browser is launched.
 use super::*;
 use crate::mono::browser::link::auth::PairingKey;
+#[cfg(unix)]
 use crate::mono::browser::links::fake_extension::socket_pair;
+#[cfg(unix)]
 use crate::mono::browser::peer::PeerReport;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 const INSTANCE: &str = "0123456789abcdef0123456789abcdef";
@@ -102,6 +105,7 @@ fn nonce_from(url: &str) -> String {
     String::from_utf8(out).unwrap()
 }
 
+#[cfg(unix)]
 fn report(rig: &Rig) -> PeerReport {
     PeerReport {
         pid: 4242,
@@ -111,6 +115,7 @@ fn report(rig: &Rig) -> PeerReport {
     }
 }
 
+#[cfg(unix)]
 fn wait_for(rig: &Rig, want: Phase) -> ConnectStatus {
     let end = Instant::now() + Duration::from_secs(5);
     loop {
@@ -197,6 +202,7 @@ fn a_written_manifest_without_a_pairing_is_the_manifest_written_phase() {
     assert_eq!(rig.connect.status().phase, Phase::ManifestWritten);
 }
 
+#[cfg(unix)]
 #[test]
 fn pairing_then_connecting_reaches_connected_and_disconnect_forgets_it() {
     let rig = rig(true);
@@ -222,6 +228,7 @@ fn pairing_then_connecting_reaches_connected_and_disconnect_forgets_it() {
     assert!(rig.connect.status().links.is_empty());
 }
 
+#[cfg(unix)]
 #[test]
 fn an_unsupported_protocol_range_is_the_protocol_mismatch_phase() {
     let rig = rig(true);
