@@ -97,6 +97,8 @@ struct Web {
     snapshot_fails: std::sync::atomic::AtomicBool,
     /// `browser_navigate` takes this long (a slow page).
     delay_ms: std::sync::atomic::AtomicU64,
+    /// The `target` of every form field a fill call carried, as the backend received it.
+    fill_targets: Mutex<Vec<String>>,
     /// The gate in front of this backend: the approval tool shows its cards there.
     gate: Mutex<Option<std::sync::Weak<Gate>>>,
 }
@@ -196,11 +198,25 @@ impl Web {
     }
     fn call(&self, name: &str, args: &Value) -> Value {
         let mut args = args.clone();
+        if name == "browser_fill_form" {
+            let mut seen = self.fill_targets.lock().unwrap();
+            for field in args["fields"].as_array().into_iter().flatten() {
+                seen.push(field["target"].as_str().unwrap_or("").to_owned());
+            }
+        }
         if let Some(selector) = args["target"]
             .as_str()
             .and_then(|r| self.selector_for_ref(r))
         {
             args["target"] = json!(selector);
+        }
+        for at in 0..args["fields"].as_array().map_or(0, Vec::len) {
+            if let Some(selector) = args["fields"][at]["target"]
+                .as_str()
+                .and_then(|r| self.selector_for_ref(r))
+            {
+                args["fields"][at]["target"] = json!(selector);
+            }
         }
         let args = &args;
         self.calls

@@ -155,7 +155,8 @@ fn mark_recipes_for_dry_run(store: &Store) {
     };
     let root = crate::mono::root(store);
     let Ok(entries) = std::fs::read_dir(&root) else {
-        // No Mono folder yet: nothing was ever recorded. Look again next time.
+        // No Mono folder: nothing was ever recorded, so every recipe made from now on is new.
+        let _ = store.save_setting(RECIPE_DRY_RUN_KEY, "1");
         return;
     };
     let mut done = true;

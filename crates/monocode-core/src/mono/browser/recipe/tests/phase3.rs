@@ -1945,3 +1945,64 @@ fn r5_a_select_takes_the_class_of_the_live_menu() {
     assert_eq!(shown.lock().unwrap()[1].category, Category::Payment);
     assert!(!rig.web.names().iter().any(|n| n == "browser_select_option"));
 }
+
+#[test]
+fn a_fill_and_a_type_step_run_through_refs_without_passing_selectors_through() {
+    // No `pass_selectors_through`: the gate turns every selector, also the ones of a form's
+    // fields, into refs, as it must on the extension.
+    let mut recipe = chat_recipe();
+    recipe.steps[2] = Step::Fill {
+        fields: vec![FormField {
+            target: target("textbox", "Message"),
+            kind: FieldKind::Textbox,
+            value: "{text}".into(),
+        }],
+        expect: vec![Expect::TextVisible("Team chat".into())],
+    };
+    let rig = chat_rig_yes();
+    approved_recipe(&rig, &recipe);
+    let (ok, result) = run_json(&rig, &recipe.id, say());
+    assert!(ok, "{result}");
+    let fills: Vec<Value> = rig
+        .web
+        .tool_calls()
+        .into_iter()
+        .filter(|c| c.0 == "browser_fill_form")
+        .map(|c| c.1)
+        .collect();
+    assert_eq!(fills.len(), 1);
+    assert_eq!(fills[0]["fields"][0]["value"], TYPED);
+    // The backend got a ref, never the selector.
+    let targets = rig.web.fill_targets.lock().unwrap().clone();
+    assert_eq!(targets, ["e30"]);
+
+    // A type step too.
+    let rig = chat_rig_yes();
+    approved_recipe(&rig, &chat_recipe());
+    let (ok, result) = run_json(&rig, &chat_recipe().id, say());
+    assert!(ok, "{result}");
+    assert_eq!(typed_calls(&rig).len(), 1);
+
+    // One field that matches nothing fails the whole step: nothing is filled.
+    let mut two = recipe.clone();
+    two.steps[2] = Step::Fill {
+        fields: vec![
+            FormField {
+                target: target("textbox", "Message"),
+                kind: FieldKind::Textbox,
+                value: "{text}".into(),
+            },
+            FormField {
+                target: target("textbox", "Nowhere"),
+                kind: FieldKind::Textbox,
+                value: "{text}".into(),
+            },
+        ],
+        expect: vec![Expect::TextVisible("Team chat".into())],
+    };
+    let rig = chat_rig_yes();
+    approved_recipe(&rig, &two);
+    let (ok, _) = run_json(&rig, &two.id, say());
+    assert!(!ok);
+    assert!(!rig.web.names().iter().any(|n| n == "browser_fill_form"));
+}

@@ -1936,6 +1936,38 @@ fn a_recipe_selector_is_turned_into_the_ref_of_its_element_before_the_call_goes_
     assert!(none.is_error && none.text.contains("does not match any elements"));
     let css = converted(json!({"target": "#buy"})).unwrap_err();
     assert!(css.is_error && css.text.contains("does not match any elements"));
+    // The fields of a form: every one becomes a ref from one snapshot, or the step fails.
+    let before = backend.seen.lock().unwrap().len();
+    let form = gate
+        .inner
+        .with_refs(
+            "browser_fill_form",
+            json!({"fields": [
+                {"target": r#"internal:role=button[name="Buy"s]"#, "value": "a"},
+                {"target": "e4", "value": "b"},
+                {"target": r#"internal:role=dialog[name="Cart"s]"#, "value": "c"}
+            ]}),
+        )
+        .unwrap();
+    assert_eq!(form["fields"][0]["target"], "e2");
+    assert_eq!(form["fields"][1]["target"], "e4");
+    assert_eq!(form["fields"][2]["target"], "e3");
+    assert_eq!(
+        backend.seen.lock().unwrap().len(),
+        before + 1,
+        "one snapshot"
+    );
+    let bad = gate
+        .inner
+        .with_refs(
+            "browser_fill_form",
+            json!({"fields": [
+                {"target": r#"internal:role=button[name="Buy"s]"#, "value": "a"},
+                {"target": r#"internal:role=button[name="Nope"s]"#, "value": "b"}
+            ]}),
+        )
+        .unwrap_err();
+    assert!(bad.is_error);
     // A ref, or no target at all, passes as it is and reads nothing.
     let before = backend.seen.lock().unwrap().len();
     assert_eq!(converted(json!({"target": "e5"})).unwrap()["target"], "e5");

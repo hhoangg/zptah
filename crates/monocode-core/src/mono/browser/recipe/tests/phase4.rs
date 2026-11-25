@@ -1168,3 +1168,21 @@ fn the_migration_makes_every_saved_recipe_wait_for_a_dry_run_once() {
     migration::run(&store, None, &Options::current());
     assert!(!approvals.needs_dry_run("mono-a", &first));
 }
+
+#[test]
+fn a_fresh_install_marks_no_recipe_made_later_as_migrated() {
+    use crate::mono::browser::migration::{self, Options, RECIPE_DRY_RUN_KEY};
+    let root = tempfile::tempdir().unwrap();
+    let store = crate::store::Store::open(&root.path().join("monocode.db")).unwrap();
+    let approvals = MonoBrowserStore::for_store(&store).unwrap();
+    // Nothing recorded yet: the migration is done at once.
+    migration::run(&store, None, &Options::current());
+    assert!(store.setting(RECIPE_DRY_RUN_KEY).unwrap().is_some());
+    // A recipe saved after that is not marked on the next load.
+    let monos = crate::mono::root(&store);
+    let recipes = RecipeStore::new(crate::mono::browser::recipes_dir(&monos, "mono-a"));
+    let recipe = sample_recipe();
+    recipes.save(&recipe).unwrap();
+    migration::run(&store, None, &Options::current());
+    assert_eq!(approvals.outside_source("mono-a", &recipe.id), None);
+}

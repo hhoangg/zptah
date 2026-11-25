@@ -1424,9 +1424,19 @@ impl Inner {
         if self.selectors_through.load(Ordering::SeqCst) {
             return Ok(args);
         }
-        let Some(selector) = refs::selector_of(&args).map(str::to_owned) else {
+        // Where the call names elements: its `target`, and the `target` of each form field.
+        let mut slots: Vec<(Option<usize>, String)> = Vec::new();
+        if let Some(selector) = refs::selector_of(&args) {
+            slots.push((None, selector.to_owned()));
+        }
+        for (at, field) in args["fields"].as_array().into_iter().flatten().enumerate() {
+            if let Some(selector) = refs::selector_of(field) {
+                slots.push((Some(at), selector.to_owned()));
+            }
+        }
+        if slots.is_empty() {
             return Ok(args);
-        };
+        }
         let failed = |text: String| runner::ToolOutput {
             text,
             is_error: true,
@@ -1437,18 +1447,30 @@ impl Inner {
             return Err(failed(text));
         }
         let forest = recipe::snapshot::parse(recipe::snapshot::snapshot_body(&text));
-        match refs::locate(&forest, &selector) {
-            refs::Located::Ref(found) => {
-                args["target"] = json!(found);
-                Ok(args)
+        // Every element must resolve to exactly one: otherwise the whole step fails.
+        let mut found = Vec::new();
+        for (at, selector) in &slots {
+            match refs::locate(&forest, selector) {
+                refs::Located::Ref(reference) => found.push((*at, reference)),
+                refs::Located::Multiple(count) => {
+                    return Err(failed(format!(
+                        "Error: strict mode violation: locator resolved to {count} elements for {selector}"
+                    )))
+                }
+                refs::Located::Missing | refs::Located::Unsupported => {
+                    return Err(failed(format!(
+                        "Error: \"{selector}\" does not match any elements ({tool})."
+                    )))
+                }
             }
-            refs::Located::Multiple(count) => Err(failed(format!(
-                "Error: strict mode violation: locator resolved to {count} elements for {selector}"
-            ))),
-            refs::Located::Missing | refs::Located::Unsupported => Err(failed(format!(
-                "Error: \"{selector}\" does not match any elements ({tool})."
-            ))),
         }
+        for (at, reference) in found {
+            match at {
+                None => args["target"] = json!(reference),
+                Some(at) => args["fields"][at]["target"] = json!(reference),
+            }
+        }
+        Ok(args)
     }
 
     /// A `recipe_*` tool call. The browser-using ones (`run`, `record`) hold the run lock.
