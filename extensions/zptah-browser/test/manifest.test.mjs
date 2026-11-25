@@ -45,3 +45,13 @@ test("forbidden permissions are absent", () => {
 test("version major is the protocol major", () => {
   assert.match(manifest.version, /^1\.\d+\.\d+$/);
 });
+
+test("CSP is exactly script-src 'self'; object-src 'self'", () => {
+  assert.deepEqual(manifest.content_security_policy, {
+    extension_pages: "script-src 'self'; object-src 'self'",
+  });
+});
+
+test("minimum Chrome version allows 30 s alarms", () => {
+  assert.ok(Number(manifest.minimum_chrome_version) >= 120);
+});

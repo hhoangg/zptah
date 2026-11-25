@@ -19,6 +19,7 @@ const BAD_JS = [
   ["sendBeacon", "navigator.sendBeacon('/b', 'x')"],
   ["userScripts", "chrome.userScripts.register([])"],
   ["registerContentScripts", "chrome.scripting.registerContentScripts([])"],
+  ["requestUpdateCheck", "chrome.runtime.requestUpdateCheck()"],
   ["setUninstallURL", "chrome.runtime.setUninstallURL('https://x')"],
   ["tabs-update-active", "chrome.tabs.update(id, { url, active: true })"],
   ["tabs-update-active", "chrome.tabs.update(id, {\n  active: true,\n})"],
