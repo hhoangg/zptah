@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 pub mod copy;
+pub mod connect;
 pub mod defense;
 pub mod gate;
 pub mod host_mode;
