@@ -53,7 +53,7 @@ export function ResponsiveOverlay({ open, onOpenChange, title, description, chil
           {/* 4 + 16 = 20px, the same inset as the header and footer, with room for the focus ring. */}
           <div className="px-1">{children}</div>
         </div>
-        {footer ? <div className="flex flex-col-reverse gap-2 px-5 pt-2">{footer}</div> : null}
+        {footer ? <div className="flex shrink-0 flex-col-reverse gap-2 px-5 pt-2">{footer}</div> : null}
       </DrawerContent>
     </Drawer>
   );

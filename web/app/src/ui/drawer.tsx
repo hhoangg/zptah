@@ -48,7 +48,7 @@ export function DrawerContent({ className, children, ...props }: ComponentProps<
 }
 
 export function DrawerHeader({ className, ...props }: ComponentProps<"div">) {
-  return <div data-slot="drawer-header" className={cn("grid min-h-14 gap-1 px-5 pt-3", className)} {...props} />;
+  return <div data-slot="drawer-header" className={cn("grid min-h-14 shrink-0 gap-1 px-5 pt-3", className)} {...props} />;
 }
 
 export function DrawerTitle({ className, ...props }: ComponentProps<typeof DrawerPrimitive.Title>) {

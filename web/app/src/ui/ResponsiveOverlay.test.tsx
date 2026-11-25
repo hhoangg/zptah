@@ -21,6 +21,18 @@ afterEach(() => {
   window.matchMedia = original;
 });
 
+describe("ResponsiveOverlay mobile sheet layout", () => {
+  it("never shrinks the header or footer, so a long list cannot overlap the description", () => {
+    render(
+      <ResponsiveOverlay open onOpenChange={() => undefined} title="Projects" description="A long description" footer={<button>Save</button>}>
+        body
+      </ResponsiveOverlay>,
+    );
+    expect(document.querySelector('[data-slot="drawer-header"]')!.className).toContain("shrink-0");
+    expect(screen.getByRole("button", { name: "Save" }).parentElement!.className).toContain("shrink-0");
+  });
+});
+
 describe("ResponsiveOverlay fullHeight", () => {
   it("makes the mobile sheet fill the viewport", () => {
     render(
