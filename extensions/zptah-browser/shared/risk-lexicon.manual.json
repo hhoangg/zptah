@@ -1,0 +1,2308 @@
+{
+ "comment": "Hand-written part of the risk lexicon and its cases. gen-risk-lexicon.mjs merges it with the entries parsed from spec Appendix A.",
+ "settings": {
+  "version": 1,
+  "comment": "Source of truth for the risk lexicon. Generated from spec Appendix A and section 7.3; shared by the Rust gate and the extension. Entry classes: payment, destructive, account_security, sharing, send, post, terms, consent, context, dismiss, not_risky, field_<kind>. A single-word phrase matches only as the whole name or the first word of a name of at most max_words (default short_word_max_words) words. not_risky and dismiss entries match only as the whole name, except prefix entries, which also win when they start the name. ctx marks a bare cancel word that takes the page context outside a dialog.",
+  "short_word_max_words": 6,
+  "button_window_words": 4,
+  "informational_max_words": 8,
+  "ambiguous_stripped": [
+   "go",
+   "moi",
+   "dang",
+   "dong",
+   "co"
+  ],
+  "informational_prefixes": [
+   "Chính sách",
+   "Hướng dẫn",
+   "Điều khoản",
+   "Câu hỏi",
+   "Policy",
+   "Help",
+   "Guide",
+   "Terms of"
+  ],
+  "consent_container_words": [
+   "cookie",
+   "cookies",
+   "chính sách cookie",
+   "tệp cookie"
+  ],
+  "consent_managers": [
+   "onetrust",
+   "cookiebot",
+   "didomi",
+   "quantcast",
+   "trustarc",
+   "usercentrics",
+   "consent.google.com"
+  ],
+  "public_visibility_words": [
+   "public",
+   "everyone",
+   "anyone",
+   "công khai",
+   "mọi người"
+  ],
+  "visibility_control_words": [
+   "visibility",
+   "audience",
+   "permission",
+   "permissions",
+   "who can see",
+   "quyền",
+   "hiển thị",
+   "đối tượng",
+   "quyền riêng tư",
+   "who can view",
+   "who can edit"
+  ],
+  "signup_prefixes": [
+   "Đăng ký",
+   "Sign up",
+   "Register"
+  ],
+  "period_words": [
+   "tháng",
+   "năm",
+   "tuần",
+   "month",
+   "monthly",
+   "year",
+   "yearly",
+   "annual",
+   "annually",
+   "week",
+   "weekly",
+   "mo",
+   "yr"
+  ]
+ },
+ "entries": [
+  {
+   "phrase": "pay",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "pay now",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "buy",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "buy now",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "place order",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "confirm order",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "checkout",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "check out",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "complete purchase",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "confirm payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "subscribe",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "upgrade plan",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "top up",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "transfer",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "send money",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "donate",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "book and pay",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "rent now",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "purchase",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "pay with card",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "proceed to payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "proceed to checkout",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "agree and pay",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "complete order",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "order now",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "buy with",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "get started and pay",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "delete",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "delete permanently",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "remove",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel order",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel subscription",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel booking",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "unsubscribe",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "deactivate",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "close account",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "delete account",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "empty trash",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "discard",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "erase",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "revoke",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "leave group",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "unfollow",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "block",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel your subscription",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel your order",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel your booking",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel my subscription",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "delete your account",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "delete my account",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "close your account",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "change password",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "reset password",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "two-factor",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "2-step verification",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "authenticator",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "security key",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "passkey",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "recovery email",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "recovery phone",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "change email",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "sign out of all devices",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "app password",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "turn off 2-step verification",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "share",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "invite",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "add member",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "give access",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "change permissions",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "anyone with the link",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "make public",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "change visibility",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "transfer ownership",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "send",
+   "class": "send",
+   "lang": "en"
+  },
+  {
+   "phrase": "send now",
+   "class": "send",
+   "lang": "en"
+  },
+  {
+   "phrase": "reply all",
+   "class": "send",
+   "lang": "en"
+  },
+  {
+   "phrase": "forward",
+   "class": "send",
+   "lang": "en"
+  },
+  {
+   "phrase": "post",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "publish",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "tweet",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "comment",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "submit review",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "share post",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "reply",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "i agree",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "agree and continue",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "accept terms",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "accept and continue",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "i accept",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "sign agreement",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "i agree to the terms",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "accept all",
+   "class": "consent",
+   "lang": "en"
+  },
+  {
+   "phrase": "accept all cookies",
+   "class": "consent",
+   "lang": "en"
+  },
+  {
+   "phrase": "allow all",
+   "class": "consent",
+   "lang": "en"
+  },
+  {
+   "phrase": "allow all cookies",
+   "class": "consent",
+   "lang": "en"
+  },
+  {
+   "phrase": "agree to all",
+   "class": "consent",
+   "lang": "en"
+  },
+  {
+   "phrase": "confirm",
+   "class": "context",
+   "lang": "en"
+  },
+  {
+   "phrase": "continue",
+   "class": "context",
+   "lang": "en"
+  },
+  {
+   "phrase": "yes",
+   "class": "context",
+   "lang": "en"
+  },
+  {
+   "phrase": "close",
+   "class": "dismiss",
+   "lang": "en"
+  },
+  {
+   "phrase": "no",
+   "class": "dismiss",
+   "lang": "en"
+  },
+  {
+   "phrase": "not now",
+   "class": "dismiss",
+   "lang": "en"
+  },
+  {
+   "phrase": "skip",
+   "class": "dismiss",
+   "lang": "en"
+  },
+  {
+   "phrase": "back",
+   "class": "dismiss",
+   "lang": "en"
+  },
+  {
+   "phrase": "later",
+   "class": "dismiss",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel",
+   "class": "dismiss",
+   "lang": "en",
+   "ctx": true
+  },
+  {
+   "phrase": "add to cart",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "view more",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "view all",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "see more",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "learn more",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "home",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "search",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "contact us",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "support",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "log in",
+   "class": "not_risky",
+   "lang": "en",
+   "prefix": true
+  },
+  {
+   "phrase": "login",
+   "class": "not_risky",
+   "lang": "en",
+   "prefix": true
+  },
+  {
+   "phrase": "sign in",
+   "class": "not_risky",
+   "lang": "en",
+   "prefix": true
+  },
+  {
+   "phrase": "sign up",
+   "class": "not_risky",
+   "lang": "en",
+   "prefix": true
+  },
+  {
+   "phrase": "Đồng ý và thanh toán",
+   "class": "terms",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đồng ý và thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tôi đồng ý và thanh toán",
+   "class": "terms",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tôi đồng ý và thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "password",
+   "class": "field_password",
+   "lang": "en"
+  },
+  {
+   "phrase": "passwd",
+   "class": "field_password",
+   "lang": "en"
+  },
+  {
+   "phrase": "passcode",
+   "class": "field_password",
+   "lang": "en"
+  },
+  {
+   "phrase": "pin",
+   "class": "field_password",
+   "lang": "en"
+  },
+  {
+   "phrase": "mat khau",
+   "class": "field_password",
+   "lang": "en"
+  },
+  {
+   "phrase": "otp",
+   "class": "field_otp",
+   "lang": "en"
+  },
+  {
+   "phrase": "totp",
+   "class": "field_otp",
+   "lang": "en"
+  },
+  {
+   "phrase": "2fa",
+   "class": "field_otp",
+   "lang": "en"
+  },
+  {
+   "phrase": "mfa",
+   "class": "field_otp",
+   "lang": "en"
+  },
+  {
+   "phrase": "verification code",
+   "class": "field_otp",
+   "lang": "en"
+  },
+  {
+   "phrase": "one time code",
+   "class": "field_otp",
+   "lang": "en"
+  },
+  {
+   "phrase": "card number",
+   "class": "field_card_number",
+   "lang": "en"
+  },
+  {
+   "phrase": "cardnumber",
+   "class": "field_card_number",
+   "lang": "en"
+  },
+  {
+   "phrase": "ccnum",
+   "class": "field_card_number",
+   "lang": "en"
+  },
+  {
+   "phrase": "cc number",
+   "class": "field_card_number",
+   "lang": "en"
+  },
+  {
+   "phrase": "pan",
+   "class": "field_card_number",
+   "lang": "en"
+  },
+  {
+   "phrase": "credit card number",
+   "class": "field_card_number",
+   "lang": "en"
+  },
+  {
+   "phrase": "cvv",
+   "class": "field_card_cvc",
+   "lang": "en"
+  },
+  {
+   "phrase": "cvc",
+   "class": "field_card_cvc",
+   "lang": "en"
+  },
+  {
+   "phrase": "csc",
+   "class": "field_card_cvc",
+   "lang": "en"
+  },
+  {
+   "phrase": "security code",
+   "class": "field_card_cvc_weak",
+   "lang": "en"
+  },
+  {
+   "phrase": "expiry",
+   "class": "field_card_expiry",
+   "lang": "en"
+  },
+  {
+   "phrase": "expiry date",
+   "class": "field_card_expiry",
+   "lang": "en"
+  },
+  {
+   "phrase": "expiration date",
+   "class": "field_card_expiry",
+   "lang": "en"
+  },
+  {
+   "phrase": "exp date",
+   "class": "field_card_expiry",
+   "lang": "en"
+  },
+  {
+   "phrase": "expiration",
+   "class": "field_card_expiry",
+   "lang": "en"
+  },
+  {
+   "phrase": "cc exp",
+   "class": "field_card_expiry",
+   "lang": "en"
+  },
+  {
+   "phrase": "account number",
+   "class": "field_bank_account",
+   "lang": "en"
+  },
+  {
+   "phrase": "iban",
+   "class": "field_bank_account",
+   "lang": "en"
+  },
+  {
+   "phrase": "swift",
+   "class": "field_bank_account",
+   "lang": "en"
+  },
+  {
+   "phrase": "routing number",
+   "class": "field_bank_account",
+   "lang": "en"
+  },
+  {
+   "phrase": "routing",
+   "class": "field_bank_account",
+   "lang": "en"
+  },
+  {
+   "phrase": "stk",
+   "class": "field_bank_account",
+   "lang": "en"
+  },
+  {
+   "phrase": "amount",
+   "class": "field_amount",
+   "lang": "en"
+  },
+  {
+   "phrase": "ssn",
+   "class": "field_national_id",
+   "lang": "en"
+  },
+  {
+   "phrase": "passport number",
+   "class": "field_national_id",
+   "lang": "en"
+  },
+  {
+   "phrase": "social security number",
+   "class": "field_national_id",
+   "lang": "en"
+  },
+  {
+   "phrase": "mã định danh",
+   "class": "field_national_id",
+   "lang": "vi"
+  },
+  {
+   "phrase": "pagar",
+   "class": "payment",
+   "lang": "es"
+  },
+  {
+   "phrase": "comprar",
+   "class": "payment",
+   "lang": "es"
+  },
+  {
+   "phrase": "pagar ahora",
+   "class": "payment",
+   "lang": "es"
+  },
+  {
+   "phrase": "eliminar",
+   "class": "destructive",
+   "lang": "es"
+  },
+  {
+   "phrase": "borrar",
+   "class": "destructive",
+   "lang": "es"
+  },
+  {
+   "phrase": "enviar",
+   "class": "send",
+   "lang": "es"
+  },
+  {
+   "phrase": "compartir",
+   "class": "sharing",
+   "lang": "es"
+  },
+  {
+   "phrase": "payer",
+   "class": "payment",
+   "lang": "fr"
+  },
+  {
+   "phrase": "acheter",
+   "class": "payment",
+   "lang": "fr"
+  },
+  {
+   "phrase": "commander",
+   "class": "payment",
+   "lang": "fr"
+  },
+  {
+   "phrase": "supprimer",
+   "class": "destructive",
+   "lang": "fr"
+  },
+  {
+   "phrase": "envoyer",
+   "class": "send",
+   "lang": "fr"
+  },
+  {
+   "phrase": "partager",
+   "class": "sharing",
+   "lang": "fr"
+  },
+  {
+   "phrase": "bezahlen",
+   "class": "payment",
+   "lang": "de"
+  },
+  {
+   "phrase": "kaufen",
+   "class": "payment",
+   "lang": "de"
+  },
+  {
+   "phrase": "jetzt kaufen",
+   "class": "payment",
+   "lang": "de"
+  },
+  {
+   "phrase": "löschen",
+   "class": "destructive",
+   "lang": "de"
+  },
+  {
+   "phrase": "entfernen",
+   "class": "destructive",
+   "lang": "de"
+  },
+  {
+   "phrase": "senden",
+   "class": "send",
+   "lang": "de"
+  },
+  {
+   "phrase": "teilen",
+   "class": "sharing",
+   "lang": "de"
+  },
+  {
+   "phrase": "finalizar compra",
+   "class": "payment",
+   "lang": "pt"
+  },
+  {
+   "phrase": "excluir",
+   "class": "destructive",
+   "lang": "pt"
+  },
+  {
+   "phrase": "apagar",
+   "class": "destructive",
+   "lang": "pt"
+  },
+  {
+   "phrase": "compartilhar",
+   "class": "sharing",
+   "lang": "pt"
+  },
+  {
+   "phrase": "bayar",
+   "class": "payment",
+   "lang": "id"
+  },
+  {
+   "phrase": "beli",
+   "class": "payment",
+   "lang": "id"
+  },
+  {
+   "phrase": "beli sekarang",
+   "class": "payment",
+   "lang": "id"
+  },
+  {
+   "phrase": "hapus",
+   "class": "destructive",
+   "lang": "id"
+  },
+  {
+   "phrase": "kirim",
+   "class": "send",
+   "lang": "id"
+  },
+  {
+   "phrase": "bagikan",
+   "class": "sharing",
+   "lang": "id"
+  },
+  {
+   "phrase": "支付",
+   "class": "payment",
+   "lang": "zh"
+  },
+  {
+   "phrase": "购买",
+   "class": "payment",
+   "lang": "zh"
+  },
+  {
+   "phrase": "立即购买",
+   "class": "payment",
+   "lang": "zh"
+  },
+  {
+   "phrase": "删除",
+   "class": "destructive",
+   "lang": "zh"
+  },
+  {
+   "phrase": "发送",
+   "class": "send",
+   "lang": "zh"
+  },
+  {
+   "phrase": "分享",
+   "class": "sharing",
+   "lang": "zh"
+  },
+  {
+   "phrase": "支払う",
+   "class": "payment",
+   "lang": "ja"
+  },
+  {
+   "phrase": "購入",
+   "class": "payment",
+   "lang": "ja"
+  },
+  {
+   "phrase": "購入する",
+   "class": "payment",
+   "lang": "ja"
+  },
+  {
+   "phrase": "削除",
+   "class": "destructive",
+   "lang": "ja"
+  },
+  {
+   "phrase": "送信",
+   "class": "send",
+   "lang": "ja"
+  },
+  {
+   "phrase": "共有",
+   "class": "sharing",
+   "lang": "ja"
+  },
+  {
+   "phrase": "결제",
+   "class": "payment",
+   "lang": "ko"
+  },
+  {
+   "phrase": "구매",
+   "class": "payment",
+   "lang": "ko"
+  },
+  {
+   "phrase": "삭제",
+   "class": "destructive",
+   "lang": "ko"
+  },
+  {
+   "phrase": "보내기",
+   "class": "send",
+   "lang": "ko"
+  },
+  {
+   "phrase": "공유",
+   "class": "sharing",
+   "lang": "ko"
+  },
+  {
+   "phrase": "ชำระเงิน",
+   "class": "payment",
+   "lang": "th"
+  },
+  {
+   "phrase": "ซื้อ",
+   "class": "payment",
+   "lang": "th"
+  },
+  {
+   "phrase": "ลบ",
+   "class": "destructive",
+   "lang": "th"
+  },
+  {
+   "phrase": "ส่ง",
+   "class": "send",
+   "lang": "th"
+  },
+  {
+   "phrase": "แชร์",
+   "class": "sharing",
+   "lang": "th"
+  },
+  {
+   "phrase": "book now",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "withdraw",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "submit payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "complete payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "make payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "confirm purchase",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "submit order",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "reserve",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "confirm and pay",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "Đặt ngay",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hoàn tất thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hoàn tất đặt hàng",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xác nhận mua hàng",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Thực hiện thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Giữ chỗ",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Trở về trang chủ",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tìm hiểu ngay",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "ok",
+   "class": "context",
+   "lang": "en"
+  },
+  {
+   "phrase": "okay",
+   "class": "context",
+   "lang": "en"
+  },
+  {
+   "phrase": "register",
+   "class": "not_risky",
+   "lang": "en",
+   "prefix": true
+  }
+ ],
+ "cases": [
+  {
+   "name": "Đăng nhập",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "F8: login is not post"
+  },
+  {
+   "name": "Đăng nhập eMB",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "F8: login prefix beats the short word Đăng"
+  },
+  {
+   "name": "Đăng ký",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "decision 7b"
+  },
+  {
+   "name": "Đăng ký gói",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "decision 7b: paid subscription"
+  },
+  {
+   "name": "Đăng ký vay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "decision 7a"
+  },
+  {
+   "name": "Vay nhanh",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "decision 7a"
+  },
+  {
+   "name": "Ví trả sau",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "decision 7a"
+  },
+  {
+   "name": "Mua trước trả sau",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "decision 7a"
+  },
+  {
+   "name": "Đang xử lý",
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: Đang is not Đăng"
+  },
+  {
+   "name": "Đang",
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: Đang is not Đăng"
+  },
+  {
+   "name": "Dang",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "ambiguous stripped word off a Vietnamese page"
+  },
+  {
+   "name": "Dang nhap",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "stripped login"
+  },
+  {
+   "name": "Đăng",
+   "expect": {
+    "categories": [],
+    "post": true
+   }
+  },
+  {
+   "name": "Đăng bài",
+   "expect": {
+    "categories": [],
+    "post": true
+   }
+  },
+  {
+   "name": "Mua vé xem phim",
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: menu tile, 4 words"
+  },
+  {
+   "name": "Mua vé xem phim",
+   "kind": "link",
+   "link": {
+    "href": "/ve",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": []
+   },
+   "note": "F8"
+  },
+  {
+   "name": "MUA SẮM TOÀN BỘ SẢN PHẨM",
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: 5 words"
+  },
+  {
+   "name": "Mua sắm",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   }
+  },
+  {
+   "name": "Chính sách thanh toán",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   },
+   "note": "F8: policy link"
+  },
+  {
+   "name": "Chính sách bảo mật thanh toán",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   }
+  },
+  {
+   "name": "Chính sách quyền riêng tư",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   }
+  },
+  {
+   "name": "Hướng dẫn đặt hàng",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   }
+  },
+  {
+   "name": "Hướng dẫn trả góp",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   }
+  },
+  {
+   "name": "Terms of service",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   }
+  },
+  {
+   "name": "Gửi yêu cầu hỗ trợ",
+   "expect": {
+    "categories": []
+   },
+   "note": "Gửi is a short word, 4 words"
+  },
+  {
+   "name": "Gửi",
+   "expect": {
+    "categories": [],
+    "send": true
+   }
+  },
+  {
+   "name": "Gửi tin nhắn",
+   "expect": {
+    "categories": [],
+    "send": true
+   },
+   "note": "unlisted phrase: Gửi starts a name of at most 3 words"
+  },
+  {
+   "name": "Gỡ",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "GO TO STORE",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: Go is not Gỡ"
+  },
+  {
+   "name": "Go",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: Go is not Gỡ"
+  },
+  {
+   "name": "Đóng",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "dismiss, not destructive"
+  },
+  {
+   "name": "Đóng tiền",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "M0.10"
+  },
+  {
+   "name": "Đóng tài khoản",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Điều khoản: Đồng ý và thanh toán",
+   "expect": {
+    "categories": [
+     "payment",
+     "terms"
+    ]
+   },
+   "note": "F8: buttons match inside segments"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "/pay",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": false
+   },
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "not in nav"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "/thanh-toan-hoa-don",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": []
+   },
+   "note": "F8: nav tab to a non-checkout path"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "/checkout",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "checkout path is never exempt"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "/info?x=1",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "query string is never exempt"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "https://other.example/info",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "other origin is never exempt"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "/info",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "in_dialog": true,
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "in a dialog"
+  },
+  {
+   "name": "Xóa tài khoản",
+   "kind": "link",
+   "link": {
+    "href": "/account",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "destructive is never exempt"
+  },
+  {
+   "name": "Chuyển tiền - Thanh toán",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Sim số - Thẻ cào - Thẻ game",
+   "expect": {
+    "categories": []
+   }
+  },
+  {
+   "name": "thanh-toán",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "THANH TOAN",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Thanh toán hoá đơn",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "old tone placement"
+  },
+  {
+   "name": "Thanh toán hóa đơn",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "new tone placement"
+  },
+  {
+   "name": "Xoá",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Xóa",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Chấp nhận tất cả",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "cookie consent is not terms"
+  },
+  {
+   "name": "Accept all",
+   "expect": {
+    "categories": [],
+    "consent": true
+   }
+  },
+  {
+   "name": "Tôi đồng ý",
+   "expect": {
+    "categories": [
+     "terms"
+    ]
+   }
+  },
+  {
+   "name": "Buy now",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Buyer reviews",
+   "expect": {
+    "categories": []
+   },
+   "note": "short word buy is not buyer"
+  },
+  {
+   "name": "Payment methods help",
+   "expect": {
+    "categories": []
+   },
+   "note": "short word pay is not payment"
+  },
+  {
+   "name": "Add to cart",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   }
+  },
+  {
+   "name": "Log in",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   }
+  },
+  {
+   "name": "Sign in with Google",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   }
+  },
+  {
+   "name": "Delete",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Delete account",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Send",
+   "expect": {
+    "categories": [],
+    "send": true
+   }
+  },
+  {
+   "name": "Post",
+   "expect": {
+    "categories": [],
+    "post": true
+   }
+  },
+  {
+   "name": "Share",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   }
+  },
+  {
+   "name": "Mời",
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   }
+  },
+  {
+   "name": "Mới",
+   "expect": {
+    "categories": []
+   },
+   "note": "Mới is not Mời"
+  },
+  {
+   "name": "Moi",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "ambiguous stripped word off a Vietnamese page"
+  },
+  {
+   "name": "Moi",
+   "page_vi": true,
+   "expect": {
+    "categories": [
+     "sharing"
+    ]
+   }
+  },
+  {
+   "name": "Tiếp tục",
+   "expect": {
+    "categories": []
+   },
+   "note": "context word alone"
+  },
+  {
+   "name": "Cancel",
+   "in_dialog": true,
+   "dialog_has_primary": true,
+   "dialog_text": "Cancel your subscription?",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "dismiss is never risky"
+  },
+  {
+   "name": "Hủy",
+   "in_dialog": true,
+   "dialog_has_primary": true,
+   "dialog_text": "Bạn có chắc muốn xóa tài khoản?",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   }
+  },
+  {
+   "name": "Confirm",
+   "in_dialog": true,
+   "dialog_has_primary": true,
+   "dialog_text": "Cancel your subscription?",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "the primary button takes the dialog category"
+  },
+  {
+   "name": "Yes",
+   "in_dialog": true,
+   "dialog_has_primary": true,
+   "dialog_text": "Are you sure you want to delete this file?",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Xác nhận",
+   "in_dialog": true,
+   "dialog_text": "Bạn có chắc chắn muốn xóa tài khoản không?",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Xác nhận",
+   "page_title": "Thanh toán đơn hàng",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Continue",
+   "page_heading": "Checkout and pay",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Continue",
+   "expect": {
+    "categories": []
+   },
+   "note": "no context"
+  },
+  {
+   "name": "Cancel",
+   "page_heading": "Cancel subscription",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "bare cancel takes the page context"
+  },
+  {
+   "name": "Hủy",
+   "page_heading": "Hủy gói",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Cancel",
+   "expect": {
+    "categories": []
+   },
+   "note": "bare cancel without context"
+  },
+  {
+   "name": "Có",
+   "page_vi": true,
+   "in_dialog": true,
+   "dialog_text": "Xóa vĩnh viễn?",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   }
+  },
+  {
+   "name": "Co",
+   "page_vi": false,
+   "expect": {
+    "categories": []
+   },
+   "note": "ambiguous stripped word"
+  },
+  {
+   "name": "Close",
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   }
+  },
+  {
+   "name": "OK",
+   "in_dialog": true,
+   "dialog_text": "Xóa vĩnh viễn?",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "OK is not a lexicon word; the dialog text still marks it"
+  },
+  {
+   "name": "Help: delete account",
+   "kind": "link",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "I2: a policy-like prefix does not hide a destructive phrase"
+  },
+  {
+   "name": "Điều khoản hủy gói",
+   "kind": "link",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "I2"
+  },
+  {
+   "name": "Hướng dẫn đổi mật khẩu",
+   "kind": "link",
+   "expect": {
+    "categories": [
+     "account_security"
+    ]
+   },
+   "note": "I2"
+  },
+  {
+   "name": "Chính sách thanh toán",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   },
+   "note": "I2: payment after a policy prefix stays informational"
+  },
+  {
+   "name": "Accept all",
+   "in_dialog": true,
+   "dialog_text": "We use cookies to improve your experience",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "I3: confirmed cookie banner"
+  },
+  {
+   "name": "Accept all",
+   "in_dialog": true,
+   "dialog_text": "Welcome",
+   "dialog_markers": "onetrust-banner-sdk",
+   "expect": {
+    "categories": [],
+    "consent": true
+   },
+   "note": "I3: known consent manager"
+  },
+  {
+   "name": "Accept all",
+   "in_dialog": true,
+   "dialog_text": "Delete your account? This cannot be undone.",
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "I3: not a cookie banner"
+  },
+  {
+   "name": "Chấp nhận tất cả",
+   "in_dialog": true,
+   "dialog_text": "Xác nhận thanh toán đơn hàng",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "I3: a payment dialog is not a cookie banner"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "#",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "I4: fragment-only href is never exempt"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "I4: empty href is never exempt"
+  },
+  {
+   "name": "Thanh toán",
+   "kind": "link",
+   "link": {
+    "href": "/info",
+    "page_url": "https://shop.example.vn/",
+    "in_nav_footer_menu": true
+   },
+   "role": "button",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "I4: role=button is never exempt"
+  },
+  {
+   "name": "Sign up",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "I5: plain sign-up"
+  },
+  {
+   "name": "Sign up",
+   "nearby_text": "Pro plan $9.99/month",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "I5: price"
+  },
+  {
+   "name": "Sign up",
+   "nearby_text": "Billed every year",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "I5: period word"
+  },
+  {
+   "name": "Đăng ký",
+   "nearby_text": "Gói Plus 199.000đ",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "I5: price, Vietnamese"
+  },
+  {
+   "name": "Đăng ký",
+   "nearby_text": "Chỉ 50 nghìn mỗi tháng",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "I5: period word, Vietnamese"
+  },
+  {
+   "name": "Đăng ký",
+   "nearby_text": "Tạo tài khoản miễn phí",
+   "expect": {
+    "categories": [],
+    "not_risky": true
+   },
+   "note": "decision 7b"
+  },
+  {
+   "name": "Register",
+   "nearby_text": "Annual fee: 120 USD",
+   "page_vi": true,
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   },
+   "note": "I5: on any page"
+  },
+  {
+   "name": "Cancel",
+   "in_dialog": true,
+   "dialog_has_primary": true,
+   "dialog_text": "Delete this file permanently?",
+   "dialog_primary_names": [
+    "Keep file"
+   ],
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "M2: no other primary is destructive"
+  },
+  {
+   "name": "Cancel",
+   "in_dialog": true,
+   "dialog_has_primary": true,
+   "dialog_text": "Delete this file permanently?",
+   "dialog_primary_names": [
+    "Delete"
+   ],
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "M2: the other primary is destructive"
+  },
+  {
+   "name": "Cancel",
+   "in_dialog": true,
+   "dialog_has_primary": true,
+   "dialog_text": "Delete this file permanently?",
+   "dialog_primary_names": [
+    "OK"
+   ],
+   "expect": {
+    "categories": [],
+    "dismiss": true
+   },
+   "note": "M2: a confirm word takes the dialog meaning"
+  },
+  {
+   "name": "Hủy",
+   "in_dialog": true,
+   "dialog_has_primary": true,
+   "dialog_text": "Xóa vĩnh viễn tệp này?",
+   "dialog_primary_names": [
+    "Giữ lại"
+   ],
+   "expect": {
+    "categories": [
+     "destructive"
+    ]
+   },
+   "note": "M2"
+  },
+  {
+   "name": "Điều khoản: Dong y va thanh toan",
+   "expect": {
+    "categories": [
+     "payment",
+     "terms"
+    ]
+   },
+   "note": "M4: a segment without diacritics is compared stripped"
+  },
+  {
+   "name": "Thanh toán - Dong y va tiep tuc",
+   "expect": {
+    "categories": [
+     "payment",
+     "terms"
+    ]
+   },
+   "note": "M4"
+  },
+  {
+   "name": "Điều khoản: Thanh toán ngay",
+   "kind": "link",
+   "note": "second segment keeps payment",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Hướng dẫn: Mua ngay",
+   "kind": "link",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Help - Pay now",
+   "kind": "link",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  },
+  {
+   "name": "Chính sách thanh toán",
+   "kind": "link",
+   "expect": {
+    "categories": [],
+    "informational": true
+   }
+  },
+  {
+   "name": "Accept all",
+   "in_dialog": true,
+   "dialog_text": "Xác nhận thanh toán 5.000.000đ. Chúng tôi dùng cookie.",
+   "note": "cookie words do not make a payment dialog a banner",
+   "expect": {
+    "categories": [
+     "payment"
+    ]
+   }
+  }
+ ]
+}

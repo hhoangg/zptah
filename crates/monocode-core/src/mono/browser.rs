@@ -26,6 +26,7 @@ pub mod link;
 pub mod output;
 pub(crate) mod peer;
 pub mod recipe;
+pub mod risk;
 pub mod server;
 
 /// Name of the MCP server. Distinct from a user-level `playwright` server.

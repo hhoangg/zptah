@@ -11,7 +11,7 @@
     "pretest:host": "npm run host:build",
     "test:host": "vitest run --config host/vitest.config.ts",
     "ext:build": "node extensions/zptah-browser/scripts/build.mjs",
-    "ext:test": "node --test extensions/zptah-browser/test/*.test.mjs",
+    "ext:test": "node --test extensions/zptah-browser/test/*.test.mjs extensions/zptah-browser/shared/*.test.mjs",
     "ext:check": "tsc -p extensions/zptah-browser/jsconfig.json",
     "worktrees:clean": "node scripts/worktrees-clean.mjs",
     "native:dev": "node scripts/dev-native.mjs",
