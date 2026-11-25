@@ -1,3 +1,5 @@
+> Superseded by [docs/superpowers/specs/2026-11-25-zptah-browser-extension.md](2026-11-25-zptah-browser-extension.md): the Playwright MCP backend was removed.
+
 # Mono Browser (real Chrome via Playwright MCP extension mode) - design
 
 Status: spec, not scheduled. Native app only.

@@ -100,7 +100,8 @@ pub(crate) struct Preferences {
     /// Experimental: report Monocode instead of `sdk-cli` as Claude's entrypoint.
     pub claude_entrypoint: bool,
     pub binary_paths: HashMap<String, String>,
-    /// Where `npx` is, when the app cannot find Node.js itself (Mono Browser tab). Empty is automatic.
+    /// Where Node.js `npx` is, when the app cannot find it itself. Empty is automatic. The zptah
+    /// Browser extension does not use it.
     pub node_path: String,
     /// How a new session of each provider opens (`monocode.providerSurface.v1`).
     #[serde(deserialize_with = "known_surfaces")]

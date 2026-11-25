@@ -1,18 +1,14 @@
 //! Tab bookkeeping of one Mono's browser: which tabs the agent made, which were used last, and
 //! when an address is already open.
 //!
-//! Why: the Playwright Bridge extension makes a tab group per connection and the connection is
-//! the only owner of the tabs it made or was handed. A new connection (the app restarted the
-//! server, the extension reconnected) never adopts the tabs of an earlier one: the old group is
-//! greyed and left (`docs/superpowers/specs/2026-11-22-browser-all-tabs-research.md`; only a drag
-//! into the live group transfers a tab, `TabGroupManager._onTabChangedGroup`). The extension has
-//! no message to claim a group by its name, and `@playwright/mcp` 0.0.86 only sends the name and
-//! color for the new group (`--session-name`, `--session-color`). So re-adoption after a restart
-//! is not possible from this side; the server therefore lives for hours (see
-//! [`super::super::server::IDLE_TIMEOUT`]) and the gate makes the Mono reuse what is open now.
+//! Why: the extension owns the tab groups (one per Mono per window, keyed by Mono id and tab id,
+//! spec section 9 of `docs/superpowers/specs/2026-11-25-zptah-browser-extension.md`). A tab the
+//! user opened is not the Mono's until it is adopted, and the app learns what is open only from
+//! the answers of `tabs.list`. The gate therefore keeps its own mirror of the last list, so the
+//! Mono reuses what is open now instead of opening the same address twice.
 //!
-//! The book is a mirror of the last `browser_tabs` list, kept by index (the only identity the
-//! tool gives) and by exact address. It fails safe: a tab counts as the agent's only while its
+//! The book is a mirror of the last `browser_tabs` list, kept by position in the rendered list and
+//! by exact address (Chrome tab ids are in the payload but the book does not use them). It fails safe: a tab counts as the agent's only while its
 //! identity is certain (the same address at the same position, the tab the agent is working in,
 //! or an address that is unique in both lists). Anything else (a tab the user opened, dragged in
 //! or swapped, a popup, any list that changed in a way the agent did not cause) counts as the
