@@ -1,6 +1,6 @@
 use super::*;
 use crate::mono::browser::link::auth::encode_bytes;
-use crate::mono::browser::link::frame::{encode_frame, MAX_HOST_TO_EXTENSION_FRAME};
+use crate::mono::browser::link::frame::encode_frame;
 use crate::mono::browser::link::protocol::{EnvelopeType, Event};
 use serde_json::json;
 
@@ -224,6 +224,7 @@ fn an_immediate_eof_ends_quietly_and_a_failed_verification_sends_nothing() {
 #[cfg(unix)]
 mod relay {
     use super::*;
+    use crate::mono::browser::link::frame::MAX_HOST_TO_EXTENSION_FRAME;
     use std::os::unix::net::UnixStream;
 
     struct Rig {
