@@ -38,6 +38,27 @@ pub enum Category {
 }
 
 impl Category {
+    /// The category with this id (`payment`, `send_unnamed`, ...), as the agent declares it.
+    pub fn parse(id: &str) -> Option<Category> {
+        const ALL: [Category; 14] = [
+            Category::Payment,
+            Category::Destructive,
+            Category::AccountSecurity,
+            Category::Sharing,
+            Category::SendUnnamed,
+            Category::PostPublic,
+            Category::Upload,
+            Category::CredentialEntry,
+            Category::Terms,
+            Category::UnrelatedDomain,
+            Category::SensitiveSite,
+            Category::SoulRule,
+            Category::Tainted,
+            Category::Injection,
+        ];
+        ALL.into_iter().find(|c| c.as_str() == id.trim())
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Category::Payment => "payment",

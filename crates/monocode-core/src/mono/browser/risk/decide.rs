@@ -44,9 +44,18 @@ pub struct DecisionInput<'a> {
     pub grants: &'a BTreeSet<Category>,
 }
 
-/// Categories a grant can never cover.
+/// Categories a grant can never cover: money and credentials (spec 7.6), plus the ones that are
+/// not about the task at all: an injection warning, data that would leave for another site, and a
+/// rule the user wrote (an `ask` rule asks every time).
 pub fn never_granted(c: Category) -> bool {
-    matches!(c, Category::Payment | Category::CredentialEntry)
+    matches!(
+        c,
+        Category::Payment
+            | Category::CredentialEntry
+            | Category::Injection
+            | Category::Tainted
+            | Category::SoulRule
+    )
 }
 
 /// The union of every source of categories.

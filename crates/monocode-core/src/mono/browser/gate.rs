@@ -143,6 +143,11 @@ pub fn approval_required(trust: BrowserTrust, category: Category) -> bool {
     }
 }
 
+/// The two-level counterpart of [`approval_required`] for the extension backend (spec 8.1), over
+/// the classifier's categories. The Playwright backend keeps [`approval_required`] until it is
+/// removed.
+pub use super::trust::approval_required as approval_required_level;
+
 /// One approval the user is asked for. Everything the user needs to decide is in it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApprovalRequest {
@@ -219,6 +224,11 @@ pub struct Policy {
     pub show_actions: bool,
 }
 impl Policy {
+    /// The two-level view of the setting (spec 8.1) the extension backend decides with: both
+    /// asking levels of the Playwright backend are `act`.
+    pub fn level(&self) -> super::trust::BrowserLevel {
+        self.trust.into()
+    }
     pub fn new(trust: BrowserTrust, blocked_origins: Vec<String>) -> Self {
         Self {
             trust,
