@@ -320,6 +320,13 @@ impl Rig {
         // These tests are about recipes, not about the taint rule (which has its own tests).
         gate.begin_turn(&route, "");
         gate.exempt_from_taint(&route);
+        // The gate's "Save as recipe?" suggestion card is shown from a detached thread after a
+        // few browsing calls. Left on, it races with the test's own attach and steals the first
+        // answer (or finds no user at all), so these tests refuse it up front. The card has its
+        // own tests in gate/tests.rs.
+        MonoBrowserStore::at(database.clone())
+            .set_never_suggest(MONO, SITE)
+            .unwrap();
         Self {
             web,
             gate,

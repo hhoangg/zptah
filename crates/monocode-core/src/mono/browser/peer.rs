@@ -41,6 +41,8 @@ mod linux;
 mod macos;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+pub(crate) mod windows_pipe;
 
 #[cfg(target_os = "linux")]
 use linux as os;

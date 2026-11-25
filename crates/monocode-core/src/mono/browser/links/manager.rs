@@ -78,6 +78,32 @@ impl Conn {
     }
 }
 
+#[cfg(windows)]
+struct PipeControl(super::super::peer::windows_pipe::OverlappedPipe);
+
+#[cfg(windows)]
+impl ConnControl for PipeControl {
+    fn set_read_timeout(&self, timeout: Option<Duration>) {
+        self.0.set_read_timeout(timeout);
+    }
+    fn close(&self) {
+        self.0.close();
+    }
+}
+
+#[cfg(windows)]
+impl Conn {
+    /// `pipe` must be an overlapped handle, so the reader thread's pending read never blocks the
+    /// writer thread's writes.
+    pub(crate) fn from_pipe(pipe: super::super::peer::windows_pipe::OverlappedPipe) -> Conn {
+        Conn {
+            reader: Box::new(pipe.try_clone()),
+            writer: Box::new(pipe.try_clone()),
+            control: Box::new(PipeControl(pipe)),
+        }
+    }
+}
+
 // ---- records ----
 
 /// What pairing recorded about one extension install. Not secret: the key is in the key store.
