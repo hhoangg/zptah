@@ -109,4 +109,15 @@ describe("hostile input stays fast", () => {
     const [link] = parseInline("[https://a.dev](https://b.dev)");
     expect(link).toMatchObject({ type: "link", href: "https://b.dev", children: [{ type: "text", text: "https://a.dev" }] });
   });
+
+  it("reads task items and leaves other brackets alone", () => {
+    const [list] = parseMarkdown("- [x] a\n- [ ] b\n- [link] c");
+    expect(list).toMatchObject({ type: "list", tasks: [true, false, null] });
+    expect(parseMarkdown("- a\n- b")[0]).not.toHaveProperty("tasks");
+  });
+
+  it("reads a lone task box and an ordered task", () => {
+    expect(parseMarkdown("- [x]")[0]).toMatchObject({ tasks: [true] });
+    expect(parseMarkdown("1. [ ] a")[0]).toMatchObject({ ordered: true, tasks: [false] });
+  });
 });

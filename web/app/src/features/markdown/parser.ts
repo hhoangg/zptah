@@ -19,7 +19,14 @@ export type MarkdownBlock =
   | { type: "paragraph"; inline: Inline[] }
   | { type: "heading"; level: number; inline: Inline[] }
   | { type: "code"; lang: string; text: string }
-  | { type: "list"; ordered: boolean; start: number; items: MarkdownBlock[][] }
+  | {
+      type: "list";
+      ordered: boolean;
+      start: number;
+      items: MarkdownBlock[][];
+      /** Per item: `true`/`false` for a task item (`[x]`/`[ ]`), `null` for a plain one. Present only with a task item. */
+      tasks?: (boolean | null)[];
+    }
   | { type: "quote"; children: MarkdownBlock[] }
   | { type: "table"; rows: Inline[][][]; truncated?: boolean }
   | { type: "rule" };
@@ -27,6 +34,8 @@ export type MarkdownBlock =
 const FENCE = /^ {0,3}(`{3,}|~{3,})\s*([\w+-]*)/;
 const HEADING = /^ {0,3}(#{1,6})\s+(.*)$/;
 const RULE = /^ {0,3}([-*_])(\s*\1){2,}\s*$/;
+/** A task item's box at the start of its first line. */
+const TASK = /^\[( |x|X)\](?:\s+|$)/;
 const ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 const QUOTE = /^ {0,3}>\s?(.*)$/;
 /** Lines longer than this never start a table (the divider pattern is not linear on long runs of space). */
@@ -280,12 +289,19 @@ function parseList(lines: string[], from: number, depth: number): [MarkdownBlock
   }
   // The first line is a list item by construction, but never return without consuming it.
   if (index === from) index += 1;
+  const tasks = items.map((body): boolean | null => {
+    const found = TASK.exec(body[0] ?? "");
+    if (!found) return null;
+    body[0] = (body[0] ?? "").slice(found[0].length);
+    return found[1] !== " ";
+  });
   return [
     {
       type: "list",
       ordered,
       start: ordered ? parseInt(marker, 10) : 1,
       items: items.map((body) => parseBlocks(body, depth + 1)),
+      ...(tasks.some((task) => task !== null) ? { tasks } : {}),
     },
     index,
   ];
