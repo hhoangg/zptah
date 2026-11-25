@@ -40,7 +40,7 @@
   }
 
   /**
-   * @param {{ generation: number, query: string, max?: number }} args
+   * @param {{ generation: number, query: string, max?: number, reset?: boolean }} args
    * @param {any} [env]
    */
   function find(args, env) {

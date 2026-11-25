@@ -97,7 +97,7 @@ export function createPages({ api, now, sleep }) {
     for (const key of snaps.keys()) {
       if (snaps.size <= CACHE_TABS && total <= CACHE_BYTES) break;
       if (key === tabId) continue;
-      total -= snaps.get(key).text.length;
+      total -= snaps.get(key)?.text.length ?? 0;
       snaps.delete(key);
     }
   };
