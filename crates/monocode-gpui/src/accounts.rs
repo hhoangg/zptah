@@ -1205,6 +1205,7 @@ mod tests {
                 used_percent: 40.,
                 minutes: 300,
                 resets_at: None,
+                group: None,
             }],
             ..Default::default()
         };

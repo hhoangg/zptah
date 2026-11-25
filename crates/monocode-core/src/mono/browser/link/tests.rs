@@ -193,8 +193,8 @@ fn samples() -> Vec<(Method, Value, Value)> {
     let url_title = json!({"url": "https://example.com/", "title": "Example"});
     let prepared = json!({
         "prepare_id": "p1", "expires_ms": 30000, "digest": "ab", "url": "https://example.com/",
-        "title": "Example", "frame_url": "https://example.com/", "element": {"role": "button"},
-        "ext_risk": ["send"]
+        "title": "Example", "frame_url": "https://example.com/", "element": act_samples()["element"],
+        "form": act_samples()["form"], "ext_risk": ["payment"]
     });
     vec![
         (
@@ -288,7 +288,9 @@ fn samples() -> Vec<(Method, Value, Value)> {
         (
             Method::ActCommit,
             json!({"prepare_id": "p1", "approval": {"approval_id": "a1", "categories": ["send"], "digest": "ab"}, "input": "auto"}),
-            json!({"url": "https://example.com/", "title": "Example", "effects": {}}),
+            json!({"url": "https://example.com/", "title": "Example",
+                   "effects": {"method": "content", "dom_mutations": 1, "url_changed": false,
+                               "focus_changed": false, "value_matches": true}}),
         ),
         (
             Method::ActExtend,
@@ -343,7 +345,20 @@ fn event_samples() -> Vec<(Event, Value)> {
             Event::CursorChanged,
             json!({"enabled": false, "off_sites": []}),
         ),
+        (
+            Event::ActLate,
+            json!({"tab": 5, "prepare_id": "p1", "ok": true, "url": "https://example.com/",
+                   "effects": {"method": "content", "dom_mutations": 2, "url_changed": false,
+                               "focus_changed": false}}),
+        ),
     ]
+}
+
+const ACT_SAMPLES: &str =
+    include_str!("../../../../../../extensions/zptah-browser/shared/act-samples.json");
+
+fn act_samples() -> Value {
+    serde_json::from_str(ACT_SAMPLES).expect("act-samples.json is valid JSON")
 }
 
 fn error_of<T: std::fmt::Debug>(r: Result<T, ProtocolError>) -> ErrorCode {
@@ -1513,5 +1528,92 @@ fn shared_vectors_match_the_implementation() {
     for text in committed["canonical_rejects"].as_array().unwrap() {
         let value: Value = serde_json::from_str(text.as_str().unwrap()).unwrap();
         assert!(canonical_json(&value).is_err());
+    }
+}
+
+// ---- the act payloads the extension sends (T14) ----
+
+/// Keys of a struct as it serializes by default, split into required (not `Option`) and optional.
+fn struct_keys<T: Default + serde::Serialize>() -> (Vec<String>, Vec<String>) {
+    let v = serde_json::to_value(T::default()).unwrap();
+    let mut required = Vec::new();
+    let mut optional = Vec::new();
+    for (k, v) in v.as_object().unwrap() {
+        if v.is_null() {
+            optional.push(k.clone());
+        } else {
+            required.push(k.clone());
+        }
+    }
+    (required, optional)
+}
+
+fn strip_nulls(v: &mut Value) {
+    if let Value::Object(map) = v {
+        map.retain(|_, x| !x.is_null());
+        map.values_mut().for_each(strip_nulls);
+    } else if let Value::Array(items) = v {
+        items.iter_mut().for_each(strip_nulls);
+    }
+}
+
+fn assert_signals_shape<T>(sample: &Value, name: &str)
+where
+    T: Default + serde::Serialize + serde::de::DeserializeOwned,
+{
+    let (required, optional) = struct_keys::<T>();
+    let keys: Vec<&String> = sample.as_object().unwrap().keys().collect();
+    for k in &required {
+        assert!(keys.contains(&k), "{name}: sample lacks required key {k}");
+    }
+    for k in keys {
+        assert!(
+            required.contains(k) || optional.contains(k),
+            "{name}: sample has key {k} that the Rust struct does not know"
+        );
+    }
+    // The sample survives a round trip through the Rust type unchanged.
+    let typed: T = serde_json::from_value(sample.clone()).unwrap();
+    let mut back = serde_json::to_value(&typed).unwrap();
+    strip_nulls(&mut back);
+    assert_eq!(&back, sample, "{name} changed in a round trip");
+}
+
+#[test]
+fn extension_signals_match_the_rust_signal_types_exactly() {
+    use crate::mono::browser::risk::signals::{ElementSignals, FormSignals};
+    let samples = act_samples();
+    let root = schema();
+    for key in ["element", "element_in_dialog"] {
+        assert_signals_shape::<ElementSignals>(&samples[key], key);
+        valid(&root, "ElementSignals", &samples[key]).unwrap();
+    }
+    for key in ["form", "form_with_recipients"] {
+        assert_signals_shape::<FormSignals>(&samples[key], key);
+        valid(&root, "FormSignals", &samples[key]).unwrap();
+        for field in samples[key]["fields"].as_array().unwrap() {
+            let kind = field["kind"].as_str().unwrap();
+            assert!(
+                crate::mono::browser::risk::signals::FieldKind::parse(kind).is_some(),
+                "unknown field kind {kind}"
+            );
+        }
+    }
+    // Every category the extension may report parses as a Rust category.
+    for c in root["$defs"]["RiskCategory"]["enum"].as_array().unwrap() {
+        assert!(
+            serde_json::from_value::<crate::mono::browser::risk::Category>(c.clone()).is_ok(),
+            "unknown risk category {c}"
+        );
+    }
+    let kinds: Vec<&str> = root["$defs"]["FieldKind"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k.as_str().unwrap())
+        .collect();
+    assert_eq!(kinds.len(), 12);
+    for k in kinds {
+        assert!(crate::mono::browser::risk::signals::FieldKind::parse(k).is_some());
     }
 }

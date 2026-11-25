@@ -534,7 +534,7 @@ test("screenshot: the debugger is used only when permitted and already attached"
 });
 
 test("screenshot: full_page needs the attached debugger and captures beyond the viewport", async () => {
-  const visible = { content: { "1:0": () => ({ visible: true }) } };
+  const visible = { content: { "1:0": (op) => (op === "size" ? { width: 1280, height: 5000 } : { visible: true }) } };
   err(await setup(visible).call("page.screenshot", { tab: 1, full_page: true }), "E_UNSUPPORTED");
   const s = setup({ ...visible, debuggerPermission: true, attached: true });
   const r = await s.call("page.screenshot", { tab: 1, full_page: true });
@@ -542,6 +542,7 @@ test("screenshot: full_page needs the attached debugger and captures beyond the 
   const cdp = s.calls.find((c) => c[0] === "cdp" && c[1] === "Page.captureScreenshot");
   assert.equal(cdp[2].captureBeyondViewport, true);
   assert.deepEqual(cdp[2].clip, { x: 0, y: 0, width: 1280, height: 5000, scale: 1 });
+  assert.ok(!s.calls.some((c) => c[0] === "cdp" && c[1] === "Page.getLayoutMetrics"), "only allowlisted CDP methods");
 });
 
 test("screenshot: captures are spaced to stay under two per second", async () => {
@@ -560,8 +561,9 @@ test("no worker source activates a tab or focuses a window", () => {
   const dir = new URL("../src/worker/", import.meta.url);
   for (const name of readdirSync(dir)) {
     const text = readFileSync(new URL(name, dir), "utf8");
-    assert.ok(!/active\s*:\s*true|focused\s*:\s*true|highlighted\s*:|drawAttention|bringToFront|activateTarget/.test(text), name);
-    assert.ok(!/tabs\s*\.\s*update|windows\s*\.\s*update/.test(text.replace(/\/\/.*$/gm, "")) || name === "main.js", name);
+    // focus-guard.js names these properties only to refuse them (see act.test.mjs).
+    if (name !== "focus-guard.js") assert.ok(!/active\s*:\s*true|focused\s*:\s*true|highlighted\s*:|drawAttention|bringToFront|activateTarget/.test(text), name);
+    assert.ok(!/tabs\s*\.\s*update|windows\s*\.\s*update/.test(text.replace(/\/\/.*$/gm, "")) || name === "main.js" || name === "focus-guard.js", name);
   }
 });
 

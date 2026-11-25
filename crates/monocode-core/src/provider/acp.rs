@@ -60,7 +60,7 @@ thread_local! {
 
 /// The legacy `agy_acp_server.par` speaks ACP with no arguments. Every other Antigravity
 /// binary (`agy`, `agy.exe`, a user override) is the current CLI, which needs `acp`.
-pub(super) fn is_legacy_antigravity_server(binary: &Path) -> bool {
+pub(crate) fn is_legacy_antigravity_server(binary: &Path) -> bool {
     binary
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("par"))
