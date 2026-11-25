@@ -38,6 +38,8 @@ pub use trust::BrowserLevel;
 
 /// Name of the MCP server the gate offers. Distinct from a user-level `playwright` server.
 pub const MCP_SERVER: &str = "zptah_browser";
+/// The environment variable Codex reads the gate's bearer token from.
+pub const TOKEN_ENV: &str = "ZPTAH_BROWSER_GATE_TOKEN";
 /// The server name of the retired backend. Still parsed in tool names, so audit rows and saved
 /// sessions that used it keep their meaning.
 pub const LEGACY_MCP_SERVER: &str = "playwright_browser";
@@ -773,6 +775,8 @@ pub struct Runtime {
     pub trust: BrowserLevel,
     /// The URL the agent connects to: the Mono's gate, which fronts the extension link.
     pub endpoint: String,
+    /// The bearer token the gate requires in `Authorization`. Never put it in a URL or on argv.
+    pub token: String,
     /// The gate behind `endpoint`; a run attaches its approval channel to it.
     pub gate: std::sync::Arc<gate::Gate>,
     /// The app session this runtime was resolved for: the gate keeps cards and the remembered
@@ -784,7 +788,11 @@ pub struct Runtime {
 impl Runtime {
     /// Claude's entry: the Mono's gate over HTTP.
     pub fn claude_server(&self) -> Value {
-        json!({"type": "http", "url": self.endpoint})
+        json!({
+            "type": "http",
+            "url": self.endpoint,
+            "headers": {"Authorization": format!("Bearer {}", self.token)},
+        })
     }
     /// `mcp__zptah_browser`: every tool of the server the gate offers, with no harness prompt
     /// (the gate asks where it must, in every permission mode). The tools [`Self::claude_disallowed`]
@@ -820,6 +828,9 @@ impl Runtime {
     pub fn codex_overrides(&self) -> Vec<(String, String)> {
         let mut values = vec![
             ("url", json!(self.endpoint)),
+            // Codex reads the token from this environment variable ([`TOKEN_ENV`]), so it never
+            // appears on argv.
+            ("bearer_token_env_var", json!(TOKEN_ENV)),
             ("disabled_tools", json!(self.trust.disabled_tools())),
             ("startup_timeout_sec", json!(START_TIMEOUT_SECONDS)),
             // An approval waits for the user: longer than the gate's own timeout, so the gate
@@ -839,6 +850,7 @@ impl Runtime {
             .collect()
     }
     pub fn configure_codex(&self, command: &mut std::process::Command) {
+        command.env(TOKEN_ENV, &self.token);
         for (key, value) in self.codex_overrides() {
             command.args(["-c", &format!("{key}={value}")]);
         }
@@ -975,6 +987,7 @@ fn attach(
     Attach::Ready(Runtime {
         trust: browser.trust,
         endpoint: gate.url_for(&route),
+        token: gate.token().to_owned(),
         gate,
         route,
         approvals: queue,

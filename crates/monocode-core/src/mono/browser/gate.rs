@@ -728,10 +728,15 @@ impl Gate {
         }))
     }
 
-    /// The URL a session connects to: the path holds the gate's secret and the session's route.
-    /// Cards, denials and the remembered page are kept per route.
+    /// The URL a session connects to: the path holds the session's route only. The gate's secret
+    /// travels as `Authorization: Bearer` (see [`Self::token`]), never in a URL, so it stays off
+    /// argv. Cards, denials and the remembered page are kept per route.
     pub fn url_for(&self, route: &str) -> String {
-        format!("http://127.0.0.1:{}/{}/{route}/mcp", self.port, self.secret)
+        format!("http://127.0.0.1:{}/{route}/mcp", self.port)
+    }
+    /// The bearer token every request to the gate must carry.
+    pub fn token(&self) -> &str {
+        &self.secret
     }
     /// The route token of an app session (`None`: a caller without one). It is random, issued on
     /// first use and stable for the gate's life, so a warm agent process keeps a working URL; the

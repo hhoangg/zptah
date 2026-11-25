@@ -117,7 +117,7 @@ section 18.
  +------------------------------ zptah app process (signed) ------------------------------+
  |                                                                                         |
  |  Mono run (Claude / Codex child process)                                                |
- |     | MCP over loopback HTTP, secret path (unchanged, BD/gate/http.rs)                   |
+ |     | MCP over loopback HTTP, bearer token (BD/gate/http.rs)                              |
  |     v                                                                                   |
  |  +---------+   tools/call    +-----------------+   approvals   +----------------------+ |
  |  |  Gate   |---------------->| Risk classifier |<------------->| Approval card (GPUI) | |
@@ -172,10 +172,13 @@ Process facts:
 | `BrowserTrust` 3 levels, AskRisky asks for every write (`BD/gate.rs:126`) | 2 levels: Read only, Act for me (section 8.1) |
 | Server name `playwright_browser` (`B:29`) | `zptah_browser` (old prefix still parsed for old audit rows) |
 
-The gate's agent-facing side does not change: the agent still gets
-`http://127.0.0.1:<port>/<secret>/<route>/mcp` (`BD/gate.rs:828`), Claude through `--mcp-config`
-(`CORE/provider.rs:1668`), Codex through `-c mcp_servers.<name>.url` (`B:1088`). A process that
-learns that URL (the agent's shell can) only reaches the gate, which applies the same policy,
+The gate's agent-facing side changes in one way (security review I1): the agent gets
+`http://127.0.0.1:<port>/<route>/mcp` and the gate's secret travels as `Authorization: Bearer`, never
+in a URL or on argv (other users can read `/proc/<pid>/cmdline`). Claude gets it through
+`--mcp-config <path>` of a private 0600 file whose server entry carries the header
+(`CORE/provider.rs`), Codex through `-c mcp_servers.<name>.url` plus `bearer_token_env_var`, with the
+token in the child's environment. A process that
+learns the URL and token (the agent's shell can) only reaches the gate, which applies the same policy,
 approvals and audit to every caller. The bypass found in agent-browser and chrome-use (a raw
 browser channel next to the gate) does not exist here because the only channel to the browser is
 the app's link, which accepts nothing but a verified host and only carries app-originated
@@ -1679,6 +1682,33 @@ build we published, the browser.
 | T12 | Network attacker | No network traffic from the extension or the host | |
 | T13 | Focus theft and confusion of the user | Invariant 1; popup restore; cursor shows who acts; badge; emergency stop | A page's own `window.focus()` games are outside our control |
 | T14 | Denial of service by a soul edit or a page (endless prompts) | Prompts are rate-limited per Mono (at most one open prompt; repeated identical denied actions are auto-denied for the turn with a note) | |
+
+### Residual risks (v1)
+
+Known and accepted for v1, found in the security review. Each is outside what the gate and the
+extension can close without the platform's help.
+
+- **Extension key `K` in `chrome.storage.local`, unencrypted.** A same-user process that reads the
+  profile on disk can read it (T1). The app side keeps its half in the OS credential store.
+- **Same-user processes are out of scope.** One that can read the app's memory, `ptrace` it or
+  replace the browser profile is not stopped by the gate.
+- **The pairing nonce is briefly in Chrome's argv on Linux** while the browser starts, so another
+  local user can read it with `/proc/<pid>/cmdline` in that window.
+- **Registrable-domain grants.** A grant for a domain covers its subdomains (7.4), including ones
+  that host user content on a shared domain.
+- **Lexicon evasion.** The risk lexicon (7.3, appendix A) is matched on visible words, so novel or
+  deliberately neutral wording on an unknown site can hide a payment or a send (T5).
+- **Hover never asks.** A hover runs without a card, so a page that acts on hover (menus that
+  submit, prefetch on hover) can do so.
+- **Screenshots, grants and the audit log sit on disk** in the Mono's folder and database, readable
+  by any same-user process (8.5).
+- **Trusted debugger input is indistinguishable from a human's** to the page: a site cannot tell
+  our `Input.dispatch*` events from the user's, so nothing page-side tells them apart.
+- **The session key is not bound to `instance_id`.** The binding is defense in depth only: a
+  stolen session key is not tied to one browser instance (5.4).
+- **Approved actions are not retried (security review I2).** When a card was answered and the page
+  shows no change, nothing is retried: the agent is told the action may have run and decides, so
+  an approved payment or send runs at most once per approval.
 
 ## 15. Removing Playwright MCP and migrating
 

@@ -24,7 +24,7 @@ pub struct HttpServer {
     stop: Arc<AtomicBool>,
 }
 impl HttpServer {
-    /// Serves `POST /{secret}/mcp` on a free loopback port.
+    /// Serves `POST /{route}/mcp` with `Authorization: Bearer {secret}` on a free loopback port.
     pub fn start(handler: Arc<dyn Handler>, secret: String) -> Result<Self, String> {
         let listener = TcpListener::bind((LOOPBACK, 0))
             .map_err(|_| "Could not open a port for the browser gate.".to_owned())?;
@@ -75,6 +75,7 @@ struct Request {
     method: String,
     path: String,
     host: String,
+    authorization: String,
     body: Vec<u8>,
 }
 
@@ -85,7 +86,8 @@ fn read_request(stream: &TcpStream) -> Result<Request, String> {
     let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or("").to_owned();
     let path = parts.next().unwrap_or("").to_owned();
-    let (mut host, mut length, mut chunked) = (String::new(), None::<usize>, false);
+    let (mut host, mut authorization) = (String::new(), String::new());
+    let (mut length, mut chunked) = (None::<usize>, false);
     let mut header_bytes = 0u64;
     loop {
         let mut header = String::new();
@@ -102,6 +104,7 @@ fn read_request(stream: &TcpStream) -> Result<Request, String> {
             let value = value.trim();
             match name.trim().to_ascii_lowercase().as_str() {
                 "host" => host = value.to_owned(),
+                "authorization" => authorization = value.to_owned(),
                 "content-length" => length = value.parse().ok(),
                 "transfer-encoding" => chunked = value.to_ascii_lowercase().contains("chunked"),
                 _ => {}
@@ -140,6 +143,7 @@ fn read_request(stream: &TcpStream) -> Result<Request, String> {
         method,
         path,
         host,
+        authorization,
         body,
     })
 }
@@ -185,12 +189,16 @@ fn serve(stream: TcpStream, port: u16, secret: &str, handler: &dyn Handler) -> R
     if request.host != format!("{LOOPBACK}:{port}") && request.host != format!("localhost:{port}") {
         return respond(&stream, "403 Forbidden", "", None);
     }
-    // `/{secret}/{route}/mcp`: the route names the app session the call belongs to.
+    // `/{route}/mcp`: the route names the app session the call belongs to. The secret is a
+    // bearer token, checked first and in constant time, so a wrong token learns nothing about routes.
+    let secret_ok = request
+        .authorization
+        .strip_prefix("Bearer ")
+        .or_else(|| request.authorization.strip_prefix("bearer "))
+        .is_some_and(|given| constant_time_eq(given.trim(), secret));
     let path = request.path.split('?').next().unwrap_or("");
     let route = path
         .strip_prefix('/')
-        .and_then(|rest| rest.strip_prefix(secret))
-        .and_then(|rest| rest.strip_prefix('/'))
         .and_then(|rest| rest.strip_suffix("/mcp"))
         .filter(|route| {
             !route.is_empty()
@@ -199,10 +207,6 @@ fn serve(stream: TcpStream, port: u16, secret: &str, handler: &dyn Handler) -> R
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
         });
-    let secret_ok = path
-        .strip_prefix('/')
-        .and_then(|rest| rest.get(..secret.len()))
-        .is_some_and(|given| constant_time_eq(given, secret));
     let Some(route) = route.filter(|route| secret_ok && handler.knows(route)) else {
         return respond(&stream, "404 Not Found", "", None);
     };

@@ -39,6 +39,8 @@ struct Act {
     after_url: Option<String>,
     /// The first untrusted commit changes nothing and says so (the retry path).
     ignore_first_commit: bool,
+    /// Where `nav.history` lands (default: where the page is).
+    history_url: Option<String>,
     next: u32,
     commits: Vec<Value>,
 }
@@ -56,6 +58,7 @@ impl Act {
             commit_error: None,
             after_url: None,
             ignore_first_commit: false,
+            history_url: None,
             next: 0,
             commits: Vec::new(),
         }))
@@ -108,7 +111,12 @@ fn install(browser: &mut Browser, act: &Arc<Mutex<Act>>) {
             "act.extend" => Ok(json!({"expires_ms": crate::time::now_ms() + 30_000})),
             "act.cancel" | "task.end" | "dialog.respond" | "upload.put" => Ok(json!({})),
             "nav.go" => Ok(json!({"url": params["url"], "title": "Opened"})),
-            "nav.history" => Ok(json!({"url": a.url, "title": a.title})),
+            "nav.history" => {
+                if let Some(url) = a.history_url.take() {
+                    a.url = url;
+                }
+                Ok(json!({"url": a.url, "title": a.title}))
+            }
             _ => return None,
         })
     }));
@@ -170,8 +178,19 @@ struct ActRig {
 }
 
 fn rig_with(url: &str, name: &str, answers: Vec<UserAnswer>) -> (ActRig, FrontEnd) {
+    rig_tabs(url, name, answers, vec![])
+}
+
+fn rig_tabs(
+    url: &str,
+    name: &str,
+    answers: Vec<UserAnswer>,
+    more_tabs: Vec<TabInfo>,
+) -> (ActRig, FrontEnd) {
     let act = Act::new(url, name);
-    let mut browser = Browser::new(vec![tab(3, url, "Cart", Some(MONO))]);
+    let mut tabs = vec![tab(3, url, "Cart", Some(MONO))];
+    tabs.extend(more_tabs);
+    let mut browser = Browser::new(tabs);
     install(&mut browser, &act);
     let rig = start(browser);
     let root = tempfile::tempdir().unwrap();
@@ -294,6 +313,26 @@ fn a_click_that_changed_nothing_is_retried_once_through_trusted_input() {
     assert_eq!(commits[1]["input"], "trusted");
     assert!(text.contains("Page changes seen: 3"), "{text}");
     assert_eq!(r.rows()[0].tool, "browser_click");
+    r.rig.finish();
+}
+
+#[test]
+fn an_approved_action_that_changed_nothing_is_never_retried() {
+    let (r, _front) = rig_with(SHOPPING, "Pay 1,200,000 VND", vec![UserAnswer::AllowOnce]);
+    {
+        let mut a = r.act.lock().unwrap();
+        a.ext_risk = vec!["payment"];
+        a.element["is_submit"] = json!(true);
+        a.element["amounts"] = json!(["1,200,000 VND"]);
+        a.ignore_first_commit = true;
+    }
+    let text = ok_text(r.click());
+    let commits = r.act.lock().unwrap().commits.clone();
+    assert_eq!(commits.len(), 1, "one commit for one approval: {commits:?}");
+    assert!(commits[0].get("input").is_none());
+    assert!(commits[0].get("approval").is_some());
+    assert!(text.contains("may have run"), "{text}");
+    assert!(text.contains("Do not repeat"), "{text}");
     r.rig.finish();
 }
 
@@ -839,6 +878,99 @@ fn navigating_to_a_site_the_user_did_not_name_asks_with_the_full_address() {
         json!({"tab": 3, "url": "javascript:alert(1)"}),
     );
     assert!(is_error(&bad));
+    r.rig.finish();
+}
+
+#[test]
+fn going_back_to_an_unrelated_page_asks_and_a_refusal_moves_the_tab_back() {
+    let (r, front) = rig_with(SHOPPING, "x", vec![UserAnswer::AllowOnce, UserAnswer::Deny]);
+    let route = r.gate.route_for(Some(4));
+    r.gate.begin_turn(&route, "look at shop.example");
+    // The destination is unknown before the move, so the page it lands on is judged after it.
+    r.act.lock().unwrap().history_url = Some("https://evil-example.net/page".into());
+    let allowed = call_on(&r.gate, &route, "browser_navigate_back", json!({"tab": 3}));
+    assert!(!is_error(&allowed), "{}", text_of(&allowed));
+    let card = &front.cards()[0];
+    assert!(card.facts.categories.contains(&Category::UnrelatedDomain));
+    assert!(card
+        .text_in(copy::Lang::En)
+        .lines
+        .iter()
+        .any(|l| l.contains("https://evil-example.net/page")));
+    assert_eq!(
+        r.rig.requests("nav.history").len(),
+        1,
+        "no move back after a yes"
+    );
+    // A refusal asks the extension to undo the move.
+    r.act.lock().unwrap().history_url = Some("https://other-evil.example/".into());
+    let denied = call_on(
+        &r.gate,
+        &route,
+        "browser_navigate_forward",
+        json!({"tab": 3}),
+    );
+    assert!(is_error(&denied), "{}", text_of(&denied));
+    assert!(
+        text_of(&denied).contains("moved back"),
+        "{}",
+        text_of(&denied)
+    );
+    let moves = r.rig.requests("nav.history");
+    assert_eq!(moves.len(), 3);
+    assert_eq!(moves[1].params.as_ref().unwrap()["dir"], "forward");
+    assert_eq!(moves[2].params.as_ref().unwrap()["dir"], "back");
+    // A page on a related domain asks nothing.
+    r.act.lock().unwrap().history_url = Some("https://shop.example/prev".into());
+    let related = call_on(&r.gate, &route, "browser_navigate_back", json!({"tab": 3}));
+    assert!(!is_error(&related), "{}", text_of(&related));
+    assert_eq!(front.cards().len(), 2);
+    r.rig.finish();
+}
+
+#[test]
+fn acting_in_a_tab_of_another_mono_or_the_user_is_refused_before_any_card_but_reading_works() {
+    let (r, front) = rig_tabs(
+        SHOPPING,
+        "Next",
+        vec![],
+        vec![
+            tab(
+                4,
+                "https://news.example/a",
+                "News",
+                Some("fedcba9876543210fedcba9876543210"),
+            ),
+            tab(5, "https://mail.example/inbox", "Mail", None),
+        ],
+    );
+    for id in [4, 5] {
+        let refused = call(&r.gate, "browser_click", json!({"tab": id, "ref": "e2"}));
+        assert!(is_error(&refused), "{id}");
+        assert!(
+            text_of(&refused).contains("E_NOT_OWNER"),
+            "{}",
+            text_of(&refused)
+        );
+        let nav = call(
+            &r.gate,
+            "browser_navigate",
+            json!({"tab": id, "url": "https://shop.example/"}),
+        );
+        assert!(is_error(&nav) && text_of(&nav).contains("E_NOT_OWNER"));
+    }
+    assert!(r.rig.requests("act.prepare").is_empty());
+    assert!(r.rig.requests("nav.go").is_empty());
+    assert!(front.cards().is_empty());
+    // Reading another Mono's tab stays allowed (spec 9.3).
+    let read = call(&r.gate, "browser_snapshot", json!({"tab": 4}));
+    assert!(
+        !text_of(&read).contains("E_NOT_OWNER"),
+        "{}",
+        text_of(&read)
+    );
+    // Its own tab still works.
+    assert!(!is_error(&r.click()));
     r.rig.finish();
 }
 

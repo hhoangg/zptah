@@ -1492,6 +1492,24 @@ fn run_process(
     run_operation(request, cancel, controls, probe, false, false, emit)
 }
 
+/// The Claude MCP config as a private file (created 0600), for `--mcp-config <path>`. The servers
+/// carry the browser gate's bearer token and argv is readable by other users.
+fn write_mcp_config(
+    servers: &serde_json::Map<String, Value>,
+) -> Result<tempfile::NamedTempFile, String> {
+    use std::io::Write as _;
+    let fail = |e: std::io::Error| format!("Could not write the MCP config: {e}");
+    let mut file = tempfile::Builder::new()
+        .prefix("zptah-mcp-")
+        .suffix(".json")
+        .tempfile()
+        .map_err(fail)?;
+    file.write_all(json!({"mcpServers": servers}).to_string().as_bytes())
+        .and_then(|_| file.flush())
+        .map_err(fail)?;
+    Ok(file)
+}
+
 /// Resolves the Mono's browser once and records the outcome in the settings, so the rules the
 /// provider gets agree with what the launch adds (the server, or the reason it is missing).
 fn apply_browser(
@@ -1566,6 +1584,8 @@ fn run_operation(
         );
     }
     let mut command = Command::new(&request.binary);
+    // Holds the Claude MCP config file (it carries the gate's bearer token) until the run ends.
+    let mut _mcp_config_file: Option<tempfile::NamedTempFile> = None;
     crate::scm::shell::apply_gui_env(&mut command);
     command.envs(&request.settings.environment);
     request.settings.account.apply(request.kind, &mut command)?;
@@ -1672,7 +1692,11 @@ fn run_operation(
                 command.args(["--append-system-prompt", &system.join("\n\n")]);
             }
             if !servers.is_empty() {
-                command.args(["--mcp-config", &json!({"mcpServers":servers}).to_string()]);
+                // A file, not argv: the servers carry the gate's bearer token and argv is readable
+                // by other users (`/proc/<pid>/cmdline`). `NamedTempFile` is created 0600.
+                let file = write_mcp_config(&servers)?;
+                command.arg("--mcp-config").arg(file.path());
+                _mcp_config_file = Some(file);
             }
             if !allowed.is_empty() {
                 command.args(["--allowedTools", &allowed.join(",")]);
@@ -2100,6 +2124,28 @@ fn run_operation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_mcp_config_is_a_private_file_holding_the_servers() {
+        let token = concat!("fake-gate-", "token");
+        let mut servers = serde_json::Map::new();
+        servers.insert(
+            "zptah_browser".into(),
+            json!({"type": "http", "url": "http://127.0.0.1:1/r/mcp", "headers": {"Authorization": format!("Bearer {token}")}}),
+        );
+        let file = write_mcp_config(&servers).unwrap();
+        let text = std::fs::read_to_string(file.path()).unwrap();
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            parsed["mcpServers"]["zptah_browser"]["headers"]["Authorization"],
+            format!("Bearer {token}").as_str()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(file.path()).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "{mode:o}");
+        }
+    }
     fn protocol(kind: Kind) -> Protocol {
         Protocol::new(Request {
             kind,

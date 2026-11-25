@@ -580,6 +580,28 @@ test("a click that did nothing keeps its prepare for one trusted retry through t
   finish(s);
 });
 
+test("an approved action that shows no change is never retried and the prepare is dropped", async () => {
+  // The app answered a card for a send the extension itself does not flag, so only the approval marks it.
+  const s = setup({ build: (h) => [h("button", { id: "b", type: "button", rect: [10, 40, 80, 30] }, "Send")], debuggerPermission: true, url: "https://mail.test/" });
+  let sent = 0;
+  s.world.document.querySelector("#b").addEventListener("click", () => {
+    sent += 1;
+  });
+  const p = await prep(s, { kind: "click", ref: refOf(await snap(s), "button", "Send") });
+  const approval = { approval_id: "x", categories: ["send_unnamed"], digest: p.digest };
+  const done = ok(await s.call("act.commit", { prepare_id: p.prepare_id, approval }));
+  assert.equal(sent, 1);
+  assert.equal(done.effects.dom_mutations, 0);
+  assert.doesNotMatch(done.effects.hint, /input: trusted/);
+  assert.match(done.effects.hint, /Do not repeat/);
+  // The same approval cannot run it a second time, trusted or not.
+  err(await s.call("act.commit", { prepare_id: p.prepare_id, approval, input: "trusted" }), "E_STALE_PREPARE");
+  err(await s.call("act.commit", { prepare_id: p.prepare_id, approval }), "E_STALE_PREPARE");
+  assert.equal(sent, 1, "it ran once");
+  assert.equal(s.calls.filter((c) => c[0] === "cdp" && c[1] === "Input.dispatchMouseEvent").length, 0);
+  finish(s);
+});
+
 test("a trusted retry is refused when the page changed after the first try", async () => {
   const s = setup({ build: (h) => [h("button", { id: "b", type: "button", rect: [10, 40, 80, 30] }, "Next")], debuggerPermission: true, url: "https://shop.test/" });
   const text = await snap(s);
