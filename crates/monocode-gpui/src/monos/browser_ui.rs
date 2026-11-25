@@ -925,7 +925,7 @@ impl Monos {
             sections.push(self.browser_prerequisites(cx));
             sections.push(self.browser_profile_card(mono, &setting, cx));
             sections.push(self.browser_token_card(&setting, cx));
-            sections.push(self.browser_safety_card(&setting, window, cx));
+            sections.push(self.browser_safety_card(&mono.label(), &setting, window, cx));
             sections.push(self.browser_show_actions_card(&setting, cx));
             sections.push(self.recipes_card(cx));
             sections.push(self.browser_audit_card());
@@ -1322,6 +1322,7 @@ impl Monos {
 
     fn browser_safety_card(
         &mut self,
+        mono_name: &str,
         setting_: &MonoBrowser,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1333,7 +1334,7 @@ impl Monos {
                 trust_row(trust, selected, cx)
             })
             .collect();
-        let suggest = self.browser_suggest_card(setting_, cx);
+        let suggest = self.browser_suggest_card(mono_name, setting_, cx);
         let blocked = self.browser_origin_card(false, &setting_.blocked_origins, window, cx);
         let allowed = self.browser_origin_card(true, &setting_.allowed_origins, window, cx);
         div()

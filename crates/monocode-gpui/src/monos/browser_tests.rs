@@ -587,6 +587,7 @@ fn a_stored_legacy_level_displays_as_act_for_me(cx: &mut TestAppContext) {
         trust_label(BrowserTrust::AskRisky, Lang::En)
     );
     assert!(page.on(browser_ui::trust_selector(BrowserTrust::AskRisky)));
+    // Not asserted: aria_selected of the row, the harness has no accessor for it.
     let read_only = shows_as(BrowserTrust::ReadOnly, BrowserTrust::ReadOnly);
     assert!(read_only && !shows_as(BrowserTrust::ReadOnly, BrowserTrust::AskRisky));
 }
@@ -672,14 +673,25 @@ fn switch_and_keep_resolve_the_blocked_list_offer_once(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
-fn a_migrated_mono_without_a_connection_shows_reconnect_needed(cx: &mut TestAppContext) {
+fn a_migrated_extension_mono_without_a_connection_shows_reconnect_needed(cx: &mut TestAppContext) {
     let mut page = open(cx);
     page.enable();
-    assert!(
-        !page.on("mono-browser-reconnect"),
-        "no profile, nothing to reconnect"
-    );
-    page.manager(|m, cx| m.browser_edit(cx, |b| *b = migrated()));
+    page.manager(|m, cx| {
+        m.browser_edit(cx, |b| {
+            *b = migrated();
+            b.use_extension = true;
+            b.migrated = 0;
+        })
+    });
+    assert!(!page.on("mono-browser-reconnect"), "never migrated");
+    page.manager(|m, cx| {
+        m.browser_edit(cx, |b| {
+            b.migrated = 1;
+            b.use_extension = false;
+        })
+    });
+    assert!(!page.on("mono-browser-reconnect"), "Playwright backend");
+    page.manager(|m, cx| m.browser_edit(cx, |b| b.use_extension = true));
     assert!(page.setting().unwrap().needs_reconnect());
     assert!(page.on("mono-browser-reconnect"));
     page.manager(|m, cx| m.browser_edit(cx, |b| b.connection = Some("link-1".into())));
@@ -793,8 +805,7 @@ fn the_picker_changes_the_profile_when_profiles_are_listed(cx: &mut TestAppConte
     page.enable();
     page.choose("Default");
     assert_eq!(page.setting().unwrap().profile_dir, "Default");
-    // The "Reconnect needed" card above pushes the select down: scroll to it first.
-    page.tap("mono-browser-profile");
+    page.click("mono-browser-profile");
     assert!(page.ui(|u| u.select_is_open()));
     page.choose("Profile 6");
     let setting = page.setting().unwrap();

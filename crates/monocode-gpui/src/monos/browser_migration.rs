@@ -34,7 +34,7 @@ struct Text {
     tab_group: &'static str,
     dismiss: &'static str,
     suggest_title: &'static str,
-    suggest_line: &'static str,
+    suggest_line: fn(&str) -> String,
     switch: &'static str,
     keep: &'static str,
     reconnect_title: &'static str,
@@ -49,8 +49,12 @@ fn text(lang: Lang) -> Text {
             trust: TRUST_NOTICE,
             tab_group: TAB_GROUP_NOTICE,
             dismiss: "Dismiss",
-            suggest_title: "New default blocked sites",
-            suggest_line: "zptah Browser ships a new default list of blocked sites. This Mono still has the old one.",
+            suggest_title: "New defaults for banking and payment sites",
+            suggest_line: |mono| {
+                format!(
+                    "zptah now asks before risky steps on banking and payment sites instead of blocking them. Switch {mono} to the new defaults?"
+                )
+            },
             switch: "Switch to the new defaults",
             keep: "Keep my list",
             reconnect_title: RECONNECT_NEEDED,
@@ -62,8 +66,12 @@ fn text(lang: Lang) -> Text {
             trust: "Từ nay các Mono chỉ hỏi bạn trước những bước rủi ro như thanh toán và xóa dữ liệu.",
             tab_group: "zptah Browser tạo cho mỗi Mono một nhóm tab mới. Để chuyển nhóm Playwright cũ sang, hãy kéo các tab của nó vào nhóm mới. Bạn có thể gỡ \"Playwright MCP Bridge\" tại chrome://extensions.",
             dismiss: "Đóng",
-            suggest_title: "Danh sách chặn mặc định mới",
-            suggest_line: "zptah Browser có danh sách trang bị chặn mặc định mới. Mono này vẫn dùng danh sách cũ.",
+            suggest_title: "Mặc định mới cho trang ngân hàng và thanh toán",
+            suggest_line: |mono| {
+                format!(
+                    "zptah giờ hỏi trước các bước rủi ro trên trang ngân hàng và thanh toán thay vì chặn. Chuyển {mono} sang mặc định mới? Danh sách trang web bị chặn của bạn sẽ không bị xóa nếu bạn chọn giữ."
+                )
+            },
             switch: "Chuyển sang mặc định mới",
             keep: "Giữ danh sách của tôi",
             reconnect_title: "Cần kết nối lại",
@@ -110,6 +118,7 @@ impl Monos {
     /// The offer to move from the old default blocked list to the new one, shown once.
     pub(super) fn browser_suggest_card(
         &mut self,
+        mono: &str,
         browser: &MonoBrowser,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
@@ -121,7 +130,7 @@ impl Monos {
             card()
                 .child(setting(
                     t.suggest_title,
-                    Some(t.suggest_line),
+                    Some(&(t.suggest_line)(mono)),
                     div().into_any_element(),
                 ))
                 .child(
@@ -149,7 +158,11 @@ impl Monos {
         browser: &MonoBrowser,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !browser.enabled || !browser.needs_reconnect() {
+        if !browser.enabled
+            || browser.migrated == 0
+            || !browser.use_extension
+            || !browser.needs_reconnect()
+        {
             return None;
         }
         let t = text(copy::app_language());
