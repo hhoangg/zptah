@@ -195,7 +195,7 @@ impl<'de> Deserialize<'de> for BrowserTrust {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = Option::<String>::deserialize(deserializer)?;
         Ok(match text.as_deref() {
-            Some("readOnly") => Self::ReadOnly,
+            Some("readOnly" | "read-only") => Self::ReadOnly,
             Some("autonomous") => Self::Autonomous,
             _ => Self::AskRisky,
         })
@@ -290,10 +290,17 @@ pub struct MonoBrowser {
     /// The one-time notice of [`migration`] has not been dismissed yet (Settings > Browser).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub migration_notice: bool,
+    /// The [`migration`] version this setting went through (0: none). A row that carries it is
+    /// never migrated again, even when the roster's version marker could not be written.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub migrated: u32,
     /// The migration kept the old default blocked list: Settings > Browser offers once to switch
     /// to the new defaults (spec 18, decision 15). See [`MonoBrowser::switch_to_new_defaults`].
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub suggest_new_defaults: bool,
+}
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 impl Default for MonoBrowser {
     fn default() -> Self {
@@ -312,6 +319,7 @@ impl Default for MonoBrowser {
             ready: false,
             connection: None,
             migration_notice: false,
+            migrated: 0,
             suggest_new_defaults: false,
         }
     }
@@ -334,8 +342,9 @@ impl MonoBrowser {
     /// "Switch" of the one-time suggestion: removes only the entries of the old
     /// [`DEFAULT_BLOCKED_ORIGINS`] that are still present; origins the user added stay blocked.
     pub fn switch_to_new_defaults(&mut self) {
-        self.blocked_origins
-            .retain(|o| !DEFAULT_BLOCKED_ORIGINS.contains(&o.as_str()));
+        self.blocked_origins.retain(|o| {
+            normalize_origin(o).map_or(true, |o| !DEFAULT_BLOCKED_ORIGINS.contains(&o.as_str()))
+        });
         self.suggest_new_defaults = false;
     }
     /// "Keep my list" of the one-time suggestion: the list stays as it is.
@@ -859,6 +868,17 @@ impl MonoBrowserStore {
             |_| Ok(()),
         )
         .is_ok()
+    }
+    /// Deletes every secret named `name`, whatever its Mono (also Monos no longer in the roster).
+    pub fn delete_secrets_named(&self, name: &str) -> Result<(), String> {
+        let Some(conn) = self.open()? else {
+            return Ok(());
+        };
+        match conn.execute("DELETE FROM mono_secrets WHERE name=?1", params![name]) {
+            Ok(_) => Ok(()),
+            Err(e) if e.to_string().contains("no such table") => Ok(()),
+            Err(_) => Err("Could not remove the token.".into()),
+        }
     }
     pub fn has_token_row(&self, mono_id: &str) -> bool {
         self.has_row(mono_id, SECRET_NAME)

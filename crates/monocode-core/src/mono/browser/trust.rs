@@ -54,8 +54,10 @@ impl BrowserLevel {
     /// id is `None`.
     pub fn from_id(id: &str) -> Option<Self> {
         match id {
-            "read-only" => Some(Self::ReadOnly),
-            "act" | "ask-risky" | "ask-every" | "autonomous" => Some(Self::Act),
+            "read-only" | "readOnly" => Some(Self::ReadOnly),
+            "act" | "ask-risky" | "askRisky" | "ask-every" | "askEvery" | "autonomous" => {
+                Some(Self::Act)
+            }
             _ => None,
         }
     }

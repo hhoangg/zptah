@@ -59,11 +59,12 @@ fn trust_levels_become_act_and_read_only_stays() {
         ("e", r#"{"enabled":true,"trust":"ask-risky"}"#),
         ("f", r#"{"enabled":true,"trust":"read-only"}"#),
         ("g", r#"{"enabled":true,"trust":"futureLevel"}"#),
+        ("i", r#"{"enabled":true,"trust":5}"#),
         ("h", r#"{"enabled":true}"#),
     ]);
     let f = fixture(Some(&old));
     migrate(&f, &OFF);
-    for id in ["a", "b", "d", "e", "g", "h"] {
+    for id in ["a", "b", "d", "e", "h"] {
         let level: crate::mono::browser::trust::BrowserLevel = browser_of(&f, id).trust.into();
         assert_eq!(
             level,
@@ -71,7 +72,7 @@ fn trust_levels_become_act_and_read_only_stays() {
             "{id}"
         );
     }
-    for id in ["c", "f"] {
+    for id in ["c", "f", "g", "i"] {
         assert_eq!(browser_of(&f, id).trust, BrowserTrust::ReadOnly, "{id}");
     }
 }
@@ -223,6 +224,7 @@ fn the_token_is_deleted_only_when_asked_and_only_once() {
     let old = roster_of(&[("a", r#"{"enabled":true}"#), ("b", r#"{}"#)]);
     let f = fixture(Some(&old));
     let secrets = MonoBrowserStore::for_store(&f.store).unwrap();
+    secrets.set_secret("gone", SECRET_NAME, TOKEN).unwrap();
     secrets.set_secret("a", SECRET_NAME, TOKEN).unwrap();
     secrets.set_secret("b", SECRET_NAME, TOKEN).unwrap();
     secrets.set_secret("a", "other-secret", TOKEN).unwrap();
@@ -234,6 +236,10 @@ fn the_token_is_deleted_only_when_asked_and_only_once() {
     // Later release: the token goes, other secrets stay, and it is recorded.
     migrate(&f, &ON);
     assert!(!secrets.has_row("a", SECRET_NAME) && !secrets.has_row("b", SECRET_NAME));
+    assert!(
+        !secrets.has_row("gone", SECRET_NAME),
+        "also a Mono no longer in the roster"
+    );
     assert!(secrets.has_row("a", "other-secret"));
     assert!(f.store.setting(TOKEN_CLEANUP_KEY).unwrap().is_some());
     migrate(&f, &ON);
@@ -289,4 +295,47 @@ fn the_new_fields_round_trip_and_old_json_without_them_loads() {
     assert_eq!(back, b);
     let plain = serde_json::to_string(&MonoBrowser::default()).unwrap();
     assert!(!plain.contains("connection") && !plain.contains("migrationNotice"));
+}
+
+#[test]
+fn level_ids_accept_the_forms_the_migration_stores() {
+    use crate::mono::browser::trust::BrowserLevel;
+    assert_eq!(
+        BrowserLevel::from_id("readOnly"),
+        Some(BrowserLevel::ReadOnly)
+    );
+    assert_eq!(BrowserLevel::from_id("askRisky"), Some(BrowserLevel::Act));
+    assert_eq!(BrowserLevel::from_id("nonsense"), None);
+    for text in [r#""readOnly""#, r#""read-only""#] {
+        assert_eq!(
+            serde_json::from_str::<BrowserTrust>(text).unwrap(),
+            BrowserTrust::ReadOnly
+        );
+    }
+}
+
+#[test]
+fn a_row_already_carrying_the_version_is_not_migrated_again() {
+    let mut once = value(&roster_of(&[(
+        "a",
+        r#"{"enabled":true,"trust":"autonomous"}"#,
+    )]));
+    migrate_roster(&mut once).unwrap();
+    // The user dismissed both flags (they are no longer written), then the marker write failed.
+    let browser = once["monos"][0]["browser"].as_object_mut().unwrap();
+    browser.remove("migrationNotice");
+    browser.remove("suggestNewDefaults");
+    let dismissed = once.clone();
+    migrate_roster(&mut once).unwrap();
+    assert_eq!(once, dismissed);
+}
+
+#[test]
+fn switching_matches_origins_the_way_the_suggestion_does() {
+    let mut b = MonoBrowser {
+        blocked_origins: vec!["HTTPS://PayPal.com/".into(), "https://mine.example".into()],
+        ..Default::default()
+    };
+    b.switch_to_new_defaults();
+    assert_eq!(b.blocked_origins, ["https://mine.example"]);
 }

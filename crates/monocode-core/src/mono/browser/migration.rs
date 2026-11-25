@@ -5,8 +5,7 @@
 //! the typed read, so the old values are still visible. What it does to each Mono that has a
 //! `browser` object:
 //!
-//! * `trust`: `ask-risky` and `autonomous` (and an unknown value, which always read as Level 2)
-//!   become the one acting level, stored as `askRisky` until the old enum is removed with the
+//! * `trust`: `ask-risky` and `autonomous` become the one acting level, stored as `askRisky` until the old enum is removed with the
 //!   Playwright backend (it maps to [`super::trust::BrowserLevel::Act`]); `readOnly` stays.
 //! * `blockedOrigins`: kept unchanged. A missing list (it read as the defaults) is written out as
 //!   [`super::DEFAULT_BLOCKED_ORIGINS`], so changing the default for new Monos later cannot drop a
@@ -76,9 +75,7 @@ pub fn run(store: &Store, text: Option<String>, options: &Options) -> Option<Str
         .is_some_and(|v| v >= VERSION);
     let text = if done { text } else { migrate_row(store, text) };
     if options.delete_token {
-        if let Some(text) = &text {
-            delete_tokens(store, text);
-        }
+        delete_tokens(store);
     }
     text
 }
@@ -120,26 +117,17 @@ fn backup(store: &Store, old: &str) -> Result<(), String> {
     }
 }
 
-fn delete_tokens(store: &Store, text: &str) {
+fn delete_tokens(store: &Store) {
     if store.setting(TOKEN_CLEANUP_KEY).ok().flatten().is_some() {
         return;
     }
-    let Ok(roster) = serde_json::from_str::<Value>(text) else {
+    // Without a database file there is no secret to delete, and nothing is recorded.
+    let Ok(secrets) = super::MonoBrowserStore::for_store(store) else {
         return;
     };
-    let ids: Vec<&str> = roster["monos"]
-        .as_array()
-        .map(|monos| monos.iter().filter_map(|m| m["id"].as_str()).collect())
-        .unwrap_or_default();
-    // No database file means no secret to delete.
-    if let Ok(secrets) = super::MonoBrowserStore::for_store(store) {
-        for id in ids {
-            if secrets.delete_secret(id, super::SECRET_NAME).is_err() {
-                return;
-            }
-        }
+    if secrets.delete_secrets_named(super::SECRET_NAME).is_ok() {
+        let _ = store.save_setting(TOKEN_CLEANUP_KEY, "1");
     }
-    let _ = store.save_setting(TOKEN_CLEANUP_KEY, "1");
 }
 
 /// Transforms the roster in place. On error the value may be half changed: the caller drops it.
@@ -167,16 +155,25 @@ pub fn migrate_roster(roster: &mut Value) -> Result<(), String> {
 }
 
 fn migrate_browser(browser: &mut Map<String, Value>) -> Result<(), String> {
-    // Trust: an unreadable or unknown value read as Level 2 before, so it becomes `act`.
-    let read_only = matches!(
-        browser.get("trust").and_then(Value::as_str),
-        Some("readOnly" | "read-only")
-    );
-    if read_only {
-        browser.insert("trust".into(), json!("readOnly"));
-    } else if browser.contains_key("trust") {
-        browser.insert("trust".into(), json!("askRisky"));
+    if browser.get("migrated").and_then(Value::as_u64) >= Some(u64::from(VERSION)) {
+        return Ok(());
     }
+    // Trust: the acting levels become `act`; an unknown value never becomes `act`.
+    let trust = browser
+        .get("trust")
+        .and_then(Value::as_str)
+        .map(|t| match t {
+            "askRisky" | "ask-risky" | "askEvery" | "ask-every" | "autonomous" | "act" => {
+                "askRisky"
+            }
+            _ => "readOnly",
+        });
+    if let Some(trust) = trust {
+        browser.insert("trust".into(), json!(trust));
+    } else if browser.contains_key("trust") {
+        browser.insert("trust".into(), json!("readOnly"));
+    }
+    browser.insert("migrated".into(), json!(VERSION));
 
     // Blocked origins: keep, and write the old defaults out when the list was never saved.
     match browser.get("blockedOrigins") {
