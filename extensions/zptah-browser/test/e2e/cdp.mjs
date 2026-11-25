@@ -29,6 +29,8 @@ export class Cdp {
   constructor(url) {
     this.ws = new WebSocket(url);
     this.nextId = 1;
+    /** @type {((m: any) => void)[]} */
+    this.listeners = [];
     /** @type {Map<number, { ok: (v: any) => void, fail: (e: Error) => void }>} */
     this.pending = new Map();
     this.opened = new Promise((ok, fail) => {
@@ -37,6 +39,7 @@ export class Cdp {
     });
     this.ws.addEventListener("message", (e) => {
       const msg = JSON.parse(String(e.data));
+      if (msg.method) for (const fn of this.listeners) fn(msg);
       const p = msg.id ? this.pending.get(msg.id) : undefined;
       if (!p) return;
       this.pending.delete(msg.id);
@@ -56,6 +59,25 @@ export class Cdp {
     const done = new Promise((ok, fail) => this.pending.set(id, { ok, fail }));
     this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     return /** @type {Promise<any>} */ (done);
+  }
+
+  /**
+   * Record the console and exceptions of a target with timestamps, until the browser closes.
+   * @param {string} targetId
+   * @param {string[]} sink
+   */
+  async traceConsole(targetId, sink) {
+    const { sessionId } = await this.send("Target.attachToTarget", { targetId, flatten: true });
+    this.listeners.push((m) => {
+      if (m.sessionId !== sessionId) return;
+      const stamp = new Date().toISOString().slice(11, 23);
+      if (m.method === "Runtime.consoleAPICalled") {
+        sink.push(`${stamp} console.${m.params.type} ${m.params.args.map((/** @type {any} */ a) => a.value ?? a.description ?? "").join(" ")}`);
+      } else if (m.method === "Runtime.exceptionThrown") {
+        sink.push(`${stamp} exception ${m.params.exceptionDetails.text} ${m.params.exceptionDetails.exception?.description ?? ""}`);
+      }
+    });
+    await this.send("Runtime.enable", {}, sessionId);
   }
 
   async targets() {

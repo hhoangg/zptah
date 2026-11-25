@@ -104,6 +104,7 @@ export class BrowserLink {
 
   /** @param {LinkStatus} status @param {unknown} [detail] */
   #setStatus(status, detail) {
+    console.debug("zptah-link", status, detail instanceof Error ? detail.message : detail ?? "");
     this.#status = status;
     this.#deps.onStatus?.(status, detail);
   }
@@ -190,7 +191,20 @@ export class BrowserLink {
     });
     port.onDisconnect.addListener(() => {
       const message = chrome.runtime.lastError?.message ?? null;
-      if (port === this.#port) this.#onGone(message, pairing);
+      if (port !== this.#port) return;
+      // A ready link is gone at once: queued app requests must not run on the page after the app
+      // left, and the reconnect should not wait for them. During the handshake and pairing the
+      // answer may still be queued behind the disconnect: the app closes the pairing connection
+      // right after its answer, and Chrome delivers the message before the disconnect, but it is
+      // handled asynchronously. Handle what is queued first, or a finished pairing is reported as
+      // failed and its key is lost.
+      if (this.#stage === "ready") {
+        this.#onGone(message, pairing);
+        return;
+      }
+      void this.#inbound.then(() => {
+        if (port === this.#port) this.#onGone(message, pairing);
+      });
     });
     const key = pairing ? null : this.#keyB64 === null ? null : b64decodeFixed(this.#keyB64, KEY_LEN);
     this.#hs = new ExtHandshake({ key, instanceId: this.#instanceId });
