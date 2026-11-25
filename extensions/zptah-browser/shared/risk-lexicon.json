@@ -1,0 +1,2164 @@
+{
+ "version": 1,
+ "comment": "Source of truth for the risk lexicon. Generated from spec Appendix A and section 7.3; shared by the Rust gate and the extension. Entry classes: payment, destructive, account_security, sharing, send, post, terms, consent, context, dismiss, not_risky, field_<kind>. A single-word phrase matches only as the whole name or the first word of a name of at most max_words (default short_word_max_words) words. not_risky and dismiss entries match only as the whole name, except prefix entries, which also win when they start the name. ctx marks a bare cancel word that takes the page context outside a dialog.",
+ "short_word_max_words": 6,
+ "button_window_words": 4,
+ "informational_max_words": 8,
+ "ambiguous_stripped": [
+  "go",
+  "moi",
+  "dang",
+  "dong",
+  "co"
+ ],
+ "informational_prefixes": [
+  "Chính sách",
+  "Hướng dẫn",
+  "Điều khoản",
+  "Câu hỏi",
+  "Policy",
+  "Help",
+  "Guide",
+  "Terms of"
+ ],
+ "consent_container_words": [
+  "cookie",
+  "cookies",
+  "chính sách cookie",
+  "tệp cookie"
+ ],
+ "consent_managers": [
+  "onetrust",
+  "cookiebot",
+  "didomi",
+  "quantcast",
+  "trustarc",
+  "usercentrics",
+  "consent.google.com"
+ ],
+ "public_visibility_words": [
+  "public",
+  "everyone",
+  "anyone",
+  "công khai",
+  "mọi người"
+ ],
+ "visibility_control_words": [
+  "visibility",
+  "audience",
+  "permission",
+  "permissions",
+  "who can see",
+  "quyền",
+  "hiển thị",
+  "đối tượng",
+  "quyền riêng tư",
+  "who can view",
+  "who can edit"
+ ],
+ "signup_prefixes": [
+  "Đăng ký",
+  "Sign up",
+  "Register"
+ ],
+ "period_words": [
+  "tháng",
+  "năm",
+  "tuần",
+  "month",
+  "monthly",
+  "year",
+  "yearly",
+  "annual",
+  "annually",
+  "week",
+  "weekly",
+  "mo",
+  "yr"
+ ],
+ "entries": [
+  {
+   "phrase": "Thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Thanh toán ngay",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tiến hành thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xác nhận thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Thanh toán hóa đơn",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đặt hàng",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xác nhận đặt hàng",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mua ngay",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mua hàng",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chọn mua",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đặt mua",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mua lại",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Trả góp",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mua",
+   "class": "payment",
+   "lang": "vi",
+   "max_words": 3
+  },
+  {
+   "phrase": "Trả tiền",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Nâng cấp gói",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chuyển tiền",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chuyển khoản",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xác nhận chuyển tiền",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xác nhận giao dịch",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Nạp tiền",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Rút tiền",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đăng ký gói",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Nâng cấp",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Gia hạn",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Ủng hộ",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Quyên góp",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đóng tiền",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Nạp thẻ",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Nạp data",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Nạp điện thoại",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đặt vé",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đặt phòng",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đặt chỗ",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Vay",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Vay nhanh",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Vay vốn",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đăng ký vay",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Ví trả sau",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mua trước trả sau",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xóa",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xóa vĩnh viễn",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chuyển vào thùng rác",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Dọn sạch thùng rác",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xóa tin nhắn",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Thu hồi",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xóa cuộc trò chuyện",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Rời nhóm",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Giải tán nhóm",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xóa bạn",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hủy kết bạn",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chặn",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hủy đơn hàng",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hủy đơn",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hủy đăng ký",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hủy gói",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tắt tự động gia hạn",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hủy đặt chỗ",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hủy vé",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Gỡ",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Gỡ bỏ",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Bỏ theo dõi",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Ngừng theo dõi",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xóa bài viết",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xóa tài khoản",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đóng tài khoản",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hủy liên kết",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Vô hiệu hóa",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Dọn thùng rác",
+   "class": "destructive",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đổi mật khẩu",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Thay đổi mật khẩu",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đặt lại mật khẩu",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xác minh 2 bước",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tắt xác minh 2 bước",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xác thực hai yếu tố",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Smart OTP",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Kích hoạt Smart OTP",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xác thực sinh trắc học",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Khóa truy cập",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mã dự phòng",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Email khôi phục",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Số điện thoại khôi phục",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đổi email",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đổi số điện thoại",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đăng xuất khỏi tất cả thiết bị",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Khóa thẻ",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mở khóa thẻ",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đổi mã PIN",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Thay đổi hạn mức",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Liên kết ngân hàng",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Ứng dụng xác thực",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Khóa bảo mật",
+   "class": "account_security",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chia sẻ",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chia sẻ ngay",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mời",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Thêm thành viên",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Bất kỳ ai có đường liên kết",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Công khai",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mọi người",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Người chỉnh sửa",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Cấp quyền",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chuyển quyền sở hữu",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chế độ hiển thị",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Quyền riêng tư",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đổi quyền",
+   "class": "sharing",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Gửi",
+   "class": "send",
+   "lang": "vi",
+   "max_words": 3
+  },
+  {
+   "phrase": "Gửi ngay",
+   "class": "send",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Trả lời tất cả",
+   "class": "send",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chuyển tiếp",
+   "class": "send",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đăng",
+   "class": "post",
+   "lang": "vi",
+   "max_words": 3
+  },
+  {
+   "phrase": "Đăng bài",
+   "class": "post",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đăng tin",
+   "class": "post",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đăng ngay",
+   "class": "post",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Bình luận",
+   "class": "post",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Phản hồi",
+   "class": "post",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Gửi đánh giá",
+   "class": "post",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đánh giá",
+   "class": "post",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Phát trực tiếp",
+   "class": "post",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Phát hành",
+   "class": "post",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tôi đồng ý",
+   "class": "terms",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đồng ý và tiếp tục",
+   "class": "terms",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tôi đã đọc và đồng ý",
+   "class": "terms",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chấp nhận điều khoản",
+   "class": "terms",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đồng ý với điều khoản",
+   "class": "terms",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Ký hợp đồng",
+   "class": "terms",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chấp nhận và tiếp tục",
+   "class": "terms",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xác nhận và ký",
+   "class": "terms",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chấp nhận tất cả",
+   "class": "consent",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đồng ý tất cả",
+   "class": "consent",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Chấp nhận cookie",
+   "class": "consent",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Cho phép tất cả cookie",
+   "class": "consent",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mật khẩu",
+   "class": "field_password",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Nhập mật khẩu",
+   "class": "field_password",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mã PIN",
+   "class": "field_password",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mã OTP",
+   "class": "field_otp",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mã xác thực",
+   "class": "field_otp",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mã xác minh",
+   "class": "field_otp",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mã xác nhận",
+   "class": "field_otp",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Số thẻ",
+   "class": "field_card_number",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tên chủ thẻ",
+   "class": "field_card_number",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Ngày hết hạn",
+   "class": "field_card_expiry",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Mã bảo mật thẻ",
+   "class": "field_card_cvc",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Số tài khoản",
+   "class": "field_bank_account",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Số tiền",
+   "class": "field_amount",
+   "lang": "vi"
+  },
+  {
+   "phrase": "CMND",
+   "class": "field_national_id",
+   "lang": "vi"
+  },
+  {
+   "phrase": "CCCD",
+   "class": "field_national_id",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Căn cước công dân",
+   "class": "field_national_id",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Số hộ chiếu",
+   "class": "field_national_id",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xác nhận",
+   "class": "context",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tiếp tục",
+   "class": "context",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đồng ý",
+   "class": "context",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hoàn tất",
+   "class": "context",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Có",
+   "class": "context",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hủy",
+   "class": "dismiss",
+   "lang": "vi",
+   "ctx": true
+  },
+  {
+   "phrase": "Hủy bỏ",
+   "class": "dismiss",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đóng",
+   "class": "dismiss",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Để sau",
+   "class": "dismiss",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Bỏ qua",
+   "class": "dismiss",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Không",
+   "class": "dismiss",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Quay lại",
+   "class": "dismiss",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Thêm vào giỏ hàng",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xem giỏ hàng",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tiếp tục mua sắm",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Phương thức thanh toán",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Lịch sử giao dịch",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đăng nhập",
+   "class": "not_risky",
+   "lang": "vi",
+   "prefix": true
+  },
+  {
+   "phrase": "Đăng ký",
+   "class": "not_risky",
+   "lang": "vi",
+   "prefix": true
+  },
+  {
+   "phrase": "Đăng xuất",
+   "class": "not_risky",
+   "lang": "vi",
+   "prefix": true
+  },
+  {
+   "phrase": "Mua sắm",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xem thêm",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xem chi tiết",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xem tất cả",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xem ngay",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tìm hiểu thêm",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tải ngay",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tải ứng dụng",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Thêm vào giỏ",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Trang chủ",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Liên hệ",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hỗ trợ",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tìm kiếm",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "pay",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "pay now",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "buy",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "buy now",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "place order",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "confirm order",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "checkout",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "check out",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "complete purchase",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "confirm payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "subscribe",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "upgrade plan",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "top up",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "transfer",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "send money",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "donate",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "book and pay",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "rent now",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "purchase",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "pay with card",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "proceed to payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "proceed to checkout",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "agree and pay",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "complete order",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "order now",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "buy with",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "get started and pay",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "delete",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "delete permanently",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "remove",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel order",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel subscription",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel booking",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "unsubscribe",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "deactivate",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "close account",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "delete account",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "empty trash",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "discard",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "erase",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "revoke",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "leave group",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "unfollow",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "block",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel your subscription",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel your order",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel your booking",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel my subscription",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "delete your account",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "delete my account",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "close your account",
+   "class": "destructive",
+   "lang": "en"
+  },
+  {
+   "phrase": "change password",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "reset password",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "two-factor",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "2-step verification",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "authenticator",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "security key",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "passkey",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "recovery email",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "recovery phone",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "change email",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "sign out of all devices",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "app password",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "turn off 2-step verification",
+   "class": "account_security",
+   "lang": "en"
+  },
+  {
+   "phrase": "share",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "invite",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "add member",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "give access",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "change permissions",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "anyone with the link",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "make public",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "change visibility",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "transfer ownership",
+   "class": "sharing",
+   "lang": "en"
+  },
+  {
+   "phrase": "send",
+   "class": "send",
+   "lang": "en"
+  },
+  {
+   "phrase": "send now",
+   "class": "send",
+   "lang": "en"
+  },
+  {
+   "phrase": "reply all",
+   "class": "send",
+   "lang": "en"
+  },
+  {
+   "phrase": "forward",
+   "class": "send",
+   "lang": "en"
+  },
+  {
+   "phrase": "post",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "publish",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "tweet",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "comment",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "submit review",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "share post",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "reply",
+   "class": "post",
+   "lang": "en"
+  },
+  {
+   "phrase": "i agree",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "agree and continue",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "accept terms",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "accept and continue",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "i accept",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "sign agreement",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "i agree to the terms",
+   "class": "terms",
+   "lang": "en"
+  },
+  {
+   "phrase": "accept all",
+   "class": "consent",
+   "lang": "en"
+  },
+  {
+   "phrase": "accept all cookies",
+   "class": "consent",
+   "lang": "en"
+  },
+  {
+   "phrase": "allow all",
+   "class": "consent",
+   "lang": "en"
+  },
+  {
+   "phrase": "allow all cookies",
+   "class": "consent",
+   "lang": "en"
+  },
+  {
+   "phrase": "agree to all",
+   "class": "consent",
+   "lang": "en"
+  },
+  {
+   "phrase": "confirm",
+   "class": "context",
+   "lang": "en"
+  },
+  {
+   "phrase": "continue",
+   "class": "context",
+   "lang": "en"
+  },
+  {
+   "phrase": "yes",
+   "class": "context",
+   "lang": "en"
+  },
+  {
+   "phrase": "close",
+   "class": "dismiss",
+   "lang": "en"
+  },
+  {
+   "phrase": "no",
+   "class": "dismiss",
+   "lang": "en"
+  },
+  {
+   "phrase": "not now",
+   "class": "dismiss",
+   "lang": "en"
+  },
+  {
+   "phrase": "skip",
+   "class": "dismiss",
+   "lang": "en"
+  },
+  {
+   "phrase": "back",
+   "class": "dismiss",
+   "lang": "en"
+  },
+  {
+   "phrase": "later",
+   "class": "dismiss",
+   "lang": "en"
+  },
+  {
+   "phrase": "cancel",
+   "class": "dismiss",
+   "lang": "en",
+   "ctx": true
+  },
+  {
+   "phrase": "add to cart",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "view more",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "view all",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "see more",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "learn more",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "home",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "search",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "contact us",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "support",
+   "class": "not_risky",
+   "lang": "en"
+  },
+  {
+   "phrase": "log in",
+   "class": "not_risky",
+   "lang": "en",
+   "prefix": true
+  },
+  {
+   "phrase": "login",
+   "class": "not_risky",
+   "lang": "en",
+   "prefix": true
+  },
+  {
+   "phrase": "sign in",
+   "class": "not_risky",
+   "lang": "en",
+   "prefix": true
+  },
+  {
+   "phrase": "sign up",
+   "class": "not_risky",
+   "lang": "en",
+   "prefix": true
+  },
+  {
+   "phrase": "Đồng ý và thanh toán",
+   "class": "terms",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Đồng ý và thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tôi đồng ý và thanh toán",
+   "class": "terms",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tôi đồng ý và thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "password",
+   "class": "field_password",
+   "lang": "en"
+  },
+  {
+   "phrase": "passwd",
+   "class": "field_password",
+   "lang": "en"
+  },
+  {
+   "phrase": "passcode",
+   "class": "field_password",
+   "lang": "en"
+  },
+  {
+   "phrase": "pin",
+   "class": "field_password",
+   "lang": "en"
+  },
+  {
+   "phrase": "mat khau",
+   "class": "field_password",
+   "lang": "en"
+  },
+  {
+   "phrase": "otp",
+   "class": "field_otp",
+   "lang": "en"
+  },
+  {
+   "phrase": "totp",
+   "class": "field_otp",
+   "lang": "en"
+  },
+  {
+   "phrase": "2fa",
+   "class": "field_otp",
+   "lang": "en"
+  },
+  {
+   "phrase": "mfa",
+   "class": "field_otp",
+   "lang": "en"
+  },
+  {
+   "phrase": "verification code",
+   "class": "field_otp",
+   "lang": "en"
+  },
+  {
+   "phrase": "one time code",
+   "class": "field_otp",
+   "lang": "en"
+  },
+  {
+   "phrase": "card number",
+   "class": "field_card_number",
+   "lang": "en"
+  },
+  {
+   "phrase": "cardnumber",
+   "class": "field_card_number",
+   "lang": "en"
+  },
+  {
+   "phrase": "ccnum",
+   "class": "field_card_number",
+   "lang": "en"
+  },
+  {
+   "phrase": "cc number",
+   "class": "field_card_number",
+   "lang": "en"
+  },
+  {
+   "phrase": "pan",
+   "class": "field_card_number",
+   "lang": "en"
+  },
+  {
+   "phrase": "credit card number",
+   "class": "field_card_number",
+   "lang": "en"
+  },
+  {
+   "phrase": "cvv",
+   "class": "field_card_cvc",
+   "lang": "en"
+  },
+  {
+   "phrase": "cvc",
+   "class": "field_card_cvc",
+   "lang": "en"
+  },
+  {
+   "phrase": "csc",
+   "class": "field_card_cvc",
+   "lang": "en"
+  },
+  {
+   "phrase": "security code",
+   "class": "field_card_cvc_weak",
+   "lang": "en"
+  },
+  {
+   "phrase": "expiry",
+   "class": "field_card_expiry",
+   "lang": "en"
+  },
+  {
+   "phrase": "expiry date",
+   "class": "field_card_expiry",
+   "lang": "en"
+  },
+  {
+   "phrase": "expiration date",
+   "class": "field_card_expiry",
+   "lang": "en"
+  },
+  {
+   "phrase": "exp date",
+   "class": "field_card_expiry",
+   "lang": "en"
+  },
+  {
+   "phrase": "expiration",
+   "class": "field_card_expiry",
+   "lang": "en"
+  },
+  {
+   "phrase": "cc exp",
+   "class": "field_card_expiry",
+   "lang": "en"
+  },
+  {
+   "phrase": "account number",
+   "class": "field_bank_account",
+   "lang": "en"
+  },
+  {
+   "phrase": "iban",
+   "class": "field_bank_account",
+   "lang": "en"
+  },
+  {
+   "phrase": "swift",
+   "class": "field_bank_account",
+   "lang": "en"
+  },
+  {
+   "phrase": "routing number",
+   "class": "field_bank_account",
+   "lang": "en"
+  },
+  {
+   "phrase": "routing",
+   "class": "field_bank_account",
+   "lang": "en"
+  },
+  {
+   "phrase": "stk",
+   "class": "field_bank_account",
+   "lang": "en"
+  },
+  {
+   "phrase": "amount",
+   "class": "field_amount",
+   "lang": "en"
+  },
+  {
+   "phrase": "ssn",
+   "class": "field_national_id",
+   "lang": "en"
+  },
+  {
+   "phrase": "passport number",
+   "class": "field_national_id",
+   "lang": "en"
+  },
+  {
+   "phrase": "social security number",
+   "class": "field_national_id",
+   "lang": "en"
+  },
+  {
+   "phrase": "mã định danh",
+   "class": "field_national_id",
+   "lang": "vi"
+  },
+  {
+   "phrase": "pagar",
+   "class": "payment",
+   "lang": "es"
+  },
+  {
+   "phrase": "comprar",
+   "class": "payment",
+   "lang": "es"
+  },
+  {
+   "phrase": "pagar ahora",
+   "class": "payment",
+   "lang": "es"
+  },
+  {
+   "phrase": "eliminar",
+   "class": "destructive",
+   "lang": "es"
+  },
+  {
+   "phrase": "borrar",
+   "class": "destructive",
+   "lang": "es"
+  },
+  {
+   "phrase": "enviar",
+   "class": "send",
+   "lang": "es"
+  },
+  {
+   "phrase": "compartir",
+   "class": "sharing",
+   "lang": "es"
+  },
+  {
+   "phrase": "payer",
+   "class": "payment",
+   "lang": "fr"
+  },
+  {
+   "phrase": "acheter",
+   "class": "payment",
+   "lang": "fr"
+  },
+  {
+   "phrase": "commander",
+   "class": "payment",
+   "lang": "fr"
+  },
+  {
+   "phrase": "supprimer",
+   "class": "destructive",
+   "lang": "fr"
+  },
+  {
+   "phrase": "envoyer",
+   "class": "send",
+   "lang": "fr"
+  },
+  {
+   "phrase": "partager",
+   "class": "sharing",
+   "lang": "fr"
+  },
+  {
+   "phrase": "bezahlen",
+   "class": "payment",
+   "lang": "de"
+  },
+  {
+   "phrase": "kaufen",
+   "class": "payment",
+   "lang": "de"
+  },
+  {
+   "phrase": "jetzt kaufen",
+   "class": "payment",
+   "lang": "de"
+  },
+  {
+   "phrase": "löschen",
+   "class": "destructive",
+   "lang": "de"
+  },
+  {
+   "phrase": "entfernen",
+   "class": "destructive",
+   "lang": "de"
+  },
+  {
+   "phrase": "senden",
+   "class": "send",
+   "lang": "de"
+  },
+  {
+   "phrase": "teilen",
+   "class": "sharing",
+   "lang": "de"
+  },
+  {
+   "phrase": "finalizar compra",
+   "class": "payment",
+   "lang": "pt"
+  },
+  {
+   "phrase": "excluir",
+   "class": "destructive",
+   "lang": "pt"
+  },
+  {
+   "phrase": "apagar",
+   "class": "destructive",
+   "lang": "pt"
+  },
+  {
+   "phrase": "compartilhar",
+   "class": "sharing",
+   "lang": "pt"
+  },
+  {
+   "phrase": "bayar",
+   "class": "payment",
+   "lang": "id"
+  },
+  {
+   "phrase": "beli",
+   "class": "payment",
+   "lang": "id"
+  },
+  {
+   "phrase": "beli sekarang",
+   "class": "payment",
+   "lang": "id"
+  },
+  {
+   "phrase": "hapus",
+   "class": "destructive",
+   "lang": "id"
+  },
+  {
+   "phrase": "kirim",
+   "class": "send",
+   "lang": "id"
+  },
+  {
+   "phrase": "bagikan",
+   "class": "sharing",
+   "lang": "id"
+  },
+  {
+   "phrase": "支付",
+   "class": "payment",
+   "lang": "zh"
+  },
+  {
+   "phrase": "购买",
+   "class": "payment",
+   "lang": "zh"
+  },
+  {
+   "phrase": "立即购买",
+   "class": "payment",
+   "lang": "zh"
+  },
+  {
+   "phrase": "删除",
+   "class": "destructive",
+   "lang": "zh"
+  },
+  {
+   "phrase": "发送",
+   "class": "send",
+   "lang": "zh"
+  },
+  {
+   "phrase": "分享",
+   "class": "sharing",
+   "lang": "zh"
+  },
+  {
+   "phrase": "支払う",
+   "class": "payment",
+   "lang": "ja"
+  },
+  {
+   "phrase": "購入",
+   "class": "payment",
+   "lang": "ja"
+  },
+  {
+   "phrase": "購入する",
+   "class": "payment",
+   "lang": "ja"
+  },
+  {
+   "phrase": "削除",
+   "class": "destructive",
+   "lang": "ja"
+  },
+  {
+   "phrase": "送信",
+   "class": "send",
+   "lang": "ja"
+  },
+  {
+   "phrase": "共有",
+   "class": "sharing",
+   "lang": "ja"
+  },
+  {
+   "phrase": "결제",
+   "class": "payment",
+   "lang": "ko"
+  },
+  {
+   "phrase": "구매",
+   "class": "payment",
+   "lang": "ko"
+  },
+  {
+   "phrase": "삭제",
+   "class": "destructive",
+   "lang": "ko"
+  },
+  {
+   "phrase": "보내기",
+   "class": "send",
+   "lang": "ko"
+  },
+  {
+   "phrase": "공유",
+   "class": "sharing",
+   "lang": "ko"
+  },
+  {
+   "phrase": "ชำระเงิน",
+   "class": "payment",
+   "lang": "th"
+  },
+  {
+   "phrase": "ซื้อ",
+   "class": "payment",
+   "lang": "th"
+  },
+  {
+   "phrase": "ลบ",
+   "class": "destructive",
+   "lang": "th"
+  },
+  {
+   "phrase": "ส่ง",
+   "class": "send",
+   "lang": "th"
+  },
+  {
+   "phrase": "แชร์",
+   "class": "sharing",
+   "lang": "th"
+  },
+  {
+   "phrase": "book now",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "withdraw",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "submit payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "complete payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "make payment",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "confirm purchase",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "submit order",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "reserve",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "confirm and pay",
+   "class": "payment",
+   "lang": "en"
+  },
+  {
+   "phrase": "Đặt ngay",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hoàn tất thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Hoàn tất đặt hàng",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Xác nhận mua hàng",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Thực hiện thanh toán",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Giữ chỗ",
+   "class": "payment",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Trở về trang chủ",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "Tìm hiểu ngay",
+   "class": "not_risky",
+   "lang": "vi"
+  },
+  {
+   "phrase": "ok",
+   "class": "context",
+   "lang": "en"
+  },
+  {
+   "phrase": "okay",
+   "class": "context",
+   "lang": "en"
+  },
+  {
+   "phrase": "register",
+   "class": "not_risky",
+   "lang": "en",
+   "prefix": true
+  }
+ ]
+}
