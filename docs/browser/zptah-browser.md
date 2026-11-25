@@ -17,14 +17,14 @@ which will be added to the same flow once the listing exists.
 
 ## Connect and pair
 
-1. In zptah open Settings > Browser and click Connect extension (in a Mono's Browser tab, the
-   Browser connection card).
-2. If the extension is missing, the app opens Chrome so you can add it. When it is installed, the
-   app opens the extension's pairing page and shows "Connecting to zptah...".
+1. Open a Mono, go to its settings and choose the Browser tab. The Browser connection card is
+   there. Click Connect extension.
+2. If the extension is missing, the card says "Waiting for the extension" and asks you to install
+   zptah Browser in that Chrome profile, then press Try again. Once it is installed, the app opens
+   the extension's pairing page and the card says to finish in the browser tab that opened.
 3. The pairing page asks once for the optional debugger permission. Click Allow. It closes itself
-   and the card shows "Connected: Chrome, profile <name>".
-4. Pick the connection for each Mono that should use the browser. Several Monos can use one
-   connection.
+   and the card shows "Connected." with a row such as "Chrome, profile <name>".
+4. Repeat from each Mono that should use the browser. Several Monos can use one connection.
 
 Pairing is open for 5 minutes with a single-use code. No token is shown or pasted. Disconnect in the
 card removes the pairing on both sides. Connect another profile to pair a second Chrome profile.
@@ -65,9 +65,11 @@ opened are yours until a Mono is given one. A Mono never steals focus.
 ## Troubleshooting
 
 - **Reconnect needed**: a Mono from before the extension kept its Chrome profile but is not bound
-  to a connection. Click Connect extension and bind the Mono.
-- **Protocol mismatch**: the extension options page shows "Update zptah" or "Update the extension"
-  and the badge shows `!`. Update whichever is older. The card button reads Try again.
+  to a connection. Open the Mono's Browser tab and click Connect extension in the Browser connection card.
+- **Protocol mismatch**: the card says "The extension speaks a different version than this app. Update zptah Browser or
+  the app, then try again." and the extension options page says "zptah and this extension speak
+  different versions. Update zptah and this extension, then try again." Update whichever is older,
+  then press Try again.
 - **Full Disk Access (macOS)**: optional. Without it zptah cannot read Chrome's profile list, so
   connection names do not show profile names. Connecting still works: start it from the profile
   you want. To show names, allow zptah under System Settings > Privacy & Security > Full Disk

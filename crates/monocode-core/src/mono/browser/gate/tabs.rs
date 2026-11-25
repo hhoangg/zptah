@@ -7,8 +7,8 @@
 //! the answers of `tabs.list`. The gate therefore keeps its own mirror of the last list, so the
 //! Mono reuses what is open now instead of opening the same address twice.
 //!
-//! The book is a mirror of the last `browser_tabs` list, kept by index (the only identity the
-//! tool gives) and by exact address. It fails safe: a tab counts as the agent's only while its
+//! The book is a mirror of the last `browser_tabs` list, kept by position in the rendered list and
+//! by exact address (Chrome tab ids are in the payload but the book does not use them). It fails safe: a tab counts as the agent's only while its
 //! identity is certain (the same address at the same position, the tab the agent is working in,
 //! or an address that is unique in both lists). Anything else (a tab the user opened, dragged in
 //! or swapped, a popup, any list that changed in a way the agent did not cause) counts as the
