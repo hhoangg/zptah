@@ -495,14 +495,10 @@ impl Monos {
                 "Before a click or a typed value, a box and a cursor show where the Mono is about to act, for about half a second. Off: no overlay and no delay.",
             )
         };
-        let toggle = switch_track(
-            "mono-browser-show-actions",
-            title,
-            setting_.show_actions,
-        )
-        .debug_selector(|| "mono-browser-show-actions".into())
-        .cursor_pointer()
-        .on_click(cx.listener(|this, _, _, cx| this.browser_toggle_show_actions(cx)));
+        let toggle = switch_track("mono-browser-show-actions", title, setting_.show_actions)
+            .debug_selector(|| "mono-browser-show-actions".into())
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| this.browser_toggle_show_actions(cx)));
         card()
             .child(switch_setting(
                 title,

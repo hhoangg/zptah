@@ -852,7 +852,11 @@ fn request_error_text(error: RequestError, method: Method) -> String {
 /// What an error code of the extension means for the agent.
 fn remote_text(body: &ErrorBody) -> String {
     // The gate's own words (the user's Stop on a tab) need no hint around them.
-    if body.detail.as_ref().is_some_and(|d| d["user_stopped"] == true) {
+    if body
+        .detail
+        .as_ref()
+        .is_some_and(|d| d["user_stopped"] == true)
+    {
         return body.message.clone();
     }
     let hint = match body.code {

@@ -1192,14 +1192,13 @@ impl ExtensionUpstream {
             (Err(_), Some(stopped)) => Err(stopped),
             (other, _) => other,
         };
-        result
-            .map_err(|e| {
-                let code = match &e {
-                    RequestError::Remote(body) => Some(body.code),
-                    _ => None,
-                };
-                (request_error_text(e, Method::ActCommit), code)
-            })
+        result.map_err(|e| {
+            let code = match &e {
+                RequestError::Remote(body) => Some(body.code),
+                _ => None,
+            };
+            (request_error_text(e, Method::ActCommit), code)
+        })
     }
 
     fn keep_alive(&self, prepare_id: &str) {
