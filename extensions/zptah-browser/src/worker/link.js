@@ -191,7 +191,12 @@ export class BrowserLink {
     });
     port.onDisconnect.addListener(() => {
       const message = chrome.runtime.lastError?.message ?? null;
-      if (port === this.#port) this.#onGone(message, pairing);
+      // Messages arrive before the disconnect, but they are handled asynchronously. The app closes
+      // the pairing connection right after its answer, so handle what is queued first: otherwise a
+      // finished pairing is reported as failed and its key is lost.
+      void this.#inbound.then(() => {
+        if (port === this.#port) this.#onGone(message, pairing);
+      });
     });
     const key = pairing ? null : this.#keyB64 === null ? null : b64decodeFixed(this.#keyB64, KEY_LEN);
     this.#hs = new ExtHandshake({ key, instanceId: this.#instanceId });

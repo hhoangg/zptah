@@ -55,6 +55,8 @@ class FakeApp {
       this.send(await this.session.seal({ v: 1, type: "res", id: f.id, ok: true, result: { roster: [], stopped: false } }));
     } else if (f.method === "pair.begin") {
       this.send({ v: 1, type: "res", id: f.id, ok: true, result: { key: b64encode(o.newKey) } });
+      // The real app closes the pairing connection right after it answers.
+      if (o.dropAfterPair) this.port.drop("Native host has exited.");
     }
   }
 }
@@ -268,6 +270,16 @@ test("pairing: hello without mac, pair.begin once, key stored, reconnect with a 
   assert.equal(h.link.paired, true);
 });
 
+test("pairing: the app closing the connection right after pair.begin does not lose the pairing", async () => {
+  const newKey = randomBytes(32);
+  const h = harness({ key: newKey, newKey, stored: undefined, dropAfterPair: true });
+  await h.link.start();
+  await h.link.pair(b64encode(randomBytes(16)));
+  await until(() => h.link.status === "ready", "ready after pairing");
+  assert.equal(h.store.data["zptah.link"].key, b64encode(newKey));
+  assert.ok(!h.statuses.includes("pair_failed"));
+});
+
 test("pairing: a mac in the unpaired hello result, a bad key or an app error fail pairing and store nothing", async () => {
   const nonce = b64encode(randomBytes(16));
   const cases = {
@@ -318,7 +330,7 @@ test("backoff resets after a successful handshake", async () => {
   await until(() => h.link.status === "ready", "ready");
   assert.equal(h.link.attempts, 0);
   h.ports[0].drop(null);
-  assert.equal(h.link.status, "disconnected");
+  await until(() => h.link.status === "disconnected", "disconnected");
   assert.deepEqual(h.timers.map((t) => t.ms), [1000]);
   h.advance(1000);
   await h.link.tick();
