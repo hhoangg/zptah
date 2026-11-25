@@ -163,7 +163,7 @@ jobs:
       # native:test:dev are skipped.
       - run: npm ci
       - run: npm run native:test:dev
-      - run: cargo clippy --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-core --all-targets --profile native-dev -- -D warnings
+      - run: cargo clippy --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-core --all-targets --features test-support --profile native-dev -- -D warnings
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest@0.9.151

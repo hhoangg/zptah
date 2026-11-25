@@ -49,12 +49,10 @@ export async function ensureChrome(cacheDir) {
       throw new Error(`Chrome for Testing sha256 mismatch: got ${got}, pinned ${spec.sha256}`);
     }
     renameSync(tmp, zip);
-    rmSync(unpacked, { recursive: true, force: true });
   }
-  if (!existsSync(exe)) {
-    rmSync(unpacked, { recursive: true, force: true });
-    execFileSync("unzip", ["-q", zip, "-d", root], { stdio: "inherit" });
-  }
+  // Always unpack the verified zip: a cached unpacked tree could not be trusted.
+  rmSync(unpacked, { recursive: true, force: true });
+  execFileSync("unzip", ["-q", zip, "-d", root], { stdio: "inherit" });
   if (!existsSync(exe)) throw new Error(`browser executable missing after unpack: ${resolve(exe)}`);
   return realpathSync(exe);
 }
