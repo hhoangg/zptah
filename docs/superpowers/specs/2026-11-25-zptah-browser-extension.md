@@ -1,7 +1,8 @@
 # zptah Browser: our own Chrome extension for Mono browser use - design
 
 Status: design spec. No code. Date: 2026-11-25, revised the same day with the user's answers to
-the open questions (section 18) and one new requirement (the in-tab overlay, section 10a).
+the open questions (section 18), one new requirement (the in-tab overlay, section 10a), and the M0
+spike results (section 19).
 Native app only.
 
 Supersedes the Playwright MCP Bridge backend of `2026-11-21-mono-browser-design.md` and the
@@ -237,7 +238,8 @@ type ErrorCode =
   | "E_PROTOCOL" | "E_AUTH" | "E_NOT_PAIRED" | "E_UNKNOWN_MONO" | "E_NOT_OWNER" | "E_BUSY"
   | "E_TAB_GONE" | "E_RESTRICTED_URL" | "E_ORIGIN_BLOCKED" | "E_STALE_REF" | "E_STALE_PREPARE"
   | "E_STOPPED" | "E_PASSWORD_FIELD" | "E_INCOGNITO" | "E_DEBUGGER_DENIED" | "E_DEBUGGER_BUSY"
-  | "E_NEEDS_APPROVAL" | "E_TOO_LARGE" | "E_TIMEOUT" | "E_INVALID" | "E_UNSUPPORTED";
+  | "E_NEEDS_APPROVAL" | "E_TOO_LARGE" | "E_TIMEOUT" | "E_INVALID" | "E_UNSUPPORTED"
+  | "E_DIALOG_SUSPECTED";
 ```
 
 Rules:
@@ -330,7 +332,9 @@ Why both peer checks and the HMAC:
   Service when available), otherwise in the encrypted `mono_secrets` table as today (`B:672`).
 - Residual risk: code with the user's privileges can read the extension's
   `chrome.storage.local` on disk and, on Linux, can `ptrace` same-user processes unless Yama blocks
-  it. On macOS the hardened runtime blocks injection into the signed app.
+  it. On macOS the hardened runtime would block injection into the signed app, but the current
+  release build is signed without it (`flags=0x0`, M0 finding F11, section 19). Until the release
+  signing adds `--options runtime`, a same-user process can also inject into the app on macOS.
 
 ### 5.4a The Mono's own shell
 
@@ -570,11 +574,36 @@ Lifecycle:
   run ends with no new run of the same task within 2 minutes (a conversation can stay open for days;
   the debugger must not). A later run of the same task that needs it attaches again.
 - **The infobar cannot be hidden.** Chrome shows "<extension name> started debugging this browser"
-  while any extension debugger session is attached. A Web Store extension has no way to hide it;
-  only the user can, by launching the browser with `--silent-debugger-extension-api`, a flag we
-  never set and never ask users to set. The overlay (10a) and the badge explain what is going on.
+  while any extension debugger session is attached. A Web Store extension has no way to hide it.
+  Only the user can, by launching the browser with `--silent-debugger-extension-api` (in M0.9 the
+  flag did suppress the bar in Chrome for Testing 158, F3); we never set it and never ask users to.
+  Measured in M0.9 without the flag: the bar is 57 px tall, shows on every tab of every visible
+  window of the profile (also when the attached tab is in the background), appears within about
+  0.3 s and stays 5 to 6 s after detach. Because it shifts the viewport by 57 px, the extension
+  re-measures element geometry after every attach and detach. The overlay (10a) and the badge
+  explain what is going on.
 - If attach fails because DevTools or another debugger is attached, `E_DEBUGGER_BUSY`; the gate
   tells the agent and does not retry silently.
+- **Dialogs need the debugger before they open** (F1). In M0.5 an `alert` or `confirm` that opened
+  while no debugger was attached could not be seen or answered: a late `Page.enable` never returned,
+  `handleJavaScriptDialog` failed with "No dialog is showing", and `chrome.scripting` calls stayed
+  pending (only a reload was seen to clear the dialog; `prompt()` was not tested). So:
+  - **Pre-attach.** When the `debugger` permission is granted, the extension attaches at **prepare**
+    time for an action whose signals put it in `destructive` or `payment` (where confirmation
+    dialogs are likely; an assumption, not a measurement), waits for the 57 px infobar resize to
+    settle, and only then gathers signals, geometry and the screenshot, so commit's re-check sees the
+    final layout. The dialog text is then classified like a button (7.1, `browser_handle_dialog`).
+    By the stickiness rule (6.4) every later action on that tab in the task uses the debugger too.
+    If the attach fails (`E_DEBUGGER_BUSY`) the action continues without it and the next rule
+    applies.
+  - **Suspected dialog.** Whenever no debugger is attached to the tab, a commit whose content
+    script does not answer within 3 s on a loaded page ends as `E_DIALOG_SUSPECTED`. The click has
+    already been dispatched, so the outcome is unknown: the prepare is consumed (no retry, no trusted
+    retry), the audit row says "outcome unknown", the Mono stops and asks the user to answer the
+    dialog in the tab ("Show tab"), and the late result, if it arrives after the user answers, is
+    sent as an event and added to the audit. The tab is marked "dialog suspected" so reads fail fast
+    with the same code instead of waiting 30 s (dialogs opened by timers block reads too). The
+    extension never reloads a tab on its own, because that loses the page's state.
 - `onDetach` with `canceled_by_user` (the user pressed Cancel on Chrome's infobar) is treated like a
   per-tab stop: no re-attach to that tab for the rest of the task, and the event goes to the app.
   chrome-use soft-detaches here and re-attaches on the agent's next command
@@ -609,6 +638,8 @@ When the extension switches to the debugger:
    gate allows that only once per prepared action, so an action is never silently run twice. If the
    page changed after the first try (DOM mutation, navigation, focus change), the extension refuses
    the trusted retry (`E_STALE_PREPARE`), because a non-idempotent click may already have worked.
+5. Pre-attach: an action classified `destructive` or `payment`, when the permission is granted
+   (6.3, F1), so a confirmation dialog it opens can be read.
 
 Lessons applied from chrome-use's changelog: read only from the isolated world (page wrappers of
 `querySelector` and friends cannot see us, `CU/CHANGELOG.md:625`); never wrap page natives
@@ -618,13 +649,41 @@ frames (`:2289-2295`; chrome-use's host list is in `CU/cli/src/native/observatio
 `www.google.com/recaptcha/`, `*.arkoselabs.com`, `geo.captcha-delivery.com`). When a human-check appears, the Mono stops and asks
 the user to solve it (`blocked_by_human_check` in the result), it never tries to solve it.
 
-Screenshots: if the tab is the active tab of a visible window, `chrome.tabs.captureVisibleTab`
-plus a crop (no infobar). If the debugger is already attached to the tab for the task, it is used.
-Otherwise the approval card shows the text preview (8.2) instead of attaching just for a picture,
-because an attach would then stay for the task (rule above). `browser_take_screenshot` follows the
-same rule: for a tab that is neither visible nor attached it returns `E_UNSUPPORTED` with "The tab
-is in the background; use browser_snapshot, or ask the user to show the tab". Whether `captureVisibleTab` works for
-an unfocused but visible window, and how occluded windows behave, is spike M0.1.
+Screenshots (measured in M0.1, F5):
+
+- `chrome.tabs.captureVisibleTab` is used only when the content script reports
+  `document.visibilityState === "visible"` for the window's active tab. It works for a visible but
+  unfocused window (44 to 72 ms), but for a hidden page (a minimized window, or a window created
+  while the browser was in the background; true occlusion was not measured) it **hangs without an
+  error**, so every call is wrapped in a 2 s timeout. A timed-out call can still settle later (one
+  settled about 4 s after the window was restored) and then shows whatever tab is active, possibly a
+  user's tab, so late results are discarded and the active tab id is checked before and after each
+  capture. Chrome allows 2 calls per second; the extension queues calls to stay under that.
+- If the debugger is already attached to the tab for the task, `Page.captureScreenshot` is used; it
+  works for background tabs and minimized windows (about 1.7 s for the first call).
+- Otherwise the approval card shows the text preview (8.2) instead of attaching just for a picture,
+  because an attach would then stay for the task (rule above). `browser_take_screenshot` follows the
+  same rule: for a tab that is neither visible nor attached it returns `E_UNSUPPORTED` with "The tab
+  is in the background; use browser_snapshot, or ask the user to show the tab".
+
+Background rendering (F7): some sites render little or nothing while their tab is hidden (in M0.10
+a bank home page had 0 controls in a background tab and 70 once shown). Snapshots report
+`visibility: hidden`, and when a hidden page looks unrendered the result says so, so the Mono asks
+the user to show the tab instead of concluding the page is empty.
+
+Input robustness (F6): target resolution skips `aria-hidden`, zero-size and `readonly` decoy inputs
+(DuckDuckGo puts a 4 px hidden input in front of its search box; a `readonly` input on another site
+only opens an overlay); a commit returns observed effects (value read back after the page's
+handlers ran, DOM mutation count, URL change, focus change) so the agent can tell when input was
+ignored. Submitting never clicks anything that was not prepared: if the field is in a form, the
+extension uses `requestSubmit()`; if there is no form, the result tells the agent to prepare the
+site's search or submit button as its own click (classified like any click; in M0.6 one site
+without a form worked this way), then an untrusted Enter (it did submit on one site in M0.6, and
+never submits a form), then the debugger. For rich editors `document.execCommand('insertText')`
+from the isolated world is tried before the debugger (it worked once in M0.6; M3 measures it
+properly); it inserts at the current selection, so the extension first focuses the prepared element
+and checks that `document.activeElement` is that element and is not a password field (invariant 4,
+6.5).
 
 ### 6.5 Invariants enforced in the extension (defense in depth)
 
@@ -645,8 +704,8 @@ per-Mono data (roster, origin lists) that can make them stricter.
 3. **Ownership.** Only the owner Mono can act on a tab (section 9). Reads are allowed on any
    eligible tab subject to rule 2.
 4. **Password fields are never typed into** (section 8.6): `E_PASSWORD_FIELD`, regardless of
-   approval. The check runs on the target ref and, for `press`, `type` and `insertText` without a
-   ref or through the debugger, on `document.activeElement` (and the active element inside the
+   approval. The check runs on the target ref and, for `press`, `type`, `insertText` and
+   `execCommand('insertText')`, without a ref or through the debugger, on `document.activeElement` (and the active element inside the
    focused frame and shadow root) right before each key or text is sent.
 5. **No incognito.** Manifest `"incognito": "not_allowed"`, and every command checks
    `tab.incognito === false`.
@@ -817,6 +876,30 @@ Matching:
 - The longest matching phrase wins. "Not risky" entries (Appendix A.10) match only when they are
   the whole name, and they never remove a category that comes from another signal (form fields,
   dialog text, site category).
+- Rules added after M0.10 (F8), where real pages produced false positives:
+  - Links are classified by their text like buttons. A link is exempt only when all of these hold:
+    it is inside `nav`, `footer` or `role=menu`; it is same-origin with no query string; its path
+    matches neither the checkout paths (7.4) nor action paths (`delete`, `remove`, `unsubscribe`,
+    `logout`, `confirm`, `huy`, `xoa`); it is not in a dialog; and its match is not `destructive` or
+    `account_security`. This removes the menu-tile and footer false positives ("Mua vé xem phim",
+    "Chính sách thanh toán") without letting a page hide "Xóa tài khoản" behind a link whose script
+    posts the form (the isolated world cannot see page listeners, so a link's behavior is never
+    trusted).
+  - For links and landmark text only: names longer than 8 words, and names starting with
+    `Chính sách`, `Hướng dẫn`, `Điều khoản`, `Câu hỏi` (and English "Policy", "Help", "Guide",
+    "Terms of"), are informational and only feed `nearby_text`. Buttons and submits are never
+    exempted this way: their phrases are matched in the first 4 words of the name whatever its
+    length, so "Điều khoản: Đồng ý và thanh toán" is still `payment` and `terms`.
+  - Punctuation is a hard boundary: "Sim số - Thẻ cào" does not match `Số thẻ`.
+  - Short words `Mua`, `Gửi`, `Đăng` match only as the whole name, or as the first word of a name of
+    at most 3 words; `Đăng nhập`, `Đăng ký`, `Đăng xuất` are whole-name not-risky entries (A.10).
+  - Ambiguous stripped short forms (`go`, `moi`, `dang`, `dong`, `co`) are used only on pages that
+    are Vietnamese (the `lang` attribute, else the share of text with Vietnamese diacritics), so `go`
+    (Gỡ) does not match an English "GO TO STORE". Multi-word stripped phrases ("xac nhan chuyen
+    tien") are matched on every page, so setting `lang="en"` does not hide unaccented Vietnamese.
+  - Tone placement is normalized before matching (old and new styles: "hoá" and "hóa", "thuỷ" and
+    "thủy", the `oa`, `oe`, `uy` pairs), so a phrase does not need a separate entry for each style
+    (Appendix A still lists "Xóa" and "Xoá" for readability).
 - Bare `cancel`/`huy`/`dong` inside a dialog that also has a primary button counts as **dismiss**
   (not risky), unless the dialog text matches a destructive phrase ("Cancel your subscription?");
   then the primary button is the risky one.
@@ -841,6 +924,8 @@ Vietnamese column below, with and without diacritics, for the user to review onc
 | sharing | share, invite, add member, give access, change permissions, anyone with the link, make public, change visibility, transfer ownership | chia sẻ, mời, thêm thành viên, cấp quyền, đổi quyền, bất kỳ ai có đường liên kết, công khai, chế độ hiển thị, chuyển quyền sở hữu |
 | send / post | send, send now, reply all, post, publish, tweet, comment, submit review, share post | gửi, gửi ngay, trả lời tất cả, đăng, đăng bài, đăng tin, bình luận, gửi đánh giá, phát hành |
 | terms | I agree, agree and continue, accept terms, accept and continue, I accept, sign agreement | tôi đồng ý, đồng ý và tiếp tục, chấp nhận điều khoản, chấp nhận và tiếp tục, ký hợp đồng |
+
+English not-risky whole names (M0.10): Add to cart, View more, Log in, Login, Sign in, Sign up.
 
 Form-field signals (computed in the extension, never sending field values):
 
@@ -1030,7 +1115,8 @@ write) and `Autonomous` levels (`B:173`) both migrate to `act` (section 15.3).
 - Mono tabs are background tabs. The image comes from `captureVisibleTab` when the tab is visible,
   or from the debugger when it is already attached for the task (6.4). Otherwise the card shows a
   text preview (the element's name, the dialog or nearby text, the amounts, the page title) and a
-  "Show tab" button. M0.1 measures how often an image is available. A missing image never turns an
+  "Show tab" button. M0.1 showed that an image needs a visible page or an attached debugger (6.4).
+  A missing image never turns an
   ask into an allow.
 - Text only, plain language, no JSON, no selectors, no refs. The Mono's `purpose` appears as a
   separate quoted line labelled as the Mono's words, so the user can tell gate facts from agent
@@ -1261,7 +1347,8 @@ New requirement (D9), modelled on how Claude in Chrome marks a tab it is working
 - **Rendering**:
   - The same mechanism as the cursor (section 10): one host element per tab with
     `attachShadow({mode: "closed"})`, shown as a `popover="manual"` in the top layer and re-shown when
-    the page opens a modal or goes fullscreen, so it stays above them. The cursor and the overlay can
+    the page opens a modal, a popover or goes fullscreen, so it is drawn above them (drawn, not
+    clickable: see "Measured in M0.8" below). The cursor and the overlay can
     share one host.
   - The host and the glow have `pointer-events: none`. **Only the Stop button has
     `pointer-events: auto`**, so the page stays fully usable around it.
@@ -1293,10 +1380,20 @@ New requirement (D9), modelled on how Claude in Chrome marks a tab it is working
   anything. It offers only Stop: there is no "Allow" in the page, ever; approvals stay in zptah.
 - **Best effort, by nature**: the overlay lives in a page the site controls. A capture-phase
   listener on `window` can swallow the click before it reaches the shadow root; page CSS or a later
-  popover can cover the host; and an open modal dialog may make it inert (M0.8 checks). The host
+  popover can cover the host; and an open modal dialog makes it inert (measured in M0.8, below). The host
   carries inline `!important` styles (`display`, `visibility`, `opacity`, `position`) and is
   re-shown on top when covered, which makes these harder, not impossible. **The toolbar icon (11.1)
   is the guaranteed stop**; the overlay is the convenient one.
+- **Measured in M0.8 (F2)**: page CSS did not hide the host (only `* {display:none}`, which also
+  blanks the page); a later page popover covered it until it was re-shown; a capture-phase
+  `stopPropagation` on `window` swallowed the Stop click; a page script could remove the host. Under
+  an open modal `showModal()` dialog and in fullscreen the overlay is visible again after a re-show,
+  but the Stop button is **inert** (clicks reach the dialog). So while a modal dialog or a fullscreen
+  element is open, the overlay shows only the glow and a non-interactive line: under a modal "Stop
+  from the zptah icon in the toolbar" / "Dừng bằng biểu tượng zptah trên thanh công cụ"; in
+  fullscreen, where the toolbar is hidden, "Press Esc, then stop from the zptah icon" / "Nhấn Esc,
+  rồi dừng bằng biểu tượng zptah". It returns to the button when the dialog or fullscreen ends.
+  (Fullscreen was measured headless only.)
 
 ## 11. Toolbar and options page
 
@@ -1436,8 +1533,10 @@ connected) and removes the binding.
 - Without it, the flow still works: the user clicks Connect from the profile they want (the app
   opens the store page and the pair page in the default profile, or the user opens
   `zptah.app/connect` instructions), and names the connection ("Work").
-- Whether writing into `~/Library/Application Support/<browser>/NativeMessagingHosts/` hits the same
-  macOS privacy restriction that blocked reading `Local State` is spike M0.2. If it does, the
+- M0.2 (F12): from a process the current app launched, the user's Chrome dir is listable and
+  `Local State` is readable today. Whether writing into
+  `~/Library/Application Support/<browser>/NativeMessagingHosts/` works is a manual step still open
+  (section 19). If it does not, the
   fallback is the system path (`/Library/Google/Chrome/NativeMessagingHosts/`), which needs one admin
   prompt.
 
@@ -1477,7 +1576,7 @@ connected) and removes the binding.
 | `alarms` | yes | Reconnects to the zptah app after the browser wakes up or the background worker restarts. |
 | `webNavigation` | yes | Finds the frames of a page to read it fully, and restores your front tab when a page a Mono works in opens a popup. |
 | host permissions `<all_urls>` | yes | Monos work on the sites you ask them to use. Nothing runs on a page until a Mono reads or acts on it. |
-| `debugger` | **optional**, granted on the pairing page or in options | Used only for sites that ignore simulated input, for rich text editors and for page dialogs. When a tab needs it, it stays attached while the assistant works in that tab and is detached when the work ends or the user presses Stop; Chrome shows its debugging bar while attached. |
+| `debugger` | **optional**, granted on the pairing page or in options | Used only for sites that ignore simulated input, for rich text editors, and for page dialogs (attached before a delete or payment step so its confirmation dialog can be read). When a tab needs it, it stays attached while the assistant works in that tab and is detached when the work ends or the user presses Stop; Chrome shows its debugging bar while attached. |
 
 Not requested: `identity`, `downloads`, `cookies`, `history`, `bookmarks`, `webRequest`,
 `declarativeNetRequest`, `notifications`, `sidePanel`, `activeTab`, `management`, `clipboard*`.
@@ -1709,9 +1808,14 @@ between two Monos, stop and resume, reconnect after a dropped link.
 
 - `npm run ext:e2e`: downloads a pinned Chrome for Testing build (version and SHA-256 pinned in the
   script; a test-only download, never at app runtime), starts it with `--headless=new`,
-  `--user-data-dir=<tmp>`, `--load-extension=extensions/zptah-browser/dist/dev`, writes the dev host
-  manifest into Chrome for Testing's own `NativeMessagingHosts` path (it differs from Chrome's since
-  Chrome 146 per the earlier research; to confirm in M0.7), and runs a test binary that plays the app side.
+  `--user-data-dir=<tmp>`, `--load-extension=extensions/zptah-browser/dist/dev` together with
+  `--disable-features=DisableLoadExtensionCommandLineSwitch` (Chrome for Testing 158 ignores
+  `--load-extension` without it, F9), writes the dev host manifest into
+  `<user-data-dir>/NativeMessagingHosts/` (found by Chrome for Testing headless and headful, F10, so
+  the test never writes outside its temp dir), and runs a test binary that plays the app side.
+- e2e runs headless only. In M0, 14 headful launches of Chrome for Testing with `open -g -n -a`
+  brought it to the front on the developer's Mac (one other headful run did not), so headful checks
+  need the user's agreement or another machine.
 - Fixture pages served from a local HTTP server: forms with every field kind, a fake checkout with
   amounts in VND and USD, Vietnamese and English buttons, a dialog-delete flow, an iframe and a
   cross-origin iframe, shadow DOM, a React-controlled input, a contenteditable editor, a page that
@@ -1774,7 +1878,7 @@ addendum of this spec when they change the design.
 | M0.9 | Does a debugger attach survive navigations, including cross-origin, for a whole task? Can the infobar be hidden? | Attach, navigate same-origin and cross-origin, watch `onDetach`; run once with `--silent-debugger-extension-api` (a user-launched flag, recorded only to document it) | Detach events and infobar behavior recorded |
 | M0.10 | Does Appendix A match the Vietnamese wording real sites show? | Read the visible button and link text of public pages (no login, no clicks beyond navigation) on Shopee, Lazada, Tiki, MoMo, Zalo and a few bank home pages; compare with Appendix A | Matches, misses and additions listed |
 
-M0.4 (Arc) moved out of v1 with answer 12.
+M0.4 (Arc) moved out of v1 with answer 12. Results: section 19.
 
 ## 18. Decisions on the open questions (user, 2026-11-25)
 
@@ -1797,26 +1901,57 @@ M0.4 (Arc) moved out of v1 with answer 12.
 | 15 | Existing deny lists | Kept unchanged; suggest switching to the new defaults | 15.3 |
 | new | In-tab overlay | Glow in the Mono's color and a "Stop <Mono>" button | 10a |
 
-### Remaining open questions
+### Decisions after M0 (user and orchestrator defaults, 2026-11-25)
 
-1. Appendix A needs one review by the user (wording and categories), after M0.10 adds what real
-   pages show.
-2. The app UI language setting (8.3) is new; is "system language, Vietnamese or English" the right
-   default?
-3. Answer 9 extended task grants to the whole conversation. The spec also lets task domains, user
-   references and the names behind `send_unnamed` last for the conversation (section 1, "Terms").
-   Confirm, or keep those per run.
-4. Debugger: the spec adds one detail to answer 14, detaching when a run ends and no new run of the
-   same conversation starts within 2 minutes, so a conversation left open for days does not keep
-   the infobar. Confirm.
+| # | Question | Answer | Where |
+|---|---|---|---|
+| 1 | Appendix A review | Still open: one manual review by the user before v1 ships (final checklist) | Appendix A |
+| 2 | App UI language default | System language, with Vietnamese and English as choices (orchestrator default) | 8.3 |
+| 3 | Conversation-long task domains, user references and `send_unnamed` names | Last for the conversation, like answer 9; payments never covered (orchestrator default) | 1, 7.6 |
+| 4 | Debugger detach | Detach when a run ends and no new run of the same conversation starts within 2 minutes (orchestrator default) | 6.3 |
+| 5 | Hardened runtime (F11) | User: turn on hardened runtime (`--options runtime`) for release builds, with the entitlements the app needs (JIT, webview, plugins); verify existing features still work | 5.4, release flow |
+| 6 | Pre-attaching the debugger before `destructive` and `payment` commits | User: accepted; the infobar shows for the rest of that task | 6.3 |
+| 7a | Loans and buy-now-pay-later (A.11) | User: count as `payment` | 7.3, Appendix A.11 |
+| 7b | `Đăng ký` (sign up, register) | User: not risky by itself; it asks only when it creates a paid subscription (then `payment`) | 7.3, Appendix A.10 |
+
+## 19. M0 spike results (2026-11-25)
+
+M0 ran as defined in 17.1, with Chrome for Testing 158.0.8127.88 on macOS arm64 in isolated
+profiles. Full report: `~/Documents/zptah-spikes/browser-ext-m0.md` (outside the repo, with raw
+data). Findings that changed this spec:
+
+| # | Finding | Changed |
+|---|---|---|
+| F1 | An `alert` or `confirm` that opened before the debugger attached cannot be seen or answered, and blocks `chrome.scripting` | 6.3 (pre-attach at prepare for `destructive` and `payment`, `E_DIALOG_SUSPECTED`) |
+| F2 | The overlay's Stop is inert under modal dialogs and fullscreen; capture listeners can swallow it; page scripts can remove it | 10a |
+| F3 | The infobar is 57 px, on every tab of every visible window, stays 5 to 6 s after detach; only the user-set `--silent-debugger-extension-api` suppressed it | 6.3 (re-measure geometry after attach and detach) |
+| F4 | One attach survives same-origin, cross-site and history navigations and reloads | 6.3 (confirms "once per task") |
+| F5 | `captureVisibleTab` hangs on hidden pages, 2 calls per second; `Page.captureScreenshot` works on background tabs | 6.4 |
+| F6 | Content-script input worked for search on 7 of 7 testable sites; known gaps: `isTrusted` checks, `beforeinput`-prevented editors, synthetic Enter, popups; decoy inputs | 6.4 |
+| F7 | Some pages do not render in background tabs | 6.4 |
+| F8 | Lexicon false positives come from matching rules (links, long names, punctuation, short words, per-control diacritics, tone placement) | 7.3, Appendix A |
+| F9 | Chrome for Testing 158 needs `--disable-features=DisableLoadExtensionCommandLineSwitch` with `--load-extension` | 16.3 |
+| F10 | Host manifest in `<user-data-dir>/NativeMessagingHosts/` works; host argv is `[path, origin]`, parent is the browser main process, the host inherits the browser's environment; an open port keeps the worker alive (over 400 s), without one it stops after about 31 s; the host gets EOF and exits on every disconnect | 16.3; confirms 5.4 and 4 |
+| F11 | `LOCAL_PEERPID` and `LOCAL_PEERTOKEN` work both ways; the installed release app has no hardened runtime | 5.4, decision 5 (18) |
+| F12 | From the app's process tree the user's Chrome dir and `Local State` are readable (a read-only probe in this session; no evidence file) | 12.4 (read part of M0.2) |
+
+Still open from M0 (manual steps for the user, listed in the report): the write test in the real
+Chrome dir (M0.2), Windows (M0.3), Ubuntu (M0.7), the infobar Cancel path (M0.9), headful
+fullscreen. Not verified: behavior in branded Chrome; checkout, dialog, account and cookie wording
+on real sites (needs logins or carts).
 
 ## Appendix A. Vietnamese risk keywords
 
 Source: written from the Vietnamese interfaces of the listed sites as the spec author knows them,
-not yet checked live; M0.10 compares them with the text real public pages show. Matching is
-diacritic-aware (7.3): page text with diacritics is matched against the phrase with diacritics,
-and the normalized form is used only for page text written without diacritics, so "Thanh toán" and
-"THANH TOAN" both match while "Đang" does not match "Đăng". Short
+partly checked on 12 public pages in M0.10 (section 19); entries marked "(M0.10)" were added from
+that check, and checkout, dialog, account and cookie wording is still unchecked (needs logins or
+carts). Matching is diacritic-aware (7.3): page text with diacritics is matched against the phrase
+with diacritics after tone placement is normalized; multi-word stripped forms are matched against
+text written without diacritics on any page; ambiguous short stripped forms (`go`, `moi`, `dang`,
+`dong`, `co`) only on Vietnamese pages. So "Thanh toán" and "THANH TOAN" both match while "Đang"
+does not match "Đăng". English not-risky entries proposed in M0.10 (`Add to Cart`, `View more`,
+`Login`, `Sign up`) belong to the English seed in 7.3; `Tìm hiểu ngay` and `Trở về trang chủ` are
+covered by the link exemption and were not added. Short
 words such as "Gửi", "Xóa", "Đăng" follow the short-word rule of 7.3 (whole name, or the first word
 of a short name). The English seed list is in 7.3.
 
@@ -1851,6 +1986,10 @@ of a short name). The English seed list is in 7.3.
 | Gia hạn | `gia han` | subscriptions, domains |
 | Ủng hộ | `ung ho` | donations |
 | Quyên góp | `quyen gop` | donations |
+| Đóng tiền | `dong tien` | Tiki (M0.10) |
+| Nạp thẻ | `nap the` | Tiki, MoMo (M0.10) |
+| Nạp data | `nap data` | MoMo (M0.10) |
+| Nạp điện thoại | `nap dien thoai` | MoMo (M0.10) |
 | Đặt vé | `dat ve` | airlines, cinemas, buses |
 | Đặt phòng | `dat phong` | hotels |
 | Đặt chỗ | `dat cho` | restaurants, travel |
@@ -2025,3 +2164,30 @@ of a short name). The English seed list is in 7.3.
 | Tiếp tục mua sắm | `tiep tuc mua sam` | shops |
 | Phương thức thanh toán | `phuong thuc thanh toan` | a heading, not an action |
 | Lịch sử giao dịch | `lich su giao dich` | banks, MoMo |
+| Đăng nhập | `dang nhap` | Shopee, MB Bank (M0.10) |
+| Đăng ký | `dang ky` | sign-up links (M0.10); asks only when it creates a paid subscription (decision 7b) |
+| Đăng xuất | `dang xuat` | account menus |
+| Mua sắm | `mua sam` | Lazada (M0.10) |
+| Xem thêm | `xem them` | all sites (M0.10) |
+| Xem chi tiết | `xem chi tiet` | all sites (M0.10) |
+| Xem tất cả | `xem tat ca` | all sites (M0.10) |
+| Xem ngay | `xem ngay` | all sites (M0.10) |
+| Tìm hiểu thêm | `tim hieu them` | all sites (M0.10) |
+| Tải ngay | `tai ngay` | Zalo (M0.10) |
+| Tải ứng dụng | `tai ung dung` | Zalo (M0.10) |
+| Thêm vào giỏ | `them vao gio` | Tiki (M0.10) |
+| Trang chủ | `trang chu` | all sites (M0.10) |
+| Liên hệ | `lien he` | all sites (M0.10) |
+| Hỗ trợ | `ho tro` | all sites (M0.10) |
+| Tìm kiếm | `tim kiem` | all sites (M0.10) |
+
+### A.11 Credit and buy-now-pay-later (`payment`, decision 7a; seen only as menu tiles in M0.10)
+
+| Phrase | Without diacritics (normalized) | Typical on |
+|---|---|---|
+| Vay | `vay` | MoMo, banks |
+| Vay nhanh | `vay nhanh` | MoMo |
+| Vay vốn | `vay von` | banks |
+| Đăng ký vay | `dang ky vay` | banks |
+| Ví trả sau | `vi tra sau` | MoMo |
+| Mua trước trả sau | `mua truoc tra sau` | Tiki, MoMo |
