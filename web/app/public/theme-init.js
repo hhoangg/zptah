@@ -36,6 +36,9 @@
   else if (appearance === "system" && typeof window.matchMedia === "function") {
     dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   }
+  // The sign-in family matches the landing page, which is dark only (ui/Shell.tsx forces the same once the app mounts).
+  var signIn = /^\/(login|register|recover)\/?$/.test(window.location.pathname);
+  if (signIn) dark = true;
   var scheme = dark ? "dark" : "light";
 
   var root = document.documentElement;
@@ -44,5 +47,5 @@
   root.setAttribute("data-accent", accent);
 
   var meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", BACKGROUNDS[theme][dark ? 0 : 1]);
+  if (meta) meta.setAttribute("content", signIn ? "#0a0a0a" : BACKGROUNDS[theme][dark ? 0 : 1]);
 })();

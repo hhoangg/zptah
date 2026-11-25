@@ -38,9 +38,9 @@ async function tabThrough(page: Page, path: string, primary: RegExp): Promise<vo
 
 
 const SIGNED_OUT: Screen[] = [
-  { name: "register", path: "/register", key: (p) => p.getByRole("button", { name: /create passkey/i }) },
-  { name: "login", path: "/login", key: (p) => p.getByRole("button", { name: "Sign in with passkey" }) },
-  { name: "recover", path: "/recover", key: (p) => p.getByRole("button", { name: "Recover account" }) },
+  { name: "register", path: "/register", schemes: ["dark"], key: (p) => p.getByRole("button", { name: /create passkey/i }) },
+  { name: "login", path: "/login", schemes: ["dark"], key: (p) => p.getByRole("button", { name: "Sign in with passkey" }) },
+  { name: "recover", path: "/recover", schemes: ["dark"], key: (p) => p.getByRole("button", { name: "Recover account" }) },
 ];
 
 const SIGNED_IN: Screen[] = [

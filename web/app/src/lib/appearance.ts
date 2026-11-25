@@ -44,15 +44,28 @@ export function resolveScheme(appearance: Appearance, systemDark: boolean): Sche
   return systemDark ? "dark" : "light";
 }
 
+/** A scheme a screen forces regardless of the stored appearance (the sign-in family is dark, like the landing page). */
+let forcedScheme: Scheme | null =
+  typeof window !== "undefined" && /^\/(login|register|recover)\/?$/.test(window.location.pathname) ? "dark" : null;
+
+/** The theme-color of a forced scheme: the landing page background. */
+const FORCED_THEME_COLOR = "#0a0a0a";
+
+/** Forces (or, with null, releases) the scheme and re-applies the stored appearance so DOM and store agree. */
+export function forceScheme(scheme: Scheme | null): void {
+  forcedScheme = scheme;
+  useAppearance.getState().sync();
+}
+
 /** Sets data-scheme, data-theme, data-accent and the theme-color meta, as theme-init.js does. */
 export function applyAppearance(state: { appearance: Appearance; theme: Theme; accent: Accent }): Scheme {
-  const scheme = resolveScheme(state.appearance, systemPrefersDark());
+  const scheme = forcedScheme ?? resolveScheme(state.appearance, systemPrefersDark());
   const root = document.documentElement;
   root.setAttribute("data-scheme", scheme);
   root.setAttribute("data-theme", state.theme);
   root.setAttribute("data-accent", state.accent);
   const meta = document.querySelector('meta[name="theme-color"]');
-  meta?.setAttribute("content", THEME_BACKGROUNDS[state.theme][scheme === "dark" ? 0 : 1]);
+  meta?.setAttribute("content", forcedScheme ? FORCED_THEME_COLOR : THEME_BACKGROUNDS[state.theme][scheme === "dark" ? 0 : 1]);
   return scheme;
 }
 

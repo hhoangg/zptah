@@ -9,10 +9,10 @@ const root = path.resolve(import.meta.dirname, "..");
 const script = new vm.Script(readFileSync(path.join(root, "public/theme-init.js"), "utf8"));
 
 /** Runs public/theme-init.js in a fresh document, as the browser does from <head>. */
-function run(storage: Record<string, string>, systemDark: boolean) {
+function run(storage: Record<string, string>, systemDark: boolean, pathname = "/") {
   const dom = new JSDOM('<!doctype html><html><head><meta name="theme-color" content="#131313"></head><body></body></html>', {
     runScripts: "outside-only",
-    url: "https://monoptah.test/",
+    url: `https://monoptah.test${pathname}`,
   });
   const win = dom.window as unknown as Window & typeof globalThis;
   for (const [k, v] of Object.entries(storage)) win.localStorage.setItem(k, v);
@@ -28,6 +28,13 @@ function run(storage: Record<string, string>, systemDark: boolean) {
 }
 
 describe("public/theme-init.js", () => {
+  it("forces dark with the landing theme color on the sign-in family, with or without a trailing slash, and nowhere else", () => {
+    for (const p of ["/login", "/login/", "/register", "/recover"]) {
+      expect(run({ "monoptah.appearance": "light" }, false, p)).toMatchObject({ scheme: "dark", color: "#0a0a0a" });
+    }
+    expect(run({ "monoptah.appearance": "light" }, false, "/install")).toMatchObject({ scheme: "light", color: "#f7f7f7" });
+  });
+
   it("defaults to system appearance, mono theme and theme accent", () => {
     expect(run({}, true)).toEqual({ scheme: "dark", theme: "mono", accent: "theme", color: "#131313" });
     expect(run({}, false)).toEqual({ scheme: "light", theme: "mono", accent: "theme", color: "#f7f7f7" });

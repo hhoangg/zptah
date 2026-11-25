@@ -1,5 +1,6 @@
 // Entry point of the landing page.
 import { initDemo } from './demo.js';
+import { initReveal } from './reveal.js';
 import { initCopy, initInstall, initProviders } from './extras.js';
 
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -9,3 +10,4 @@ initDemo(data, reducedMotion);
 initProviders(reducedMotion);
 initInstall();
 initCopy();
+initReveal();

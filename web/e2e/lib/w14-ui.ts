@@ -160,10 +160,12 @@ export interface Screen {
   key: (page: Page) => Locator;
   /** Optional: content that must be visible before axe and the screenshots run (a transcript or list that loads over the link). */
   ready?: (page: Page) => Locator;
+  /** Optional: the schemes the screen supports (the sign-in family is always dark, like the landing page). Default: both. */
+  schemes?: Scheme[];
 }
 
 export async function checkScreen(page: Page, screen: Screen): Promise<void> {
-  for (const scheme of SCHEMES) {
+  for (const scheme of screen.schemes ?? SCHEMES) {
     await resetViewport(page);
     await openIn(page, screen.path, scheme);
     // axe runs once per theme at the desktop width, before the viewport emulation changes anything.

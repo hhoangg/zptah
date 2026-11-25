@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { setApiTransport } from "@/features/accounts/api";
 import { createMockServer } from "@/features/accounts/mock/transport";
+import { useAppearance } from "@/lib/appearance";
 import { getLinkStore } from "@/link/store";
 import { DesktopSwitcher } from "@/features/desktops/DesktopSwitcher";
 import { mountApp } from "@/features/desktops/testMount";
@@ -105,12 +106,37 @@ describe("app shell frame and navigation", () => {
     }
   });
 
-  it.each(["/install", "/pair/c0de", "/desktops/dk1/verify", "/login"])("keeps the app header on %s", async (url) => {
+  it.each(["/install", "/pair/c0de", "/desktops/dk1/verify"])("keeps the app header on %s", async (url) => {
     mountApp(url);
     expect(await screen.findByTestId("app-header")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "zptah" })).toBeInTheDocument();
     expect(screen.getByRole("main")).not.toHaveClass("pt-[env(safe-area-inset-top)]");
     expect(screen.getByTestId("connection-banner").className).toContain("top-[calc(env(safe-area-inset-top)+2.75rem)]");
+  });
+
+  it.each(["/login", "/register", "/recover"])("shows the brand block instead of the app header on %s", async (url) => {
+    mountApp(url);
+    const brand = await screen.findByTestId("auth-brand");
+    expect(brand).toHaveTextContent("zptah");
+    expect(screen.queryByTestId("app-header")).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Main" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "zptah" })).toBeNull();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "Skip to content" })).toBeInTheDocument();
+  });
+
+  it("forces the dark scheme on the sign-in family and restores the visitor's appearance on /install", async () => {
+    const root = document.documentElement;
+    useAppearance.getState().setAppearance("light");
+    const { router } = mountApp("/login");
+    await screen.findByTestId("auth-brand");
+    expect(root.getAttribute("data-scheme")).toBe("dark");
+    await act(async () => {
+      await router.navigate({ to: "/install" });
+    });
+    await screen.findByTestId("app-header");
+    expect(root.getAttribute("data-scheme")).toBe("light");
+    useAppearance.getState().setAppearance("system");
   });
 
   it("sends the old /admin URL into the settings shell, which has no header and so no Account avatar to mark", async () => {
