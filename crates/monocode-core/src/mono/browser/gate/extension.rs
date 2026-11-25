@@ -413,7 +413,7 @@ impl ExtensionUpstream {
             notes.push(page.more_hint("browser_snapshot", Some(generation)));
         }
         text.push_str(&notes_block(&notes));
-        let mut out = text_result(text);
+        let out = text_result(text);
         Ok(out)
     }
 
@@ -435,7 +435,7 @@ impl ExtensionUpstream {
             notes.push(page.more_hint("browser_read", None));
         }
         text.push_str(&notes_block(&notes));
-        let mut out = text_result(text);
+        let out = text_result(text);
         Ok(out)
     }
 
@@ -458,7 +458,6 @@ impl ExtensionUpstream {
         let matches = result["matches"]
             .as_array()
             .ok_or("The extension sent a find result that could not be read.")?;
-        let generation = result["generation"].as_u64().unwrap_or(0);
         let mut text = page_header(&url, &title);
         text.push_str("### Matches\n");
         if matches.is_empty() {
@@ -474,7 +473,7 @@ impl ExtensionUpstream {
                 clean_line(&one("context")),
             ));
         }
-        let mut out = text_result(text);
+        let out = text_result(text);
         Ok(out)
     }
 
