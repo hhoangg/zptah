@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 pub mod connect;
 pub mod defense;
 pub mod gate;
+pub mod host_mode;
 pub mod link;
 pub(crate) mod links;
 pub mod output;
