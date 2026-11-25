@@ -557,3 +557,54 @@ mod cartesian {
         assert_eq!((bars.top, bars.width, bars.height), (16., 365., 162.));
     }
 }
+
+#[gpui::test]
+fn visual_flow_renders_in_the_shared_diagram_viewer(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| {
+                VisualView::new(
+                    document(
+                        "return () => visual.flow({title:'Approval',nodes:[{id:'a',label:'Request',kind:'start'},{id:'b',label:'Risk?',kind:'decision'},{id:'c',label:'Auto act',color:'positive'}],edges:[{from:'a',to:'b'},{from:'b',to:'c',label:'safe'},{from:'c',to:'a'}]});",
+                    ),
+                    cx,
+                )
+            })
+        })
+        .unwrap()
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let board = visual.debug_bounds("flow-image").expect("flow board");
+    assert!(board.size.width > px(100.) && board.size.height >= px(180.));
+    assert!(visual.debug_bounds("flow-zoom-in").is_some());
+    assert!(visual.debug_bounds("flow-fullscreen").is_some());
+    // No Source or Copy: a flow has no diagram source to show.
+    assert!(visual.debug_bounds("flow-toggle").is_none());
+    assert!(visual.debug_bounds("flow-copy").is_none());
+}
+
+#[gpui::test]
+fn canvas_with_anchored_labels_arrows_and_chips_renders(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| {
+                VisualView::new(
+                    document(
+                        "return () => visual.canvas([visual.rect(10,10,120,36,{color:'warning',radius:8,stroke:'ink'}),visual.label(70,28,'Centered',{align:'center',baseline:'middle'}),visual.line(130,28,230,28,{arrow:'end',dashed:true}),visual.label(180,28,'edge',{chip:true,align:'center',baseline:'middle'}),visual.circle(260,28,12,{color:'accent',stroke:'ink'})],{width:300,height:120});",
+                    ),
+                    cx,
+                )
+            })
+        })
+        .unwrap()
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            assert!(view.error.is_none(), "{:?}", view.error);
+            assert!(matches!(view.tree, Some(Node::Canvas { .. })));
+        })
+        .unwrap();
+}

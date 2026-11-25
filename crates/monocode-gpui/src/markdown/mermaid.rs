@@ -1,22 +1,18 @@
 //! Native Mermaid previews with a bounded cache shared across virtualized rows.
 use super::*;
-use gpui::{ClipboardItem, Context, IntoElement, RenderImage, RenderOnce, Subscription, Task};
+use crate::diagram_viewer::{DiagramViewer, FlowScene, ViewerContent};
+use gpui::{Context, IntoElement, RenderImage, RenderOnce, Subscription, Task};
 use mermaid_rs_renderer::{LayoutConfig, Theme, compute_layout, parse_mermaid_strict, render_svg};
+use monocode_core::diagram::mermaid::parse_flowchart;
 use std::{collections::VecDeque, time::Duration};
 #[path = "mermaid_curves.rs"]
 mod curves;
 use curves::flowchart_curves;
 #[path = "mermaid_input.rs"]
 mod input;
-#[path = "mermaid_media.rs"]
-mod media;
 #[path = "mermaid_sequence.rs"]
 mod sequence;
 
-const SOURCE_HEIGHT: f32 = 320.;
-const LOADING_HEIGHT: f32 = 128.;
-const MAX_PREVIEW_HEIGHT: f32 = 640.;
-const PREVIEW_PADDING: f32 = 16.;
 const CACHE_BYTES: usize = 32 * 1024 * 1024;
 const CACHE_ITEMS: usize = 32;
 const MAX_SOURCE_BYTES: usize = 32 * 1024;
@@ -92,33 +88,25 @@ pub(super) struct Diagram {
 struct Preview {
     key: Option<PreviewKey>,
     result: Option<PreviewResult>,
-    source: bool,
-    copied: bool,
-    copy_reset: Option<Task<()>>,
+    /// The flowchart parsed into the shared diagram model, per source. `None`
+    /// scene means the source is not a flowchart the shared parser covers, and
+    /// the general Mermaid renderer draws it as an image.
+    flow: Option<(SharedString, Option<Arc<FlowScene>>)>,
     task: Option<Task<()>>,
     _release: Option<Subscription>,
 }
 
 impl Preview {
-    fn copy(&mut self, code: &str, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(
-            code.strip_suffix("\r\n")
-                .or_else(|| code.strip_suffix('\n'))
-                .unwrap_or(code)
-                .to_owned(),
-        ));
-        self.copied = true;
-        cx.notify();
-        self.copy_reset = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(1500))
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.copied = false;
-                this.copy_reset = None;
-                cx.notify();
-            });
-        }));
+    fn flow(&mut self, code: &SharedString) -> Option<Arc<FlowScene>> {
+        if self.flow.as_ref().is_none_or(|(key, _)| key != code) {
+            let scene = (code.len() <= MAX_SOURCE_BYTES
+                && code.lines().count() <= MAX_SOURCE_LINES)
+                .then(|| parse_flowchart(code).ok())
+                .flatten()
+                .and_then(|graph| FlowScene::new(graph).ok());
+            self.flow = Some((code.clone(), scene));
+        }
+        self.flow.as_ref().and_then(|(_, scene)| scene.clone())
     }
 
     fn clear_image(&mut self, cx: &mut App) {
@@ -141,8 +129,6 @@ impl Preview {
             return;
         }
         self.task = None;
-        self.copied = false;
-        self.copy_reset = None;
         self.clear_image(cx);
         let key = (source.clone(), dark);
         self.key = Some(key.clone());
@@ -251,35 +237,32 @@ impl RenderOnce for Diagram {
             cx,
             |_, _| Preview::default(),
         );
-        state.update(cx, |state, cx| {
-            state.prepare(self.fence.code.clone(), !is_light(), cx)
-        });
-        let preview = state.read(cx);
-        let is_copied = preview.copied;
-        let has_diagram = matches!(preview.result, Some(Ok(_)));
-        let show_source = preview.source || matches!(preview.result, Some(Err(_)));
-        let ratio = preview
-            .result
-            .as_ref()
-            .and_then(|result| result.as_ref().ok())
-            .map(|image| {
-                let size = image.size(0);
-                size.width.0 as f32 / size.height.0 as f32
-            });
-        let mut status = match &preview.result {
-            None => Some("Rendering diagram…".to_owned()),
-            Some(Err(error)) => Some(format!("Unable to preview Mermaid: {error}")),
-            Some(Ok(_)) => None,
-        };
-        let media = if show_source {
-            let fence = source_preview(&self.fence);
-            if !Arc::ptr_eq(&fence, &self.fence) {
-                status =
-                    Some("Source preview is truncated. Copy includes the complete source.".into());
+        let code = self.fence.code.clone();
+        let flow = state.update(cx, |state, _| state.flow(&code));
+        let (content, status, error) = if let Some(scene) = flow {
+            (ViewerContent::Flow(scene), None, false)
+        } else {
+            state.update(cx, |state, cx| state.prepare(code.clone(), !is_light(), cx));
+            match &state.read(cx).result {
+                None => (
+                    ViewerContent::Loading,
+                    Some("Rendering diagram…".to_owned()),
+                    false,
+                ),
+                Some(Err(error)) => (
+                    ViewerContent::Empty,
+                    Some(format!("Unable to preview Mermaid: {error}")),
+                    true,
+                ),
+                Some(Ok(image)) => (ViewerContent::Image(image.clone()), None, false),
             }
+        };
+        let fence = source_preview(&self.fence);
+        let truncated = !Arc::ptr_eq(&fence, &self.fence);
+        let selection = self.selection;
+        let source = Box::new(move || {
             div()
                 .id("mermaid-source")
-                .debug_selector(|| "mermaid-source".into())
                 .size_full()
                 .overflow_scroll()
                 .py_2()
@@ -289,134 +272,21 @@ impl RenderOnce for Diagram {
                     None,
                     "",
                     false,
-                    self.selection,
+                    selection,
                 ))
                 .into_any_element()
-        } else if let Some(Ok(image)) = &preview.result {
-            gpui::img(image.clone())
-                .absolute()
-                .inset_0()
-                .debug_selector(|| "mermaid-image".into())
-                .role(Role::Image)
-                .aria_label(format!("Mermaid diagram\n{}", self.fence.code))
-                .size_full()
-                .object_fit(gpui::ObjectFit::Contain)
-                .into_any_element()
-        } else {
-            div()
-                .debug_selector(|| "mermaid-loading".into())
-                .into_any_element()
-        };
-        let copied = self.fence.code.clone();
-        let copy_state = state.clone();
-        div()
-            .id(self.id)
-            .w_full()
-            .min_w_0()
-            .rounded(px(10.))
-            .overflow_hidden()
-            .border_1()
-            .border_color(content(0.1))
-            .bg(content(0.06))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px(px(10.))
-                    .min_h(px(36.))
-                    .text_size(px(12.))
-                    .text_color(content(0.65))
-                    .child(crate::activity::file_icon("code.mermaid", 16.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(self.fence.label.clone()),
-                    )
-                    .when(has_diagram, |d| {
-                        d.child(
-                            div()
-                                .id("mermaid-toggle")
-                                .debug_selector(|| "mermaid-toggle".into())
-                                .role(Role::Button)
-                                .aria_label(if show_source {
-                                    "Show diagram"
-                                } else {
-                                    "Show source"
-                                })
-                                .cursor_pointer()
-                                .hover(|s| s.text_color(content(1.)))
-                                .child(if show_source { "Diagram" } else { "Source" })
-                                .on_click(move |_, _, cx| {
-                                    state.update(cx, |state, cx| {
-                                        state.source = !state.source;
-                                        cx.notify();
-                                    });
-                                    cx.stop_propagation();
-                                }),
-                        )
-                    })
-                    .child(
-                        icon_button(
-                            "mermaid-copy",
-                            if is_copied { "Copied" } else { "Copy code" },
-                            if is_copied { "check" } else { "copy" },
-                        )
-                        .debug_selector(|| "mermaid-copy".into())
-                        .on_click(move |_, _, cx| {
-                            copy_state.update(cx, |state, cx| state.copy(&copied, cx));
-                            cx.stop_propagation();
-                        }),
-                    ),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .debug_selector(|| "mermaid-panel".into())
-                    .when(ratio.is_some(), |d| d.py(px(PREVIEW_PADDING)))
-                    .when(ratio.is_none(), |d| {
-                        d.h(px(if show_source {
-                            SOURCE_HEIGHT
-                        } else {
-                            LOADING_HEIGHT
-                        }))
-                    })
-                    .flex()
-                    .flex_col()
-                    .border_t_1()
-                    .border_color(content(0.1))
-                    .when_some(status, |d, status| {
-                        d.child(
-                            div()
-                                .px_3()
-                                .py_1()
-                                .flex_shrink_0()
-                                .truncate()
-                                .text_size(px(12.))
-                                .text_color(content(0.5))
-                                .child(status),
-                        )
-                    })
-                    .child(if let Some(ratio) = ratio {
-                        media::FittedMedia::new(
-                            media,
-                            ratio,
-                            MAX_PREVIEW_HEIGHT - 2. * PREVIEW_PADDING,
-                        )
-                        .into_any_element()
-                    } else {
-                        div()
-                            .relative()
-                            .flex_1()
-                            .min_h_0()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .child(media)
-                            .into_any_element()
-                    }),
-            )
+        });
+        let mut viewer = DiagramViewer::new(self.id, "mermaid", self.fence.label.clone(), content)
+            .icon("code.mermaid")
+            .aria(format!("Mermaid diagram\n{}", self.fence.code))
+            .source(self.fence.code.clone(), source)
+            .force_source(error)
+            .status(status);
+        if truncated {
+            viewer = viewer
+                .source_status("Source preview is truncated. Copy includes the complete source.");
+        }
+        viewer
     }
 }
 
@@ -430,29 +300,6 @@ mod tests {
         code: &'static str,
     }
 
-    #[gpui::test]
-    fn copying_shows_check_then_resets_and_repeated_copy_restarts_feedback(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let preview = cx.new(|_| Preview::default());
-        preview.update(cx, |state, cx| state.copy("graph LR; A-->B\r\n", cx));
-        assert!(preview.read_with(cx, |state, _| state.copied));
-        assert_eq!(
-            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
-                .as_deref(),
-            Some("graph LR; A-->B")
-        );
-        cx.run_until_parked();
-        cx.executor().advance_clock(Duration::from_millis(1000));
-        preview.update(cx, |state, cx| state.copy("graph LR; A-->C\n", cx));
-        cx.run_until_parked();
-        cx.executor().advance_clock(Duration::from_millis(1000));
-        cx.run_until_parked();
-        assert!(preview.read_with(cx, |state, _| state.copied));
-        cx.executor().advance_clock(Duration::from_millis(500));
-        cx.run_until_parked();
-        assert!(!preview.read_with(cx, |state, _| state.copied));
-    }
     impl gpui::Render for Fixture {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div().w(px(self.width)).when(self.visible, |d| {
@@ -465,21 +312,33 @@ mod tests {
         }
     }
 
-    #[gpui::test]
-    fn preview_buttons_switch_source_and_copy_without_changing_height(
+    fn open_fixture(
         cx: &mut gpui::TestAppContext,
+        code: &'static str,
+    ) -> (
+        gpui::WindowHandle<Fixture>,
+        &'static mut gpui::VisualTestContext,
     ) {
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|_| Fixture {
                     visible: true,
                     width: 640.,
-                    code: "graph LR; A-->B",
+                    code,
                 })
             })
             .unwrap()
         });
-        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        let visual = gpui::VisualTestContext::from_window(window.into(), cx).into_mut();
+        (window, visual)
+    }
+
+    #[gpui::test]
+    fn raster_preview_buttons_switch_source_and_copy_without_changing_height(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let code = "sequenceDiagram\n Alice->>Bob: Hello\n Bob-->>Alice: Hi";
+        let (window, visual) = open_fixture(cx, code);
         visual.run_until_parked();
         assert!(visual.debug_bounds("mermaid-source").is_none());
         assert!(visual.debug_bounds("mermaid-loading").is_some());
@@ -502,13 +361,12 @@ mod tests {
             visual
                 .update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
                 .as_deref(),
-            Some("graph LR; A-->B")
+            Some(code)
         );
         let button = visual.debug_bounds("mermaid-toggle").unwrap();
         visual.simulate_click(button.center(), Default::default());
         visual.run_until_parked();
         assert_eq!(visual.debug_bounds("mermaid-image").unwrap(), image);
-        assert!(image.size.height < px(SOURCE_HEIGHT));
         window
             .update(visual, |this, _, cx| {
                 this.visible = false;
@@ -526,6 +384,7 @@ mod tests {
         assert_eq!(visual.debug_bounds("mermaid-image").unwrap(), image);
         assert!(visual.debug_bounds("mermaid-source").is_none());
         assert!(visual.debug_bounds("mermaid-loading").is_none());
+        // The board follows the container width; its height stays put.
         window
             .update(visual, |this, _, cx| {
                 this.width = 400.;
@@ -534,17 +393,20 @@ mod tests {
             .unwrap();
         visual.run_until_parked();
         let narrow = visual.debug_bounds("mermaid-image").unwrap();
-        assert!(
-            (image.size.width / image.size.height - narrow.size.width / narrow.size.height).abs()
-                < 0.02
-        );
-        assert!(narrow.size.height < image.size.height);
+        assert!(narrow.size.width < image.size.width);
+        assert_eq!(narrow.size.height, image.size.height);
+    }
+
+    #[gpui::test]
+    fn every_diagram_kind_fits_its_board_inside_the_panel(cx: &mut gpui::TestAppContext) {
+        let (window, visual) = open_fixture(cx, "graph LR; A-->B");
         for code in [
             "sequenceDiagram\n Alice->>Bob: Hello\n Bob-->>Alice: Hi",
             "classDiagram\n Animal <|-- Duck\n Animal : +int age",
             "stateDiagram-v2\n [*] --> Ready\n Ready --> [*]",
             "erDiagram\n CUSTOMER ||--o{ ORDER : places",
             "graph TD; A-->B-->C-->D-->E-->F-->G-->H",
+            "flowchart LR\n subgraph s\n A-->B\n end",
         ] {
             window
                 .update(visual, |this, _, cx| {
@@ -564,23 +426,46 @@ mod tests {
                     })
                     .unwrap();
                 visual.run_until_parked();
-                let image = visual.debug_bounds("mermaid-image").unwrap();
+                let board = visual.debug_bounds("mermaid-image").unwrap();
                 let panel = visual.debug_bounds("mermaid-panel").unwrap();
-                assert!(image.size.height <= px(MAX_PREVIEW_HEIGHT - 2. * PREVIEW_PADDING));
-                assert!(panel.contains(&image.origin));
-                assert!(image.bottom_right().x <= panel.bottom_right().x + px(0.1));
-                let top_gap = image.origin.y - panel.origin.y - px(1.); // divider
-                let bottom_gap = panel.bottom_right().y - image.bottom_right().y;
                 assert!(
-                    (top_gap - px(PREVIEW_PADDING)).abs() < px(0.1),
-                    "{code}, width={width}, top={top_gap:?}"
+                    board.size.height <= px(crate::diagram_viewer::MAX_BOARD),
+                    "{code}"
                 );
+                assert!(panel.contains(&board.origin), "{code}, width={width}");
                 assert!(
-                    (bottom_gap - px(PREVIEW_PADDING)).abs() < px(0.1),
-                    "{code}, width={width}, bottom={bottom_gap:?}"
+                    board.bottom_right().x <= panel.bottom_right().x + px(0.1),
+                    "{code}, width={width}"
                 );
             }
         }
+    }
+
+    #[gpui::test]
+    fn flowcharts_render_vectors_in_the_shared_viewer(cx: &mut gpui::TestAppContext) {
+        let code = "flowchart LR\n A[Start] --> B{Ready?}\n B -->|Yes| C[Done]";
+        let (_, visual) = open_fixture(cx, code);
+        visual.run_until_parked();
+        // No debounce and no rasterising: the board is there at once.
+        assert!(visual.debug_bounds("mermaid-loading").is_none());
+        let board = visual.debug_bounds("mermaid-image").unwrap();
+        assert!(board.size.width > px(300.) && board.size.height >= px(180.));
+        let toggle = visual.debug_bounds("mermaid-toggle").unwrap();
+        visual.simulate_click(toggle.center(), Default::default());
+        visual.run_until_parked();
+        assert_eq!(
+            visual.debug_bounds("mermaid-source").unwrap().size.height,
+            board.size.height
+        );
+        let copy = visual.debug_bounds("mermaid-copy").unwrap();
+        visual.simulate_click(copy.center(), Default::default());
+        visual.run_until_parked();
+        assert_eq!(
+            visual
+                .update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                .as_deref(),
+            Some(code)
+        );
     }
 
     #[test]

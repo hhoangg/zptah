@@ -1,18 +1,26 @@
 //! Session visuals are a bounded native component tree, with no browser surface.
-use crate::theme::{accent_color, content};
+use crate::diagram_viewer::{DiagramViewer, FlowScene, ViewerContent};
+use crate::theme::{accent_color, content, floating_fill};
 use gpui::{
     AnyElement, Bounds, Context, Div, EventEmitter, FontWeight, Hsla, IntoElement, MouseButton,
-    PathBuilder, Pixels, Point, Render, Role, SharedString, Stateful, Window, canvas, div, fill,
-    point, prelude::*, px, relative, size,
+    PathBuilder, Pixels, Point, Render, Role, SharedString, Stateful, Window, canvas, div, point,
+    prelude::*, px, relative, size,
+};
+use monocode_core::diagram::{
+    Baseline, FlowGraph, TextAlign, label_origin,
+    layout::{arrowhead, dash_polyline},
+    luminance, prefers_dark_text,
 };
 use monocode_core::visual::{
-    Camera, Node, SceneObject, Shape, TextSize, ThemeColor, VisualDocument, VisualRuntime,
+    ArrowEnds, Camera, Node, SceneObject, Shape, TextSize, ThemeColor, VisualDocument,
+    VisualRuntime, label_backdrop,
 };
 use serde_json::{Value, json};
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     rc::Rc,
+    sync::Arc,
 };
 
 pub(crate) mod calendar;
@@ -39,6 +47,7 @@ pub(crate) struct VisualView {
     active: HashSet<String>,
     revision: u64,
     scene_cache: HashMap<String, Rc<RefCell<Option<SceneCache>>>>,
+    flows: HashMap<String, Arc<FlowScene>>,
     /// Placed in an answer's prose: no title bar, its caption underneath.
     inline: Option<String>,
     /// When the visual first appeared, for its charts' entrances.
@@ -65,7 +74,7 @@ struct SceneCache {
     projection: Rc<scene::Projection>,
 }
 
-fn color(token: &ThemeColor) -> Hsla {
+pub(crate) fn color(token: &ThemeColor) -> Hsla {
     // Semantic hues need darker variants when the interface uses dark ink.
     let light_surface = content(1.).l < 0.5;
     let hue = |dark, light| gpui::rgb(if light_surface { light } else { dark }).into();
@@ -179,6 +188,7 @@ impl VisualView {
             active: HashSet::new(),
             revision: 0,
             scene_cache: HashMap::new(),
+            flows: HashMap::new(),
             inline: None,
             motion: dither::Motion(std::time::Instant::now()),
         };
@@ -864,12 +874,54 @@ impl VisualView {
                 height,
                 shapes,
             } => drawing(*width, *height, shapes.clone()),
+            Node::Flow {
+                graph,
+                title,
+                height,
+            } => self.flow(&key, graph, title.as_deref(), *height),
             Node::Scene {
                 width: _,
                 height,
                 objects,
                 camera,
             } => self.scene(key, *height, objects.clone(), camera.clone(), cx),
+        }
+    }
+    /// A `visual.flow` diagram in the shared diagram viewer. The layout is cached
+    /// per node key and rebuilt only when the graph changes.
+    fn flow(
+        &mut self,
+        key: &str,
+        graph: &FlowGraph,
+        title: Option<&str>,
+        height: Option<f32>,
+    ) -> AnyElement {
+        let cached = self
+            .flows
+            .get(key)
+            .filter(|scene| scene.graph == *graph)
+            .cloned();
+        let scene = match cached {
+            Some(scene) => Ok(scene),
+            None => FlowScene::new(graph.clone()).inspect(|scene| {
+                self.flows.insert(key.to_owned(), scene.clone());
+            }),
+        };
+        match scene {
+            Ok(scene) => DiagramViewer::new(
+                format!("visual-flow-{key}"),
+                "flow",
+                title.unwrap_or("Diagram").to_owned(),
+                ViewerContent::Flow(scene),
+            )
+            .aria(format!("{} diagram", title.unwrap_or("Flow")))
+            .height(height)
+            .into_any_element(),
+            Err(error) => div()
+                .text_size(px(12.))
+                .text_color(color(&ThemeColor::Negative))
+                .child(format!("Unable to draw diagram: {error}"))
+                .into_any_element(),
         }
     }
     fn scene(
@@ -1197,7 +1249,7 @@ fn format_number(value: f64) -> String {
             .to_owned()
     }
 }
-fn paint_path(
+pub(crate) fn paint_path(
     points: &[[f32; 2]],
     origin: Point<Pixels>,
     scale: f32,
@@ -1229,11 +1281,17 @@ fn paint_path(
         window.paint_path(path, color);
     }
 }
+/// Paint a label anchored at `anchor` (screen pixels) per its align and baseline,
+/// optionally on a surface chip. `font_size` is in pixels.
+#[allow(clippy::too_many_arguments)]
 fn paint_label(
     text: String,
-    at: Point<Pixels>,
-    token: &ThemeColor,
+    anchor: Point<Pixels>,
+    ink: Hsla,
     font_size: f32,
+    align: TextAlign,
+    baseline: Baseline,
+    chip: bool,
     window: &mut Window,
     cx: &mut gpui::App,
 ) {
@@ -1241,7 +1299,7 @@ fn paint_label(
     let run = gpui::TextRun {
         len: text.len(),
         font: style.font(),
-        color: color(token),
+        color: ink,
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -1249,6 +1307,32 @@ fn paint_label(
     let line = window
         .text_system()
         .shape_line(text.into(), px(font_size), &[run], None);
+    let [left, top] = label_origin(
+        anchor.x.as_f32(),
+        anchor.y.as_f32(),
+        line.width.as_f32(),
+        font_size,
+        align,
+        baseline,
+    );
+    let at = point(px(left), px(top));
+    if chip {
+        let pad = font_size * 0.35;
+        window.paint_quad(gpui::quad(
+            Bounds::new(
+                at - point(px(pad), px(font_size * 0.1)),
+                size(
+                    line.width + px(2. * pad),
+                    px(font_size * 1.4 + font_size * 0.2),
+                ),
+            ),
+            px(font_size * 0.3),
+            floating_fill(),
+            gpui::Edges::all(px(1.)),
+            content(0.2),
+            gpui::BorderStyle::Solid,
+        ));
+    }
     let _ = line.paint(
         at,
         px(font_size * 1.4),
@@ -1258,6 +1342,50 @@ fn paint_label(
         cx,
     );
 }
+
+/// Dark or light ink for text on a fill, by the fill's luminance over the surface.
+fn ink_on(fill: Hsla) -> Hsla {
+    let top: gpui::Rgba = fill.into();
+    let base: gpui::Rgba = floating_fill().into();
+    let mix = |t: f32, b: f32| t * top.a + b * (1. - top.a);
+    let l = luminance([mix(top.r, base.r), mix(top.g, base.g), mix(top.b, base.b)]);
+    if prefers_dark_text(l) {
+        gpui::rgb(0x15171a).into()
+    } else {
+        gpui::rgb(0xf5f5f7).into()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_stroked(
+    points: &[[f32; 2]],
+    origin: Point<Pixels>,
+    scale: f32,
+    width: f32,
+    ends: ArrowEnds,
+    dashed: bool,
+    ink: Hsla,
+    window: &mut Window,
+) {
+    if dashed {
+        for dash in dash_polyline(points, 6. * width.max(1.), 4. * width.max(1.)) {
+            paint_path(&dash, origin, scale, width * scale, false, ink, window);
+        }
+    } else {
+        paint_path(points, origin, scale, width * scale, false, ink, window);
+    }
+    let size = (width * 4.).max(8.);
+    let n = points.len();
+    if n >= 2 && matches!(ends, ArrowEnds::End | ArrowEnds::Both) {
+        let head = arrowhead(points[n - 1], points[n - 2], size);
+        paint_path(&head, origin, scale, 0., true, ink, window);
+    }
+    if n >= 2 && matches!(ends, ArrowEnds::Start | ArrowEnds::Both) {
+        let head = arrowhead(points[0], points[1], size);
+        paint_path(&head, origin, scale, 0., true, ink, window);
+    }
+}
+
 fn drawing(width: f32, height: f32, shapes: Vec<Shape>) -> AnyElement {
     div()
         .w_full()
@@ -1276,7 +1404,7 @@ fn drawing(width: f32, height: f32, shapes: Vec<Shape>) -> AnyElement {
                             px(0.),
                         );
                     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                        for shape in &shapes {
+                        for (index, shape) in shapes.iter().enumerate() {
                             match shape {
                                 Shape::Rect {
                                     x,
@@ -1284,34 +1412,73 @@ fn drawing(width: f32, height: f32, shapes: Vec<Shape>) -> AnyElement {
                                     width,
                                     height,
                                     color: token,
-                                } => window.paint_quad(fill(
-                                    Bounds::new(
+                                    radius,
+                                    stroke,
+                                    stroke_width,
+                                    fill: filled,
+                                } => {
+                                    let bounds = Bounds::new(
                                         origin + point(px(x * scale), px(y * scale)),
                                         size(px(width * scale), px(height * scale)),
-                                    ),
-                                    color(token),
-                                )),
+                                    );
+                                    let radius = px((radius * scale)
+                                        .min(width * scale / 2.)
+                                        .min(height * scale / 2.));
+                                    let (border, border_color) = match stroke {
+                                        Some(token) => (stroke_width * scale, color(token)),
+                                        None => (0., gpui::transparent_black()),
+                                    };
+                                    window.paint_quad(gpui::quad(
+                                        bounds,
+                                        radius,
+                                        if *filled {
+                                            color(token)
+                                        } else {
+                                            gpui::transparent_black()
+                                        },
+                                        gpui::Edges::all(px(border)),
+                                        border_color,
+                                        gpui::BorderStyle::Solid,
+                                    ));
+                                }
                                 Shape::Circle {
                                     x,
                                     y,
                                     radius,
                                     color: token,
+                                    stroke,
+                                    stroke_width,
+                                    fill: filled,
                                 } => {
-                                    let points = (0..48)
+                                    let mut points = (0..48)
                                         .map(|i| {
                                             let a = i as f32 * std::f32::consts::TAU / 48.;
                                             [x + radius * a.cos(), y + radius * a.sin()]
                                         })
                                         .collect::<Vec<_>>();
-                                    paint_path(
-                                        &points,
-                                        origin,
-                                        scale,
-                                        0.,
-                                        true,
-                                        color(token),
-                                        window,
-                                    );
+                                    if *filled {
+                                        paint_path(
+                                            &points,
+                                            origin,
+                                            scale,
+                                            0.,
+                                            true,
+                                            color(token),
+                                            window,
+                                        );
+                                    }
+                                    if let Some(stroke) = stroke {
+                                        points.push(points[0]);
+                                        paint_path(
+                                            &points,
+                                            origin,
+                                            scale,
+                                            stroke_width * scale,
+                                            false,
+                                            color(stroke),
+                                            window,
+                                        );
+                                    }
                                 }
                                 Shape::Line {
                                     x1,
@@ -1320,12 +1487,15 @@ fn drawing(width: f32, height: f32, shapes: Vec<Shape>) -> AnyElement {
                                     y2,
                                     width,
                                     color: token,
-                                } => paint_path(
+                                    arrow,
+                                    dashed,
+                                } => paint_stroked(
                                     &[[*x1, *y1], [*x2, *y2]],
                                     origin,
                                     scale,
-                                    width * scale,
-                                    false,
+                                    *width,
+                                    *arrow,
+                                    *dashed,
                                     color(token),
                                     window,
                                 ),
@@ -1333,12 +1503,15 @@ fn drawing(width: f32, height: f32, shapes: Vec<Shape>) -> AnyElement {
                                     points,
                                     width,
                                     color: token,
-                                } => paint_path(
+                                    arrow,
+                                    dashed,
+                                } => paint_stroked(
                                     points,
                                     origin,
                                     scale,
-                                    width * scale,
-                                    false,
+                                    *width,
+                                    *arrow,
+                                    *dashed,
                                     color(token),
                                     window,
                                 ),
@@ -1347,14 +1520,27 @@ fn drawing(width: f32, height: f32, shapes: Vec<Shape>) -> AnyElement {
                                     y,
                                     text,
                                     color: token,
-                                } => paint_label(
-                                    text.clone(),
-                                    origin + point(px(x * scale), px(y * scale)),
-                                    token,
-                                    12. * scale.max(0.7),
-                                    window,
-                                    cx,
-                                ),
+                                    align,
+                                    baseline,
+                                    chip,
+                                } => {
+                                    let ink = match (token, label_backdrop(&shapes, index)) {
+                                        (Some(token), _) => color(token),
+                                        (None, Some(fill)) => ink_on(color(&fill)),
+                                        (None, None) => content(1.),
+                                    };
+                                    paint_label(
+                                        text.clone(),
+                                        origin + point(px(x * scale), px(y * scale)),
+                                        ink,
+                                        12. * scale.max(0.7),
+                                        *align,
+                                        *baseline,
+                                        *chip,
+                                        window,
+                                        cx,
+                                    )
+                                }
                             }
                         }
                     });
