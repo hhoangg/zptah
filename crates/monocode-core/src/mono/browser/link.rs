@@ -11,4 +11,4 @@ pub mod frame;
 pub mod protocol;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

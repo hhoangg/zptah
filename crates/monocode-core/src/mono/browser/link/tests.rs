@@ -15,7 +15,7 @@ const VECTORS_PATH: &str = concat!(
     "/../../extensions/zptah-browser/shared/handshake-vectors.json"
 );
 
-fn schema() -> Value {
+pub(crate) fn schema() -> Value {
     serde_json::from_str(SCHEMA_TEXT).expect("protocol.json is valid JSON")
 }
 
@@ -29,7 +29,7 @@ fn resolve<'a>(root: &'a Value, reference: &str) -> &'a Value {
     })
 }
 
-fn validate(root: &Value, schema: &Value, value: &Value) -> Result<(), String> {
+pub(crate) fn validate(root: &Value, schema: &Value, value: &Value) -> Result<(), String> {
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
         return validate(root, resolve(root, reference), value);
     }
@@ -225,7 +225,7 @@ fn samples() -> Vec<(Method, Value, Value)> {
         (Method::StopResume, empty.clone(), empty.clone()),
         (
             Method::TabsList,
-            json!({"all": true}),
+            json!({"all": true, "deadline_ms": 30000}),
             json!({"tabs": [tab.clone()]}),
         ),
         (
@@ -242,29 +242,33 @@ fn samples() -> Vec<(Method, Value, Value)> {
         (Method::TabRelease, json!({"tab": 5}), empty.clone()),
         (
             Method::PageSnapshot,
-            json!({"tab": 5, "mode": "interactive", "scope_ref": "e3", "depth": 4, "max_bytes": 65536, "from": 0}),
+            json!({"tab": 5, "mode": "interactive", "scope_ref": "e3", "depth": 4, "max_bytes": 65536, "from": 0, "generation": 2, "deadline_ms": 30000}),
             json!({"text": "- button", "url": "https://example.com/", "title": "Example",
-                   "generation": 2, "truncated": false, "hidden_dropped": 0}),
+                   "generation": 2, "truncated": false, "hidden_dropped": 0, "total_bytes": 8,
+                   "next_from": 8, "visibility": "hidden", "unrendered": true}),
         ),
         (
             Method::PageRead,
-            json!({"tab": 5, "max_bytes": 1000}),
-            json!({"markdown": "# Hi", "url": "https://example.com/", "title": "Example", "truncated": false}),
+            json!({"tab": 5, "max_bytes": 1000, "from": 0, "deadline_ms": 30000}),
+            json!({"markdown": "# Hi", "url": "https://example.com/", "title": "Example", "truncated": false,
+                   "total_bytes": 4, "next_from": 4, "visibility": "visible", "unrendered": false}),
         ),
         (
             Method::PageFind,
-            json!({"tab": 5, "query": "buy", "max": 5}),
-            json!({"matches": [{"ref": "e1", "role": "button", "name": "Buy", "context": "Cart"}]}),
+            json!({"tab": 5, "query": "buy", "max": 5, "deadline_ms": 30000}),
+            json!({"url": "https://example.com/", "title": "Example", "generation": 2,
+                   "matches": [{"ref": "e1", "role": "button", "name": "Buy", "context": "Cart"}]}),
         ),
         (
             Method::PageScreenshot,
-            json!({"tab": 5, "ref": "e1", "full_page": false}),
-            json!({"png_b64": b64_of(30), "width": 800, "height": 600, "method": "visible"}),
+            json!({"tab": 5, "ref": "e1", "full_page": false, "max_bytes": 700000, "deadline_ms": 30000}),
+            json!({"png_b64": b64_of(30), "width": 800, "height": 600, "method": "visible",
+                   "scale_pct": 50, "url": "https://example.com/", "title": "Example"}),
         ),
         (
             Method::PageWait,
-            json!({"tab": 5, "text": "Done", "time_ms": 1000}),
-            json!({"met": true, "url": "https://example.com/"}),
+            json!({"tab": 5, "text": "Done", "time_ms": 1000, "deadline_ms": 31000}),
+            json!({"met": true, "url": "https://example.com/", "title": "Example"}),
         ),
         (
             Method::NavGo,

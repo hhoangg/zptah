@@ -15,13 +15,12 @@ use super::link::frame::{read_frame, write_frame, FrameError, FrameFormat};
 use super::link::protocol::{
     negotiate, Envelope, ErrorCode, HelloParams, Method, ProtocolError, Sender,
 };
+#[cfg(windows)]
+use super::peer::windows_pipe;
 use super::peer::{self, Flavor, PeerPolicy};
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::sync::{mpsc, Arc, Mutex};
-
-#[cfg(windows)]
-mod windows_pipe;
 
 #[cfg(test)]
 mod tests;

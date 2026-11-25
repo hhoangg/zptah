@@ -37,11 +37,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+mod extension;
 mod guard;
 mod http;
 pub mod overlay;
 mod stdio;
 pub mod tabs;
+pub use extension::{ExtensionUpstream, Origins};
 pub use http::HttpUpstream;
 pub use stdio::StdioUpstream;
 
@@ -1980,5 +1982,7 @@ impl runner::Host for GateHost<'_> {
     }
 }
 
+#[cfg(all(test, unix))]
+mod extension_tests;
 #[cfg(test)]
 mod tests;

@@ -55,7 +55,7 @@ pub const CODE_TOOLS: [&str; 2] = ["browser_evaluate", "browser_run_code_unsafe"
 /// [`SCROLL_KEYS`]: a harness list cannot look at the key, so the gate does (Enter or Space can
 /// submit a form or press a focused button, and stay refused). `browser_mouse_wheel` comes from the
 /// `vision` capability and is listed when the server has it.
-pub const READ_ONLY_TOOLS: [&str; 12] = [
+pub const READ_ONLY_TOOLS: [&str; 13] = [
     "browser_navigate",
     "browser_navigate_back",
     "browser_snapshot",
@@ -63,6 +63,7 @@ pub const READ_ONLY_TOOLS: [&str; 12] = [
     "browser_wait_for",
     "browser_take_screenshot",
     "browser_find",
+    "browser_read",
     "browser_console_messages",
     "browser_network_requests",
     "browser_network_request",
@@ -78,9 +79,10 @@ pub fn is_scroll_key(key: &str) -> bool {
     SCROLL_KEYS.contains(&key)
 }
 /// Every tool of `@playwright/mcp` 0.0.86 under the capabilities this app turns on (core, tabs
-/// and `vision`), read from the package's README tool list. A tool that is not here is neither
-/// offered nor run by the gate.
-pub const KNOWN_TOOLS: [&str; 33] = [
+/// and `vision`), read from the package's README tool list, plus `browser_read`, which only the
+/// zptah Browser extension backend offers (page text as Markdown). A tool that is not here is
+/// neither offered nor run by the gate.
+pub const KNOWN_TOOLS: [&str; 34] = [
     "browser_navigate",
     "browser_navigate_back",
     "browser_snapshot",
@@ -88,6 +90,7 @@ pub const KNOWN_TOOLS: [&str; 33] = [
     "browser_wait_for",
     "browser_take_screenshot",
     "browser_find",
+    "browser_read",
     "browser_console_messages",
     "browser_network_requests",
     "browser_network_request",
@@ -263,6 +266,12 @@ pub struct MonoBrowser {
     /// about half a second before a click, a typed value and the like. Default on. Not part of
     /// the server's shape: the gate reads it live (see [`MonoBrowser::policy`]).
     pub show_actions: bool,
+    /// Preview: use the zptah Browser extension instead of the Playwright server for this Mono
+    /// ("Use zptah Browser (preview)", spec 15.1). Off by default, and part of no other setting:
+    /// a roster saved without it loads with it off. It does not change [`MonoBrowser::server_key`]
+    /// (the extension backend has no server process); the code that picks the backend reads it
+    /// through [`MonoBrowser::uses_extension`].
+    pub use_extension: bool,
     /// The Browser page's last check found Chrome, node, a profile and a saved token. Shown in
     /// the UI only: a launch never reads it (a stale value used to drop the server silently), it
     /// checks the live conditions instead, see [`resolve`].
@@ -281,6 +290,7 @@ impl Default for MonoBrowser {
             allowed_origins: Vec::new(),
             trust: BrowserTrust::default(),
             show_actions: true,
+            use_extension: false,
             ready: false,
         }
     }
@@ -290,6 +300,11 @@ impl MonoBrowser {
     pub fn policy(&self) -> gate::Policy {
         gate::Policy::new(self.trust, self.blocked_origins.clone())
             .with_show_actions(self.show_actions)
+    }
+    /// The Mono's browser runs through the zptah Browser extension (the preview switch is on and
+    /// the browser is switched on).
+    pub fn uses_extension(&self) -> bool {
+        self.enabled && self.use_extension
     }
     /// The browser is switched on and has a saved profile: a launch tries to add the server and
     /// the prompt mentions it. Whether it can be attached right now is decided by [`resolve`].
