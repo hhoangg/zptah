@@ -407,6 +407,7 @@ export function registerActPath(link, deps) {
     if (isSuspected(tab.id)) throw new ZptahError("E_DIALOG_SUSPECTED", DIALOG_TEXT);
     const dlg = dbg.openDialog(tab.id);
     if (dlg) throw new ZptahError("E_DIALOG_SUSPECTED", `A ${dlg.kind} dialog is open: "${dlg.message.slice(0, 120)}". Answer it first.`);
+    if (rec.state === "committed_once" && p.approval) throw new ZptahError("E_STALE_PREPARE", "An approved action is never retried.");
     if (rec.state === "committed_once" && input !== "trusted") throw new ZptahError("E_STALE_PREPARE", "That action already ran. Prepare it again, or retry it once with trusted input.");
     const frames = await eligibleFrames(api, tab.id, entry);
     if (rec.frameId !== 0 && !frames.some((f) => f.frameId === rec.frameId)) throw new ZptahError("E_STALE_PREPARE", "The frame is gone.");
@@ -462,7 +463,14 @@ export function registerActPath(link, deps) {
     const fresh = await api.tabs.get(rec.tab).catch(() => null);
     const effects = /** @type {any} */ (result.effects);
     const nothing = effects.dom_mutations === 0 && !effects.url_changed && !effects.focus_changed && effects.submitted !== true;
-    if (attemptedUntrusted && nothing && input === "auto" && result.effects.method === "content" && ["click", "type", "fill", "press"].includes(action.kind)) {
+    // An approved action (a card was answered) is never retried: the approval and digest would be reused,
+    // and a page that reacts without DOM mutations may already have run it (a payment, a send).
+    const approvedAction = Boolean(p.approval);
+    if (approvedAction && nothing && input === "auto") {
+      drop(rec);
+      if (action.kind === "upload") uploads.delete(action.upload_id);
+      effects.hint = effects.hint ?? "Nothing visibly changed, but this approved action may have run. Do not repeat it: check the page, or ask the user.";
+    } else if (attemptedUntrusted && nothing && input === "auto" && result.effects.method === "content" && ["click", "type", "fill", "press"].includes(action.kind)) {
       rec.state = "committed_once";
       rec.expires = now() + RETRY_TTL_MS;
       rec.afterUrl = fresh ? tabUrl(fresh) : rec.url;

@@ -658,8 +658,9 @@ fn a_newer_run_takes_over_the_cards_and_an_older_one_cannot_detach_it() {
 // ---- The loopback server ----
 
 #[allow(clippy::result_large_err)]
-fn post(url: &str, body: &Value) -> Result<ureq::Response, ureq::Error> {
+fn post(gate: &Gate, url: &str, body: &Value) -> Result<ureq::Response, ureq::Error> {
     ureq::post(url)
+        .set("Authorization", &format!("Bearer {}", gate.token()))
         .set("Content-Type", "application/json")
         .set("Accept", "application/json, text/event-stream")
         .send_string(&body.to_string())
@@ -672,7 +673,7 @@ fn the_loopback_server_speaks_mcp_over_http_and_hides_behind_its_secret() {
     let url = gate.url();
     assert!(url.starts_with("http://127.0.0.1:") && url.ends_with("/mcp"));
 
-    let init = post(&url, &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}})).unwrap();
+    let init = post(&gate, &url, &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}})).unwrap();
     assert_eq!(init.status(), 200);
     assert!(init
         .header("content-type")
@@ -683,6 +684,7 @@ fn the_loopback_server_speaks_mcp_over_http_and_hides_behind_its_secret() {
     assert!(init["result"]["capabilities"]["tools"].is_object());
 
     let note = post(
+        &gate,
         &url,
         &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
     )
@@ -691,6 +693,7 @@ fn the_loopback_server_speaks_mcp_over_http_and_hides_behind_its_secret() {
 
     let list: Value = serde_json::from_str(
         &post(
+            &gate,
             &url,
             &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
         )
@@ -702,7 +705,7 @@ fn the_loopback_server_speaks_mcp_over_http_and_hides_behind_its_secret() {
     assert!(names(&list).contains(&APPROVAL_TOOL.to_owned()));
 
     let called: Value = serde_json::from_str(
-        &post(&url, &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "browser_click", "arguments": {"target": "e1"}}}))
+        &post(&gate, &url, &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "browser_click", "arguments": {"target": "e1"}}}))
             .unwrap()
             .into_string()
             .unwrap(),
@@ -712,7 +715,7 @@ fn the_loopback_server_speaks_mcp_over_http_and_hides_behind_its_secret() {
 
     // A batch is answered as a batch.
     let batch: Value = serde_json::from_str(
-        &post(&url, &json!([{"jsonrpc": "2.0", "id": 4, "method": "ping"}, {"jsonrpc": "2.0", "method": "notifications/initialized"}]))
+        &post(&gate, &url, &json!([{"jsonrpc": "2.0", "id": 4, "method": "ping"}, {"jsonrpc": "2.0", "method": "notifications/initialized"}]))
             .unwrap()
             .into_string()
             .unwrap(),
@@ -720,19 +723,64 @@ fn the_loopback_server_speaks_mcp_over_http_and_hides_behind_its_secret() {
     .unwrap();
     assert_eq!(batch.as_array().unwrap().len(), 1);
 
-    // No stream and no session end: 405. Wrong secret: 404. Not JSON: 400.
+    // No stream and no session end: 405. Unknown route: 404. Not JSON: 400.
     assert!(matches!(
-        ureq::get(&url).call(),
+        ureq::get(&url)
+            .set("Authorization", &format!("Bearer {}", gate.token()))
+            .call(),
         Err(ureq::Error::Status(405, _))
     ));
-    let wrong = url.replace(url.rsplit('/').nth(2).unwrap(), "0000");
+    let wrong = url.replace(url.rsplit('/').nth(1).unwrap(), "0000");
     assert!(matches!(
-        post(&wrong, &json!({})),
+        post(&gate, &wrong, &json!({})),
         Err(ureq::Error::Status(404, _))
     ));
     assert!(matches!(
-        ureq::post(&url).send_string("not json"),
+        ureq::post(&url)
+            .set("Authorization", &format!("Bearer {}", gate.token()))
+            .send_string("not json"),
         Err(ureq::Error::Status(400, _))
+    ));
+}
+
+#[test]
+fn the_gate_requires_its_bearer_token_and_never_puts_it_in_the_url() {
+    let upstream = FakeExtension::new();
+    let gate = gate(BrowserLevel::Act, &upstream);
+    let url = gate.url();
+    assert!(!url.contains(gate.token()), "the token must stay off argv");
+    let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
+    #[allow(clippy::result_large_err)]
+    let send = |auth: Option<String>| -> Result<ureq::Response, ureq::Error> {
+        let mut request = ureq::post(&url).set("Content-Type", "application/json");
+        if let Some(auth) = auth {
+            request = request.set("Authorization", &auth);
+        }
+        request.send_string(&ping.to_string())
+    };
+    assert_eq!(
+        send(Some(format!("Bearer {}", gate.token())))
+            .unwrap()
+            .status(),
+        200
+    );
+    for bad in [
+        None,
+        Some("Bearer ".to_owned()),
+        Some("Bearer wrong".to_owned()),
+        Some(gate.token().to_owned()),
+        Some(format!("Bearer {}x", gate.token())),
+    ] {
+        assert!(
+            matches!(send(bad.clone()), Err(ureq::Error::Status(404, _))),
+            "{bad:?}"
+        );
+    }
+    // The old form, the secret in the path, no longer works.
+    let old = url.replace("/mcp", &format!("/mcp/{}", gate.token()));
+    assert!(matches!(
+        ureq::post(&old).send_string("{}"),
+        Err(ureq::Error::Status(404, _))
     ));
 }
 
@@ -743,17 +791,18 @@ fn a_request_for_another_host_name_is_refused_and_a_chunked_body_is_read() {
     let gate = gate(BrowserLevel::Act, &upstream);
     let url = gate.url();
     let (authority, path) = url.trim_start_matches("http://").split_once('/').unwrap();
+    let token = gate.token().to_owned();
     let send = |host: &str, chunked: bool| {
         let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
         let mut stream = std::net::TcpStream::connect(authority).unwrap();
         let request = if chunked {
             format!(
-                "POST /{path} HTTP/1.1\r\nHost: {host}\r\nTransfer-Encoding: chunked\r\nContent-Type: application/json\r\n\r\n{:x}\r\n{body}\r\n0\r\n\r\n",
+                "POST /{path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nTransfer-Encoding: chunked\r\nContent-Type: application/json\r\n\r\n{:x}\r\n{body}\r\n0\r\n\r\n",
                 body.len()
             )
         } else {
             format!(
-                "POST /{path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: {}\r\n\r\n{body}",
+                "POST /{path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len()
             )
         };
@@ -870,12 +919,12 @@ fn routes_are_random_per_session_stable_and_only_issued_ones_answer() {
     assert!(a != b && a != none && b != none);
     assert!(a.len() >= 32 && a.bytes().all(|c| c.is_ascii_hexdigit()));
     let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
-    assert_eq!(post(&gate.url_for(&a), &ping).unwrap().status(), 200);
-    assert_eq!(post(&gate.url(), &ping).unwrap().status(), 200);
+    assert_eq!(post(&gate, &gate.url_for(&a), &ping).unwrap().status(), 200);
+    assert_eq!(post(&gate, &gate.url(), &ping).unwrap().status(), 200);
     // A guessed or made-up route is not found, even with the right secret.
     for guess in ["s1", "shared", "0"] {
         assert!(matches!(
-            post(&gate.url_for(guess), &ping),
+            post(&gate, &gate.url_for(guess), &ping),
             Err(ureq::Error::Status(404, _))
         ));
     }

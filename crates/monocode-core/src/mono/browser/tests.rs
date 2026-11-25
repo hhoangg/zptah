@@ -46,6 +46,7 @@ fn runtime(b: &MonoBrowser) -> Runtime {
     Runtime {
         trust: b.trust,
         endpoint: gate.url_for(&route),
+        token: gate.token().to_owned(),
         gate,
         route,
         approvals: trust::approval::queue_for("runtime-test"),
@@ -265,7 +266,11 @@ fn claude_and_codex_are_pointed_at_the_gate_with_no_process_and_no_secret() {
     let r = runtime(&b);
     let url = r.endpoint.clone();
     assert!(url.starts_with("http://127.0.0.1:") && url.ends_with("/mcp"));
-    assert_eq!(r.claude_server(), json!({"type": "http", "url": url}));
+    assert_eq!(
+        r.claude_server(),
+        json!({"type": "http", "url": url, "headers": {"Authorization": format!("Bearer {}", r.token)}})
+    );
+    assert!(!url.contains(&r.token), "the token must not be in the URL");
     let overrides = r.codex_overrides();
     let get = |key: &str| {
         overrides
@@ -290,7 +295,14 @@ fn claude_and_codex_are_pointed_at_the_gate_with_no_process_and_no_secret() {
     assert!(get("tool_timeout_sec").parse::<u64>().unwrap() > gate::APPROVAL_TIMEOUT.as_secs());
     let mut command = std::process::Command::new("codex");
     r.configure_codex(&mut command);
-    assert!(command.get_envs().next().is_none());
+    // The token goes by environment variable and is named, not carried, in the arguments.
+    assert_eq!(get("bearer_token_env_var"), format!("\"{}\"", TOKEN_ENV));
+    assert!(command
+        .get_envs()
+        .any(|(k, v)| k == TOKEN_ENV && v == Some(std::ffi::OsStr::new(&r.token))));
+    assert!(command
+        .get_args()
+        .all(|a| !a.to_string_lossy().contains(&r.token)));
     assert!(command.get_args().any(|a| a
         .to_string_lossy()
         .starts_with("mcp_servers.zptah_browser.url=")));
@@ -756,7 +768,11 @@ fn a_launch_wires_the_agent_to_the_gate_at_each_level_and_the_gate_follows_the_m
     assert_eq!(first.trust, BrowserLevel::ReadOnly);
     assert!(first.claude_disallowed().contains("browser_click"));
     let url = first.endpoint.clone();
-    assert_eq!(first.claude_server(), json!({"type": "http", "url": url}));
+    assert_eq!(first.claude_server()["url"], url.as_str());
+    assert_eq!(
+        first.claude_server()["headers"]["Authorization"],
+        format!("Bearer {}", first.token).as_str()
+    );
     assert!(first
         .codex_overrides()
         .iter()

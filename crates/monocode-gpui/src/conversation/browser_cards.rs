@@ -50,7 +50,16 @@ pub(super) struct State {
     pub(super) surface: Surface,
     /// One handle per open card, so Enter and Escape only ever answer the focused card.
     focus: std::cell::RefCell<std::collections::HashMap<String, gpui::FocusHandle>>,
+    /// When each open card was first drawn, and when the user last answered one: clicks inside
+    /// [`ACTIVATION_DELAY`] of either are ignored, so a double-click on a card that is just being
+    /// replaced by the next one cannot answer the new card.
+    first_drawn: std::cell::RefCell<std::collections::HashMap<String, std::time::Instant>>,
+    last_answered: std::cell::Cell<Option<std::time::Instant>>,
+    delay: std::time::Duration,
 }
+
+/// How long a card ignores clicks after it first appears or after the previous card was answered.
+pub(crate) const ACTIVATION_DELAY: std::time::Duration = std::time::Duration::from_millis(600);
 
 impl State {
     pub(super) fn new() -> Self {
@@ -58,7 +67,22 @@ impl State {
             mono_id: None,
             surface: Surface::default(),
             focus: Default::default(),
+            first_drawn: Default::default(),
+            last_answered: Default::default(),
+            delay: ACTIVATION_DELAY,
         }
+    }
+
+    /// Whether a click on card `id` must be ignored now: it appeared, or the previous card was
+    /// answered, less than the activation delay ago. A card that was never drawn cannot have been
+    /// clicked, so it is not held.
+    fn held(&self, id: &str) -> bool {
+        let recent = |at: std::time::Instant| at.elapsed() < self.delay;
+        self.first_drawn
+            .borrow()
+            .get(id)
+            .is_some_and(|at| recent(*at))
+            || self.last_answered.get().is_some_and(recent)
     }
 }
 
@@ -119,6 +143,12 @@ impl Conversation {
         self.browser.mono_id = Some(mono_id.to_owned());
     }
 
+    /// Sets the activation delay (tests use a short one, or none).
+    #[cfg(test)]
+    pub(crate) fn set_browser_activation_delay(&mut self, delay: std::time::Duration) {
+        self.browser.delay = delay;
+    }
+
     /// What the browser surface shows now.
     #[cfg(test)]
     pub(crate) fn browser_surface(&self) -> &Surface {
@@ -127,6 +157,10 @@ impl Conversation {
 
     /// Replaces what the browser surface shows.
     pub(crate) fn set_browser_surface(&mut self, surface: Surface, cx: &mut Context<Self>) {
+        self.browser
+            .first_drawn
+            .borrow_mut()
+            .retain(|id, _| surface.cards.iter().any(|c| &c.id == id));
         self.browser.surface = surface;
         cx.notify();
     }
@@ -173,6 +207,19 @@ impl Conversation {
         delivered
     }
 
+    /// An answer the user gave with the mouse or keyboard. Ignored while the card is held (see
+    /// [`ACTIVATION_DELAY`]); otherwise [`Self::browser_answer`], remembering when it happened.
+    fn browser_user_answer(&mut self, id: &str, answer: UserAnswer, cx: &mut Context<Self>) {
+        if self.browser.held(id) {
+            return;
+        }
+        if self.browser_answer(id, answer, cx) {
+            self.browser
+                .last_answered
+                .set(Some(std::time::Instant::now()));
+        }
+    }
+
     fn browser_dismiss(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(mono_id) = self.browser.mono_id.clone() {
             approval::queue_for(&mono_id).dismiss_notice(id);
@@ -185,6 +232,11 @@ impl Conversation {
         let lang = copy::app_language();
         let text = card.text_in(lang);
         let id = card.id.clone();
+        self.browser
+            .first_drawn
+            .borrow_mut()
+            .entry(id.clone())
+            .or_insert_with(std::time::Instant::now);
         let (once_id, conv_id, deny_id, key_id) = (id.clone(), id.clone(), id.clone(), id.clone());
         let mut ink = shell_fill();
         ink.a = 1.;
@@ -198,7 +250,7 @@ impl Conversation {
                     .text_color(content(0.5))
                     .hover(|s| s.bg(content(0.08)).text_color(content(0.9)))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.browser_answer(&deny_id, UserAnswer::Deny, cx);
+                        this.browser_user_answer(&deny_id, UserAnswer::Deny, cx);
                     })),
             );
         if let Some(label) = text.allow_conversation {
@@ -207,7 +259,7 @@ impl Conversation {
                     .bg(content(0.06))
                     .hover(|s| s.bg(content(0.1)))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.browser_answer(&conv_id, UserAnswer::AllowConversation, cx);
+                        this.browser_user_answer(&conv_id, UserAnswer::AllowConversation, cx);
                     })),
             );
         }
@@ -218,7 +270,7 @@ impl Conversation {
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .hover(move |s| s.bg(content(0.85)).text_color(ink))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.browser_answer(&once_id, UserAnswer::AllowOnce, cx);
+                    this.browser_user_answer(&once_id, UserAnswer::AllowOnce, cx);
                 })),
         );
         let now = monocode_core::time::now_ms();
@@ -303,10 +355,10 @@ impl Conversation {
                 // Only while the user put focus on the card: Enter allows once, Escape denies.
                 match event.keystroke.key.as_str() {
                     "enter" => {
-                        this.browser_answer(&key_id, UserAnswer::AllowOnce, cx);
+                        this.browser_user_answer(&key_id, UserAnswer::AllowOnce, cx);
                     }
                     "escape" => {
-                        this.browser_answer(&key_id, UserAnswer::Deny, cx);
+                        this.browser_user_answer(&key_id, UserAnswer::Deny, cx);
                     }
                     _ => {}
                 }
@@ -515,6 +567,14 @@ mod tests {
     use std::time::Duration;
 
     fn conversation(cx: &mut TestAppContext, mono: &str) -> WindowHandle<Conversation> {
+        conversation_held(cx, mono, Duration::ZERO)
+    }
+
+    fn conversation_held(
+        cx: &mut TestAppContext,
+        mono: &str,
+        delay: Duration,
+    ) -> WindowHandle<Conversation> {
         let store = Store::open(Path::new(":memory:")).unwrap();
         let summary = store.create("codex", "/tmp").unwrap();
         let mono = mono.to_owned();
@@ -532,6 +592,7 @@ mod tests {
                     view.loaded = true;
                     view.summary.has_messages = true;
                     view.set_browser_mono(&mono);
+                    view.set_browser_activation_delay(delay);
                     view
                 })
             })
@@ -631,6 +692,91 @@ mod tests {
             assert_eq!(asked.join().unwrap().1, Outcome::Answered(expected));
             assert!(visual.debug_bounds("browser-card").is_none());
         }
+    }
+
+    #[gpui::test]
+    fn a_card_ignores_clicks_until_its_activation_delay_has_passed(cx: &mut TestAppContext) {
+        let mono = format!("card-held-{}", monocode_core::mono::new_id());
+        let delay = Duration::from_millis(400);
+        let window = conversation_held(cx, &mono, delay);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        let queue = approval::queue_for(&mono);
+        let _listening = queue.subscribe(|| {});
+        let asked = ask(&mono, true, Duration::from_secs(30));
+        let pending = wait_pending(&mono);
+        show(
+            &window,
+            visual,
+            Surface {
+                cards: pending.clone(),
+                ..Default::default()
+            },
+        );
+        // A double-click right after the card appeared answers nothing.
+        for _ in 0..2 {
+            let center = visual.debug_bounds("browser-card-once").unwrap().center();
+            visual.simulate_click(center, Default::default());
+            visual.refresh().unwrap();
+        }
+        assert_eq!(queue.pending().len(), 1, "the card is still open");
+        assert!(visual.debug_bounds("browser-card").is_some());
+        std::thread::sleep(delay + Duration::from_millis(100));
+        let center = visual.debug_bounds("browser-card-once").unwrap().center();
+        visual.simulate_click(center, Default::default());
+        visual.refresh().unwrap();
+        assert_eq!(
+            asked.join().unwrap().1,
+            Outcome::Answered(UserAnswer::AllowOnce)
+        );
+    }
+
+    #[gpui::test]
+    fn a_click_right_after_answering_a_card_does_not_answer_the_next_one(cx: &mut TestAppContext) {
+        let mono = format!("card-next-{}", monocode_core::mono::new_id());
+        let delay = Duration::from_millis(400);
+        let window = conversation_held(cx, &mono, delay);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        let queue = approval::queue_for(&mono);
+        let _listening = queue.subscribe(|| {});
+        let first = ask(&mono, false, Duration::from_secs(30));
+        wait_pending(&mono);
+        let second = ask(&mono, false, Duration::from_secs(30));
+        for _ in 0..500 {
+            if queue.pending().len() == 2 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pending = queue.pending();
+        assert_eq!(pending.len(), 2);
+        // Both are drawn, then the delay passes: only the answer of the first starts a new hold.
+        show(
+            &window,
+            visual,
+            Surface {
+                cards: pending.clone(),
+                ..Default::default()
+            },
+        );
+        std::thread::sleep(delay + Duration::from_millis(100));
+        let click = |visual: &mut VisualTestContext| {
+            let center = visual.debug_bounds("browser-card-deny").unwrap().center();
+            visual.simulate_click(center, Default::default());
+            visual.refresh().unwrap();
+        };
+        click(visual);
+        assert_eq!(queue.pending().len(), 1, "the first card was answered");
+        click(visual);
+        assert_eq!(
+            queue.pending().len(),
+            1,
+            "the second card ignored the follow-up click"
+        );
+        std::thread::sleep(delay + Duration::from_millis(100));
+        click(visual);
+        assert!(queue.pending().is_empty());
+        first.join().unwrap();
+        second.join().unwrap();
     }
 
     #[gpui::test]

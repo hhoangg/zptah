@@ -825,9 +825,26 @@ impl ExtensionUpstream {
         })
     }
 
-    /// The tab an act tool works on, with the Mono's origin lists applied.
+    /// The tab an act tool works on, with the Mono's origin lists applied. Reading another Mono's
+    /// or a user's tab is allowed (9.3), acting is not: it is refused here before any card, with
+    /// the owner re-read once because the extension holds the authoritative table.
     fn act_tab(&self, args: &Value) -> Result<TabInfo, String> {
-        self.resolve_tab(args)
+        let mut tab = self.resolve_tab(args)?;
+        if tab.owner.as_deref() != Some(self.mono_id.as_str()) {
+            self.refresh(true)?;
+            tab = self.resolve_tab(args)?;
+        }
+        match tab.owner.as_deref() {
+            Some(owner) if owner == self.mono_id => Ok(tab),
+            Some(_) => Err(format!(
+                "E_NOT_OWNER: tab {} belongs to another Mono. You can read it, but not act in it. Ask the user to name it so you can transfer it with browser_tabs adopt (the user approves a transfer), or open your own tab.",
+                tab.tab
+            )),
+            None => Err(format!(
+                "E_NOT_OWNER: tab {} is the user's tab. You can read it, but not act in it until you adopt it: browser_tabs adopt with the words the user used for it, or ask them to drag it into your group.",
+                tab.tab
+            )),
+        }
     }
 
     // ---- prepare ----
@@ -1138,7 +1155,11 @@ impl ExtensionUpstream {
         let committed = self
             .commit(&prepared, approval.as_ref(), None)
             .and_then(|first| {
-                if first["effects"]["hint"].as_str().is_some()
+                // Never when a card was answered: the retry would reuse the approval and its digest,
+                // and a page that reacts without DOM changes may already have run a payment or send.
+                // The agent and the user decide from the "nothing visibly changed" hint.
+                if approval.is_none()
+                    && first["effects"]["hint"].as_str().is_some()
                     && needs_trusted_retry(&first["effects"])
                 {
                     // Nothing changed with the plain input: one retry through the debugger (6.4).
@@ -1501,11 +1522,113 @@ impl ExtensionUpstream {
             &ev.reason,
             approval_id,
         );
+        if method == Method::NavHistory {
+            // History has no readable destination before the move (the browser exposes none), so
+            // the page it landed on is judged now as an unknown-destination navigation (7.4): a
+            // blocked, sensitive or unrelated page asks, and a refusal moves back.
+            if let Err(text) = self.judge_history_landing(&ctx, name, args, &tab, &url) {
+                let back = if name == "browser_navigate_back" {
+                    "forward"
+                } else {
+                    "back"
+                };
+                let _ = self.ask_raw(
+                    Method::NavHistory,
+                    json!({"tab": tab.tab, "dir": back}),
+                    DEFAULT_DEADLINE_MS,
+                );
+                return Err(text);
+            }
+        }
         self.with_trust(ctx.session_id, |state, _| state.note_link_followed(&url));
         self.check_reply_url(&url)?;
         let mut text = page_header(&url, &title);
         text.push_str("### Result\n- Navigated. Take a browser_snapshot to see the page.\n");
         Ok(text_result(text))
+    }
+
+    /// Judges the page a back or forward move landed on, as a navigation to `url`. `Err` is the
+    /// text for the agent: the page is blocked, or the user refused it.
+    fn judge_history_landing(
+        &self,
+        ctx: &RunContext,
+        name: &str,
+        args: &Value,
+        tab: &TabInfo,
+        url: &str,
+    ) -> Result<(), String> {
+        if let Err(reason) = self.origins().check(url) {
+            let text = format!(
+                "{} (the page history led there; the tab was moved back.)",
+                refusal_text(reason)
+            );
+            return Err(text);
+        }
+        let mut action = TrustAction::new(name, args, &tab.url);
+        action.target_url = Some(url);
+        action.page_title = &tab.title;
+        let ev = self.with_trust(ctx.session_id, |state, config| {
+            state.evaluate(
+                &Config {
+                    level: config.level,
+                    rules: &config.rules,
+                },
+                &action,
+            )
+        });
+        let summary = format!(
+            "{} landed on {}",
+            name.trim_start_matches("browser_"),
+            audit_url(url)
+        );
+        match ev.decision.clone() {
+            Decision::Deny(reason) => {
+                self.write_nav_row(
+                    ctx,
+                    name,
+                    tab,
+                    &ev,
+                    &summary,
+                    AuditDecision::Blocked,
+                    &reason,
+                    None,
+                );
+                Err(format!("Not allowed: {reason}. The tab was moved back."))
+            }
+            Decision::Allow | Decision::AllowByGrant(_) => Ok(()),
+            Decision::Ask(_) => {
+                let mut facts = CardFacts::new(
+                    &self.act_config().mono_label,
+                    &ev.site,
+                    ActionDesc::Navigate,
+                    ev.categories.iter().copied().collect(),
+                );
+                facts.url = url.to_owned();
+                facts.site_kind = site_category(url);
+                facts.rule = ev.reason.strip_prefix("soul rule: ").map(str::to_owned);
+                facts.purpose = s(args, "purpose").map(str::to_owned);
+                match self.ask_card(ctx, name, Some(tab.tab), facts, &ev, None, None) {
+                    Ok((answer, id)) => {
+                        self.with_trust(ctx.session_id, |state, _| state.commit(&ev, answer));
+                        self.write_nav_row(
+                            ctx,
+                            name,
+                            tab,
+                            &ev,
+                            &summary,
+                            AuditDecision::AskedAllowedOnce,
+                            &ev.reason,
+                            Some(id),
+                        );
+                        Ok(())
+                    }
+                    Err((text, audit, id)) => {
+                        self.write_nav_row(ctx, name, tab, &ev, &summary, audit, &text, Some(id));
+                        Err(format!("{text} The tab was moved back."))
+                    }
+                }
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
