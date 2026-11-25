@@ -13,7 +13,7 @@ const HEX32 = /^[0-9a-f]{32}$/;
  * @param {import("./link.js").BrowserLink} link
  * @param {{ api?: any, now?: () => number, sleep?: (ms: number) => Promise<void>, imaging?: import("./screenshot.js").Imaging,
  *   ownerOf?: (tab: number) => string | null, captureTimeoutMs?: number,
- *   onRoster?: () => void, groupTitle?: (mono: string) => string | undefined,
+ *   onRoster?: () => void, around?: <T>(tab: number, fn: () => Promise<T>) => Promise<T>, groupTitle?: (mono: string) => string | undefined,
  *   dbg?: { send: (tab: number, method: string, params?: Record<string, unknown>) => Promise<any>, isAttached: (tab: number) => boolean } }} [deps]
  */
 export function registerReadPath(link, deps = {}) {
@@ -27,6 +27,10 @@ export function registerReadPath(link, deps = {}) {
     api, sleep, now, imaging: deps.imaging ?? canvasImaging(), getGeneration: (t) => pages.gens.get(t), captureTimeoutMs: deps.captureTimeoutMs,
     cdp: deps.dbg?.send, isAttached: deps.dbg?.isAttached,
   });
+
+  // The cursor and the overlay are removed before any capture and restored after (spec 10).
+  const capture = shots.screenshot.bind(shots);
+  shots.screenshot = (entry, p) => (deps.around && Number.isSafeInteger(p?.tab) ? deps.around(p.tab, () => capture(entry, p)) : capture(entry, p));
 
   /** @param {Record<string, any>} msg */
   function entryFor(msg) {

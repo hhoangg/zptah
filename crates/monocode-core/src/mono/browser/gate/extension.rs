@@ -157,6 +157,9 @@ struct State {
     known: HashMap<u64, TabInfo>,
     /// The tab the read tools use when the agent names none.
     selected: Option<u64>,
+    /// Tabs the user stopped this Mono on with the in-page Stop button, with the title they had.
+    /// Every call on such a tab fails until the user gives it back (spec 10a).
+    stopped_tabs: HashMap<u64, String>,
 }
 
 pub struct ExtensionUpstream {
@@ -252,6 +255,11 @@ impl ExtensionUpstream {
         mut params: Value,
         deadline_ms: u64,
     ) -> Result<Value, RequestError> {
+        if let Some(tab) = params["tab"].as_u64() {
+            if let Some(error) = self.stopped_tab_error(tab) {
+                return Err(error);
+            }
+        }
         let Some(link) = (self.link)().filter(LinkHandle::is_open) else {
             return Err(RequestError::Closed);
         };
@@ -260,6 +268,19 @@ impl ExtensionUpstream {
         }
         let wait = Duration::from_millis(deadline_ms) + LINK_GRACE;
         link.request(method, Some(&self.mono_id), params, wait)
+    }
+
+    /// The error every call on a tab gets after the user pressed the in-page Stop there.
+    fn stopped_tab_error(&self, tab: u64) -> Option<RequestError> {
+        let title = self.state().stopped_tabs.get(&tab).cloned()?;
+        Some(RequestError::Remote(ErrorBody {
+            code: ErrorCode::NotOwner,
+            message: format!(
+                "The user stopped you on the tab \"{}\" and took it back. Do not use that tab unless the user asks again.",
+                clean_line(&title)
+            ),
+            detail: Some(json!({"user_stopped": true})),
+        }))
     }
 
     // ---- tab bookkeeping ----
@@ -830,6 +851,10 @@ fn request_error_text(error: RequestError, method: Method) -> String {
 
 /// What an error code of the extension means for the agent.
 fn remote_text(body: &ErrorBody) -> String {
+    // The gate's own words (the user's Stop on a tab) need no hint around them.
+    if body.detail.as_ref().is_some_and(|d| d["user_stopped"] == true) {
+        return body.message.clone();
+    }
     let hint = match body.code {
         ErrorCode::TabGone => "That tab is closed. Call browser_tabs list again.",
         ErrorCode::StaleRef => "That element reference is out of date. Take a new browser_snapshot.",

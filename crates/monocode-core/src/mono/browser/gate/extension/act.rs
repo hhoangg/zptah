@@ -163,6 +163,14 @@ pub(crate) fn dispatch_event(instance_id: &str, envelope: &Envelope) {
         let change = ownership::with_table(instance_id, |table| {
             table.apply_event(&params, crate::time::now_ms())
         });
+        if let Some(change) = change.as_ref() {
+            for upstream in all.iter().filter(|u| {
+                change.to.as_deref() == Some(u.mono_id.as_str())
+                    && (u.link)().is_some_and(|l| l.instance_id() == instance_id)
+            }) {
+                upstream.tab_given_back(change.tab);
+            }
+        }
         if let Some(change) = change.filter(|c| c.taken_back) {
             for upstream in all.iter().filter(|u| {
                 change.from.as_deref() == Some(u.mono_id.as_str())
@@ -369,16 +377,9 @@ impl ExtensionUpstream {
                 );
             }
             e if e == Event::TabStopped.as_str() => {
-                // The overlay's Stop: the Mono's grants for that tab's site end in every
-                // conversation, and its open cards go.
-                let site = params["tab"]
-                    .as_u64()
-                    .and_then(|tab| self.state().known.get(&tab).cloned())
-                    .and_then(|tab| registrable_domain_of(&tab.url));
-                if let (Some(site), Some(store)) = (site, self.act_config().store) {
-                    let _ = store.revoke_grants(&self.mono_id, None, Some(&site));
+                if let Some(tab) = params["tab"].as_u64() {
+                    self.tab_stopped_by_user(tab);
                 }
-                self.approvals().withdraw_all();
             }
             e if e == Event::DialogOpened.as_str() => {
                 if let Some(tab) = params["tab"].as_u64() {
@@ -462,6 +463,8 @@ impl GrantBook {
 
 /// What `act.prepare` answered.
 struct Prepared {
+    /// The tab the action was prepared on (set by `prepare`, the extension does not echo it).
+    tab: u64,
     id: String,
     digest: String,
     url: String,
@@ -482,6 +485,7 @@ impl Prepared {
             .filter_map(|v| v.as_str().and_then(Category::parse))
             .collect();
         Ok(Self {
+            tab: 0,
             id: result["prepare_id"].as_str().ok_or_else(bad)?.to_owned(),
             digest: result["digest"].as_str().ok_or_else(bad)?.to_owned(),
             url: str_field(result, "url"),
@@ -810,7 +814,9 @@ impl ExtensionUpstream {
             params["needs_screenshot"] = json!(true);
         }
         match self.ask_raw(Method::ActPrepare, params, DEFAULT_DEADLINE_MS) {
-            Ok(result) => Prepared::parse(&result).map_err(PrepareFail::Text),
+            Ok(result) => Prepared::parse(&result)
+                .map(|p| Prepared { tab, ..p })
+                .map_err(PrepareFail::Text),
             Err(RequestError::Remote(body)) if body.code == ErrorCode::PasswordField => {
                 Err(PrepareFail::Password(remote_text(&body)))
             }
@@ -1179,7 +1185,14 @@ impl ExtensionUpstream {
         if let Some(input) = input {
             params["input"] = json!(input);
         }
-        self.ask_raw(Method::ActCommit, params, DEFAULT_DEADLINE_MS)
+        let result = self.ask_raw(Method::ActCommit, params, DEFAULT_DEADLINE_MS);
+        // The user pressed Stop on the tab while the action was in flight: that is the answer,
+        // whatever the extension said about the cancelled prepare.
+        let result = match (result, self.stopped_tab_error(prepared.tab)) {
+            (Err(_), Some(stopped)) => Err(stopped),
+            (other, _) => other,
+        };
+        result
             .map_err(|e| {
                 let code = match &e {
                     RequestError::Remote(body) => Some(body.code),

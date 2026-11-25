@@ -76,6 +76,8 @@ export class BrowserLink {
   /** @type {Frame | null} */
   roster = null;
   stopped = false;
+  /** The app's version from the last hello, for the options page. */
+  appVersion = "";
 
   /** @param {LinkDeps} deps */
   constructor(deps) {
@@ -245,6 +247,7 @@ export class BrowserLink {
     if (!hs) throw new AuthError("out_of_order", "no handshake");
     if (this.#stage === "hello") {
       if (msg.result.protocol !== PROTOCOL) throw new AuthError("invalid", "unsupported protocol");
+      this.appVersion = typeof msg.result.app_version === "string" ? msg.result.app_version.slice(0, 64) : "";
       if (this.#pairNonce !== null) {
         hs.checkUnpairedHello(msg.result);
         this.#stage = "pair";

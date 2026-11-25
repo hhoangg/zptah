@@ -483,9 +483,21 @@ impl Monos {
         setting_: &MonoBrowser,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // With the zptah Browser extension the switch is the Mono's virtual cursor (spec 10).
+        let (title, hint) = if setting_.use_extension {
+            (
+                "Show cursor",
+                "While the Mono acts, a cursor in the Mono's color moves to each target in the page, with its name and what it is doing. Off: no cursor. The glow and the Stop button in the tab stay.",
+            )
+        } else {
+            (
+                "Show agent actions on the page",
+                "Before a click or a typed value, a box and a cursor show where the Mono is about to act, for about half a second. Off: no overlay and no delay.",
+            )
+        };
         let toggle = switch_track(
             "mono-browser-show-actions",
-            "Show agent actions on the page",
+            title,
             setting_.show_actions,
         )
         .debug_selector(|| "mono-browser-show-actions".into())
@@ -493,8 +505,8 @@ impl Monos {
         .on_click(cx.listener(|this, _, _, cx| this.browser_toggle_show_actions(cx)));
         card()
             .child(switch_setting(
-                "Show agent actions on the page",
-                "Before a click or a typed value, a box and a cursor show where the Mono is about to act, for about half a second. Off: no overlay and no delay.",
+                title,
+                hint,
                 false,
                 toggle.into_any_element(),
             ))

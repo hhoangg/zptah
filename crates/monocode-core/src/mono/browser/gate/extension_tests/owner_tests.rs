@@ -596,3 +596,77 @@ fn a_tab_dragged_into_another_monos_group_changes_hands_without_a_prompt() {
     assert_eq!(mirror_owner(&two, 9).as_deref(), Some(OTHER_MONO));
     two.rig.finish();
 }
+
+// ---- the user presses Stop in the page overlay ----
+
+fn call_tool(gate: &Gate, route: &str, name: &str, args: Value) -> Value {
+    gate.handle(
+        route,
+        json!({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": name, "arguments": args}}),
+    )
+    .expect("a reply")["result"]
+        .clone()
+}
+
+fn tab_stopped_event(instance: &str, mono: &str, tab: u64) {
+    let mut envelope = Envelope::event(
+        "x-2",
+        Event::TabStopped,
+        json!({"tab": tab, "mono": mono, "by": "overlay"}),
+    );
+    envelope.mono = Some(mono.to_owned());
+    dispatch_event(instance, &envelope);
+}
+
+#[test]
+fn the_overlay_stop_ends_every_call_on_that_tab_until_the_user_gives_it_back() {
+    let two = two(vec![]);
+    let route = two.a.route_for(Some(11));
+    two.a.begin_turn(&route, "look at the page");
+    ok_text(call_gate(&two.a, &route, json!({"action": "list"})));
+
+    tab_stopped_event(&two.instance, MONO, 3);
+    assert_eq!(mirror_owner(&two, 3), None, "the tab is the user's again");
+    assert!(ownership::with_table(&two.instance, |t| t.taken_back_at(3)).is_some());
+
+    // Mira, not Kai, is stopped: the next call on that tab fails with the stop text and never
+    // reaches the browser.
+    let stopped = call_tool(&two.a, &route, "browser_snapshot", json!({"tab": 3}));
+    assert!(is_error(&stopped));
+    let text = text_of(&stopped);
+    assert!(text.contains("The user stopped you on the tab"), "{text}");
+    assert!(text.contains("Mira's page"), "{text}");
+    assert!(two.rig.requests("page.snapshot").is_empty());
+
+    // Another tab of the same Mono is not affected.
+    let other = call_tool(&two.a, &route, "browser_snapshot", json!({"tab": 1}));
+    assert!(
+        !text_of(&other).contains("The user stopped you"),
+        "{}",
+        text_of(&other)
+    );
+
+    // The user drags the tab back: calls on it work again.
+    ownership_event(&two.instance, 3, Some(MONO), "user_drag");
+    let again = call_tool(&two.a, &route, "browser_snapshot", json!({"tab": 3}));
+    assert!(
+        !text_of(&again).contains("The user stopped you"),
+        "{}",
+        text_of(&again)
+    );
+    two.rig.finish();
+}
+
+#[test]
+fn the_overlay_stop_of_one_mono_does_not_stop_another() {
+    let two = two(vec![]);
+    let route = said_b(&two, "look at the page");
+    tab_stopped_event(&two.instance, MONO, 3);
+    let reply = call_tool(&two.b, &route, "browser_snapshot", json!({"tab": 4}));
+    assert!(
+        !text_of(&reply).contains("The user stopped you"),
+        "{}",
+        text_of(&reply)
+    );
+    two.rig.finish();
+}
