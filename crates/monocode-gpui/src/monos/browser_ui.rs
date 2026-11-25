@@ -1,11 +1,9 @@
-//! A Mono's Browser settings page: switch, prerequisites, Chrome profile, extension, token,
-//! connection test, safety rules and the audit log. Design:
-//! `docs/superpowers/specs/2026-11-21-mono-browser-design.md`.
+//! A Mono's Browser settings page: switch, Chrome check, Chrome profile, connection to the zptah
+//! Browser extension, safety rules, recipes and the audit log. Design:
+//! `docs/superpowers/specs/2026-11-25-zptah-browser-extension.md`.
 //!
-//! What a Mono keeps is `Mono::browser` in the roster (no secret). The extension token is
-//! sealed in `mono_secrets` (`MonoBrowserStore`); the page only ever shows its last four
-//! characters. Anything that would touch Chrome, System Settings or the MCP server goes
-//! through [`BrowserOps`], which tests replace.
+//! What a Mono keeps is `Mono::browser` in the roster (no secret). Anything that would touch
+//! Chrome, System Settings or a running gate goes through [`BrowserOps`], which tests replace.
 use super::panels::{card, heading, setting, switch_setting, switch_track};
 use super::*;
 use crate::{
@@ -16,31 +14,29 @@ use gpui::{Div, Stateful};
 use monocode_core::mono::browser::copy;
 use monocode_core::mono::browser::recipe::manage::DryRunReport;
 use monocode_core::mono::browser::{
-    self, AuditEntry, BrowserTrust, Check, ChromeProfile, MonoBrowser, MonoBrowserStore, PrereqEnv,
+    self, AuditEntry, BrowserLevel, Check, ChromeProfile, MonoBrowser, MonoBrowserStore, PrereqEnv,
     Prerequisites,
 };
-use monocode_core::node_tool::{self, NodeTools};
 use std::sync::Arc;
 
-/// Stops the Mono's browser server (off the UI thread: ending a process can wait a moment).
+/// Drops the Mono's gate (its browser was turned off or changed). It is the app's own state, so
+/// this never touches the user's Chrome.
 fn stop_server(id: &str) {
     let id = id.to_owned();
     std::thread::spawn(move || browser::server::servers().stop(&id));
 }
 
 /// The selector id of a trust level's row (tests click it).
-pub(super) fn trust_selector(trust: BrowserTrust) -> &'static str {
+pub(super) fn trust_selector(trust: BrowserLevel) -> &'static str {
     match trust {
-        BrowserTrust::ReadOnly => "mono-browser-trust-read-only",
-        BrowserTrust::AskRisky => "mono-browser-trust-ask-risky",
-        // Not a shown choice any more; the id stays so the match is complete.
-        BrowserTrust::Autonomous => "mono-browser-trust-autonomous",
+        BrowserLevel::ReadOnly => "mono-browser-trust-read-only",
+        BrowserLevel::Act => "mono-browser-trust-act",
     }
 }
 const TRUST_SUBTITLE: &str = "How far this Mono may act in your Chrome. Change it any time; it applies from the next message.";
 
 /// One level of the trust selector: a radio dot, the level's name and what it means.
-fn trust_row(trust: BrowserTrust, selected: bool, cx: &mut Context<Monos>) -> AnyElement {
+fn trust_row(trust: BrowserLevel, selected: bool, cx: &mut Context<Monos>) -> AnyElement {
     let selector = trust_selector(trust);
     div()
         .id(selector)
@@ -102,53 +98,24 @@ fn trust_row(trust: BrowserTrust, selected: bool, cx: &mut Context<Monos>) -> An
 pub(super) const FULL_DISK_ACCESS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 const SELECT_PRIORITY: usize = 90;
-pub(super) const NODE_PATH_FIELD: &str = "browser-node-path";
 const AUDIT_ROWS: usize = 20;
-pub(super) const SUBTITLE: &str = "Let this Mono use your own Chrome, with the sessions you are signed in to, through Playwright MCP. Off by default.";
+pub(super) const SUBTITLE: &str = "Let this Mono use your own Chrome, with the sessions you are signed in to, through the zptah Browser extension. Off by default.";
 
-/// What touches the outside world. The real one opens Chrome and starts the MCP server.
+/// What touches the outside world. The real one opens Chrome and System Settings and reaches the
+/// Mono's running gate.
 pub(super) trait BrowserOps: Send + Sync {
-    fn open_in_profile(&self, env: &PrereqEnv, profile_dir: &str, url: &str) -> Result<(), String>;
     fn open_full_disk_access(&self);
-    fn probe(&self, runtime: &browser::Runtime, env: &PrereqEnv) -> Result<(), String>;
     /// A recipe's dry run through the Mono's running gate (see `Gate::dry_run_recipe`). It
     /// blocks until a run in progress ends, so it is called off the UI thread.
     fn dry_run_recipe(&self, mono_id: &str, recipe_id: &str) -> Result<DryRunReport, String>;
-    /// Looks node up (it may run the login shell for a few seconds): called off the UI thread.
-    fn resolve_node(&self) -> Option<NodeTools>;
-    /// Forgets the last lookup, so the next [`BrowserOps::resolve_node`] looks again.
-    fn recheck_node(&self);
-    /// Checks the path typed in the Browser page. Never runs a shell.
-    fn validate_node_path(&self, raw: &str) -> Result<NodeTools, String>;
-    /// Makes `path` (empty is automatic) the override every npx launch uses, now.
-    fn apply_node_path(&self, path: &str);
 }
 struct RealOps;
 impl BrowserOps for RealOps {
-    fn resolve_node(&self) -> Option<NodeTools> {
-        node_tool::resolve()
-    }
-    fn recheck_node(&self) {
-        node_tool::recheck();
-    }
-    fn validate_node_path(&self, raw: &str) -> Result<NodeTools, String> {
-        node_tool::validate_real(raw)
-    }
-    fn apply_node_path(&self, path: &str) {
-        node_tool::set_override(path);
-    }
-    fn open_in_profile(&self, env: &PrereqEnv, profile_dir: &str, url: &str) -> Result<(), String> {
-        browser::open_in_profile(env, profile_dir, url)
-    }
     fn open_full_disk_access(&self) {
         #[cfg(target_os = "macos")]
         let _ = std::process::Command::new("open")
             .arg(FULL_DISK_ACCESS_URL)
             .spawn();
-    }
-    fn probe(&self, runtime: &browser::Runtime, env: &PrereqEnv) -> Result<(), String> {
-        let mut transport = browser::ProcessTransport::spawn(runtime, env)?;
-        browser::probe(&mut transport)
     }
     fn dry_run_recipe(&self, mono_id: &str, recipe_id: &str) -> Result<DryRunReport, String> {
         browser::server::servers()
@@ -160,14 +127,6 @@ impl BrowserOps for RealOps {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum TestState {
-    Idle,
-    Running,
-    Passed,
-    Failed(String),
-}
-
 /// The page's own state; the setting itself is on the Mono.
 pub(super) struct BrowserUi {
     pub(super) ops: Arc<dyn BrowserOps>,
@@ -176,28 +135,11 @@ pub(super) struct BrowserUi {
     pub(super) profiles: Vec<ChromeProfile>,
     /// Chrome's profile list could not be read: `profiles` holds only the saved profile.
     pub(super) profiles_unreadable: bool,
-    pub(super) installed: bool,
-    pub(super) hint: Option<String>,
-    /// The Mono `hint` was read for. The 2 second install poll must not decrypt the token again.
-    pub(super) hint_mono: Option<String>,
-    pub(super) replacing: bool,
-    pub(super) test: TestState,
     pub(super) audit: Vec<AuditEntry>,
     pub(super) recipes: super::recipes_ui::RecipesUi,
     pub(super) select: Option<Choices<String>>,
     pub(super) profile_anchor: AnchorSlot,
-    pub(super) watching: bool,
     pub(super) error: Option<String>,
-    /// A node lookup is running in the background (it may start the login shell).
-    pub(super) node_checking: bool,
-    /// A lookup has finished since the page opened or since Recheck.
-    pub(super) node_known: bool,
-    /// What that lookup found.
-    pub(super) node_found: Option<NodeTools>,
-    /// Recheck or a new path came while a lookup was running: look again when it ends.
-    pub(super) node_requeue: bool,
-    /// Why the path typed in the page was not accepted.
-    pub(super) node_error: Option<String>,
     pub(super) connect: super::browser_connect::ConnectUi,
     pub(super) approval: super::browser_approval::ApprovalUi,
 }
@@ -205,54 +147,31 @@ impl BrowserUi {
     pub(super) fn new() -> Self {
         Self {
             ops: Arc::new(RealOps),
-            // Tests start with Chrome and Node absent, never the real ones.
+            // Tests start with Chrome absent, never the real one.
             env: cfg!(test).then(|| PrereqEnv {
                 chrome_binaries: Vec::new(),
                 user_data_dir: PathBuf::new(),
-                search_path: String::new(),
-                node: None,
             }),
             prereq: None,
             profiles: Vec::new(),
             profiles_unreadable: false,
-            installed: false,
-            hint: None,
-            hint_mono: None,
-            replacing: false,
-            test: TestState::Idle,
             audit: Vec::new(),
             recipes: Default::default(),
             select: None,
             profile_anchor: AnchorSlot::default(),
-            watching: false,
             error: None,
-            node_checking: false,
-            // Tests never look node up for real.
-            node_known: cfg!(test),
-            node_found: None,
-            node_requeue: false,
-            node_error: None,
             connect: Default::default(),
             approval: super::browser_approval::ApprovalUi::new(),
         }
     }
-    /// Chrome's and node's environment as the page sees it now. In the app the node part is the
-    /// last lookup, never a new one: that runs in [`Monos::browser_check_node`].
+    /// Chrome's environment as the page sees it now.
     fn env(&self) -> PrereqEnv {
-        let mut env = self.env.clone().unwrap_or_else(PrereqEnv::detect);
-        if env.node.is_none() {
-            env.node = self.node_found.clone();
-        }
-        env
+        self.env.clone().unwrap_or_else(PrereqEnv::detect)
     }
     #[cfg(test)]
     pub(super) fn use_fakes(&mut self, ops: Arc<dyn BrowserOps>, env: PrereqEnv) {
         self.ops = ops;
         self.env = Some(env);
-    }
-    #[cfg(test)]
-    pub(super) fn test_state(&self) -> TestState {
-        self.test.clone()
     }
     #[cfg(test)]
     pub(super) fn error(&self) -> Option<&str> {
@@ -301,15 +220,12 @@ impl Monos {
         MonoBrowserStore::for_store(&store)
     }
 
-    /// Reads what the page shows from disk: prerequisites, profiles, the extension, the token
-    /// hint and the audit log. Then keeps the Mono's `ready` flag true to it.
+    /// Reads what the page shows from disk: prerequisites, profiles and the audit log. Then keeps
+    /// the Mono's `ready` flag true to it.
     pub(super) fn browser_refresh(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.active.clone() else {
             return;
         };
-        if !self.browser_ui.node_known && !self.browser_ui.node_checking {
-            self.browser_check_node(cx);
-        }
         self.browser_connect_refresh(cx);
         self.browser_approval_page_refresh(cx);
         let env = self.browser_ui.env();
@@ -343,94 +259,18 @@ impl Monos {
                 picture: None,
             });
         }
-        ui.installed = !profile_dir.is_empty()
-            && browser::extension_installed(&env.user_data_dir, &profile_dir);
         let store = self.browser_store().ok();
         let ui = &mut self.browser_ui;
-        if ui.hint_mono.as_deref() != Some(&id) {
-            ui.hint = None;
-        }
-        ui.hint = match &store {
-            Some(s) if s.has_token_row(&id) => ui.hint.take().or_else(|| s.token_hint(&id)),
-            _ => None,
-        };
-        ui.hint_mono = Some(id.clone());
-        // The note of a failed launch goes once its cause is fixed: a token is saved and Chrome
-        // and node are there. A later launch sets it again if something else is wrong.
-        if ui.hint.is_some() && ui.prereq.as_ref().is_some_and(Prerequisites::can_attach) {
-            browser::server::servers().set_attach_error(&id, None);
-        }
         ui.audit = store
             .as_ref()
             .map(|s| s.recent(&id, AUDIT_ROWS))
             .unwrap_or_default();
         self.recipes_refresh();
-        if self.browser_ui.node_checking {
-            // `ready` waits for the lookup: node is not known to be missing yet.
-            cx.notify();
-        } else {
-            self.browser_sync(cx);
-        }
+        self.browser_sync(cx);
     }
 
-    /// Looks node up on a worker (the login shell can take seconds), then refreshes the page.
-    pub(super) fn browser_check_node(&mut self, cx: &mut Context<Self>) {
-        if self.browser_ui.node_checking {
-            self.browser_ui.node_requeue = true;
-            return;
-        }
-        self.browser_ui.node_checking = true;
-        let ops = self.browser_ui.ops.clone();
-        cx.spawn(async move |this, cx| {
-            let found = cx.background_spawn(async move { ops.resolve_node() }).await;
-            let _ = this.update(cx, |this, cx| {
-                let ui = &mut this.browser_ui;
-                ui.node_checking = false;
-                if std::mem::take(&mut ui.node_requeue) {
-                    // That answer predates the Recheck or the new path: drop it, look again.
-                    ui.node_known = false;
-                    ui.node_found = None;
-                } else {
-                    ui.node_known = true;
-                    ui.node_found = found;
-                }
-                this.browser_refresh(cx);
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
-    /// The Recheck button: forgets the last lookup and looks again.
-    pub(super) fn browser_recheck_node(&mut self, cx: &mut Context<Self>) {
-        self.browser_ui.ops.recheck_node();
-        let ui = &mut self.browser_ui;
-        ui.node_known = false;
-        ui.node_found = None;
-        self.browser_check_node(cx);
-        self.browser_refresh(cx);
-    }
-
-    /// Saves the path typed in the page. It is checked first and an unusable one is reported
-    /// and not saved. Empty goes back to finding node by itself.
-    pub(super) fn browser_save_node_path(&mut self, cx: &mut Context<Self>) {
-        let text = self.value(NODE_PATH_FIELD, cx).trim().to_owned();
-        if !text.is_empty()
-            && let Err(error) = self.browser_ui.ops.validate_node_path(&text)
-        {
-            self.browser_ui.node_error = Some(error);
-            cx.notify();
-            return;
-        }
-        self.browser_ui.node_error = None;
-        self.browser_ui.ops.apply_node_path(&text);
-        self.prefs.node_path = text.clone();
-        cx.emit(NodePathChanged(text));
-        self.browser_recheck_node(cx);
-    }
-
-    /// `ready` is the page's own summary: Chrome, node, a profile and a token. A launch does not
-    /// read it. Full Disk Access is not part of it: it only lets the page list other profiles.
+    /// `ready` is the page's own summary: Chrome and a profile. A launch does not read it. Full
+    /// Disk Access is not part of it: it only lets the page list other profiles.
     fn browser_sync(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.active.clone() else {
             return;
@@ -439,8 +279,7 @@ impl Monos {
             .browser_ui
             .prereq
             .as_ref()
-            .is_some_and(Prerequisites::can_attach)
-            && self.browser_ui.hint.is_some();
+            .is_some_and(Prerequisites::can_attach);
         let Some(setting) = self.roster.get_mut(&id).and_then(|m| m.browser.as_mut()) else {
             cx.notify();
             return;
@@ -469,9 +308,8 @@ impl Monos {
         let before = setting.clone();
         change(setting);
         setting.normalize();
-        // The server starts again with the new setting on the next run, with a new tab group.
-        // A change that does not shape the server (the trust level) keeps it and its group; the
-        // running gate takes the new level at once.
+        // The gate starts again with the new setting on the next run. A change that does not
+        // shape it (the trust level) keeps it; the running gate takes the new level at once.
         if before.server_key() != setting.server_key() {
             stop_server(&id);
         }
@@ -483,7 +321,7 @@ impl Monos {
     }
 
     /// A level row was chosen.
-    pub(super) fn browser_set_trust(&mut self, trust: BrowserTrust, cx: &mut Context<Self>) {
+    pub(super) fn browser_set_trust(&mut self, trust: BrowserLevel, cx: &mut Context<Self>) {
         self.browser_edit(cx, |b| b.trust = trust);
     }
 
@@ -497,18 +335,9 @@ impl Monos {
         setting_: &MonoBrowser,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // With the zptah Browser extension the switch is the Mono's virtual cursor (spec 10).
-        let (title, hint) = if setting_.use_extension {
-            (
-                "Show cursor",
-                "While the Mono acts, a cursor in the Mono's color moves to each target in the page, with its name and what it is doing. Off: no cursor. The glow and the Stop button in the tab stay.",
-            )
-        } else {
-            (
-                "Show agent actions on the page",
-                "Before a click or a typed value, a box and a cursor show where the Mono is about to act, for about half a second. Off: no overlay and no delay.",
-            )
-        };
+        // The switch is the Mono's virtual cursor (spec 10).
+        let title = "Show cursor";
+        let hint = "While the Mono acts, a cursor in the Mono's color moves to each target in the page, with its name and what it is doing. Off: no cursor. The glow and the Stop button in the tab stay.";
         let toggle = switch_track("mono-browser-show-actions", title, setting_.show_actions)
             .debug_selector(|| "mono-browser-show-actions".into())
             .cursor_pointer()
@@ -583,10 +412,9 @@ impl Monos {
         Some(open.popover(&self.browser_ui.profile_anchor, SELECT_PRIORITY, cx))
     }
 
-    /// A token belongs to one profile's extension install, so a new profile drops it.
+    /// A choice always takes effect, also when Chrome's profile list cannot be read.
     pub(super) fn browser_choose_profile(&mut self, dir: &str, cx: &mut Context<Self>) {
-        // A listed profile, else the saved one, else any valid directory name: a choice always
-        // takes effect, also when Chrome's profile list cannot be read.
+        // A listed profile, else the saved one, else any valid directory name.
         let Some(profile) = self
             .browser_ui
             .profiles
@@ -605,139 +433,7 @@ impl Monos {
                 b.ready = false;
             }
         });
-        if changed {
-            if let (Some(id), Ok(store)) = (self.active.clone(), self.browser_store()) {
-                let _ = store.remove_token(&id);
-            }
-            self.browser_ui.replacing = false;
-            self.browser_ui.test = TestState::Idle;
-        }
         self.browser_refresh(cx);
-    }
-
-    fn browser_open(&mut self, url: String, cx: &mut Context<Self>) {
-        let dir = self.browser_setting().profile_dir;
-        let env = self.browser_ui.env();
-        self.browser_ui.error = self.browser_ui.ops.open_in_profile(&env, &dir, &url).err();
-        cx.notify();
-    }
-
-    /// Opens the Web Store page in the chosen profile and watches for the install.
-    pub(super) fn browser_install(&mut self, cx: &mut Context<Self>) {
-        self.browser_open(browser::install_url(), cx);
-        if self.browser_ui.error.is_none() {
-            self.browser_watch_install(cx);
-        }
-    }
-
-    fn browser_watch_install(&mut self, cx: &mut Context<Self>) {
-        if self.browser_ui.watching {
-            return;
-        }
-        self.browser_ui.watching = true;
-        cx.spawn(async move |this, cx| {
-            // Chrome cannot install silently; the user clicks "Add to Chrome" in their own time.
-            for _ in 0..300 {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(2))
-                    .await;
-                let done = this
-                    .update(cx, |this, cx| {
-                        this.browser_refresh(cx);
-                        this.browser_ui.installed || this.settings != Some(SettingsSection::Browser)
-                    })
-                    .unwrap_or(true);
-                if done {
-                    break;
-                }
-            }
-            let _ = this.update(cx, |this, _| this.browser_ui.watching = false);
-        })
-        .detach();
-    }
-
-    fn browser_save_token(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.active.clone() else {
-            return;
-        };
-        let field = self.value("browser-token", cx);
-        let saved = self
-            .browser_store()
-            .and_then(|store| store.save_token(&id, &field));
-        match saved {
-            Ok(()) => {
-                stop_server(&id);
-                // A new token: read its last four again.
-                self.browser_ui.hint = None;
-                if let Some(input) = self.fields.get("browser-token").cloned() {
-                    input.update(cx, |f, cx| f.set_text(String::new(), cx));
-                }
-                self.browser_ui.replacing = false;
-                self.browser_ui.test = TestState::Idle;
-                self.browser_ui.error = None;
-            }
-            Err(error) => self.browser_ui.error = Some(error),
-        }
-        self.browser_refresh(cx);
-    }
-
-    fn browser_remove_token(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.active.clone() {
-            stop_server(&id);
-            self.browser_ui.error = self
-                .browser_store()
-                .and_then(|store| store.remove_token(&id))
-                .err();
-        }
-        self.browser_ui.replacing = false;
-        self.browser_ui.test = TestState::Idle;
-        self.browser_refresh(cx);
-    }
-
-    /// Starts the MCP server with this Mono's setting and lists the browser's tabs.
-    pub(super) fn browser_test(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.active.clone() else {
-            return;
-        };
-        let setting = self.browser_setting();
-        let token = match self.browser_store().and_then(|store| store.token(&id)) {
-            Ok(Some(token)) => token,
-            Ok(None) => {
-                self.browser_ui.test = TestState::Failed("Paste the extension token first.".into());
-                cx.notify();
-                return;
-            }
-            Err(error) => {
-                self.browser_ui.test = TestState::Failed(error);
-                cx.notify();
-                return;
-            }
-        };
-        if setting.profile_dir.is_empty() {
-            self.browser_ui.test = TestState::Failed("Choose a Chrome profile first.".into());
-            cx.notify();
-            return;
-        }
-        let env = self.browser_ui.env();
-        let dir = browser::output_dir(&self.root, &id);
-        let _ = std::fs::create_dir_all(&dir);
-        let runtime = browser::probe_runtime(&setting, token, &dir, &env);
-        let ops = self.browser_ui.ops.clone();
-        self.browser_ui.test = TestState::Running;
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move { ops.probe(&runtime, &env) })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.browser_ui.test = match result {
-                    Ok(()) => TestState::Passed,
-                    Err(error) => TestState::Failed(error),
-                };
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
     pub(super) fn browser_add_origin(&mut self, allowed: bool, cx: &mut Context<Self>) {
@@ -858,17 +554,6 @@ impl Monos {
             }
             .on_click(cx.listener(move |this, _, _, cx| this.browser_add_origin(allowed, cx))),
         );
-        if !allowed {
-            footer = footer.child(
-                action("mono-browser-blocked-reset", "Reset to defaults").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.browser_edit(cx, |b| {
-                            b.blocked_origins = MonoBrowser::default().blocked_origins
-                        })
-                    },
-                )),
-            );
-        }
         card()
             .child(
                 div()
@@ -879,7 +564,7 @@ impl Monos {
                     .child(if allowed {
                         "Allowed origins. When any are listed, only these may be used."
                     } else {
-                        "Blocked origins: banks, wallets and payment pages. The Mono never opens these."
+                        "Blocked origins: the Mono never opens these. Banking and payment sites are not blocked by default: zptah asks before a risky step there."
                     }),
             )
             .children(rows)
@@ -932,7 +617,6 @@ impl Monos {
             sections.extend(self.browser_extension_cards(mono, &setting, cx));
             sections.push(self.browser_prerequisites(cx));
             sections.push(self.browser_profile_card(mono, &setting, cx));
-            sections.push(self.browser_token_card(&setting, cx));
             sections.push(self.browser_safety_card(&mono.label(), &setting, window, cx));
             sections.push(self.browser_show_actions_card(&setting, cx));
             sections.push(self.recipes_card(cx));
@@ -969,7 +653,6 @@ impl Monos {
         let Some(prereq) = self.browser_ui.prereq.clone() else {
             return div().into_any_element();
         };
-        let node_checking = self.browser_ui.node_checking;
         let row = |id: &'static str, label: &str, check: &Check, fix: Option<AnyElement>| {
             let (text, alpha) = match check {
                 Check::Ok => ("Ready".to_owned(), 0.7),
@@ -996,21 +679,6 @@ impl Monos {
                 }))
                 .into_any_element()
         });
-        let found = self.browser_ui.env().node_tools();
-        let node_check = if node_checking {
-            Check::Missing("Checking...".into())
-        } else {
-            prereq.node.clone()
-        };
-        let recheck = action("mono-browser-node-recheck", "Recheck")
-            .when(node_checking, |d| d.opacity(0.5))
-            .on_click(cx.listener(|this, _, _, cx| {
-                if !this.browser_ui.node_checking {
-                    this.browser_recheck_node(cx);
-                }
-            }))
-            .into_any_element();
-        let node_path = self.browser_node_path_card(found, cx);
         card()
             .child(row(
                 "mono-browser-prereq-chrome",
@@ -1024,88 +692,6 @@ impl Monos {
                 "Access to Chrome's profiles",
                 &prereq.full_disk_access,
                 fda_fix,
-            ))
-            .child(div().h(px(1.)).bg(content(0.05)))
-            .child(row(
-                "mono-browser-prereq-node",
-                "Node.js (node and npx)",
-                &node_check,
-                Some(recheck),
-            ))
-            .child(node_path)
-            .into_any_element()
-    }
-
-    /// Where node was found and how, and the field that overrides it.
-    fn browser_node_path_card(
-        &mut self,
-        found: Option<NodeTools>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let initial = self.prefs.node_path.clone();
-        let input = self.field(
-            NODE_PATH_FIELD,
-            "Path to npx or its folder (automatic when empty)",
-            initial,
-            false,
-            cx,
-        );
-        if self.field_blurs.insert(input.entity_id()) {
-            self.observations.push(
-                cx.subscribe(&input, move |this, _, _: &input::Submitted, cx| {
-                    this.browser_save_node_path(cx)
-                }),
-            );
-        }
-        let location = match (&found, self.browser_ui.node_checking) {
-            (_, true) => None,
-            (Some(tools), _) => Some(format!(
-                "{} (found via {})",
-                tools.npx.display(),
-                tools.source.label()
-            )),
-            (None, _) => None,
-        };
-        let field = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(
-                div()
-                    .id("mono-browser-node-path-input")
-                    .w(px(260.))
-                    .h(px(28.))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(content(0.1))
-                    .child(input),
-            )
-            .child(
-                action("mono-browser-node-path-save", "Save")
-                    .on_click(cx.listener(|this, _, _, cx| this.browser_save_node_path(cx))),
-            )
-            .into_any_element();
-        div()
-            .flex()
-            .flex_col()
-            .child(div().h(px(1.)).bg(content(0.05)))
-            .when_some(location, |d, text| {
-                d.child(div().px_3().pt_2().child(note(
-                    "mono-browser-node-location",
-                    text,
-                    0.6,
-                )))
-            })
-            .when_some(self.browser_ui.node_error.clone(), |d, error| {
-                d.child(div().px_3().pt_2().child(alert("mono-browser-node-error", error)))
-            })
-            .child(setting(
-                "Node.js path",
-                Some("Only needed when Node.js is not found. The full path of npx, or of the folder that holds npx and node."),
-                field,
             ))
             .into_any_element()
     }
@@ -1150,30 +736,6 @@ impl Monos {
             .child(div().min_w_0().truncate().child(label))
             .child(icon("chevron-down", 12.).text_color(content(0.5)));
         let shared = browser::profile_shared_with(&self.roster.monos, &mono.id);
-        let has_profile = !setting_.profile_dir.is_empty();
-        let installed = self.browser_ui.installed;
-        let status = if !has_profile {
-            "Choose a profile first"
-        } else if installed {
-            "Installed"
-        } else {
-            "Not installed"
-        };
-        let controls = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(note(
-                "mono-browser-install-status",
-                status,
-                if installed { 0.8 } else { 0.5 },
-            ))
-            .when(has_profile && !installed, |d| {
-                d.child(
-                    action("mono-browser-install", "Install extension")
-                        .on_click(cx.listener(|this, _, _, cx| this.browser_install(cx))),
-                )
-            });
         let mut card_ = card()
             .child(setting(
                 "Chrome profile",
@@ -1198,133 +760,6 @@ impl Monos {
                 0.6,
             )));
         }
-        card_
-            .child(setting(
-                "Playwright MCP Bridge",
-                Some("Chrome extension that lets the Mono connect."),
-                controls.into_any_element(),
-            ))
-            .into_any_element()
-    }
-
-    fn browser_token_card(&mut self, setting_: &MonoBrowser, cx: &mut Context<Self>) -> AnyElement {
-        let hint = self.browser_ui.hint.clone();
-        let editing = hint.is_none() || self.browser_ui.replacing;
-        let has_profile = !setting_.profile_dir.is_empty();
-        let control: AnyElement = if editing {
-            let input = self.field(
-                "browser-token",
-                "Paste the extension token",
-                String::new(),
-                false,
-                cx,
-            );
-            input.update(cx, |f, _| f.set_secret(true));
-            if self.field_blurs.insert(input.entity_id()) {
-                self.observations.push(
-                    cx.subscribe(&input, |this, _, _: &input::Submitted, cx| {
-                        this.browser_save_token(cx)
-                    }),
-                );
-            }
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .id("mono-browser-token-input")
-                        .w(px(130.))
-                        .h(px(28.))
-                        .px_2()
-                        .flex()
-                        .items_center()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(content(0.1))
-                        .child(input),
-                )
-                .child(
-                    action("mono-browser-token-save", "Save")
-                        .on_click(cx.listener(|this, _, _, cx| this.browser_save_token(cx))),
-                )
-                .into_any_element()
-        } else {
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(note(
-                    "mono-browser-token-hint",
-                    format!(
-                        "\u{2022}\u{2022}\u{2022}\u{2022}{}",
-                        hint.clone().unwrap_or_default()
-                    ),
-                    0.8,
-                ))
-                .child(
-                    action("mono-browser-token-replace", "Replace").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.browser_ui.replacing = true;
-                            cx.notify();
-                        },
-                    )),
-                )
-                .child(
-                    action("mono-browser-token-remove", "Remove")
-                        .on_click(cx.listener(|this, _, _, cx| this.browser_remove_token(cx))),
-                )
-                .into_any_element()
-        };
-        let test = match self.browser_ui.test.clone() {
-            TestState::Idle => None,
-            TestState::Running => Some(("Connecting to Chrome\u{2026}".to_owned(), 0.6)),
-            TestState::Passed => Some(("Connected. The Mono can see your tabs.".to_owned(), 0.85)),
-            TestState::Failed(error) => Some((error, 0.75)),
-        };
-        let running = self.browser_ui.test == TestState::Running;
-        let mut card_ = card().child(setting(
-            "Extension token",
-            Some("Stored encrypted. Only the last four characters are shown."),
-            control,
-        ));
-        if has_profile {
-            card_ = card_
-                .child(div().h(px(1.)).bg(content(0.05)))
-                .child(setting(
-                    "Get the token",
-                    Some("Opens the extension page in this profile. Copy its token."),
-                    action("mono-browser-open-token-page", "Open extension page")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.browser_open(browser::token_page_url(), cx)
-                        }))
-                        .into_any_element(),
-                ));
-        }
-        card_ = card_
-            .child(div().h(px(1.)).bg(content(0.05)))
-            .child(setting(
-                "Test connection",
-                None,
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .when(!running, |d| {
-                        d.child(
-                            action("mono-browser-test", "Test connection")
-                                .on_click(cx.listener(|this, _, _, cx| this.browser_test(cx))),
-                        )
-                    })
-                    .into_any_element(),
-            ));
-        if let Some((text, alpha)) = test {
-            card_ = card_.child(div().px_3().pb_2().child(note(
-                "mono-browser-test-result",
-                text,
-                alpha,
-            )));
-        }
         card_.into_any_element()
     }
 
@@ -1337,10 +772,7 @@ impl Monos {
     ) -> AnyElement {
         let rows: Vec<AnyElement> = super::browser_migration::CHOICES
             .into_iter()
-            .map(|trust| {
-                let selected = super::browser_migration::shows_as(setting_.trust, trust);
-                trust_row(trust, selected, cx)
-            })
+            .map(|trust| trust_row(trust, setting_.trust == trust, cx))
             .collect();
         let suggest = self.browser_suggest_card(mono_name, setting_, cx);
         let blocked = self.browser_origin_card(false, &setting_.blocked_origins, window, cx);
@@ -1354,7 +786,7 @@ impl Monos {
             .child(
                 note(
                     "mono-browser-trust-note",
-                    BrowserTrust::ENFORCEMENT_NOTE,
+                    BrowserLevel::ENFORCEMENT_NOTE,
                     0.5,
                 )
                 .px_1()

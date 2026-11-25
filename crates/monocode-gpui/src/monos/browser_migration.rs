@@ -6,25 +6,18 @@ use super::panels::{card, setting};
 use super::*;
 use monocode_core::mono::browser::copy::{self, Lang};
 use monocode_core::mono::browser::migration::{RECONNECT_NEEDED, TAB_GROUP_NOTICE, TRUST_NOTICE};
-use monocode_core::mono::browser::{BrowserTrust, MonoBrowser};
+use monocode_core::mono::browser::{BrowserLevel, MonoBrowser};
 
-/// The trust levels a user can choose. `Ask every` and `Autonomous` are gone from the page.
-pub(super) const CHOICES: [BrowserTrust; 2] = [BrowserTrust::ReadOnly, BrowserTrust::AskRisky];
+/// The trust levels a user can choose. `Ask every` and `Autonomous` are gone from the page; a
+/// stored legacy level already reads as `Act for me`.
+pub(super) const CHOICES: [BrowserLevel; 2] = [BrowserLevel::ReadOnly, BrowserLevel::Act];
 
-/// Whether `trust` is the shown choice `choice`: a stored legacy level displays as `Act for me`.
-pub(super) fn shows_as(trust: BrowserTrust, choice: BrowserTrust) -> bool {
-    match choice {
-        BrowserTrust::ReadOnly => trust == BrowserTrust::ReadOnly,
-        _ => trust != BrowserTrust::ReadOnly,
-    }
-}
-
-pub(super) fn trust_label(trust: BrowserTrust, lang: Lang) -> &'static str {
+pub(super) fn trust_label(trust: BrowserLevel, lang: Lang) -> &'static str {
     match (trust, lang) {
-        (BrowserTrust::ReadOnly, Lang::En) => "Read only",
-        (BrowserTrust::ReadOnly, Lang::Vi) => "Chỉ đọc",
-        (_, Lang::En) => "Act for me",
-        (_, Lang::Vi) => "Làm giúp tôi",
+        (BrowserLevel::ReadOnly, Lang::En) => "Read only",
+        (BrowserLevel::ReadOnly, Lang::Vi) => "Chỉ đọc",
+        (BrowserLevel::Act, Lang::En) => "Act for me",
+        (BrowserLevel::Act, Lang::Vi) => "Làm giúp tôi",
     }
 }
 
@@ -158,11 +151,7 @@ impl Monos {
         browser: &MonoBrowser,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !browser.enabled
-            || browser.migrated == 0
-            || !browser.use_extension
-            || !browser.needs_reconnect()
-        {
+        if !(browser.enabled && browser.migrated > 0 && browser.needs_reconnect()) {
             return None;
         }
         let t = text(copy::app_language());

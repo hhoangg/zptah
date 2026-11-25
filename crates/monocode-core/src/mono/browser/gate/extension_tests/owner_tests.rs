@@ -146,11 +146,7 @@ fn two(answers: Vec<UserAnswer>) -> Two {
         config(BrowserLevel::Act, "Kai", &ApprovalQueue::new(OTHER_MONO)),
         Origins::default(),
     );
-    let policy = || {
-        Policy::new(BrowserTrust::AskRisky, Vec::new())
-            .with_extension(true)
-            .with_show_actions(false)
-    };
+    let policy = || Policy::new(BrowserLevel::Act, Vec::new());
     let a = Gate::start_with_timeout(rig.upstream.clone(), policy(), "extension", WAIT).unwrap();
     let b = Gate::start_with_timeout(other, policy(), "extension", WAIT).unwrap();
     let front = super::act_tests::FrontEnd::start(&a_queue, answers);

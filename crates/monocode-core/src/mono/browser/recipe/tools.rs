@@ -18,7 +18,7 @@ use super::repair::{self, Applied, Book, Class, Patch, Pending};
 use super::runner::{self, Failure, Host, Options};
 use super::store::RecipeStore;
 use crate::mono::browser::gate::{ApprovalRequest, Category};
-use crate::mono::browser::{normalize_origin, BrowserTrust, MonoBrowserStore};
+use crate::mono::browser::{normalize_origin, BrowserLevel, MonoBrowserStore};
 use serde_json::{json, Map, Value};
 
 pub const FIND: &str = "recipe_find";
@@ -37,12 +37,12 @@ pub fn is_recipe_tool(name: &str) -> bool {
 
 /// Whether the gate lists and runs `name` at this level: recording, repairing and rolling back
 /// need a level that can ask the user and act (Level 2 and up).
-pub fn offered(name: &str, trust: BrowserTrust) -> bool {
+pub fn offered(name: &str, trust: BrowserLevel) -> bool {
     is_recipe_tool(name)
-        && (![RECORD, REPAIR, ROLLBACK].contains(&name) || trust != BrowserTrust::ReadOnly)
+        && (![RECORD, REPAIR, ROLLBACK].contains(&name) || trust != BrowserLevel::ReadOnly)
 }
 
-pub fn definitions(trust: BrowserTrust) -> Vec<Value> {
+pub fn definitions(trust: BrowserLevel) -> Vec<Value> {
     let mut out = vec![
         json!({
             "name": FIND,
@@ -82,7 +82,7 @@ pub fn definitions(trust: BrowserTrust) -> Vec<Value> {
             "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
         }),
     ];
-    if trust != BrowserTrust::ReadOnly {
+    if trust != BrowserLevel::ReadOnly {
         out.push(json!({
             "name": REPAIR,
             "title": "Repair the step of a recipe that just failed",
@@ -483,8 +483,6 @@ fn ask_first_run(recipe: &Recipe, given: &Map<String, Value>, ctx: &Context) -> 
             recipe.computed_risk().as_str(),
             steps.join("\n")
         ),
-        code: None,
-        explanation: String::new(),
     };
     (ctx.ask)(request).map_err(|reason| format!("The recipe was not run. {reason}"))
 }
@@ -556,7 +554,7 @@ fn offer_repair(
 ) {
     // Level 1 has no repair tool. A refusal, a sign-in page or a failure before the first step is
     // not something a patch can fix.
-    if ctx.host.trust() == BrowserTrust::ReadOnly
+    if ctx.host.trust() == BrowserLevel::ReadOnly
         || failure.step == 0
         || !failure.repairable
         || failure.needs_login
@@ -768,8 +766,6 @@ fn repair(args: &Value, ctx: &Context) -> Reply {
                 },
                 record::plain_summary(&applied.recipe)
             ),
-            code: None,
-            explanation: String::new(),
         };
         if let Err(reason) = (ctx.ask)(request) {
             audit(&format!("{} not approved by the user", patch.name()));
@@ -964,7 +960,7 @@ fn rollback(args: &Value, ctx: &Context) -> Reply {
 }
 
 fn record(args: &Value, ctx: &Context) -> Reply {
-    if ctx.host.trust() == BrowserTrust::ReadOnly {
+    if ctx.host.trust() == BrowserLevel::ReadOnly {
         return err("Recording a recipe needs Level 2 or higher.");
     }
     let draft: Draft = match serde_json::from_value(args.clone()) {
@@ -1039,8 +1035,6 @@ fn record(args: &Value, ctx: &Context) -> Reply {
                 ),
             }
         ),
-        code: None,
-        explanation: String::new(),
     };
     if let Err(reason) = (ctx.ask)(request) {
         return err(format!("The recipe was not saved. {reason}"));

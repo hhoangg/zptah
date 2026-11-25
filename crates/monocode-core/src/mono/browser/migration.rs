@@ -5,21 +5,21 @@
 //! the typed read, so the old values are still visible. What it does to each Mono that has a
 //! `browser` object:
 //!
-//! * `trust`: `ask-risky` and `autonomous` become the one acting level, stored as `askRisky` until the old enum is removed with the
-//!   Playwright backend (it maps to [`super::trust::BrowserLevel::Act`]); `readOnly` stays.
+//! * `trust`: `ask-risky` and `autonomous` become the one acting level, stored as `act`
+//!   ([`super::trust::BrowserLevel::Act`]); `readOnly` stays; an unknown value becomes `readOnly`.
 //! * `blockedOrigins`: kept unchanged. A missing list (it read as the defaults) is written out as
 //!   [`super::DEFAULT_BLOCKED_ORIGINS`], so changing the default for new Monos later cannot drop a
 //!   block. When any old default is present `suggestNewDefaults` is set for the one-time offer.
 //! * `connection` stays absent: the Mono shows "Reconnect needed" until bound ([`RECONNECT_NEEDED`]).
 //! * `showActions` is kept: it is the per-Mono cursor switch now. `ready` is recomputed (cleared).
-//! * `useExtension` is not touched: the Playwright backend is still the default (spec 15.1), so the
-//!   migrated Monos keep their backend. The release that removes it turns the switch on.
+//! * `useExtension` (the preview switch of the retired Playwright backend) is dropped: the zptah
+//!   Browser extension is the only backend now (spec 15.1).
 //! * `migrationNotice` is set for the one-time notice ([`TRUST_NOTICE`], [`TAB_GROUP_NOTICE`]).
 //!
 //! Existing Playwright tab groups need no data change (15.4): zptah Browser never adopts them.
 //!
-//! The secret `playwright-extension-token` is deleted by a second stage ([`Options::delete_token`])
-//! that stays off while the Playwright backend still reads it ([`PLAYWRIGHT_REMOVED`]).
+//! The secret `playwright-extension-token` is deleted by a second stage ([`Options::delete_token`]),
+//! which runs on every load until it has succeeded once ([`TOKEN_CLEANUP_KEY`]).
 //!
 //! Safety: the whole roster is transformed in memory first; any structure it does not understand
 //! aborts the migration with nothing written. Before the roster row is rewritten the old text is
@@ -35,6 +35,10 @@ pub const VERSION: u32 = 1;
 pub const VERSION_KEY: &str = "mono-browser-migration";
 /// Setting holding the roster row as it was before the migration. Written once, never replaced.
 pub const BACKUP_KEY: &str = "mono-roster-backup-browser-v1";
+/// The name of the secret the retired Playwright backend kept per Mono in `mono_secrets`.
+pub const LEGACY_TOKEN_SECRET: &str = "playwright-extension-token";
+/// Setting set once the saved recipes were marked for a dry run.
+pub const RECIPE_DRY_RUN_KEY: &str = "mono-browser-migration-recipes";
 /// Setting set once the Playwright token secrets are deleted.
 pub const TOKEN_CLEANUP_KEY: &str = "mono-browser-migration-token";
 
@@ -46,19 +50,21 @@ pub const TRUST_NOTICE: &str =
 /// One-time notice about the old tab groups (spec 15.4).
 pub const TAB_GROUP_NOTICE: &str = "zptah Browser gives each Mono a new tab group. To hand over an old Playwright group, drag its tabs into the new one. You can remove \"Playwright MCP Bridge\" from chrome://extensions.";
 
-/// Whether the Playwright backend is gone. While it is not, its token must stay (the ticket that
-/// removes the backend flips this).
-pub const PLAYWRIGHT_REMOVED: bool = false;
+/// Whether the Playwright backend is gone. Nothing reads its token any more, so it is deleted.
+pub const PLAYWRIGHT_REMOVED: bool = true;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
     /// Delete the `playwright-extension-token` secret of every Mono.
     pub delete_token: bool,
+    /// Make every saved recipe wait for a dry run on the new backend (spec 15.5).
+    pub recipe_dry_run: bool,
 }
 impl Options {
     pub fn current() -> Self {
         Self {
             delete_token: PLAYWRIGHT_REMOVED,
+            recipe_dry_run: true,
         }
     }
 }
@@ -76,6 +82,9 @@ pub fn run(store: &Store, text: Option<String>, options: &Options) -> Option<Str
     let text = if done { text } else { migrate_row(store, text) };
     if options.delete_token {
         delete_tokens(store);
+    }
+    if options.recipe_dry_run {
+        mark_recipes_for_dry_run(store);
     }
     text
 }
@@ -125,8 +134,58 @@ fn delete_tokens(store: &Store) {
     let Ok(secrets) = super::MonoBrowserStore::for_store(store) else {
         return;
     };
-    if secrets.delete_secrets_named(super::SECRET_NAME).is_ok() {
+    if secrets.delete_secrets_named(LEGACY_TOKEN_SECRET).is_ok() {
         let _ = store.save_setting(TOKEN_CLEANUP_KEY, "1");
+    }
+}
+
+/// Spec 15.5: recipes were recorded on the retired backend, where an element could be found with a
+/// selector and a name was computed slightly differently. Every saved recipe of every Mono waits
+/// for a dry run on the zptah Browser before it runs: the dry run (`Gate::dry_run_recipe`, started
+/// from Settings > Browser) replays its reading steps against the next real page, turning each
+/// locator into a ref of that page, and a locator that does not match goes through the existing
+/// repair flow. The mark is the one an imported recipe has ([`super::recipe::share::SOURCE_MIGRATED`]);
+/// the recipe files and their approved hashes are not touched. Done once.
+fn mark_recipes_for_dry_run(store: &Store) {
+    if store.setting(RECIPE_DRY_RUN_KEY).ok().flatten().is_some() {
+        return;
+    }
+    let Ok(approvals) = super::MonoBrowserStore::for_store(store) else {
+        return;
+    };
+    let root = crate::mono::root(store);
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        // No Mono folder yet: nothing was ever recorded. Look again next time.
+        return;
+    };
+    let mut done = true;
+    for entry in entries.flatten() {
+        let Some(mono_id) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        // The shared library (`_shared_recipes`) and anything else that is not a Mono id.
+        if !mono_id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        {
+            continue;
+        }
+        let recipes = super::recipe::store::RecipeStore::new(super::recipes_dir(&root, &mono_id));
+        for recipe in recipes.list() {
+            // An imported or shared recipe keeps its own mark: it needs a dry run already.
+            if approvals.outside_source(&mono_id, &recipe.id).is_some() {
+                continue;
+            }
+            if approvals
+                .mark_outside(&mono_id, &recipe.id, super::recipe::share::SOURCE_MIGRATED)
+                .is_err()
+            {
+                done = false;
+            }
+        }
+    }
+    if done {
+        let _ = store.save_setting(RECIPE_DRY_RUN_KEY, "1");
     }
 }
 
@@ -163,9 +222,7 @@ fn migrate_browser(browser: &mut Map<String, Value>) -> Result<(), String> {
         .get("trust")
         .and_then(Value::as_str)
         .map(|t| match t {
-            "askRisky" | "ask-risky" | "askEvery" | "ask-every" | "autonomous" | "act" => {
-                "askRisky"
-            }
+            "askRisky" | "ask-risky" | "askEvery" | "ask-every" | "autonomous" | "act" => "act",
             _ => "readOnly",
         });
     if let Some(trust) = trust {
@@ -173,6 +230,7 @@ fn migrate_browser(browser: &mut Map<String, Value>) -> Result<(), String> {
     } else if browser.contains_key("trust") {
         browser.insert("trust".into(), json!("readOnly"));
     }
+    browser.remove("useExtension");
     browser.insert("migrated".into(), json!(VERSION));
 
     // Blocked origins: keep, and write the old defaults out when the list was never saved.

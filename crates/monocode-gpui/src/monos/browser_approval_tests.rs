@@ -24,7 +24,7 @@ struct Rig {
     _lang: std::sync::MutexGuard<'static, ()>,
 }
 
-/// A Mono with the extension backend on, showing its conversation.
+/// A Mono with its browser on, showing its conversation.
 fn open(cx: &mut TestAppContext, language: Lang) -> Rig {
     let mut rig = open_settings(cx, language);
     rig.s.manager.update(&mut rig.visual, |m, cx| {
@@ -49,8 +49,6 @@ fn open_settings(cx: &mut TestAppContext, language: Lang) -> Rig {
     click(&mut visual, "mono-settings-Browser");
     visual.refresh().unwrap();
     click(&mut visual, "mono-browser-enabled");
-    visual.refresh().unwrap();
-    click(&mut visual, "mono-browser-use-extension");
     visual.refresh().unwrap();
     // The settings page keeps the old language choice; the tests set the copy language directly.
     copy::set_app_language(language);
@@ -343,17 +341,12 @@ fn the_language_choice_is_saved_and_changes_the_card_language(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-fn the_preview_switch_turns_the_extension_backend_on_and_off(cx: &mut TestAppContext) {
+fn the_extension_is_the_only_backend_so_there_is_no_preview_switch(cx: &mut TestAppContext) {
     let mut rig = open_settings(cx, Lang::En);
-    let on = |rig: &Rig| {
-        rig.s
-            .manager
-            .read_with(&rig.visual, |m, _| m.browser_setting().use_extension)
-    };
-    assert!(on(&rig));
+    assert!(!rig.on("mono-browser-use-extension"));
+    // Switching the browser on is all it takes for the grants card to show.
     assert!(rig.on("mono-browser-grants-empty"));
-    rig.click("mono-browser-use-extension");
-    assert!(!on(&rig));
+    rig.click("mono-browser-enabled");
     assert!(!rig.on("mono-browser-grants-empty"));
 }
 

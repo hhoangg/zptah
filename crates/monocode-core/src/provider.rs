@@ -1650,7 +1650,6 @@ fn run_operation(
                 );
                 allowed.push(browser.claude_allowed());
                 disallowed.push(browser.claude_disallowed());
-                browser.apply_env(&mut command);
             }
             let mut system = Vec::new();
             if let Some(mono) = settings.mono.as_ref().filter(|_| !settings.text_only) {
@@ -2417,12 +2416,10 @@ mod tests {
         let events = p.gate_ask(
             Ask {
                 request: ApprovalRequest {
-                    category: Category::Code,
-                    action: "Run JavaScript in the page".into(),
+                    category: Category::Payment,
+                    action: "Pay 20 USD".into(),
                     url: "https://shop.example".into(),
-                    details: String::new(),
-                    code: Some("() => document.title".into()),
-                    explanation: "Read the title".into(),
+                    details: "Visa ending 4242".into(),
                 },
                 reply,
                 abandoned: abandoned.clone(),
@@ -2450,12 +2447,12 @@ mod tests {
                 // Nothing was answered for the user.
                 assert!(answer.try_recv().is_err(), "{access:?}");
                 assert!(card.id.starts_with("browser-gate-"));
-                assert_eq!(card.title, "Allow the browser to run code?");
+                assert_eq!(card.title, "Allow the browser to make a payment?");
                 for needle in [
-                    "Running code",
+                    "Money: payment, purchase, subscription or transfer",
                     "https://shop.example",
-                    "() => document.title",
-                    "Why: Read the title",
+                    "Action: Pay 20 USD",
+                    "Details: Visa ending 4242",
                 ] {
                     assert!(card.detail.contains(needle), "{needle}");
                 }
@@ -2489,8 +2486,6 @@ mod tests {
                     action: "Save it".into(),
                     url: "https://shop.example".into(),
                     details: String::new(),
-                    code: None,
-                    explanation: String::new(),
                 },
                 reply,
                 abandoned: Default::default(),
@@ -2573,7 +2568,7 @@ mod tests {
     }
     #[test]
     fn a_warm_process_is_reused_only_at_the_same_browser_level() {
-        use crate::mono::browser::{BrowserTrust, MonoBrowser};
+        use crate::mono::browser::{BrowserLevel, MonoBrowser};
         let mono = crate::mono::Mono::default();
         let key = |trust| {
             let mut request = protocol(Kind::Claude).request;
@@ -2591,9 +2586,8 @@ mod tests {
             });
             parked::key(&request)
         };
-        assert_eq!(key(BrowserTrust::AskRisky), key(BrowserTrust::AskRisky));
-        assert_ne!(key(BrowserTrust::AskRisky), key(BrowserTrust::ReadOnly));
-        assert_ne!(key(BrowserTrust::AskRisky), key(BrowserTrust::Autonomous));
+        assert_eq!(key(BrowserLevel::Act), key(BrowserLevel::Act));
+        assert_ne!(key(BrowserLevel::Act), key(BrowserLevel::ReadOnly));
     }
     #[test]
     fn a_warm_process_is_not_reused_across_a_change_of_the_browser_outcome() {

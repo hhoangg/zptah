@@ -194,9 +194,7 @@ fn rig_with(url: &str, name: &str, answers: Vec<UserAnswer>) -> (ActRig, FrontEn
     );
     let gate = Gate::start_with_timeout(
         rig.upstream.clone(),
-        Policy::new(BrowserTrust::AskRisky, Vec::new())
-            .with_extension(true)
-            .with_show_actions(false),
+        Policy::new(BrowserLevel::Act, Vec::new()),
         "extension",
         Duration::from_secs(5),
     )
@@ -437,7 +435,7 @@ fn without_a_front_end_an_ask_is_denied_without_waiting() {
     );
     let gate = Gate::start_with_timeout(
         rig.upstream.clone(),
-        Policy::new(BrowserTrust::AskRisky, Vec::new()).with_extension(true),
+        Policy::new(BrowserLevel::Act, Vec::new()),
         "extension",
         Duration::from_secs(5),
     )

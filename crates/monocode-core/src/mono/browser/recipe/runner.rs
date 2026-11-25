@@ -23,7 +23,7 @@ use super::model::{
 use super::risk::{self, Class};
 use super::snapshot;
 use crate::mono::browser::gate::{approval_required, is_finance_url, APPROVAL_TOOL};
-use crate::mono::browser::BrowserTrust;
+use crate::mono::browser::BrowserLevel;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -46,7 +46,7 @@ pub trait Host {
     fn call(&self, tool: &str, args: Value) -> Result<ToolOutput, String>;
     /// The page the browser is on, as the last result reported it.
     fn page_url(&self) -> String;
-    fn trust(&self) -> BrowserTrust;
+    fn trust(&self) -> BrowserLevel;
     fn blocked_origins(&self) -> Vec<String>;
     /// Waits between polls. Tests do not sleep.
     fn pause(&self, duration: Duration) {

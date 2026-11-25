@@ -15,7 +15,7 @@ use monocode_core::mono::browser::{
     self, MonoBrowserStore,
     recipe::{
         manage::{self, DryRunReport, Row, Status},
-        share::{self, Library, RecipeFile, SOURCE_IMPORT, SOURCE_SHARED},
+        share::{self, Library, RecipeFile, SOURCE_IMPORT, SOURCE_MIGRATED, SOURCE_SHARED},
         store::RecipeStore,
     },
 };
@@ -178,7 +178,7 @@ impl Monos {
                     .any(|r| r.id == id && r.outside.is_some());
                 self.recipes_said(
                     Some(if needs_dry_run {
-                        "Approved. It came from outside this Mono, so it runs only after a dry run passes.".into()
+                        "Approved. It runs only after a dry run passes: it came from outside this Mono or from before zptah Browser.".into()
                     } else {
                         "Approved.".into()
                     }),
@@ -523,6 +523,7 @@ impl Monos {
         let id = row.id.clone();
         let origin_note = match row.outside.as_deref() {
             Some(SOURCE_SHARED) => "  (copied from the shared library)",
+            Some(SOURCE_MIGRATED) => "  (from before zptah Browser: needs a dry run)",
             Some(_) => "  (imported)",
             None => "",
         };

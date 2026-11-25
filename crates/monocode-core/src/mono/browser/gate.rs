@@ -1,36 +1,29 @@
-//! The Browser gate: a zptah MCP server that stands between the agent and the Mono's
-//! Playwright server. The agent is only given the gate's URL, so every browser tool call passes
-//! through [`Policy::evaluate`] before it is forwarded. It works in every permission mode (Auto
-//! and Full Access included) because it is zptah code, not a harness ask mode.
+//! The Browser gate: a zptah MCP server that stands between the agent and the zptah Browser
+//! extension. The agent is only given the gate's URL, so every browser tool call passes through
+//! [`Policy::evaluate`] before it is forwarded to the [`Upstream`] (the extension link, see
+//! [`extension`]). It works in every permission mode (Auto and Full Access included) because it
+//! is zptah code, not a harness ask mode.
 //!
-//! What is enforced here, and what is not (see also [`super::BrowserTrust`]):
+//! What is enforced here, and what is not:
 //!
 //! * Mechanical, whatever the agent does: tools outside the trust level are neither listed nor
-//!   run; `browser_evaluate` and `browser_run_code_unsafe` run only after the user approves a card
-//!   with the code and the agent's `explanation`; page-changing tools on a finance or blocked
-//!   origin, and typed card numbers, need approval; `browser_route`, `browser_unroute` and
-//!   `browser_resize` never run. Anything the user does not answer, or that cannot be asked
-//!   (no channel, plan or read-only session, timeout), is denied: the gate fails closed.
-//! * By the agent's cooperation: payments, purchases, subscriptions, transfers, sending, posting
-//!   and commenting can not be recognised from a click. The gate offers the agent
-//!   `browser_request_approval` for them and the Mono's rules require it, but nothing stops an
-//!   agent that skips it. The page URL the gate checks is the last `Page URL` a tool reported.
-//! * The Playwright server has no port: the app starts it as a child process and the gate talks to
-//!   it over stdin and stdout ([`StdioUpstream`]), so no other process, the agent's shell
-//!   included, can reach it and skip the gate. The agent can still run its own browser tooling
-//!   outside the harness's MCP list; that is outside what this gate controls.
-//! * One gate serves all sessions of a Mono and they share one Playwright session. Cards,
-//!   denials and the remembered page are kept per route (one per app session): a session's cards
-//!   show only in that session, and one session ending does not deny another's.
+//!   run; `browser_route`, `browser_unroute` and `browser_resize` never run. Anything the user
+//!   does not answer, or that cannot be asked (no channel, plan or read-only session, timeout),
+//!   is denied: the gate fails closed. The extension upstream classifies every act tool call
+//!   itself (`trust::TrustState::evaluate`) and asks through the approval queue.
+//! * By the agent's cooperation: the actions the classifier can not recognise from a click.
+//!   The gate offers the agent `browser_request_approval` for them and the Mono's rules require
+//!   it, but nothing stops an agent that skips it.
+//! * One gate serves all sessions of a Mono and they share one browser. Cards, denials and the
+//!   remembered page are kept per route (one per app session): a session's cards show only in
+//!   that session, and one session ending does not deny another's.
 //!
-//! An approval is shown through the app's existing approval card (desktop, web app, phone): the
-//! gate sends an [`Ask`] to the run that is attached ([`Gate::attach`]), the provider loop turns it
-//! into an `Event::Approval` and answers it from the user's decision.
+//! An approval is shown through the app's approval card: the gate sends an [`Ask`] to the run
+//! that is attached ([`Gate::attach`]), the provider loop turns it into an `Event::Approval` and
+//! answers it from the user's decision.
 use super::recipe::{self, record::Trace, runner};
-use super::{defense, output, AuditEntry, BrowserTrust, MonoBrowserStore};
-use super::{
-    is_scroll_key, ALWAYS_BLOCKED_TOOLS, CODE_TOOLS, KNOWN_TOOLS, READ_ONLY_TOOLS, SCROLL_KEYS,
-};
+use super::{defense, output, AuditEntry, BrowserLevel, MonoBrowserStore};
+use super::{is_scroll_key, ALWAYS_BLOCKED_TOOLS, KNOWN_TOOLS, READ_ONLY_TOOLS, SCROLL_KEYS};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -40,13 +33,10 @@ use std::time::Duration;
 pub(crate) mod extension;
 mod guard;
 mod http;
-pub mod overlay;
-mod stdio;
+mod refs;
 pub mod tabs;
 pub use extension::act::{end_conversation_everywhere, upstream_for, ActConfig, ExtensionStatus};
 pub use extension::{ExtensionUpstream, Origins};
-pub use http::HttpUpstream;
-pub use stdio::StdioUpstream;
 
 /// A stand-in route name for code that builds a [`Runtime`](super::Runtime) without a gate.
 pub const SHARED_ROUTE: &str = "shared";
@@ -58,8 +48,6 @@ pub const SUGGEST_ID_PREFIX: &str = "browser-gate-suggest-";
 pub const APPROVAL_TOOL: &str = "browser_request_approval";
 /// How long the gate waits for the user. Codex is told to wait a minute longer.
 pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const MAX_CODE_CHARS: usize = 20_000;
-const MAX_FIELD_CHARS: usize = 2_000;
 
 // ---- What needs approval ----
 
@@ -74,12 +62,6 @@ pub enum Category {
     PostPublish,
     /// Any other risky action. Agent-chosen.
     Other,
-    /// Running code in the page or the server. Chosen by the gate.
-    Code,
-    /// A page-changing action on a finance or blocked origin. Chosen by the gate.
-    FinancePage,
-    /// A card number typed into a page. Chosen by the gate.
-    CardData,
     /// Saving a browser recipe the Mono recorded. Chosen by the gate.
     Recipe,
     /// An action that follows untrusted page content and was not declared before it was read.
@@ -109,9 +91,6 @@ impl Category {
             Self::SendMessage => "Sending a message",
             Self::PostPublish => "Posting, commenting or publishing",
             Self::Other => "Risky action",
-            Self::Code => "Running code",
-            Self::FinancePage => "Change on a bank or payment page",
-            Self::CardData => "Card number typed into a page",
             Self::Recipe => "Save a browser recipe",
             Self::Untrusted => "Action after reading untrusted content",
             Self::Injection => "Possible prompt injection in a page",
@@ -120,34 +99,23 @@ impl Category {
     }
 }
 
-/// Whether an action of `category` needs the user's approval at `trust`. This is the one rule
-/// behind the Mono's rules text (see `prompt_block`) and behind recipes: Level 1 can not act at
-/// all (the policy denies the tool, so there is nothing to approve), Level 2 asks for money,
-/// sending, posting, other risky actions and code, Level 3 only for money and code. Gate-chosen
-/// categories (a finance page, a card number) always ask. A recipe that saves itself never asks
-/// through this function.
-pub fn approval_required(trust: BrowserTrust, category: Category) -> bool {
-    // Untrusted content and injection warnings ask at every level; a suggestion never blocks.
+/// Whether an action of `category` needs the user's approval at `level` (used by recipes).
+/// `read-only` can not act at all (the policy denies the tool, so there is nothing to approve);
+/// `act` asks for every category the agent or a recipe names. Untrusted content and injection
+/// warnings ask at every level; a suggestion never blocks, and a recipe that saves itself never
+/// asks through this function.
+pub fn approval_required(level: BrowserLevel, category: Category) -> bool {
     if matches!(category, Category::Untrusted | Category::Injection) {
         return true;
     }
     if category == Category::Suggestion {
         return false;
     }
-    match trust {
-        BrowserTrust::ReadOnly => false,
-        BrowserTrust::AskRisky => !matches!(category, Category::Recipe),
-        BrowserTrust::Autonomous => matches!(
-            category,
-            Category::Payment | Category::Code | Category::FinancePage | Category::CardData
-        ),
+    match level {
+        BrowserLevel::ReadOnly => false,
+        BrowserLevel::Act => category != Category::Recipe,
     }
 }
-
-/// The two-level counterpart of [`approval_required`] for the extension backend (spec 8.1), over
-/// the classifier's categories. The Playwright backend keeps [`approval_required`] until it is
-/// removed.
-pub use super::trust::approval_required as approval_required_level;
 
 /// One approval the user is asked for. Everything the user needs to decide is in it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,21 +125,14 @@ pub struct ApprovalRequest {
     pub action: String,
     pub url: String,
     pub details: String,
-    /// The code, for [`Category::Code`].
-    pub code: Option<String>,
-    /// The agent's reason for running the code.
-    pub explanation: String,
 }
 impl ApprovalRequest {
     /// The title of the approval card.
     pub fn title(&self) -> String {
         match self.category {
-            Category::Code => "Allow the browser to run code?",
             Category::Payment => "Allow the browser to make a payment?",
             Category::SendMessage => "Allow the browser to send this?",
             Category::PostPublish => "Allow the browser to post this?",
-            Category::FinancePage => "Allow a change on this bank or payment page?",
-            Category::CardData => "Allow typing a card number into this page?",
             Category::Other => "Allow this risky browser action?",
             Category::Recipe => "Save this browser recipe?",
             Category::Untrusted => "Allow this action? It follows untrusted web content",
@@ -180,8 +141,7 @@ impl ApprovalRequest {
         }
         .to_owned()
     }
-    /// The body of the approval card: category, action, page, details, and for code the
-    /// explanation and the code itself.
+    /// The body of the approval card: category, action, page and details.
     pub fn detail(&self) -> String {
         let mut out = format!("{}\nAction: {}", self.category.label(), self.action);
         if !self.url.is_empty() {
@@ -189,16 +149,6 @@ impl ApprovalRequest {
         }
         if !self.details.is_empty() {
             out.push_str(&format!("\nDetails: {}", self.details));
-        }
-        if let Some(code) = &self.code {
-            out.push_str(&format!(
-                "\n\nWhy: {}\n\nCode:\n{code}",
-                if self.explanation.is_empty() {
-                    "(none given)"
-                } else {
-                    &self.explanation
-                }
-            ));
         }
         out
     }
@@ -216,70 +166,46 @@ pub enum Verdict {
 /// The rules of one Mono's gate. Plain data: tests build it directly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
-    pub trust: BrowserTrust,
-    /// The Mono's blocked origins: a page change there needs approval, as on a finance page.
+    pub trust: BrowserLevel,
+    /// The Mono's blocked origins (recipes ask before a step on one, as on a finance page).
     pub blocked_origins: Vec<String>,
-    /// Draw a highlight and a cursor on the page before each targeted action (see [`overlay`]).
-    /// Off for a policy built with [`Policy::new`]: a gate draws only when the Mono's setting says
-    /// so, through [`Policy::with_show_actions`].
-    pub show_actions: bool,
-    /// The backend is the zptah Browser extension: its upstream decides every action itself
-    /// (`trust::TrustState::evaluate`, spec 7.6) and asks through the approval queue
-    /// (`trust::approval`), so the Playwright-era finance, card, taint and injection cards are not
-    /// raised here a second time.
-    pub extension: bool,
 }
 impl Policy {
-    /// The two-level view of the setting (spec 8.1) the extension backend decides with: both
-    /// asking levels of the Playwright backend are `act`.
-    pub fn level(&self) -> super::trust::BrowserLevel {
-        self.trust.into()
-    }
-    pub fn new(trust: BrowserTrust, blocked_origins: Vec<String>) -> Self {
+    pub fn new(trust: BrowserLevel, blocked_origins: Vec<String>) -> Self {
         Self {
             trust,
             blocked_origins,
-            show_actions: false,
-            extension: false,
         }
     }
-    /// Marks the policy of a Mono that uses the extension backend.
-    pub fn with_extension(mut self, extension: bool) -> Self {
-        self.extension = extension;
-        self
-    }
-    pub fn with_show_actions(mut self, show: bool) -> Self {
-        self.show_actions = show;
-        self
-    }
 
-    /// The decision for one `tools/call`. `page_url` is the last page the tools reported.
-    pub fn evaluate(&self, tool: &str, args: &Value, page_url: &str) -> Verdict {
+    /// The decision for one `tools/call`. The extension upstream decides every act tool call
+    /// itself (finance pages, card numbers and the rest are categories of its classifier and it
+    /// asks through the approval queue), so this is the mechanical part: the level's tool list,
+    /// the address scheme and the approval tool.
+    pub fn evaluate(&self, tool: &str, args: &Value) -> Verdict {
         if ALWAYS_BLOCKED_TOOLS.contains(&tool) {
             return Verdict::Deny(format!("{tool} is never available in this browser."));
         }
         if tool == APPROVAL_TOOL {
-            if self.extension {
-                // The upstream words the card and asks (tier K: always).
-                return if self.trust == BrowserTrust::ReadOnly {
-                    self.approval_tool(args, page_url)
-                } else {
-                    Verdict::Allow
-                };
-            }
-            return self.approval_tool(args, page_url);
+            // The upstream words the card and asks (tier K: always).
+            return if self.trust == BrowserLevel::ReadOnly {
+                Verdict::Deny(
+                    "At Level 1 the browser can not act, so there is nothing to approve.".into(),
+                )
+            } else {
+                Verdict::Allow
+            };
         }
-        let forward = self.extension && tool == "browser_navigate_forward";
-        if !KNOWN_TOOLS.contains(&tool) && !forward {
+        if !KNOWN_TOOLS.contains(&tool) {
             return Verdict::Deny(format!("{tool} is not an available browser tool."));
         }
         if let Some(reason) = unsafe_address(tool, args) {
             return Verdict::Deny(reason);
         }
-        if self.trust == BrowserTrust::ReadOnly {
+        if self.trust == BrowserLevel::ReadOnly {
             let action = args["action"].as_str().unwrap_or("");
             // Closing a tab ends something the user may still need.
-            let allowed = (READ_ONLY_TOOLS.contains(&tool) || forward)
+            let allowed = READ_ONLY_TOOLS.contains(&tool)
                 && (tool != "browser_tabs" || matches!(action, "list" | "new" | "select"));
             // `browser_press_key` is the Level 1 way to scroll, for the scroll keys only: Enter or
             // Space could submit a form or press a focused button.
@@ -300,128 +226,12 @@ impl Policy {
                 ))
             };
         }
-        if self.extension {
-            // The extension upstream decides (finance pages, card numbers and the rest are
-            // categories of its classifier). Code tools do not exist there.
-            return if CODE_TOOLS.contains(&tool) {
-                Verdict::Deny(format!("{tool} is never available with the zptah Browser."))
-            } else {
-                Verdict::Allow
-            };
-        }
-        if CODE_TOOLS.contains(&tool) {
-            return self.code(tool, args, page_url);
-        }
-        // `browser_press_key` is in the read set only for Level 1's scroll keys; at Levels 2 and 3
-        // it can type into a page, so it takes the checks below.
-        if READ_ONLY_TOOLS.contains(&tool) && tool != "browser_press_key" {
-            return Verdict::Allow;
-        }
-        // A tool that changes a page, at Level 2 or 3.
-        if is_finance_url(page_url, &self.blocked_origins) {
-            return Verdict::Ask(ApprovalRequest {
-                category: Category::FinancePage,
-                action: format!("{tool} {}", short_args(args)),
-                url: page_url.to_owned(),
-                details: "This page is a bank, wallet or payment page.".into(),
-                code: None,
-                explanation: String::new(),
-            });
-        }
-        if contains_card_number(args) {
-            return Verdict::Ask(ApprovalRequest {
-                category: Category::CardData,
-                action: format!("{tool} with what looks like a payment card number"),
-                url: page_url.to_owned(),
-                details: String::new(),
-                code: None,
-                explanation: String::new(),
-            });
-        }
         Verdict::Allow
-    }
-
-    fn approval_tool(&self, args: &Value, page_url: &str) -> Verdict {
-        if self.trust == BrowserTrust::ReadOnly {
-            return Verdict::Deny(
-                "At Level 1 the browser can not act, so there is nothing to approve.".into(),
-            );
-        }
-        let text = |key: &str| clip(args[key].as_str().unwrap_or("").trim(), MAX_FIELD_CHARS);
-        let Some(category) = args["category"].as_str().and_then(Category::parse) else {
-            return Verdict::Deny(format!(
-                "Give a category: one of {}.",
-                Category::AGENT_CHOICES.join(", ")
-            ));
-        };
-        let action = text("action");
-        if action.is_empty() {
-            return Verdict::Deny("Describe the action in `action`.".into());
-        }
-        let url = text("url");
-        Verdict::Ask(ApprovalRequest {
-            category,
-            action,
-            url: if url.is_empty() {
-                page_url.to_owned()
-            } else {
-                url
-            },
-            details: text("details"),
-            code: None,
-            explanation: String::new(),
-        })
-    }
-
-    fn code(&self, tool: &str, args: &Value, page_url: &str) -> Verdict {
-        let explanation = clip(
-            args["explanation"].as_str().unwrap_or("").trim(),
-            MAX_FIELD_CHARS,
-        );
-        if explanation.is_empty() {
-            return Verdict::Deny(format!(
-                "{tool} needs an `explanation` argument that says why the code must run. The user sees it next to the code."
-            ));
-        }
-        let code = if tool == "browser_evaluate" {
-            args["function"].as_str()
-        } else {
-            // `filename` would load code the user is never shown.
-            if args.get("filename").is_some_and(|f| !f.is_null()) {
-                return Verdict::Deny(
-                    "browser_run_code_unsafe takes `code`, not `filename`: the user must see the code.".into(),
-                );
-            }
-            args["code"].as_str()
-        };
-        let Some(code) = code.map(str::trim).filter(|c| !c.is_empty()) else {
-            return Verdict::Deny(format!("{tool} needs the code to run."));
-        };
-        if code.chars().count() > MAX_CODE_CHARS {
-            return Verdict::Deny(format!(
-                "The code is longer than {MAX_CODE_CHARS} characters, too long for the user to review. Use shorter code or the normal tools."
-            ));
-        }
-        // Always a card, at Level 2 and Level 3 alike. There is no safe "read-only code" test: a
-        // text check is bypassed by `el['cli'+'ck']()` and the like, so none is attempted.
-        Verdict::Ask(ApprovalRequest {
-            category: Category::Code,
-            action: if tool == "browser_evaluate" {
-                "Run JavaScript in the page".into()
-            } else {
-                "Run Playwright code in the browser server".into()
-            },
-            url: page_url.to_owned(),
-            details: String::new(),
-            code: Some(code.to_owned()),
-            explanation,
-        })
     }
 
     /// Whether the gate lists `tool` to the agent.
     pub fn offers(&self, tool: &str) -> bool {
-        // Going forward exists only with the extension backend (Playwright has no such tool).
-        (self.extension && tool == "browser_navigate_forward") || self.trust.offers(tool)
+        self.trust.offers(tool)
     }
 }
 
@@ -720,7 +530,7 @@ struct Approver {
 
 // ---- The upstream server ----
 
-/// Posts one JSON-RPC message to the Playwright server. Tests replace it.
+/// Posts one JSON-RPC message to the browser backend (the extension link, or a fake in tests).
 pub trait Upstream: Send + Sync {
     /// Returns the reply (for a request) and the `Mcp-Session-Id` the server named, if any.
     /// A server that refused the request answers `Err("HTTP <status>")`.
@@ -730,10 +540,9 @@ pub trait Upstream: Send + Sync {
         session: Option<&str>,
         message: &Value,
     ) -> Result<(Option<Value>, Option<String>), String>;
-    /// Whether the MCP session is still the one to use after `error`. HTTP drops it (a new
-    /// handshake is cheap). A stdio server has exactly one session for its life: it closes itself
-    /// on a timeout or a broken pipe, so the app starts a new server, and the gate a new session
-    /// on it, at the next run.
+    /// Whether the MCP session is still the one to use after `error`. The extension link has
+    /// exactly one session for its life; a backend that drops its session on an error says so
+    /// here and the gate starts a new one.
     fn session_survives(&self, _error: &str) -> bool {
         false
     }
@@ -788,19 +597,20 @@ struct Session {
 struct State {
     policy: Policy,
     upstream: Arc<dyn Upstream>,
-    /// Names the running server (its URL, or its process for a stdio server).
+    /// Names the running backend (a new one gets a new key).
     upstream_key: String,
     session: Option<Session>,
     /// The page the browser is on, as the last tool result or opened address said. The browser
-    /// (and its current tab) is shared by every session of the Mono, so the finance check reads
+    /// (and its current tab) is shared by every session of the Mono, so the recipe checks read
     /// this one value whichever session writes.
     page: String,
     /// Issued routes: an unguessable token per app session (`None`: no session).
     routes: std::collections::HashMap<Option<i64>, String>,
 }
 
-/// One gate serves every session of a Mono. The Playwright side is one shared MCP session (and
-/// one browser connection) per Mono. Approval cards and denials are kept per route (one per app session), so a card of one session never shows in another.
+/// One gate serves every session of a Mono. The backend side is one shared session (and one
+/// browser connection) per Mono. Approval cards and denials are kept per route (one per app
+/// session), so a card of one session never shows in another.
 struct Inner {
     state: Mutex<State>,
     init: Mutex<()>,
@@ -823,21 +633,18 @@ struct Inner {
     calls: AtomicU64,
     generation: AtomicU64,
     next_id: AtomicU64,
+    /// Tests: selectors are not turned into refs (see [`Gate::pass_selectors_through`]).
+    #[cfg(test)]
+    selectors_through: AtomicBool,
     timeout: Duration,
-    /// The attribute name of the action overlay: random per gate, made here, never from input.
-    overlay_token: String,
-    /// How long the overlay is held before the action, in milliseconds.
-    overlay_hold_ms: AtomicU64,
-    /// How long one overlay call may take before the gate goes on without it.
-    overlay_timeout_ms: AtomicU64,
 }
 
-/// What the gate needs to keep recipes and to confine the files Playwright writes. Without it
-/// (tests, the connection test) the gate offers no recipe tools and leaves `filename` alone.
+/// What the gate needs to keep recipes and to confine the files the browser writes. Without it
+/// (some tests) the gate offers no recipe tools and leaves `filename` alone.
 #[derive(Clone, Debug)]
 pub struct Workspace {
     pub mono_id: String,
-    /// Playwright's output folder: private, swept, the only place `filename` may point to.
+    /// The browser's output folder: private, swept, the only place `filename` may point to.
     pub output_dir: PathBuf,
     /// Recipe files. Outside the output folder, so a sweep never touches them.
     pub recipes_dir: PathBuf,
@@ -872,7 +679,7 @@ impl std::fmt::Debug for Gate {
 }
 
 impl Gate {
-    /// Starts the gate's server in front of the Playwright server named `upstream_key`.
+    /// Starts the gate's server in front of the backend named `upstream_key`.
     pub fn start(
         upstream: Arc<dyn Upstream>,
         policy: Policy,
@@ -907,10 +714,9 @@ impl Gate {
             calls: AtomicU64::new(0),
             generation: AtomicU64::new(0),
             next_id: AtomicU64::new(100),
+            #[cfg(test)]
+            selectors_through: AtomicBool::new(false),
             timeout,
-            overlay_token: overlay::new_token(),
-            overlay_hold_ms: AtomicU64::new(overlay::DEFAULT_HOLD_MS),
-            overlay_timeout_ms: AtomicU64::new(overlay::CALL_TIMEOUT_MS),
         });
         let secret = format!("{:032x}", rand::random::<u128>());
         let server = http::HttpServer::start(inner.clone(), secret.clone())?;
@@ -986,25 +792,11 @@ impl Gate {
         result
     }
 
-    /// Removes the browser files of this Mono (its server stopped): they are page content.
+    /// Removes the browser files of this Mono (its gate stopped): they are page content.
     pub fn clear_output(&self) {
         if let Some(workspace) = self.inner.workspace() {
             output::clear(&workspace.output_dir);
         }
-    }
-
-    /// Sets how long the action overlay is held before the action (tests use a short one).
-    pub fn set_overlay_hold(&self, hold: Duration) {
-        self.inner
-            .overlay_hold_ms
-            .store(hold.as_millis() as u64, Ordering::Relaxed);
-    }
-
-    /// Sets how long one overlay call may take (tests use a short one).
-    pub fn set_overlay_timeout(&self, timeout: Duration) {
-        self.inner
-            .overlay_timeout_ms
-            .store(timeout.as_millis() as u64, Ordering::Relaxed);
     }
 
     /// Applies a new policy to the calls that follow, keeping the server.
@@ -1012,8 +804,8 @@ impl Gate {
         self.inner.lock_state().policy = policy;
     }
 
-    /// Applies the Mono's current trust level and blocked origins, and which Playwright server
-    /// is behind the gate (a restart gives a new key). Takes effect on the next call.
+    /// Applies the Mono's current trust level and blocked origins, and which backend is behind the
+    /// gate (a new one gives a new key). Takes effect on the next call.
     pub fn configure(&self, policy: Policy, upstream_key: &str, upstream: Arc<dyn Upstream>) {
         let mut state = self.inner.lock_state();
         state.policy = policy;
@@ -1047,6 +839,19 @@ impl Gate {
     /// declared and suggested in the turn before is forgotten (see [`defense`]).
     pub fn begin_turn(&self, route: &str, request: &str) {
         self.inner.begin_turn(route, request);
+    }
+
+    /// Tests that stand in for the extension upstream (which asks through the approval queue):
+    /// shows a card on `route` through the gate's own channel and waits for the answer.
+    #[cfg(test)]
+    pub(crate) fn ask_for_test(&self, route: &str, request: ApprovalRequest) -> Result<(), String> {
+        self.inner.ask(route, request)
+    }
+
+    /// Tests whose scripted page resolves selectors itself: recipe steps keep their selectors.
+    #[cfg(test)]
+    pub(crate) fn pass_selectors_through(&self) {
+        self.inner.selectors_through.store(true, Ordering::SeqCst);
     }
 
     /// Tests of other features: the route's turn is never judged by the taint rule.
@@ -1117,8 +922,8 @@ impl Inner {
         })
     }
 
-    /// The upstream tools this level offers (code tools get an `explanation` argument), plus the
-    /// approval tool where there is something to approve.
+    /// The upstream tools this level offers, plus the approval tool where there is something to
+    /// approve.
     fn list_tools(&self) -> Result<Vec<Value>, String> {
         let policy = self.lock_state().policy.clone();
         let upstream = self.upstream_rpc("tools/list", json!({}))?;
@@ -1141,31 +946,8 @@ impl Inner {
                 )
                 .into();
             }
-            if tool["name"]
-                .as_str()
-                .is_some_and(|n| CODE_TOOLS.contains(&n))
-            {
-                tool["inputSchema"]["properties"]["explanation"] = json!({
-                    "type": "string",
-                    "description": "Why this code must run, in plain words. The user reads it next to the code before allowing it.",
-                });
-                let required = tool["inputSchema"]["required"]
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default();
-                if !required.iter().any(|r| r == "explanation") {
-                    let mut required = required;
-                    required.push("explanation".into());
-                    tool["inputSchema"]["required"] = Value::Array(required);
-                }
-                let description = tool["description"].as_str().unwrap_or("").to_owned();
-                tool["description"] = format!(
-                    "{description} Needs the user's approval: they see your code and `explanation`."
-                )
-                .into();
-            }
         }
-        if policy.trust != BrowserTrust::ReadOnly {
+        if policy.trust != BrowserLevel::ReadOnly {
             tools.push(approval_tool_definition());
             tools.push(defense::declare_tool_definition());
         }
@@ -1182,50 +964,32 @@ impl Inner {
             .clone()
     }
 
-    /// The policy's decision for one call, asking the user when it says so. `Err` is the reply
-    /// to give the caller instead of running the call.
-    fn authorize(&self, route: &str, name: &str, args: &Value) -> Result<Authorized, Value> {
-        let (policy, page_url) = {
-            let state = self.lock_state();
-            (state.policy.clone(), state.page.clone())
-        };
-        let verdict = policy.evaluate(name, args, &page_url);
-        // The extension upstream raises its own taint and injection asks (spec 7.6).
-        let verdict = if policy.extension {
-            verdict
-        } else {
-            self.apply_taint(route, name, args, &page_url, verdict)
-        };
-        match verdict {
+    /// The policy's decision for one call. `Err` is the reply to give the caller instead of
+    /// running the call. The extension upstream decides what needs the user's answer itself
+    /// (spec 7.6) and asks through the approval queue, so the gate only denies here.
+    fn authorize(&self, name: &str, args: &Value) -> Result<(), Value> {
+        let policy = self.lock_state().policy.clone();
+        match policy.evaluate(name, args) {
             Verdict::Deny(reason) => return Err(tool_text(reason, true)),
-            Verdict::Ask(request) => {
-                self.ask(route, request)
-                    .map_err(|reason| tool_text(reason, true))?;
-                self.allowed(route, name, args, &page_url);
-                // The wait can be long: the user may have lowered the level meanwhile.
-                let now = self.lock_state().policy.clone();
-                if let Verdict::Deny(reason) = now.evaluate(name, args, &page_url) {
-                    return Err(tool_text(reason, true));
-                }
-                if name == APPROVAL_TOOL {
-                    return Ok(Authorized::Answer(tool_text(
-                        "Approved by the user. You may do this action now.",
-                        false,
-                    )));
-                }
+            // The policy never asks any more; a verdict that would is a refusal, not a prompt.
+            Verdict::Ask(_) => {
+                return Err(tool_text(
+                    "This action needs an approval the gate can not ask for.",
+                    true,
+                ))
             }
             Verdict::Allow => {}
         }
-        if name == "browser_press_key" && policy.trust == BrowserTrust::ReadOnly {
+        if name == "browser_press_key" && policy.trust == BrowserLevel::ReadOnly {
             self.focus_guard()
                 .map_err(|reason| tool_text(reason, true))?;
         }
-        Ok(Authorized::Forward)
+        Ok(())
     }
 
     /// Level 1 scrolls with keys, and a key moves the value of a focused select, slider, radio,
     /// listbox or menu. So before the key goes out, the page is probed for the focused element
-    /// (`[active]` in Playwright's snapshot): a form control or widget refuses the key, and so
+    /// (`[active]` in the snapshot): a form control or widget refuses the key, and so
     /// does a page whose focus can not be read. A page with nothing focused is fine to scroll.
     fn focus_guard(&self) -> Result<(), String> {
         const UNKNOWN: &str = "browser_press_key is refused at Level 1: the focused element of the page could not be read, and a key could change a control. Use browser_mouse_wheel if it is listed, or tell the user.";
@@ -1251,10 +1015,9 @@ impl Inner {
         }
     }
 
-    /// Sweeps the output folder; with the extension backend the pictures of audit rows stay.
+    /// Sweeps the output folder; the pictures of audit rows stay.
     fn sweep_output(&self, workspace: &Workspace) -> usize {
-        let extension = self.lock_state().policy.extension;
-        workspace.sweep(extension)
+        workspace.sweep(true)
     }
 
     /// The app session id a route was issued for (0: none).
@@ -1295,30 +1058,15 @@ impl Inner {
         if recipe::tools::is_recipe_tool(name) {
             return self.recipe_tool(route, name, &args);
         }
-        match self.authorize(route, name, &args) {
-            Err(reply) => return reply,
-            Ok(Authorized::Answer(reply)) => {
-                // An approval the Mono asked for is part of the task it did: a recording keeps
-                // its category (never its text) to make the step it guards ask at least as much.
-                if let Some(workspace) = self.workspace() {
-                    let page = self.lock_state().page.clone();
-                    self.trace(route, &workspace, name, &args, &page, &reply);
-                }
-                return reply;
-            }
-            Ok(Authorized::Forward) => {}
+        if let Err(reply) = self.authorize(name, &args) {
+            return reply;
         }
         let mut forwarded = args;
-        // Never sent on: Playwright does not know it.
+        // Never sent on: the backend does not know it.
         let duplicate_wanted = forwarded
             .as_object_mut()
             .and_then(|map| map.remove(tabs::DUPLICATE_FLAG))
             .is_some_and(|flag| flag == true);
-        if CODE_TOOLS.contains(&name) {
-            if let Some(map) = forwarded.as_object_mut() {
-                map.remove("explanation");
-            }
-        }
         let workspace = self.workspace();
         if let Some(workspace) = &workspace {
             // A file the Mono names goes into the private output folder, never elsewhere.
@@ -1385,7 +1133,7 @@ impl Inner {
             (state.policy.clone(), state.page.clone())
         };
         // The same untrusted-content check as the agent's own call gets, but never asked.
-        let verdict = policy.evaluate(name, args, &page_url);
+        let verdict = policy.evaluate(name, args);
         let verdict = self.apply_taint(route, name, args, &page_url, verdict);
         verdict == Verdict::Allow
     }
@@ -1444,7 +1192,7 @@ impl Inner {
 
     /// The call as the agent made it, with the tab book kept in step.
     fn as_asked(&self, name: &str, forwarded: &Value, url: &str) -> TabOutcome {
-        let result = self.act(name, forwarded, false);
+        let result = self.forward(name, forwarded);
         if result["isError"] != true {
             let mut book = self.lock_tabs();
             let list = tabs::parse_tabs(&result_text(&result));
@@ -1560,7 +1308,7 @@ impl Inner {
                 performed,
             });
         }
-        let result = self.act(name, forwarded, false);
+        let result = self.forward(name, forwarded);
         self.lock_tabs().touch_current();
         performed.push((name.to_owned(), forwarded.clone()));
         Some(TabOutcome {
@@ -1607,76 +1355,7 @@ impl Inner {
         ))
     }
 
-    /// [`Inner::forward`] with the action overlay around it: the call was authorized already. The
-    /// overlay is drawn only when the Mono's setting is on and the call has an element to show,
-    /// held for a moment, and removed whatever the action did. `trusted` is a recipe step (see
-    /// [`overlay::target_of`]). The drawing is a gate call to the server, not a tool call of the
-    /// agent: it is not audited, traced, approved or counted as an action, and a failure of it
-    /// is ignored.
-    fn act(&self, name: &str, forwarded: &Value, trusted: bool) -> Value {
-        let target = if self.lock_state().policy.show_actions {
-            overlay::target_of(name, forwarded, trusted)
-        } else {
-            None
-        };
-        let Some(target) = target else {
-            return self.forward(name, forwarded);
-        };
-        let started = std::time::Instant::now();
-        let drawn = self.draw_overlay(&target);
-        if drawn {
-            // The draw call itself takes time (the server settles after an evaluate), and that
-            // time counts toward the hold: the user sees the box for about `hold` in all.
-            let hold = Duration::from_millis(self.overlay_hold_ms.load(Ordering::Relaxed));
-            if let Some(left) = hold.checked_sub(started.elapsed()) {
-                std::thread::sleep(left);
-            }
-        }
-        let result = self.forward(name, forwarded);
-        if drawn {
-            self.remove_overlay();
-        }
-        result
-    }
-
-    /// One `browser_evaluate` of the overlay, with its own short timeout (the caller holds the run
-    /// lock, and a stuck page must not hold it for the gate's whole approval timeout). `None`
-    /// is a failure or a timeout: the answer, if it comes later, is dropped.
-    fn overlay_call(&self, arguments: Value) -> Option<Value> {
-        let session = self.ensure_session().ok()?;
-        let upstream = self.lock_state().upstream.clone();
-        let message = json!({
-            "jsonrpc": "2.0",
-            "id": self.next_id.fetch_add(1, Ordering::SeqCst),
-            "method": "tools/call",
-            "params": {"name": "browser_evaluate", "arguments": arguments},
-        });
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(upstream.post(&session.key, session.id.as_deref(), &message));
-        });
-        let wait = Duration::from_millis(self.overlay_timeout_ms.load(Ordering::Relaxed));
-        match rx.recv_timeout(wait) {
-            Ok(Ok((Some(reply), _))) if reply.get("error").is_none() => {
-                Some(reply["result"].clone())
-            }
-            _ => None,
-        }
-    }
-
-    /// Whether the overlay was drawn. Any failure is `false`: the action goes on without it.
-    fn draw_overlay(&self, target: &str) -> bool {
-        self.overlay_call(overlay::draw_args(&self.overlay_token, target))
-            .is_some_and(|result| result["isError"] != true && overlay::drew(&result_text(&result)))
-    }
-
-    /// Takes the drawing away with one page-level call. A drawing it can not reach (an iframe, a
-    /// page that changed) is removed by the timer the draw script set in the page.
-    fn remove_overlay(&self) {
-        let _ = self.overlay_call(overlay::remove_args(&self.overlay_token, None));
-    }
-
-    /// One call to the Playwright server, after the policy allowed it. Remembers the page.
+    /// One call to the backend, after the policy allowed it. Remembers the page.
     fn forward(&self, name: &str, forwarded: &Value) -> Value {
         // Opening a page makes it this session's page at once, so the next write is checked
         // against it even when the result does not repeat the address.
@@ -1737,6 +1416,41 @@ impl Inner {
         let _ = MonoBrowserStore::at(workspace.database.clone()).record(&workspace.mono_id, &entry);
     }
 
+    /// Turns the selector a recipe step puts in `target` into the ref of the element it names
+    /// (spec 15.5): the page is snapshotted and the selector matched against it. `Err` is what
+    /// the step gets instead of running: the answer of a locator that found nothing, or several.
+    fn with_refs(&self, tool: &str, mut args: Value) -> Result<Value, runner::ToolOutput> {
+        #[cfg(test)]
+        if self.selectors_through.load(Ordering::SeqCst) {
+            return Ok(args);
+        }
+        let Some(selector) = refs::selector_of(&args).map(str::to_owned) else {
+            return Ok(args);
+        };
+        let failed = |text: String| runner::ToolOutput {
+            text,
+            is_error: true,
+        };
+        let snapshot = self.forward("browser_snapshot", &json!({}));
+        let text = result_text(&snapshot);
+        if snapshot["isError"] == true {
+            return Err(failed(text));
+        }
+        let forest = recipe::snapshot::parse(recipe::snapshot::snapshot_body(&text));
+        match refs::locate(&forest, &selector) {
+            refs::Located::Ref(found) => {
+                args["target"] = json!(found);
+                Ok(args)
+            }
+            refs::Located::Multiple(count) => Err(failed(format!(
+                "Error: strict mode violation: locator resolved to {count} elements for {selector}"
+            ))),
+            refs::Located::Missing | refs::Located::Unsupported => Err(failed(format!(
+                "Error: \"{selector}\" does not match any elements ({tool})."
+            ))),
+        }
+    }
+
     /// A `recipe_*` tool call. The browser-using ones (`run`, `record`) hold the run lock.
     fn recipe_tool(&self, route: &str, name: &str, args: &Value) -> Value {
         let Some(workspace) = self.workspace() else {
@@ -1745,10 +1459,7 @@ impl Inner {
         let trust = self.lock_state().policy.trust;
         if !recipe::tools::offered(name, trust) {
             return tool_text(
-                format!(
-                    "{name} is not available at this browser level (Level {}).",
-                    trust.level()
-                ),
+                format!("{name} is not available at this browser level (read only)."),
                 true,
             );
         }
@@ -1885,7 +1596,7 @@ impl Inner {
         }
     }
 
-    /// One request to the Playwright server, starting a session first when there is none. A
+    /// One request to the backend, starting a session first when there is none. A
     /// refused request (HTTP 400 or 404: a stale session) is repeated once on a new session;
     /// any other failure is not, because the call may have run.
     fn upstream_rpc(&self, method: &str, params: Value) -> Result<Value, String> {
@@ -1904,7 +1615,7 @@ impl Inner {
                     return match reply.get("error") {
                         Some(error) => Err(error["message"]
                             .as_str()
-                            .unwrap_or("The browser server refused the request.")
+                            .unwrap_or("The browser backend refused the request.")
                             .to_owned()),
                         None => Ok(reply["result"].clone()),
                     }
@@ -2060,13 +1771,6 @@ struct TabOutcome {
     performed: Vec<(String, Value)>,
 }
 
-enum Authorized {
-    /// Run the call.
-    Forward,
-    /// The answer is already known (an approved `browser_request_approval`).
-    Answer(Value),
-}
-
 /// The text parts of a tool result, joined.
 fn result_text(result: &Value) -> String {
     result["content"]
@@ -2087,11 +1791,15 @@ struct GateHost<'a> {
 }
 impl runner::Host for GateHost<'_> {
     fn call(&self, tool: &str, args: Value) -> Result<runner::ToolOutput, String> {
-        let result = match self.inner.authorize(self.route, tool, &args) {
-            Err(reply) => return Err(result_text(&reply)),
-            Ok(Authorized::Answer(reply)) => reply,
-            Ok(Authorized::Forward) => self.inner.act(tool, &args, true),
+        if let Err(reply) = self.inner.authorize(tool, &args) {
+            return Err(result_text(&reply));
+        }
+        // A recipe names elements by selector; the browser takes refs (see `refs`).
+        let args = match self.inner.with_refs(tool, args) {
+            Ok(args) => args,
+            Err(output) => return Ok(output),
         };
+        let result = self.inner.forward(tool, &args);
         // A page a recipe step reads is scanned like one the agent reads, but it does not taint
         // the turn until the run's output is read (the user approved the steps).
         self.inner
@@ -2104,7 +1812,7 @@ impl runner::Host for GateHost<'_> {
     fn page_url(&self) -> String {
         self.inner.lock_state().page.clone()
     }
-    fn trust(&self) -> BrowserTrust {
+    fn trust(&self) -> BrowserLevel {
         self.inner.lock_state().policy.trust
     }
     fn blocked_origins(&self) -> Vec<String> {

@@ -90,22 +90,8 @@ impl Inner {
                 action: format!("{name} {}", short_args(args)).trim().to_owned(),
                 url: page_url.to_owned(),
                 details: notice,
-                code: None,
-                explanation: String::new(),
             }),
         }
-    }
-
-    /// After the user allowed a call: an address it opened is allowed for the rest of the turn,
-    /// and an undeclared change they approved makes a following click ask.
-    pub(super) fn allowed(&self, route: &str, name: &str, args: &Value, page_url: &str) {
-        let action = defense::Action::describe(name, args, page_url);
-        self.with_turn(route, |turn| {
-            if let Some(opens) = &action.opens {
-                turn.allow_url(opens);
-            }
-            turn.note_approved(&action);
-        });
     }
 
     /// Notes the page, and for a reply with page content: marks the turn as having read untrusted
@@ -146,29 +132,10 @@ impl Inner {
         if was_flagged {
             return Ok(hits);
         }
-        if self.lock_state().policy.extension {
-            // Reading stays allowed; every write of the run asks (category `injection`).
-            let upstream = self.lock_state().upstream.clone();
-            upstream.injection_found(self.session_of(route));
-            return Ok(hits);
-        }
-        let request = ApprovalRequest {
-            category: Category::Injection,
-            action: format!("Let the Mono read what {tool} returned"),
-            url: page,
-            details: format!(
-                "Triggered after reading untrusted content: a prompt injection pattern was found ({}).\nPage text: \"{}\"\nAllow: the Mono sees the page, and every action it takes for the rest of this turn asks you first. Deny: the page is withheld from the Mono.",
-                hits.iter().map(|h| h.rule.as_str()).collect::<Vec<_>>().join(", "),
-                hits[0].snippet
-            ),
-            code: None,
-            explanation: String::new(),
-        };
-        match self.ask(route, request) {
-            Ok(()) => Ok(hits),
-            Err(reason) if reason == NO_CHANNEL => Ok(hits),
-            Err(reason) => Err(reason),
-        }
+        // Reading stays allowed; every write of the run asks (category `injection`).
+        let upstream = self.lock_state().upstream.clone();
+        upstream.injection_found(self.session_of(route));
+        Ok(hits)
     }
 
     /// What the agent gets for a forwarded call: page content (and any error text, which can quote
@@ -273,8 +240,6 @@ impl Inner {
                 defense::safe_snippet(&suspect.0, 80),
                 suspect.1
             ),
-            code: None,
-            explanation: String::new(),
         };
         self.ask(route, request)
             .map_err(|reason| format!("The recipe was not run. {reason}"))
@@ -287,7 +252,7 @@ impl Inner {
             let state = self.lock_state();
             (state.policy.trust, state.page.clone())
         };
-        if trust == BrowserTrust::ReadOnly {
+        if trust == BrowserLevel::ReadOnly {
             return tool_text(
                 "At Level 1 the browser can not act, so there is nothing to declare.",
                 true,
@@ -324,8 +289,6 @@ impl Inner {
                     action: format!("Declare an action: {}", intent.describe()),
                     url: page.clone(),
                     details: defense::notice(&why, turn),
-                    code: None,
-                    explanation: String::new(),
                 }
             });
             let allowed = self.ask(route, request).is_ok();
@@ -414,8 +377,6 @@ impl Inner {
                 if seen_before { ", done before" } else { "" },
                 params.join("\n")
             ),
-            code: None,
-            explanation: String::new(),
         };
         let Some(me) = self.me.upgrade() else {
             return;

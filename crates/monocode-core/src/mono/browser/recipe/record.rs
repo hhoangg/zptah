@@ -37,11 +37,14 @@ use super::model::{
 use super::risk;
 use super::snapshot::{self, Node};
 use crate::mono::browser::gate::{is_finance_url, Category};
-use crate::mono::browser::{is_scroll_key, PLAYWRIGHT_MCP_VERSION};
+use crate::mono::browser::is_scroll_key;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
+
+/// What a new recipe says it was recorded on.
+const RECORDED_ON: &str = "zptah-browser";
 
 /// Calls kept per session; older ones are dropped.
 pub const MAX_ENTRIES: usize = 120;
@@ -944,7 +947,7 @@ pub fn compile(
             .collect(),
         steps: collapsed,
         risk,
-        playwright_mcp: PLAYWRIGHT_MCP_VERSION.to_owned(),
+        recorded_on: RECORDED_ON.to_owned(),
         stats: Stats::default(),
     };
     for spec in &draft.params {

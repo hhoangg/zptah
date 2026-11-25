@@ -1,5 +1,5 @@
 use super::*;
-use crate::mono::browser::{session_color, MonoBrowser};
+use crate::mono::browser::MonoBrowser;
 use crate::mono::COLORS_MONO;
 
 fn mono(id: &str, name: &str, color: u32, mascot: &str, profile: &str) -> Mono {
@@ -10,7 +10,6 @@ fn mono(id: &str, name: &str, color: u32, mascot: &str, profile: &str) -> Mono {
         mascot: mascot.into(),
         browser: Some(MonoBrowser {
             enabled: true,
-            use_extension: true,
             profile_dir: profile.into(),
             blocked_origins: vec!["https://Bank.example/path".into(), "bank.example".into()],
             allowed_origins: vec!["shop.example".into(), "*.bad".into()],
@@ -73,12 +72,6 @@ fn grey_is_for_low_chroma_colors_only() {
     assert_eq!(group_color(0x39c363), ChromeGroupColor::Green);
 }
 
-#[test]
-fn the_old_session_color_names_follow_the_same_mapping() {
-    assert_eq!(session_color(0xd93025), "red");
-    assert_eq!(session_color(0x808080), "grey");
-}
-
 // ---- entries ----
 
 #[test]
@@ -97,7 +90,7 @@ fn an_entry_carries_name_emoji_color_level_and_normalized_origins() {
     assert!(entry.cursor);
 
     m.badge_emoji = Some("\u{1F984}".into());
-    m.browser.as_mut().unwrap().trust = BrowserTrust::ReadOnly;
+    m.browser.as_mut().unwrap().trust = BrowserLevel::ReadOnly;
     m.browser.as_mut().unwrap().show_actions = false;
     let (_, entry) = entry_for(&m).unwrap();
     assert_eq!(entry.emoji, "\u{1F984}");
@@ -106,11 +99,8 @@ fn an_entry_carries_name_emoji_color_level_and_normalized_origins() {
 }
 
 #[test]
-fn a_mono_that_does_not_use_the_extension_has_no_entry() {
+fn a_mono_with_its_browser_off_has_no_entry() {
     let mut m = mono(MIRA, "Mira", 0xd93025, "frog", "Profile 1");
-    m.browser.as_mut().unwrap().use_extension = false;
-    assert!(entry_for(&m).is_none());
-    m.browser.as_mut().unwrap().use_extension = true;
     m.browser.as_mut().unwrap().enabled = false;
     assert!(entry_for(&m).is_none());
     m.browser.as_mut().unwrap().enabled = true;
@@ -142,9 +132,9 @@ fn the_book_holds_the_roster_of_each_profile_apart() {
     assert!(book.upsert(&moved));
     assert!(book.roster_for("Profile 1").is_empty());
     assert_eq!(book.roster_for("Profile 2").len(), 2);
-    // A Mono that stops using the extension is dropped.
+    // A Mono that switches its browser off is dropped.
     let mut off = moved.clone();
-    off.browser.as_mut().unwrap().use_extension = false;
+    off.browser.as_mut().unwrap().enabled = false;
     assert!(book.upsert(&off));
     assert_eq!(book.roster_for("Profile 2").len(), 1);
 }
@@ -313,7 +303,7 @@ mod sending {
         assert_eq!(auth.roster[0].level, AccessLevel::Act);
         // The level goes down, and the extension does not answer in time.
         let mut read_only = act;
-        read_only.browser.as_mut().unwrap().trust = BrowserTrust::ReadOnly;
+        read_only.browser.as_mut().unwrap().trust = BrowserLevel::ReadOnly;
         book.set_monos(&[read_only]);
         assert!(!book.publish_timeout(&manager, Duration::from_millis(50)));
         // Nothing else changed in the book, yet the next publish sends it again.

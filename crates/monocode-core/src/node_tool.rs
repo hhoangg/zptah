@@ -3,9 +3,8 @@
 //! A GUI app started from the Dock or Finder does not inherit the login shell's PATH, so a node
 //! from nvm, fnm, volta, asdf, mise or a custom prefix is invisible to a plain PATH lookup. The
 //! lookup order is: the override from Settings, the login shell's own `command -v npx`, the
-//! well-known install locations, then PATH. Everything that spawns `npx` or `node` (the browser
-//! prerequisite check and the Playwright MCP server) goes through [`resolve`] / [`cached`] and
-//! puts [`NodeTools::path_with`] in the child's PATH.
+//! well-known install locations, then PATH. Everything that spawns `npx` or `node` goes through
+//! [`resolve`] / [`cached`] and puts [`NodeTools::path_with`] in the child's PATH.
 //!
 //! All I/O goes through [`Probe`], so the order and the parsing are tested with a fake file
 //! system, home, environment and shell. The real shell runs only in [`resolve`], which blocks

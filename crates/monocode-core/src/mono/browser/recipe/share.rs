@@ -39,6 +39,8 @@ pub const MAX_FILE_BYTES: usize = 256 * 1024;
 /// Where a recipe that came from outside came from (the value of `mark_outside`).
 pub const SOURCE_IMPORT: &str = "import";
 pub const SOURCE_SHARED: &str = "shared";
+/// A recipe recorded before the zptah Browser: it needs a dry run on the new backend (spec 15.5).
+pub const SOURCE_MIGRATED: &str = "migrated";
 
 /// The export file: a recipe with its origin, version and content hash, and nothing from its
 /// runs (no stats, no parameter values).
