@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
+pub mod connect;
 pub mod copy;
 pub mod defense;
 pub mod gate;

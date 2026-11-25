@@ -488,6 +488,20 @@ fn main() {
     app_log::init();
     // Kills login CLIs an earlier crashed run left behind and starts recording new ones.
     monocode_core::process::guard::init(&database.with_file_name("orphan-guard"));
+    // The browser link layer: hashes this executable before anything can connect, then listens for
+    // the zptah Browser extension's host for the whole app lifetime (kept in a global; `shutdown`
+    // below releases the socket and lock).
+    {
+        let data_dir = database
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
+        monocode_core::mono::browser::connect::start_app(
+            &database,
+            &data_dir,
+            notifications::updater::version(),
+        );
+    }
     let platform = gpui_platform::current_platform(false);
     let title_raster = particle_text::GlyphRaster(platform.text_system());
     gpui::Application::with_platform(platform)
@@ -514,6 +528,7 @@ fn main() {
             // A quit that macOS starts (Dock, logout) never reaches `quit`.
             cx.on_app_quit(|_| {
                 monocode_core::process::guard::kill_all();
+                monocode_core::mono::browser::connect::shutdown();
                 async {}
             })
             .detach();

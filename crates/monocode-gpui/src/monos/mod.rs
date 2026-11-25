@@ -1,6 +1,9 @@
 //! Mono workspaces: one runtime per identity, shared by the rail, title tabs,
 //! overview, settings and floating windows.
 pub(crate) mod avatar;
+mod browser_connect;
+#[cfg(test)]
+mod browser_connect_tests;
 #[cfg(test)]
 mod browser_tests;
 mod browser_ui;
