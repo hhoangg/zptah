@@ -6,10 +6,20 @@
 export const NAVIGATION_FALLBACK = "/index.html";
 
 /**
- * Navigations that must reach the network and never get the shell: the API and the relay. A response of
- * either is private (cookies, ciphertext frames) and is never stored in Cache Storage.
+ * Navigations that must reach the network and never get the shell: the API and the relay (a response of either is
+ * private, cookies and ciphertext frames, and is never stored in Cache Storage), and the landing page. `/` is the
+ * landing page when the request has no session cookie and `/home` always is, and only the Worker can tell: a cached
+ * shell must not hide the landing from a signed-out visitor. The installed app starts at `/app` (the manifest), which
+ * is cached like every other route. `/landing/` holds the landing's own files.
  */
-export const NAVIGATION_DENYLIST: readonly RegExp[] = [/^\/api\//, /^\/relay\//];
+export const NAVIGATION_DENYLIST: readonly RegExp[] = [
+  /^\/api\//,
+  /^\/relay\//,
+  // Workbox matches a denylist entry against pathname + search, so each landing entry allows a query string (`/?utm_source=x`).
+  /^\/(\?.*)?$/,
+  /^\/home\/?(\?.*)?$/,
+  /^\/landing(\/|\?|$)/,
+];
 
 /**
  * Runtime caching routes. None, on purpose: the only things in Cache Storage are the precached build
@@ -17,9 +27,15 @@ export const NAVIGATION_DENYLIST: readonly RegExp[] = [/^\/api\//, /^\/relay\//]
  */
 export const RUNTIME_CACHE_ROUTES: readonly { readonly pattern: RegExp; readonly handler: string }[] = [];
 
-/** True when a navigation to `pathname` may be answered with the cached shell. */
-export function isShellNavigation(pathname: string): boolean {
-  return !NAVIGATION_DENYLIST.some((pattern) => pattern.test(pathname));
+/** True when a navigation to `pathname` (plus `search`, as Workbox matches it) may be answered with the cached shell. */
+export function isShellNavigation(pathname: string, search = ""): boolean {
+  const target = pathname + search;
+  return !NAVIGATION_DENYLIST.some((pattern) => pattern.test(target));
+}
+
+/** True for a navigation to exactly `/` (any query). The Worker decides what it is; see rootNavigation.ts. */
+export function isRootNavigation(pathname: string): boolean {
+  return pathname === "/";
 }
 
 /** True for paths that must never be served from or written to a cache by the service worker. */

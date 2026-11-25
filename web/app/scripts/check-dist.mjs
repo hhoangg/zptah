@@ -52,6 +52,29 @@ if (!existsSync(sw)) {
   }
 }
 
+// The landing page (web/landing, built into dist/client/landing by vite-plugins/landing.ts): the Worker
+// serves it at `/` without a session cookie and at `/home`. It runs under the same CSP as the app, so it must have
+// no inline script or style element and relative (production) app links.
+const landingDir = join(client, "landing");
+const landingIndex = join(landingDir, "index.html");
+if (!existsSync(landingIndex)) {
+  problems.push("dist/client/landing/index.html is missing (vite-plugins/landing.ts builds it during vite build)");
+} else {
+  const landing = readFileSync(landingIndex, "utf8");
+  if (!landing.includes('<meta name="zptah-page" content="landing">')) problems.push("landing/index.html lacks the zptah-page meta (worker/test/landing.test.ts relies on it)");
+  if (/<script(?![^>]*\ssrc=)(?![^>]*type="application\/json")[^>]*>/.test(landing)) problems.push("landing/index.html has an inline script (blocked by script-src 'self')");
+  if (/<style[\s>]/.test(landing)) problems.push("landing/index.html has an inline <style> element (blocked by style-src 'self')");
+  if (/noindex/.test(landing)) problems.push("landing/index.html is the beta build (noindex): build with --target prod");
+  if (!landing.includes('href="/login"') || !landing.includes('href="/register"')) problems.push("landing/index.html lacks the relative /login and /register links");
+  if (landing.includes("https://zptah.app/login")) problems.push("landing/index.html has absolute app links (beta target)");
+  for (const file of ["landing.css", "js/main.js", "js/boot.js", "app-icon.png", "og.png"]) {
+    if (!existsSync(join(landingDir, file))) problems.push(`dist/client/landing/${file} is missing`);
+  }
+}
+for (const file of ["robots.txt", "sitemap.xml"]) {
+  if (!existsSync(join(client, file))) problems.push(`dist/client/${file} is missing`);
+}
+
 // vaul and Sonner insert their CSS with a <style> element at runtime, which style-src 'self' blocks. Their stylesheets
 // must be bundled into a served .css file instead (ui/drawer.tsx, ui/sonner.tsx).
 const cssText = readdirSync(client, { recursive: true, withFileTypes: true })

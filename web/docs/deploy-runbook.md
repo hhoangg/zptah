@@ -79,6 +79,57 @@ the Cloudflare D1 docs do not state. On the first internal deploy, check on the 
 
 If either row is missing or doubled, treat the deploy as bad and roll back.
 
+## Landing page and its beta host
+
+The public landing page lives in `web/landing/` (plain HTML templates in `src/html`, CSS in `src/styles`, vanilla ES modules in
+`src/js`, no dependencies; `node landing/build.mjs --target prod|beta`). Every `vite build` of the app runs it
+(`app/vite-plugins/landing.ts`) and writes it to `app/dist/client/landing/`, plus `robots.txt` and `sitemap.xml` at the root of
+`app/dist/client`, so it ships inside the production Worker's assets however the app is built (the app build script, the e2e
+harness, CI, the official deploy). Canonical, `og:*` and the sitemap use the `RP_ORIGIN` of `wrangler.jsonc`.
+
+How production serves it (`worker/src/landing.ts`, `run_worker_first` of `wrangler.jsonc` lists `/`, `/home`, `/home/`):
+
+- `GET /` without a `__Host-mc_session` cookie: the landing page. With the cookie: the SPA, exactly as before. Presence check only: no
+  D1 call, no validation (a stale cookie gets the SPA, whose auth guard sends it to `/login`). The cookie is `SameSite=Strict`, so a
+  signed-in user who arrives from another site (a link in chat or search) sees the landing page once and uses "Sign in" or "Open web app".
+- `GET /home`: always the landing page. Both answers carry `Vary: Cookie` and `Cache-Control: no-store`; HEAD behaves the same.
+- The PWA `start_url` is `/app` (redirects to the last place, or to `/login` when signed out); `scope` and `id` stay `/`.
+- Service worker: `/`, `/home` and `/landing/` are on the navigation denylist (queries included) and precaching has
+  `directoryIndex: ""`, so a signed-out visitor with the new service worker gets the landing page. Navigations to exactly `/` go
+  network first, and fall back to the precached shell when offline, so an app installed with the old `start_url` `/` still opens
+  offline. Online, such an installed app is sent from the landing page to `/app` by `landing/src/js/boot.js` (standalone display mode).
+- Transition after the first deploy: the service worker already on users' devices has the old routing (default `directoryIndex`,
+  `registerType: "prompt"`: a new worker waits until the user taps Reload or every tab is closed). Until the new worker activates, a
+  returning visitor with the old worker gets the cached app shell at `/` (which sends a signed-out user to `/login`) instead of the
+  landing page. New visitors and visitors without a service worker see the landing page at once. This is expected, not a bug.
+- `robots.txt` and `sitemap.xml` are generated from `landing/src/robots.txt` and the build host. robots disallows `/admin`, `/api/`,
+  `/app` (exactly and `/app/`, not `/apple-touch-icon.png`), `/d/`, `/desktops`, `/pair`, `/relay/`, `/settings`, and the login,
+  register and recover forms (nothing to index). It keeps `/install` (the public install guide) and `/landing/` (the page's CSS and
+  JS) crawlable. The sitemap lists `https://zptah.app/` only; `/home` is the same page and the canonical link points at `/`.
+- The page runs under the same CSP as the app (no inline script or style, no HTML string sinks because of Trusted Types);
+  `landing/test/build.test.mjs` and `app/scripts/check-dist.mjs` enforce that.
+
+Nothing of this is live until the Worker is deployed with the normal procedure above (`pnpm deploy:official` after the PR is merged).
+`vite dev` does not build the landing page (`/landing/` falls back to the SPA there); use `wrangler dev` on a built app to see it.
+
+### Landing beta (`beta.zptah.app`)
+
+A separate, assets-only Worker `zptah-landing-beta` (`landing/wrangler.beta.jsonc`) serves the beta build for review before the
+production Worker is deployed. It binds nothing (no D1, R2, Durable Object, var or secret) and has no script, so it cannot reach
+production data. The beta build differs from the production build only by flags: Sign in, Get started and Open web app point to the
+absolute `https://zptah.app/login` and `/register`, the page has `<meta name="robots" content="noindex, nofollow">`, `robots.txt` is
+`Disallow: /`, and `_headers` carries the production CSP plus `X-Robots-Tag: noindex, nofollow`.
+
+```bash
+cd web
+pnpm landing:deploy:beta --dry-run   # builds landing/dist/beta, wrangler dry run
+pnpm landing:deploy:beta             # real deploy (maintainer Mac, wrangler login; refuses when CI is set)
+```
+
+The first deploy creates the custom domain `beta.zptah.app` on the `zptah.app` zone (DNS and certificate are created by wrangler).
+Remove it with `wrangler delete --name zptah-landing-beta` (from `web/worker`); it never touches `monoptah-web`.
+When the landing page is approved: merge the PR, deploy production as usual, and delete the beta Worker if it is no longer needed.
+
 ## VAPID key rotation
 
 Only during a rotation, the Worker also reads a previous key pair, so subscriptions made with the old key keep

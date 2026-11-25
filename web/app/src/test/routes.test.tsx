@@ -332,8 +332,10 @@ describe("route stubs", () => {
     // both have their own tests above.
     // The /settings layout renders its pages, and the redirect-only routes (the settings list, /desktops, /desktops/:id and
     // /d/:desktopId/settings and the old /admin URLs) end on another route: routes/settings/redirects.test.tsx covers them.
+    // `/` and `/app` (the manifest start_url) redirect to the last place in data/lastPlace.test.tsx.
     const layouts = new Set([
       "/",
+      "/app",
       "/d/$desktopId",
       "/d/$desktopId/t/$terminalId",
       "/d/$desktopId/terminal/",

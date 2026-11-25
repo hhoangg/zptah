@@ -22,8 +22,10 @@
     "directory": "app/dist/client",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    // Only the API and the relay run the Worker first; everything else is a free asset request.
-    "run_worker_first": ["/api/*", "/relay/*"]
+    // The API and the relay run the Worker first, and so do `/` and `/home` (exact paths): the Worker serves the landing
+    // page (assets /landing/) to a request without a session cookie and the SPA to one with it (worker/src/landing.ts).
+    // Everything else is a free asset request.
+    "run_worker_first": ["/api/*", "/relay/*", "/", "/home", "/home/"]
   },
 
   "durable_objects": {

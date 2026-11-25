@@ -59,7 +59,7 @@ test.describe.serial("W-14 screens: visual, axe and keyboard", () => {
 
   test("signed-out screens: register, login, recover", async ({ newActor }) => {
     const actor = await newActor();
-    await actor.page.goto("/");
+    await actor.page.goto("/login");
     for (const screen of SIGNED_OUT) await checkScreen(actor.page, screen);
     await test.step("keyboard: Tab reaches the primary action with a visible focus", async () => {
       await tabThrough(actor.page, "/register", /create passkey/i);

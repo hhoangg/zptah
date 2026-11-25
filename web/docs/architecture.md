@@ -125,10 +125,10 @@ Frontend code from `src/` is copied, not imported (rule above and tauri-reuse.md
 ### 3.5 Service worker
 
 - `vite-plugin-pwa` with `strategies: 'injectManifest'`, `registerType: 'prompt'`, source `web/app/src/sw.ts`. No automatic `skipWaiting`: a toast offers "Update available", and the update is applied on user action so a running link is not cut.
-- Workbox `precacheAndRoute(self.__WB_MANIFEST)` for the app shell and static assets; `NavigationRoute` to `/index.html` with `denylist: [/^\/api\//, /^\/relay\//]`.
+- Workbox `precacheAndRoute(self.__WB_MANIFEST)` for the app shell and static assets; `NavigationRoute` to `/index.html` with `denylist: [/^\/api\//, /^\/relay\//, /^\/(\?.*)?$/, /^\/home\/?(\?.*)?$/, /^\/landing(\/|\?|$)/]` (`sw/routing.ts`; Workbox matches pathname + search, so each landing entry allows a query string). The landing page is decided by the Worker, so `/` and `/home` always go to the network; precaching has `directoryIndex: ""`. A navigation to exactly `/` is network first and falls back to the precached shell only when the network fails (`sw/rootNavigation.ts`), so an app installed with the old `start_url: /` still opens offline.
 - No runtime caching of `/api/*`, `/relay/*`, or anything with cookies. API responses are `Cache-Control: no-store`, except the avatar bytes of `GET /api/desktops/:id/avatar` under their current `?v=` token (`private, max-age=31536000, immutable`).
 - Handlers: `push` (parse JSON, always call `showNotification`; iOS revokes silent pushes), `notificationclick` (close, find a window client, `client.navigate(data.url)` then `focus()`, else `clients.openWindow(data.url)`), `pushsubscriptionchange` (re-subscribe and `POST /api/push/subscriptions`).
-- Manifest: `display: standalone`, `start_url: /`, `id: /`, maskable icons, theme colors from the design system.
+- Manifest: `display: standalone`, `start_url: /app` (redirects to the last place, or to /login when signed out; `/` is the landing page without a session cookie), `id: /`, maskable icons, theme colors from the design system.
 
 ### 3.6 Offline behaviour
 
@@ -632,3 +632,4 @@ The desktop is the authority for `state` and `permission`. The server mirrors th
 13. Update: `git pull`, `pnpm install --frozen-lockfile`, apply new migrations (`db:migrate:remote`) first, then build and `wrangler deploy -c wrangler.jsonc` as in step 10. Every deploy disconnects all relay sockets; clients reconnect with backoff (section 3.3). Migrations are forward-only and backward compatible for one release so a rollback of the Worker works.
 14. Backups: D1 Time Travel is on by default; export with `wrangler d1 export` before risky migrations.
 15. Docker is out of scope.
+16. The landing page: every build of `web/` includes the zptah landing page (`web/landing`), and the Worker serves it at `/` to a request without a session cookie and at `/home` (`worker/src/landing.ts`, `run_worker_first` in `wrangler.jsonc`). Its canonical link, `og:*` tags, `sitemap.xml` and `robots.txt` use your `RP_ORIGIN` (or `MONOPTAH_RP_ORIGIN` at build time), but the text, the zptah branding, the GitHub and Homebrew links are the project's. To run only the app, remove `"/"`, `"/home"` and `"/home/"` from `assets.run_worker_first` and `landingPlugin(...)` from `app/vite.config.ts`; `/` is then the app for everyone, as before. To change the page, edit `web/landing/src` (`node landing/build.mjs` builds it).

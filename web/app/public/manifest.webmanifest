@@ -2,7 +2,7 @@
   "id": "/",
   "name": "zptah",
   "short_name": "zptah",
-  "start_url": "/",
+  "start_url": "/app",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",

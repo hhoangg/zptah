@@ -6,6 +6,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { headersPlugin } from "./vite-plugins/headers.ts";
+import { landingPlugin } from "./vite-plugins/landing.ts";
 import { staticLibraryCss } from "./vite-plugins/staticLibraryCss.ts";
 import { xtermStaticStyles } from "./vite-plugins/xtermStaticStyles.ts";
 
@@ -30,6 +31,8 @@ export default defineConfig({
     tailwindcss(),
     cloudflare({ configPath: "../wrangler.jsonc", ...(previewState ? { persistState: { path: previewState }, inspectorPort: false as const } : {}) }),
     headersPlugin("../wrangler.jsonc"),
+    // The landing page (web/landing) goes into dist/client/landing, served by the Worker at / and /home.
+    landingPlugin("../wrangler.jsonc"),
     // S-08: Sonner and vaul must not append a runtime <style> (blocked by style-src 'self'); see staticLibraryCss.ts.
     staticLibraryCss(),
     // The terminal: xterm.js builds three <style> elements at run time, which the same CSP blocks; see xtermStaticStyles.ts.
@@ -46,6 +49,8 @@ export default defineConfig({
       manifest: false,
       injectManifest: {
         globPatterns: ["**/*.{js,css,html,woff2,svg,png,ico,webmanifest}"],
+        // The landing page is decided by the Worker (never the cached shell) and is not part of the app shell.
+        globIgnores: ["landing/**"],
         // The shell is a few hundred kB per chunk; a chunk over 2 MiB is a regression, not something to precache.
         maximumFileSizeToCacheInBytes: 2 * 1024 * 1024,
       },

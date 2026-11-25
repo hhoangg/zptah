@@ -1,0 +1,18 @@
+// Beta host of the landing page: https://beta.zptah.app. A SEPARATE Worker that serves only the static files of
+// `node landing/build.mjs --target beta` (landing/dist/beta). It binds nothing: no D1, R2, Durable Object, var or
+// secret, and it has no script (assets only), so it cannot reach the production data. Headers (production CSP,
+// X-Robots-Tag: noindex) come from the `_headers` file the beta build writes into the assets directory.
+// Deploy: `pnpm landing:deploy:beta` from web/ (docs/deploy-runbook.md "Landing beta"). Remove: `wrangler delete --name zptah-landing-beta`.
+{
+  "name": "zptah-landing-beta",
+  "compatibility_date": "2026-09-01",
+  "routes": [{ "pattern": "beta.zptah.app", "custom_domain": true }],
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    // Relative to this file.
+    "directory": "./dist/beta",
+    // No fallback: an unknown path is a real 404, and `/` is dist/beta/index.html.
+    "not_found_handling": "404-page"
+  }
+}
