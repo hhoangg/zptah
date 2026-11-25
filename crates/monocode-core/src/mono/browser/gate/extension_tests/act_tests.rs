@@ -520,6 +520,20 @@ fn allow_in_this_conversation_covers_the_next_destructive_click_on_that_site() {
 }
 
 #[test]
+fn closing_the_conversation_ends_its_grants() {
+    let (r, _front) = rig_with(SHOPPING, "Remove item", vec![UserAnswer::AllowConversation]);
+    r.act.lock().unwrap().ext_risk = vec!["destructive"];
+    ok_text(r.click());
+    assert!(!r.store.list_grants(MONO, None).is_empty());
+    // The gate files this rig's calls under session 0 (no route is bound to an app session).
+    // (`end_conversation_everywhere` fans out to every upstream of the process, which would also
+    // withdraw the cards of rigs running in parallel, so the test calls the one it owns.)
+    r.rig.upstream.end_conversation(0);
+    assert!(r.store.list_grants(MONO, None).is_empty());
+    r.rig.finish();
+}
+
+#[test]
 fn the_toolbar_stop_ends_the_grants_and_withdraws_open_cards() {
     let (r, _front) = rig_with(SHOPPING, "Remove item", vec![UserAnswer::AllowConversation]);
     r.act.lock().unwrap().ext_risk = vec!["destructive"];

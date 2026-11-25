@@ -349,6 +349,14 @@ impl Conversation {
                 question: input.kind == InputKind::Question,
                 label: input.label,
             })
+            // Browser cards are answered on the desktop only: the phone just says so.
+            .chain(self.browser_inputs().into_iter().map(|input| {
+                crate::mobile::transcript::Pending {
+                    id: input.request_id,
+                    question: false,
+                    label: format!("{} Answer on the desktop.", input.label),
+                }
+            }))
             .collect()
     }
 

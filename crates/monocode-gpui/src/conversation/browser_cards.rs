@@ -48,15 +48,16 @@ impl EventEmitter<BrowserAction> for Conversation {}
 pub(super) struct State {
     pub(super) mono_id: Option<String>,
     pub(super) surface: Surface,
-    focus: gpui::FocusHandle,
+    /// One handle per open card, so Enter and Escape only ever answer the focused card.
+    focus: std::cell::RefCell<std::collections::HashMap<String, gpui::FocusHandle>>,
 }
 
 impl State {
-    pub(super) fn new(cx: &mut Context<Conversation>) -> Self {
+    pub(super) fn new() -> Self {
         Self {
             mono_id: None,
             surface: Surface::default(),
-            focus: cx.focus_handle(),
+            focus: Default::default(),
         }
     }
 }
@@ -107,6 +108,12 @@ fn button(id: SharedString, label: &str) -> Stateful<Div> {
 }
 
 impl Conversation {
+    /// The focus handle of an open card (tests focus it the way a Tab key would).
+    #[cfg(test)]
+    pub(crate) fn browser_card_focus(&self, id: &str) -> Option<gpui::FocusHandle> {
+        self.browser.focus.borrow().get(id).cloned()
+    }
+
     /// Tells the conversation which Mono it belongs to (the approval queue is the Mono's).
     pub(crate) fn set_browser_mono(&mut self, mono_id: &str) {
         self.browser.mono_id = Some(mono_id.to_owned());
@@ -279,7 +286,13 @@ impl Conversation {
                     .child(countdown_text(lang, &clock)),
             );
         }
-        let focus = self.browser.focus.clone();
+        let focus = self
+            .browser
+            .focus
+            .borrow_mut()
+            .entry(card.id.clone())
+            .or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone();
         div()
             .id(SharedString::from(format!("browser-card-{id}")))
             .debug_selector(|| "browser-card".into())
@@ -458,6 +471,10 @@ impl Conversation {
     /// The ledge above the composer; an empty element when there is nothing to show.
     pub(super) fn browser_shelf(&self, cx: &mut Context<Self>) -> AnyElement {
         let surface = self.browser.surface.clone();
+        self.browser
+            .focus
+            .borrow_mut()
+            .retain(|id, _| surface.cards.iter().any(|c| &c.id == id));
         if surface.is_empty() {
             return div().into_any_element();
         }
@@ -637,11 +654,66 @@ mod tests {
         // The card did not take focus.
         window
             .update(visual, |view, window, _| {
-                assert!(!view.browser.focus.is_focused(window))
+                let handle = view.browser_card_focus(&pending[0].id).unwrap();
+                assert!(!handle.is_focused(window))
             })
             .unwrap();
         approval::queue_for(&mono).answer(&pending[0].id, UserAnswer::Deny);
         asked.join().unwrap();
+    }
+
+    #[gpui::test]
+    fn enter_and_escape_answer_only_the_focused_card(cx: &mut TestAppContext) {
+        let mono = format!("card-keys-{}", monocode_core::mono::new_id());
+        let window = conversation(cx, &mono);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        let queue = approval::queue_for(&mono);
+        let _listening = queue.subscribe(|| {});
+        let first = ask(&mono, true, Duration::from_secs(30));
+        wait_pending(&mono);
+        let second = ask(&mono, true, Duration::from_secs(30));
+        for _ in 0..500 {
+            if queue.pending().len() == 2 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pending = queue.pending();
+        assert_eq!(pending.len(), 2);
+        show(
+            &window,
+            visual,
+            Surface {
+                cards: pending.clone(),
+                ..Default::default()
+            },
+        );
+        // The composer has focus: Enter answers nothing.
+        window
+            .update(visual, |view, window, cx| {
+                window.focus(&view.input.focus_handle(cx), cx)
+            })
+            .unwrap();
+        visual.simulate_keystrokes("enter");
+        assert_eq!(queue.pending().len(), 2);
+        // Focus the second card the way Tab would: only it answers.
+        let id = pending[1].id.clone();
+        window
+            .update(visual, |view, window, cx| {
+                let handle = view.browser_card_focus(&id).unwrap();
+                window.focus(&handle, cx)
+            })
+            .unwrap();
+        visual.simulate_keystrokes("enter");
+        let left = queue.pending();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, pending[0].id);
+        assert_eq!(
+            second.join().unwrap().1,
+            Outcome::Answered(UserAnswer::AllowOnce)
+        );
+        queue.answer(&pending[0].id, UserAnswer::Deny);
+        first.join().unwrap();
     }
 
     #[gpui::test]

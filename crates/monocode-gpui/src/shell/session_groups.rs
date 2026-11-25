@@ -1269,6 +1269,8 @@ impl Shell {
         if self.workspace.tab_of(id).is_some() {
             return;
         }
+        // The conversation is gone: grants given "in this conversation" go with it.
+        monocode_core::mono::browser::gate::end_conversation_everywhere(id);
         self.release_closed_file_panes(cx);
         self.rehome_mono_panes(id, cx);
         if self

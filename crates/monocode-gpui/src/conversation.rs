@@ -819,7 +819,7 @@ impl Conversation {
             auto_resume_shown: None,
             approvals: Default::default(),
             approval_ui: Default::default(),
-            browser: browser_cards::State::new(cx),
+            browser: browser_cards::State::new(),
             remote_approvals: Default::default(),
             questions: Default::default(),
             question_overlay: Default::default(),

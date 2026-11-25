@@ -850,6 +850,20 @@ mod queue {
     }
 
     #[test]
+    fn dropping_the_last_subscriber_denies_the_open_cards() {
+        let queue = ApprovalQueue::new("mono-q");
+        let sub = queue.subscribe(|| {});
+        let other = queue.subscribe(|| {});
+        let waiting = ask(&queue, request(1, true), Duration::from_secs(30));
+        wait_for_card(&queue);
+        drop(sub);
+        assert_eq!(queue.pending().len(), 1, "another front end is still there");
+        drop(other);
+        assert_eq!(waiting.join().unwrap(), Outcome::Withdrawn);
+        assert!(queue.pending().is_empty());
+    }
+
+    #[test]
     fn the_conversation_answer_is_once_when_the_card_does_not_offer_it() {
         let queue = ApprovalQueue::new("mono-q");
         let _sub = queue.subscribe(|| {});

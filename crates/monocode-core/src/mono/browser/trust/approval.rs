@@ -171,7 +171,15 @@ pub struct Subscription {
 
 impl Drop for Subscription {
     fn drop(&mut self) {
-        self.queue.lock().listeners.retain(|(id, _)| *id != self.id);
+        let last = {
+            let mut inner = self.queue.lock();
+            inner.listeners.retain(|(id, _)| *id != self.id);
+            inner.listeners.is_empty()
+        };
+        // Nobody can answer any more: open cards are denied now, not after the timeout.
+        if last {
+            self.queue.withdraw_all();
+        }
     }
 }
 

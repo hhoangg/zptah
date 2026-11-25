@@ -70,6 +70,11 @@ impl LanguagePref {
 /// The system language. macOS apps started from the Dock have no `LANG`, so the user's language
 /// list is asked first.
 fn system_language() -> Lang {
+    static SYSTEM: std::sync::OnceLock<Lang> = std::sync::OnceLock::new();
+    *SYSTEM.get_or_init(read_system_language)
+}
+
+fn read_system_language() -> Lang {
     #[cfg(target_os = "macos")]
     if let Ok(out) = std::process::Command::new("defaults")
         .args(["read", "-g", "AppleLanguages"])
@@ -142,7 +147,7 @@ impl Monos {
         self.browser_ui.approval.language = saved;
         // Tests keep the process wide default unless a language was chosen on purpose.
         if !cx.is_test() || saved != LanguagePref::System {
-            copy::set_app_language(saved.resolve());
+            self.browser_apply_language(saved, cx);
         }
         self.browser_approval_sync(cx);
         if let Some(rx) = self.browser_ui.approval.wake_rx.take() {
@@ -216,15 +221,36 @@ impl Monos {
         }
     }
 
-    /// The rule status of a Mono from its soul file; `None` when the soul cannot be read.
-    fn browser_rule_status(&self, mono_id: &str) -> Option<RuleStatus> {
-        let store = self.browser_store().ok()?;
-        let soul = mono::files::read(&self.root, mono_id, None, "SOUL.md").ok()?;
-        Some(rules::status(
-            &store,
-            mono_id,
-            &soul.text.unwrap_or_default(),
-        ))
+    /// Reads the soul and the confirmed rules on a worker, then refreshes the Mono's surface.
+    /// `rules::status` also records a first or pure-addition set as confirmed.
+    fn browser_rules_reload(&mut self, mono_id: &str, cx: &mut Context<Self>) {
+        if !self.browser_uses_extension(mono_id) {
+            self.browser_ui.approval.rules.remove(mono_id);
+            return;
+        }
+        let Ok(store) = self.browser_store() else {
+            return;
+        };
+        let (root, id) = (self.root.clone(), mono_id.to_owned());
+        cx.spawn(async move |this, cx| {
+            let work = {
+                let id = id.clone();
+                cx.background_executor().spawn(async move {
+                    let soul = mono::files::read(&root, &id, None, "SOUL.md").ok()?;
+                    Some(rules::status(&store, &id, &soul.text.unwrap_or_default()))
+                })
+            };
+            let status = work.await;
+            let _ = this.update(cx, |this, cx| {
+                match status {
+                    Some(status) => this.browser_ui.approval.rules.insert(id.clone(), status),
+                    None => this.browser_ui.approval.rules.remove(&id),
+                };
+                this.browser_approval_refresh(&id, false, cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Builds the surface of one Mono and gives it to its conversation when it changed (a card
@@ -236,18 +262,8 @@ impl Monos {
         cx: &mut Context<Self>,
     ) {
         let uses = self.browser_uses_extension(mono_id);
-        if with_rules || !self.browser_ui.approval.rules.contains_key(mono_id) {
-            match uses.then(|| self.browser_rule_status(mono_id)).flatten() {
-                Some(status) => {
-                    self.browser_ui
-                        .approval
-                        .rules
-                        .insert(mono_id.to_owned(), status);
-                }
-                None => {
-                    self.browser_ui.approval.rules.remove(mono_id);
-                }
-            }
+        if with_rules {
+            self.browser_rules_reload(mono_id, cx);
         }
         let queue = approval::queue_for(mono_id);
         let label = self
@@ -290,7 +306,10 @@ impl Monos {
             && (changed || counting)
         {
             chat.update(cx, |chat, cx| chat.set_browser_surface(surface, cx));
-            cx.emit(NotificationChanged);
+            // The countdown only repaints; the notification layer hears about real changes.
+            if changed {
+                cx.emit(NotificationChanged);
+            }
         }
         if changed && self.settings == Some(SettingsSection::Browser) {
             self.browser_approval_page_refresh(cx);
@@ -353,16 +372,35 @@ impl Monos {
         }
     }
 
-    /// "Confirm the new rules": the soul's rule lines become the confirmed set.
+    /// "Confirm the new rules": the soul's rule lines become the confirmed set (read and written
+    /// on a worker).
     pub(super) fn browser_rules_confirm(&mut self, mono_id: &str, cx: &mut Context<Self>) {
-        let result = self.browser_store().and_then(|store| {
-            let soul = mono::files::read(&self.root, mono_id, None, "SOUL.md")?;
-            rules::confirm(&store, mono_id, &soul.text.unwrap_or_default())
-        });
-        self.browser_ui.approval.error = result.err();
+        let store = match self.browser_store() {
+            Ok(store) => store,
+            Err(error) => {
+                self.browser_ui.approval.error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
         self.browser_ui.approval.kept.remove(mono_id);
-        self.browser_approval_refresh(mono_id, true, cx);
-        self.browser_approval_page_refresh(cx);
+        let (root, id) = (self.root.clone(), mono_id.to_owned());
+        cx.spawn(async move |this, cx| {
+            let work = {
+                let id = id.clone();
+                cx.background_executor().spawn(async move {
+                    let soul = mono::files::read(&root, &id, None, "SOUL.md")?;
+                    rules::confirm(&store, &id, &soul.text.unwrap_or_default())
+                })
+            };
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.browser_ui.approval.error = result.err();
+                this.browser_rules_reload(&id, cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Reads the grants and the rule status the Settings cards show.
@@ -375,16 +413,7 @@ impl Monos {
             .map(|s| s.list_grants(&id, None))
             .unwrap_or_default();
         self.browser_ui.approval.grants = grants;
-        if self.browser_uses_extension(&id) {
-            match self.browser_rule_status(&id) {
-                Some(status) => {
-                    self.browser_ui.approval.rules.insert(id, status);
-                }
-                None => {
-                    self.browser_ui.approval.rules.remove(&id);
-                }
-            }
-        }
+        self.browser_rules_reload(&id, cx);
         cx.notify();
     }
 
@@ -400,16 +429,44 @@ impl Monos {
         self.browser_approval_page_refresh(cx);
     }
 
-    pub(super) fn browser_set_language(&mut self, pref: LanguagePref, cx: &mut Context<Self>) {
-        self.browser_ui.approval.language = pref;
-        copy::set_app_language(pref.resolve());
-        let saved = locked(&self.store).and_then(|s| s.save_setting(LANGUAGE_KEY, pref.id()));
-        self.browser_ui.approval.error = saved.err();
-        // The cards on screen take the new language on the next frame.
+    /// Sets the copy language. "System" asks the OS, which can run a process, so it happens on a
+    /// worker; the cards keep the old language until the answer comes.
+    fn browser_apply_language(&mut self, pref: LanguagePref, cx: &mut Context<Self>) {
+        match pref {
+            LanguagePref::System => {
+                cx.spawn(async move |this, cx| {
+                    let lang = cx
+                        .background_executor()
+                        .spawn(async { system_language() })
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        // A newer choice wins over a slow system lookup.
+                        if this.browser_ui.approval.language == LanguagePref::System {
+                            copy::set_app_language(lang);
+                            this.browser_repaint_chats(cx);
+                        }
+                    });
+                })
+                .detach();
+            }
+            explicit => copy::set_app_language(explicit.resolve()),
+        }
+    }
+
+    fn browser_repaint_chats(&mut self, cx: &mut Context<Self>) {
         cx.notify();
         for chat in self.chats.values() {
             chat.update(cx, |_, cx| cx.notify());
         }
+    }
+
+    pub(super) fn browser_set_language(&mut self, pref: LanguagePref, cx: &mut Context<Self>) {
+        self.browser_ui.approval.language = pref;
+        self.browser_apply_language(pref, cx);
+        let saved = locked(&self.store).and_then(|s| s.save_setting(LANGUAGE_KEY, pref.id()));
+        self.browser_ui.approval.error = saved.err();
+        // The cards on screen take the new language on the next frame.
+        self.browser_repaint_chats(cx);
     }
 
     pub(super) fn browser_toggle_extension(&mut self, cx: &mut Context<Self>) {
