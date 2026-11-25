@@ -1,4 +1,5 @@
 //! A bounded native component tree. This is data, never HTML, CSS, or a host API.
+use crate::diagram::{Baseline, FlowGraph, TextAlign};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_SOURCE_BYTES: usize = 64 * 1024;
@@ -221,6 +222,13 @@ pub enum Node {
         objects: Vec<SceneObject>,
         camera: Camera,
     },
+    /// An auto-laid-out node and edge diagram shown in the diagram viewer.
+    Flow {
+        graph: FlowGraph,
+        title: Option<String>,
+        /// Viewer height; `None` sizes it from the laid-out diagram.
+        height: Option<f32>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -232,12 +240,26 @@ pub enum Shape {
         width: f32,
         height: f32,
         color: ThemeColor,
+        #[serde(default)]
+        radius: f32,
+        #[serde(default)]
+        stroke: Option<ThemeColor>,
+        #[serde(default = "default_stroke_width")]
+        stroke_width: f32,
+        #[serde(default = "yes")]
+        fill: bool,
     },
     Circle {
         x: f32,
         y: f32,
         radius: f32,
         color: ThemeColor,
+        #[serde(default)]
+        stroke: Option<ThemeColor>,
+        #[serde(default = "default_stroke_width")]
+        stroke_width: f32,
+        #[serde(default = "yes")]
+        fill: bool,
     },
     Line {
         x1: f32,
@@ -246,18 +268,57 @@ pub enum Shape {
         y2: f32,
         width: f32,
         color: ThemeColor,
+        #[serde(default)]
+        arrow: ArrowEnds,
+        #[serde(default)]
+        dashed: bool,
     },
     Polyline {
         points: Vec<[f32; 2]>,
         width: f32,
         color: ThemeColor,
+        #[serde(default)]
+        arrow: ArrowEnds,
+        #[serde(default)]
+        dashed: bool,
     },
+    /// Text anchored at `(x, y)`. With the defaults (`align: start`,
+    /// `baseline: top`) `(x, y)` is the top-left of the text. `color` absent
+    /// means automatic: dark or light ink by the luminance of the filled
+    /// shape under the anchor, plain ink otherwise. `chip` paints a surface
+    /// chip behind the text (edge labels).
     Label {
         x: f32,
         y: f32,
         text: String,
-        color: ThemeColor,
+        #[serde(default)]
+        color: Option<ThemeColor>,
+        #[serde(default)]
+        align: TextAlign,
+        #[serde(default)]
+        baseline: Baseline,
+        #[serde(default)]
+        chip: bool,
     },
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn default_stroke_width() -> f32 {
+    1.5
+}
+
+/// Which ends of a line or polyline carry an arrowhead.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrowEnds {
+    #[default]
+    None,
+    End,
+    Start,
+    Both,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -559,6 +620,32 @@ impl Node {
                     shape.validate(budget)?;
                 }
             }
+            Self::Flow {
+                graph,
+                title,
+                height,
+            } => {
+                graph.validate()?;
+                if let Some(height) = height {
+                    bounded(*height as f64, 120., 1200., "flow height")?;
+                }
+                budget.primitives += graph.nodes.len() + graph.edges.len();
+                if budget.primitives > 4096 {
+                    return Err("Flow budget exceeded".into());
+                }
+                if let Some(title) = title {
+                    budget.text(title, 160)?;
+                }
+                for node in &graph.nodes {
+                    budget.text(&node.id, 256)?;
+                    budget.text(&node.label, 512)?;
+                }
+                for edge in &graph.edges {
+                    if let Some(label) = &edge.label {
+                        budget.text(label, 256)?;
+                    }
+                }
+            }
             Self::Scene {
                 width,
                 height,
@@ -638,17 +725,28 @@ impl Shape {
                 y,
                 width,
                 height,
+                radius,
+                stroke_width,
                 ..
             } => {
                 coordinate(*x)?;
                 coordinate(*y)?;
                 bounded(*width as f64, 0., 10_000., "rectangle width")?;
                 bounded(*height as f64, 0., 10_000., "rectangle height")?;
+                bounded(*radius as f64, 0., 10_000., "rectangle radius")?;
+                bounded(*stroke_width as f64, 0., 12., "stroke width")?;
             }
-            Self::Circle { x, y, radius, .. } => {
+            Self::Circle {
+                x,
+                y,
+                radius,
+                stroke_width,
+                ..
+            } => {
                 coordinate(*x)?;
                 coordinate(*y)?;
                 bounded(*radius as f64, 0., 10_000., "circle radius")?;
+                bounded(*stroke_width as f64, 0., 12., "stroke width")?;
             }
             Self::Line {
                 x1,
@@ -763,4 +861,32 @@ fn bounded(value: f64, min: f64, max: f64, name: &str) -> Result<(), String> {
     } else {
         Err(format!("{name} must be finite and between {min} and {max}"))
     }
+}
+
+/// The fill under a label: the last earlier filled rect or circle that contains
+/// the label's anchor point. Used to pick dark or light ink automatically.
+pub fn label_backdrop(shapes: &[Shape], index: usize) -> Option<ThemeColor> {
+    let Some(Shape::Label { x, y, .. }) = shapes.get(index) else {
+        return None;
+    };
+    shapes[..index].iter().rev().find_map(|shape| match shape {
+        Shape::Rect {
+            x: rx,
+            y: ry,
+            width,
+            height,
+            color,
+            fill: true,
+            ..
+        } if (*rx..=rx + width).contains(x) && (*ry..=ry + height).contains(y) => Some(*color),
+        Shape::Circle {
+            x: cx,
+            y: cy,
+            radius,
+            color,
+            fill: true,
+            ..
+        } if (x - cx).powi(2) + (y - cy).powi(2) <= radius * radius => Some(*color),
+        _ => None,
+    })
 }

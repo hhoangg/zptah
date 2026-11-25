@@ -65,10 +65,35 @@ visual.slider(label,value,min,max,onChange,{step?}), tabs(labels,selected,onChan
 visual.input(label,value,onChange,{placeholder?}), select(label,options,selectedIndex,onChange)
 Input handlers receive a string (up to 4096 bytes); select handlers receive an index.
 Select and input labels are not shown: make options and placeholders self-explanatory.
-visual.canvas(shapes,{width?,height?})
-Canvas shapes: visual.rect(x,y,w,h,{color?}), circle(x,y,r,{color?}),
-line(x1,y1,x2,y2,{color?,width?}), polyline([[x,y],...],{color?,width?}),
-label(x,y,text,{color?}).
+visual.canvas(shapes,{width?,height?}) for free-form drawing. For any node and
+edge diagram use visual.flow below instead of placing shapes by hand.
+Canvas shapes (coordinates in canvas units, y grows downward):
+  visual.rect(x,y,w,h,{color?,radius?,stroke?,strokeWidth?,fill?}) color is the
+    fill; radius rounds corners; stroke adds a border in that color; fill:false
+    draws the border only.
+  visual.circle(x,y,r,{color?,stroke?,strokeWidth?,fill?})
+  visual.line(x1,y1,x2,y2,{color?,width?,arrow?,dashed?}) and
+  visual.polyline([[x,y],...],{color?,width?,arrow?,dashed?}); arrow is
+    'end'|'start'|'both'|true, dashed:true draws a dashed line.
+  visual.label(x,y,text,{color?,align?,baseline?,chip?}) text is 12 units tall.
+    align 'start'|'center'|'end' (default 'start': x is the left edge) and
+    baseline 'top'|'middle'|'bottom'|'alphabetic' (default 'top': y is the TOP
+    of the text, so a label at y+22 in a 36 high rect lands near its bottom
+    edge). To center text in a rect use x+w/2, y+h/2 with align:'center',
+    baseline:'middle'. When color is omitted the text takes dark or light ink
+    from the fill of the rect or circle it sits on (plain ink elsewhere).
+    chip:true paints a surface chip behind the text, for labels on lines.
+visual.flow({nodes,edges,direction?,title?,height?}) draws an automatically laid
+out diagram in a pan and zoom viewer (flowcharts, pipelines, state machines,
+architecture). nodes: [{id,label?,kind?,color?}] with unique ids, kind 'box'
+(default)|'decision'|'start'|'end', color a semantic color for its
+border. edges: [{from,to,label?,dashed?}] referencing node ids; edges may form
+cycles. direction 'LR' (default) or 'TB'. Up to 120 nodes and 400 edges; keep
+labels short. Unknown ids, duplicate ids and bad kinds or directions are errors.
+Example: visual.flow({direction:'LR',nodes:[{id:'a',label:'Request',kind:'start'},
+{id:'b',label:'Risk?',kind:'decision'},{id:'c',label:'Auto act',color:'positive'},
+{id:'d',label:'Ask user',color:'warning'}],edges:[{from:'a',to:'b'},
+{from:'b',to:'c',label:'safe'},{from:'b',to:'d',label:'risky'}]}).
 visual.scene(objects,{width?,height?,camera?})
 Scene objects: visual.object({kind:'box'|'sphere'|'cylinder'|'cone'|'plane'},
 {position:[x,y,z],rotation:[x,y,z],scale:[x,y,z],color:'accent'}).
@@ -683,6 +708,11 @@ pub fn client(args: &[String]) -> Result<Value, String> {
     } else {
         publish_with_environment(input, &current_environment())
     }
+}
+
+#[cfg(test)]
+pub(crate) fn documentation_text() -> &'static str {
+    DOCUMENTATION
 }
 
 fn documentation() -> Value {
