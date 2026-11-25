@@ -409,12 +409,11 @@ mod windows_relay {
 
 #[test]
 fn the_dev_policy_accepts_an_extra_browser_only_by_absolute_path() {
-    let with = dev_policy(Some("/opt/cft/chrome".into()));
+    // An absolute path on every platform.
+    let exe = std::env::temp_dir().join("cft-chrome");
+    let with = dev_policy(Some(exe.clone().into_os_string()));
     assert!(with.relaxed());
-    assert_eq!(
-        with.extra_browsers(),
-        [std::path::PathBuf::from("/opt/cft/chrome")]
-    );
+    assert_eq!(with.extra_browsers(), [exe]);
     assert!(dev_policy(Some("chrome".into()))
         .extra_browsers()
         .is_empty());
