@@ -14,8 +14,8 @@ use monocode_core::mobile::policy::Failure;
 use monocode_core::{
     agent::{AccessMode, Settings, TurnInfo},
     mobile::{
-        DeviceContext, DeviceKind, Event, Invite, MobileHost, Push, Request, Status, WatchStart,
-        audit, denylist::DenyList, folders, notify, policy, watch, web_link,
+        DeviceContext, DeviceKind, Event, MobileHost, Push, Request, WatchStart, audit,
+        denylist::DenyList, folders, notify, policy, watch, web_link,
     },
     transcript::Row,
 };
@@ -47,8 +47,6 @@ const MAX_MESSAGE: usize = 100_000;
 #[derive(Default)]
 pub(super) struct Mobile {
     host: Option<MobileHost>,
-    /// The visible pairing code, until it expires, is used or is closed.
-    pub(super) invite: Option<Invite>,
     /// Commands by device-scoped ID, so a phone's retry never runs one twice.
     receipts: HashMap<String, Receipt>,
     receipt_order: VecDeque<String>,
@@ -625,69 +623,6 @@ impl Shell {
         }
     }
 
-    pub(super) fn mobile_status(&self) -> Option<Status> {
-        self.mobile.host.as_ref().map(MobileHost::status)
-    }
-
-    pub(super) fn mobile_configure(
-        &mut self,
-        enabled: bool,
-        open_router: bool,
-        remote_address: String,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(host) = self.mobile.host.clone() else {
-            return;
-        };
-        if !enabled {
-            self.mobile.invite = None;
-            self.mobile.watches.clear();
-        }
-        // Binding the port and reading the keyring can block.
-        let work = cx
-            .background_executor()
-            .spawn(async move { host.configure(enabled, open_router, &remote_address) });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                if let Err(error) = result {
-                    this.error = Some(format!("Mobile access: {error}"));
-                }
-                this.publish_mobile_catalog(cx);
-                this.sync_settings(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    pub(super) fn mobile_invite(&mut self, cx: &mut Context<Self>) {
-        let Some(host) = self.mobile.host.clone() else {
-            return;
-        };
-        let work = cx.background_executor().spawn(async move { host.invite() });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(invite) => this.mobile.invite = Some(invite),
-                    Err(error) => this.error = Some(format!("Mobile access: {error}")),
-                }
-                this.sync_settings(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    pub(super) fn mobile_cancel_invite(&mut self, cx: &mut Context<Self>) {
-        if let Some(host) = &self.mobile.host {
-            host.cancel_invite();
-        }
-        self.mobile.invite = None;
-        self.sync_settings(cx);
-    }
-
     /// The key fingerprint of a paired device, for the audit lines the app
     /// writes itself. Empty for a device the host no longer lists.
     pub(crate) fn mobile_fingerprint(&self, device_id: &str) -> String {
@@ -702,16 +637,6 @@ impl Shell {
             })
             .map(|device| device.fingerprint)
             .unwrap_or_default()
-    }
-
-    pub(super) fn mobile_revoke(&mut self, device_id: &str, cx: &mut Context<Self>) {
-        if let Some(host) = &self.mobile.host {
-            // The host writes the revoke to the audit log.
-            if let Err(error) = host.revoke(device_id) {
-                self.error = Some(format!("Mobile access: {error}"));
-            }
-        }
-        self.sync_settings(cx);
     }
 
     fn handle_mobile_event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {

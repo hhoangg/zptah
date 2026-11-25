@@ -79,8 +79,6 @@ impl Shell {
             data_dir: self.data_dir.clone(),
             store: Some(crate::settings::cloud_env::StoreHandle(self.store.clone())),
             remote: Some(self.remote.clone()),
-            mobile: self.mobile_status(),
-            mobile_invite: self.mobile.invite.clone(),
             web: self.web_status(),
             web_pairing: self.web_pairing(cx),
             web_notice: self.web_notice(cx),
@@ -297,14 +295,6 @@ impl Shell {
                     this.sync_settings(cx);
                 }
                 SettingsEvent::MobileRefresh => this.sync_settings(cx),
-                SettingsEvent::MobileConfigure {
-                    enabled,
-                    open_router,
-                    remote_address,
-                } => this.mobile_configure(*enabled, *open_router, remote_address.clone(), cx),
-                SettingsEvent::MobilePair => this.pair_mobile(cx),
-                SettingsEvent::MobileCancelInvite => this.mobile_cancel_invite(cx),
-                SettingsEvent::MobileRevoke(id) => this.mobile_revoke(id, cx),
                 SettingsEvent::WebPair { .. }
                 | SettingsEvent::WebCancelPair
                 | SettingsEvent::WebUnpair
@@ -313,7 +303,6 @@ impl Shell {
                 | SettingsEvent::WebSetPermission { .. }
                 | SettingsEvent::WebRevokeDevice(_)
                 | SettingsEvent::WebConfirmDevice { .. }
-                | SettingsEvent::PhoneSetProjects { .. }
                 | SettingsEvent::WebSetSelection { .. }
                 | SettingsEvent::WebSetPolicyFlag { .. }
                 | SettingsEvent::WebSetTerminalAllowed { .. }
@@ -471,10 +460,6 @@ impl Shell {
         self.settings_overlay_watch = None;
         // A web pairing code nobody can see should not stay usable either.
         self.web_cancel_pair(cx);
-        // A code nobody can see should not stay usable.
-        if self.mobile.invite.is_some() {
-            self.mobile_cancel_invite(cx);
-        }
         self.sidebar_slide = None;
         self.sidebar_fraction = if self.workspace.sidebar_visible {
             1.
@@ -484,37 +469,6 @@ impl Shell {
         self.reveal_contributors(cx);
         self.focus_active(window, cx);
         this_update(self, cx);
-    }
-    /// MobileSettings.tsx's pair: the desktop listens only while a phone is
-    /// paired or being paired, so start listening before making the code.
-    fn pair_mobile(&mut self, cx: &mut Context<Self>) {
-        let Some(status) = self.mobile_status() else {
-            return;
-        };
-        if status.enabled && status.listening {
-            self.mobile_invite(cx);
-            return;
-        }
-        self.mobile_configure(true, status.open_router, status.remote_address, cx);
-        cx.spawn(async move |this, cx| {
-            // Binding runs in the background; a failure lands in `error`.
-            for _ in 0..100 {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(100))
-                    .await;
-                let Ok(ready) = this.update(cx, |this, _| {
-                    this.mobile_status()
-                        .is_some_and(|status| status.enabled && status.listening)
-                }) else {
-                    return;
-                };
-                if ready {
-                    let _ = this.update(cx, |this, cx| this.mobile_invite(cx));
-                    return;
-                }
-            }
-        })
-        .detach();
     }
     /// With "auto resume at usage limit reset" on, every loaded local session
     /// still waiting on a limit is armed. Sessions that exist only on disk are
@@ -808,62 +762,6 @@ mod tests {
                 shell.apply_preferences(cx);
                 assert!(armed(shell, a, cx));
                 assert!(!armed(shell, b, cx));
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn pairing_dialog_is_a_window_overlay_and_updates_from_settings_notifications(
-        cx: &mut TestAppContext,
-    ) {
-        cx.update(super::super::bind_keys);
-        let (window, _, _) = window(cx);
-        window
-            .update(cx, |shell, w, cx| {
-                shell.open_settings(Section::Connections, w, cx)
-            })
-            .unwrap();
-        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        assert!(visual.debug_bounds("mobile-pair-overlay").is_none());
-        window
-            .update(visual, |shell, _, cx| {
-                shell.mobile.invite = Some(monocode_core::mobile::Invite {
-                    url: format!("monocode://pair?invite={}", "q".repeat(500)),
-                    expires: monocode_core::time::now_ms() / 1000 + 900,
-                });
-                // This notifies Settings alone. The root overlay must observe it.
-                shell.sync_settings(cx);
-            })
-            .unwrap();
-        visual.run_until_parked();
-        let viewport = window.update(visual, |_, w, _| w.viewport_size()).unwrap();
-        let scrim = visual
-            .debug_bounds("mobile-pair-overlay")
-            .expect("Settings changes show the portal at the shell root");
-        assert_eq!(scrim.origin, gpui::point(px(0.), px(0.)));
-        assert_eq!(scrim.size, viewport);
-        let dialog = visual.debug_bounds("mobile-pair-dialog").unwrap();
-        assert_eq!(dialog.size.width, px(560.));
-        assert!((dialog.center().x - viewport.width / 2.).abs() < px(1.));
-        assert!((dialog.center().y - viewport.height / 2.).abs() < px(1.));
-        let qr = visual.debug_bounds("mobile-pair-code").unwrap();
-        visual.simulate_click(qr.center(), Default::default());
-        visual.run_until_parked();
-        assert!(
-            visual.debug_bounds("mobile-pair-overlay").is_some(),
-            "clicking inside does not dismiss or reach Settings"
-        );
-        visual.simulate_keystrokes("escape");
-        visual.run_until_parked();
-        assert!(visual.debug_bounds("mobile-pair-overlay").is_none());
-        window
-            .update(visual, |shell, _, _| {
-                assert!(
-                    shell.settings.is_some(),
-                    "Escape only dismisses the pairing dialog"
-                );
-                assert!(shell.mobile.invite.is_none());
             })
             .unwrap();
     }

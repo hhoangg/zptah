@@ -198,18 +198,6 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "ssh remote connect host server environment",
     ),
     (
-        "mobile-access",
-        Section::Connections,
-        "Your phones",
-        "phone iphone android mobile app pair qr code device revoke remove testflight",
-    ),
-    (
-        "mobile-remote",
-        Section::Connections,
-        "Connect away from home",
-        "router port upnp nat remote address public hostname vpn wifi",
-    ),
-    (
         "mcp-servers",
         Section::Mcp,
         "MCP servers",
