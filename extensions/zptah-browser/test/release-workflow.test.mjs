@@ -56,6 +56,15 @@ test("the workflow never gets write access to contents and never creates a relea
   assert.doesNotMatch(text, /gh release|git push|git tag/);
 });
 
+test("every action is pinned to a full commit SHA with a version comment", () => {
+  const uses = [...text.matchAll(/^\s*- uses: (\S+)(.*)$/gm)];
+  assert.ok(uses.length >= 5);
+  for (const [, ref, rest] of uses) {
+    assert.match(ref, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, ref);
+    assert.match(rest, /^ # v\d+/, `${ref} needs a version comment`);
+  }
+});
+
 test("no em or en dash", () => {
   assert.doesNotMatch(text, new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]"));
 });

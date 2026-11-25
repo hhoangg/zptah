@@ -293,6 +293,8 @@ invited to the publisher in the dashboard). Once the item has an id, fill `STORE
 (`links/manifest_install.rs`, `host_mode.rs`) and add the Web Store listing step to the Connect flow
 in an app release; until then release builds keep Connect disabled.
 
+Environment protection: set the deployment tag policy of `chrome-web-store` to `ext-v*` only (no branches), keep the required reviewer, and do not allow administrators to bypass the protection rules. Without these a branch workflow or an admin could reach the secrets.
+
 Order, per extension release `X.Y.Z` (`X` is the protocol major, spec 13.5):
 
 1. Bump `version` in `extensions/zptah-browser/manifest.json` and merge.

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { build } from "../scripts/build.mjs";
-import { checkKnownBuild, checkRelease, configProtocol, packageHash, release } from "../scripts/release.mjs";
+import { canonicalManifest, checkKnownBuild, checkRelease, configProtocol, packageHash, release } from "../scripts/release.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "ext-release-"));
 const KNOWN_RS = new URL("../../../crates/monocode-core/src/mono/browser/links/known_builds.rs", import.meta.url);
@@ -85,3 +85,9 @@ function hasZip() {
     return false;
   }
 }
+
+test("canonicalManifest matches the shared vectors (also run by the Rust test)", () => {
+  const { cases } = JSON.parse(readFileSync(new URL("../shared/manifest-canon-vectors.json", import.meta.url), "utf8"));
+  assert.ok(cases.length >= 3);
+  for (const c of cases) assert.equal(canonicalManifest(c.input), c.canonical, c.name);
+});

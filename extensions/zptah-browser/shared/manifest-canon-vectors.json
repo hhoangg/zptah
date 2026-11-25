@@ -1,0 +1,19 @@
+{
+  "cases": [
+    {
+      "name": "key first, update_url in the middle, nested objects",
+      "input": "{\"key\":\"K1\",\"name\":\"x\",\"update_url\":\"https://u.invalid/\",\"version\":\"1.0.0\",\"background\":{\"type\":\"module\",\"service_worker\":\"a.js\"},\"permissions\":[\"tabs\",\"alarms\"],\"zeta\":{\"b\":1,\"a\":{\"d\":true,\"c\":null}}}",
+      "canonical": "{\"background\":{\"service_worker\":\"a.js\",\"type\":\"module\"},\"name\":\"x\",\"permissions\":[\"tabs\",\"alarms\"],\"version\":\"1.0.0\",\"zeta\":{\"a\":{\"c\":null,\"d\":true},\"b\":1}}"
+    },
+    {
+      "name": "update_url first, key last, unsorted nested",
+      "input": "{\"update_url\":\"u\",\"version\":\"2.0.1\",\"options_ui\":{\"page\":\"p.html\",\"open_in_tab\":true},\"key\":\"K\"}",
+      "canonical": "{\"options_ui\":{\"open_in_tab\":true,\"page\":\"p.html\"},\"version\":\"2.0.1\"}"
+    },
+    {
+      "name": "no key, unicode and escapes",
+      "input": "{\"name\":\"zptah é\\n\\\"q\\\"\",\"a\":[{\"z\":1,\"y\":2}]}",
+      "canonical": "{\"a\":[{\"y\":2,\"z\":1}],\"name\":\"zptah é\\n\\\"q\\\"\"}"
+    }
+  ]
+}

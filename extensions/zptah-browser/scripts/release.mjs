@@ -40,16 +40,32 @@ export function listFiles(dir) {
   return out.sort();
 }
 
+/**
+ * manifest.json as the app hashes it: without key and update_url, object keys sorted recursively,
+ * no whitespace. Independent of any parser's key order. Shared vectors: shared/manifest-canon-vectors.json
+ * (also run by the Rust test in links/tests.rs).
+ */
+export function canonicalManifest(text) {
+  const m = JSON.parse(text);
+  delete m.key;
+  delete m.update_url;
+  const write = (v) => {
+    if (Array.isArray(v)) return `[${v.map(write).join(",")}]`;
+    if (v && typeof v === "object") {
+      return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${write(v[k])}`).join(",")}}`;
+    }
+    return JSON.stringify(v);
+  };
+  return write(m);
+}
+
 /** Same hash as `hash_extension_dir` in the app. */
 export function packageHash(dir) {
   const outer = createHash("sha256");
   for (const rel of listFiles(dir)) {
     let bytes = readFileSync(join(dir, rel));
     if (rel === "manifest.json") {
-      const m = JSON.parse(bytes.toString("utf8"));
-      delete m.key;
-      delete m.update_url;
-      bytes = Buffer.from(JSON.stringify(m));
+      bytes = Buffer.from(canonicalManifest(bytes.toString("utf8")));
     }
     outer.update(rel);
     outer.update(Buffer.from([0]));
