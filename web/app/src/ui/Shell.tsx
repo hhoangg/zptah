@@ -1,9 +1,12 @@
+import { useLayoutEffect } from "react";
 import { OfflineBanner } from "@/features/offline";
+import { forceScheme } from "@/lib/appearance";
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { ApiError } from "@/features/accounts/api";
 import { meQuery } from "@/features/accounts/queries";
 import { cn } from "@/lib/utils";
+import { AuthBrand } from "./AuthBrand";
 import { Glass } from "./Glass";
 import { AppNav } from "./AppNav";
 import { TooltipProvider } from "./tooltip";
@@ -12,18 +15,25 @@ import { ViewportDebugGate } from "./ViewportDebugGate";
 /** The one `main` landmark of the app: the skip link points at it. Screens never render their own `main`. */
 export const MAIN_ID = "main-content";
 
-/** Screens of a visitor who has no session yet: no app navigation. */
+/** Screens of a visitor who has no session yet: no app navigation, no header. They show the brand block above the card instead. */
 const SIGN_IN_FAMILY: readonly string[] = ["/login", "/register", "/recover"];
 
 /** Shared Wave 0 shell: 44px header on a glass pill (outside /d and /settings routes), safe-area padding, one scrolling main. */
 export function Shell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname.replace(/(.)\/$/, "$1") });
   const signInFamily = SIGN_IN_FAMILY.includes(pathname);
+  // The sign-in family matches the landing page, which is dark only: force the dark scheme while it shows and release it
+  // (back to the visitor's own appearance) on every other route.
+  useLayoutEffect(() => {
+    forceScheme(signInFamily ? "dark" : null);
+  }, [signInFamily]);
   // The /d/:desktopId routes have no header: their nav icons sit at the right end of the desktop switcher row.
   const inDesktop = pathname.startsWith("/d/");
   // The settings shell has no app header either: its nav column and list page start with an exit button before the
   // "Settings" title. Main takes over the notch inset the header used to provide.
   const inSettings = pathname === "/settings" || pathname.startsWith("/settings/");
+  // The sign-in family has no header either: the brand block replaces it, so main takes over the notch inset.
+  const noHeader = inDesktop || inSettings || signInFamily;
   // /install is public: a visitor without a session sees the brand only (the nav entries would bounce to /login).
   const me = useQuery({ ...meQuery, enabled: pathname === "/install", retry: false, networkMode: "always" });
   // Brand only until /api/me succeeds. A signed-in visitor who is merely offline (a network error, not a 401) keeps the nav.
@@ -32,7 +42,7 @@ export function Shell() {
   return (
     <TooltipProvider delayDuration={300}>
     {/* /d routes: a fixed-height flex column (header, switcher and banner shrink-0, main fills the rest) so no screen needs 100dvh math and the body never scrolls. */}
-    <div className={cn("flex flex-col bg-background text-content", inDesktop ? "relative h-dvh overflow-hidden" : "min-h-dvh")} data-app-frame={inDesktop ? "" : undefined}>
+    <div className={cn("flex flex-col text-content", signInFamily ? "auth-backdrop" : "bg-background", inDesktop ? "relative h-dvh overflow-hidden" : "min-h-dvh")} data-app-frame={inDesktop ? "" : undefined}>
       {/* First focusable element (design-system.md 9): visible on focus only; moves focus to the main content. */}
       <a
         href={`#${MAIN_ID}`}
@@ -44,7 +54,7 @@ export function Shell() {
       >
         Skip to content
       </a>
-      {inDesktop || inSettings ? null : (
+      {noHeader ? null : (
         <header data-testid="app-header" className="sticky top-0 z-10 flex min-h-11 shrink-0 items-center gap-2 pt-[env(safe-area-inset-top)] pr-[max(0.5rem,env(safe-area-inset-right))] pl-[max(0.5rem,env(safe-area-inset-left))] min-[24rem]:pr-[max(1.25rem,env(safe-area-inset-right))] min-[24rem]:pl-[max(1.25rem,env(safe-area-inset-left))]">
           {publicPage ? (
             <Link to="/" className="rounded-pill px-3 py-2 text-small font-semibold">
@@ -61,12 +71,13 @@ export function Shell() {
         </header>
       )}
       {/* On /d the banner sits under the desktop switcher row (DesktopTopBar owns the top safe-area inset there). */}
-      {inDesktop ? null : <OfflineBanner pinned={inSettings ? "top" : "below-header"} />}
+      {inDesktop ? null : <OfflineBanner pinned={inSettings || signInFamily ? "top" : "below-header"} />}
       <main
         id={MAIN_ID}
         tabIndex={-1}
         className={cn("outline-none", inDesktop ? "relative flex min-h-0 flex-1 flex-col overflow-y-auto" : "flex-1 pb-[calc(env(safe-area-inset-bottom)+2.5rem)]", inSettings && "pt-[env(safe-area-inset-top)]")}
       >
+        {signInFamily ? <AuthBrand /> : null}
         <Outlet />
       </main>
     </div>

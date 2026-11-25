@@ -106,6 +106,45 @@ describe('targets', () => {
   });
 });
 
+describe('remote control, reveal and hero layout', () => {
+  const css = () => readFileSync(path.join(out.prod, 'landing', 'landing.css'), 'utf8');
+  it('has the remote-anywhere feature row and the hero line', () => {
+    const html = page('prod');
+    assert.match(html, /<article class="frow2[^"]*" id="remote">/);
+    assert.match(html, /same LAN or Wi-Fi/);
+    assert.match(html, /no VPN or port forwarding/);
+    assert.match(html, /passkey/);
+    assert.match(html, /end-to-end encrypted/);
+    assert.match(html, /class="mock any"/);
+    assert.match(html, /class="sub remote-line">[^<]*over the internet/);
+    assert.ok(html.indexOf('remote-line') < html.indexOf('class="cta"'));
+  });
+  it('marks reveal targets and ships the reveal script', () => {
+    const html = page('prod');
+    assert.match(html, /<h2 class="reveal">/);
+    assert.ok((html.match(/class="frow2 reveal-grp/g) ?? []).length >= 6);
+    assert.ok(existsSync(path.join(out.prod, 'landing', 'js', 'reveal.js')));
+    assert.match(readFileSync(path.join(out.prod, 'landing', 'js', 'main.js'), 'utf8'), /initReveal\(\)/);
+    assert.match(readFileSync(path.join(out.prod, 'landing', 'js', 'boot.js'), 'utf8'), /reveal-on/);
+    const boot = readFileSync(path.join(out.prod, 'landing', 'js', 'boot.js'), 'utf8');
+    assert.match(boot, /classList\.add\('js'\)/);
+    assert.match(boot, /location\.replace\('\/app'\)/);
+  });
+  it('hides content only under .reveal-on and has a reduced-motion rule', () => {
+    const c = css();
+    assert.match(c, /\.reveal-on \.reveal[^{]*\{opacity:0/);
+    assert.doesNotMatch(c.replace(/\.reveal-on[^{]*\{[^}]*\}/g, ''), /\.reveal[^{]*\{[^}]*opacity:0/);
+    assert.match(c, /@media\(prefers-reduced-motion:reduce\)\{\s*\.reveal-on \.reveal[^}]*opacity:1!important[^}]*transition:none!important/);
+  });
+  it('puts the brew box after the buttons in the hero', () => {
+    const html = page('prod');
+    const cta = html.slice(html.indexOf('<div class="cta">'), html.indexOf('<div class="wrap wide">'));
+    assert.ok(cta.indexOf('class="cta-btns"') < cta.indexOf('class="brew'));
+    assert.ok(cta.indexOf('Open web app') < cta.indexOf('class="brew'));
+    assert.match(css(), /\.cta\{display:flex;flex-direction:column;align-items:center/);
+  });
+});
+
 // En dash and em dash, built from code points so this file does not contain them.
 const DASHES = new RegExp('[' + String.fromCharCode(0x2013, 0x2014) + ']');
 

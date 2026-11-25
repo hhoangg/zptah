@@ -4,3 +4,9 @@
 @import "./glass.css";
 @import "./overlays.css";
 @import "./print.css";
+
+/* Sign-in family backdrop: the landing page look (near-black with a soft blue glow at the top). The family is always dark
+   (ui/Shell.tsx forces the scheme), so one rule is enough. */
+.auth-backdrop {
+  background: radial-gradient(900px 380px at 50% -80px, rgba(77, 163, 245, 0.14), transparent 70%), #0a0a0a;
+}

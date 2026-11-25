@@ -1,5 +1,5 @@
 // Feature rows: one small UI vignette per feature.
-import { ic, pm } from '../icons.mjs';
+import { hic, ic, pm } from '../icons.mjs';
 import { CH, row } from './diff.mjs';
 import { stIs, stPR } from './desktop.mjs';
 
@@ -31,7 +31,12 @@ V.cloud = `<div class="mock cl3"><div class="mh"><b>${pm('claude')}ENG-482 · We
 <div class="lane"><div class="ln">${ic('monitor')}<b>This computer</b></div><div class="mv2"><span class="btn-p sm c1">Continue in cloud</span><span class="btn-p sm c2">Continue locally</span></div><div class="ln r">${ic('cloud')}<b>GitHub Codespace</b></div></div>
 <div class="track"><i></i></div><div class="mf">Move a running session and keep its context</div></div>`;
 V.review = `<div class="mock rvm"><div class="rv-fh"><span class="cv2">${ic('chevron-down')}</span><b>client.ts</b><span class="fdir">src/sync</span><span class="sp"></span><span class="pl">+10</span><span class="mi2">-1</span></div><div class="rv-hh">@@ -20,5 +20,14 @@</div>${CH.s2.lines.slice(0, 8).map((l) => row(...l)).join('')}<div class="chg"><span>3 files</span><span class="sp"></span><b>Undo</b><b class="kp">Keep</b><b class="rvw">Review</b></div></div>`;
+V.anywhere = `<div class="mock any"><div class="mh"><b>Remote control</b><span class="mut">Not on the same Wi-Fi</span></div>
+<div class="any-flow"><div class="any-n"><span class="any-ic">${hic('phone')}</span><b>Your phone</b><em>Mobile data</em></div><div class="any-l"><i></i></div><div class="any-n any-r"><span class="any-ic">${ic('cloud')}</span><b>zptah.app</b><em>Relay</em></div><div class="any-l any-l2"><i></i></div><div class="any-n"><span class="any-ic">${ic('monitor')}</span><b>Your desktop</b><em>Home or office</em></div></div>
+<div class="any-pts"><div>${ic('check')}Desktop connects out, no open ports</div><div>${ic('check')}Session traffic is end-to-end encrypted</div><div>${ic('check')}Sign in with a passkey</div></div>
+<div class="mf">Pair once, revoke any device anytime</div></div>`;
 export const feats = [
+  ['Remote control', 'Reach your desktop from anywhere', 'Control your desktop agents from your phone or any browser over the internet. You do not need to be on the same LAN or Wi-Fi, and there is no VPN or port forwarding to set up: the desktop connects out to the zptah.app relay. Pair once, sign in with a passkey, and revoke devices anytime. Session traffic between your browser and your desktop is end-to-end encrypted, so the relay cannot read it.', V.anywhere, 'remote'],
   ['Worktrees', 'A worktree for every task', 'Give each session its own checkout and branch. Switch from the worktree picker, and agents stop stepping on each other.', V.worktrees],
   ['Inbox', 'Tickets become sessions', 'GitHub, GitLab, Linear, Jira, ClickUp and Azure DevOps in one list. Open any item in a new session, or ask an agent about it first.', V.inbox],
   ['Monos', 'Agents that remember', 'A Mono keeps a memory and a personality, runs habits on a schedule and drives workflows drawn as live run graphs.', V.monos],

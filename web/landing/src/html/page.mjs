@@ -103,7 +103,8 @@ ${sprite()}
 <header class="nav-top"><a class="logo" href="#top"><img src="${APP_ICON}" alt="" width="26" height="26"><b>zptah</b></a><nav><a href="#features">Features</a><a href="#providers">Providers</a><a href="#install">Install</a></nav><a class="gh" href="${REPO}">${ic('star')}GitHub</a><div class="auth"><a class="signin" href="${link.login}">Sign in</a><a class="start" href="${link.register}">Get started</a></div></header>
 <main id="top">
 <section class="hero"><div class="wrap"><div class="tag">Open source · MIT · does not sell tokens</div><h1>Every coding agent. One window.</h1><p class="sub">zptah runs the agents you already use as tabs and splits, keeps each task in its own worktree, and pings your phone when one needs you.</p>
-<div class="cta"><a class="btn pri" href="${RELEASES}">${hic('download')}Download for macOS</a><a class="btn" href="${link.login}">${hic('globe')}Open web app</a>${copyBtn()}</div></div>
+<p class="sub remote-line">Away from your desk? Control your agents from your phone over the internet. No shared Wi-Fi, no VPN.</p>
+<div class="cta"><div class="cta-btns"><a class="btn pri" href="${RELEASES}">${hic('download')}Download for macOS</a><a class="btn" href="${link.login}">${hic('globe')}Open web app</a></div>${copyBtn()}</div></div>
 <div class="wrap wide"><div class="stage" id="stage" data-focus="desktop">
 <div class="dcol"><div class="dwrap" id="dwrap"><div id="dw">${desktop}</div></div></div>
 <div class="pcol"><div class="pwrap"><div class="phone"><div class="bezel">${phone}</div></div><div class="pcap">${hic('phone')}zptah.app on your phone</div></div></div>
@@ -112,8 +113,8 @@ ${sprite()}
 <div class="capr"><p class="cap" id="cap" aria-live="polite"><b>${chips[0][0]}.</b> ${chips[0][1]}</p><button class="pp" id="pp" aria-label="Pause demo"><svg viewBox="0 0 24 24" class="ic"><path class="pa" d="M8 5v14M16 5v14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path class="pplay" d="M7 5l12 7-12 7z" fill="currentColor"/></svg><span>Pause</span></button></div></div>
 </div></section>
 
-<section class="sec" id="features"><div class="wrap"><h2>Built for people who run many agents</h2><p class="lead">Everything the demo just did, plus the parts you meet on day two.</p>
-${feats.map(([k, t, d, v], i) => `<article class="frow2${i % 2 ? ' rev' : ''}"><div class="ft"><span class="kick">${k}</span><h3>${t}</h3><p>${d}</p></div><div class="fv">${v}</div></article>`).join('')}</div></section>
+<section class="sec" id="features"><div class="wrap"><h2 class="reveal">Built for people who run many agents</h2><p class="lead reveal">Everything the demo just did, plus the parts you meet on day two.</p>
+${feats.map(([k, t, d, v, id], i) => `<article class="frow2 reveal-grp${i % 2 ? ' rev' : ''}"${id ? ` id="${id}"` : ''}><div class="ft"><span class="kick">${k}</span><h3>${t}</h3><p>${d}</p></div><div class="fv">${v}</div></article>`).join('')}</div></section>
 
 <section class="sec alt" id="providers"><div class="wrap"><div class="pgrid"><div class="ptxt"><h2>Eleven agents, one composer</h2><p class="lead">Pick the provider and model from the same menu the app uses. zptah drives the CLIs you already have installed and signed in to, so there are no tokens to buy from us. Missing CLIs are detected at startup and disabled with an install hint.</p><p class="hintp">Hover a provider on the rail.</p></div><div class="pfv">${provFly}</div></div></div></section>
 
