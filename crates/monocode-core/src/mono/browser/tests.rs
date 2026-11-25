@@ -1315,3 +1315,31 @@ fn every_level_tells_the_mono_to_list_tabs_and_reuse_one() {
         assert!(block.contains("allow_duplicate_tab"), "{trust:?}");
     }
 }
+
+#[test]
+fn the_extension_preview_switch_is_off_by_default_and_old_rosters_load_with_it_off() {
+    assert!(!MonoBrowser::default().use_extension);
+    let old: MonoBrowser =
+        serde_json::from_str(r#"{"enabled":true,"profileDir":"Default"}"#).unwrap();
+    assert!(!old.use_extension && !old.uses_extension());
+
+    let mut on = browser("Default");
+    on.use_extension = true;
+    let json = serde_json::to_string(&on).unwrap();
+    assert!(json.contains(r#""useExtension":true"#), "{json}");
+    let back: MonoBrowser = serde_json::from_str(&json).unwrap();
+    assert!(back.use_extension && back.uses_extension());
+
+    // The switch does nothing while the browser itself is off, and does not restart a server.
+    on.enabled = false;
+    assert!(!on.uses_extension());
+    assert_eq!(on.server_key().1, browser("Default").server_key().1);
+}
+
+#[test]
+fn browser_read_is_a_known_read_tool() {
+    assert!(KNOWN_TOOLS.contains(&"browser_read"));
+    assert!(READ_ONLY_TOOLS.contains(&"browser_read"));
+    assert!(BrowserTrust::ReadOnly.offers("browser_read"));
+    assert!(BrowserTrust::AskRisky.offers("browser_read"));
+}

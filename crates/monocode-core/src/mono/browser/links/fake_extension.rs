@@ -27,7 +27,14 @@ pub(crate) trait FakeStream: Read + Write + Send {
 #[cfg(unix)]
 impl FakeStream for std::os::unix::net::UnixStream {
     fn set_read_timeout(&self, timeout: Option<Duration>) {
-        std::os::unix::net::UnixStream::set_read_timeout(self, timeout).expect("read timeout");
+        // macOS refuses to set a timeout (EINVAL) on a socket whose peer already closed, which
+        // happens when the app refuses the connection before this runs. Reads on such a socket
+        // return EOF at once, so there is nothing to time out; any other error is a real failure.
+        match std::os::unix::net::UnixStream::set_read_timeout(self, timeout) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {}
+            Err(e) => panic!("read timeout: {e}"),
+        }
     }
     fn shutdown(&self) {
         let _ = std::os::unix::net::UnixStream::shutdown(self, std::net::Shutdown::Both);
