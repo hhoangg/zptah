@@ -7,9 +7,14 @@ import { CodeBlock } from "@/features/markdown/CodeBlock";
 import { FlowDiagram } from "./FlowDiagram";
 import { parseFlowchart } from "./mermaid";
 
+/** The desktop previews at most 32 KiB and 512 lines of Mermaid (monocode-gpui markdown/mermaid.rs); the same bounds here. */
+export const MAX_MERMAID_BYTES = 32 * 1024;
+export const MAX_MERMAID_LINES = 512;
+const tooLarge = (source: string) => new TextEncoder().encode(source).length > MAX_MERMAID_BYTES || source.split("\n").length > MAX_MERMAID_LINES;
+
 export function MermaidBlock({ code, isIncomplete = false }: { code: string; isIncomplete?: boolean }) {
   const source = code.replace(/\n+$/, "");
-  const parsed = useMemo(() => (isIncomplete ? null : parseFlowchart(source)), [source, isIncomplete]);
+  const parsed = useMemo(() => (isIncomplete ? null : tooLarge(source) ? ({ ok: false, error: "too large to draw" } as const) : parseFlowchart(source)), [source, isIncomplete]);
   if (!parsed) return <CodeBlock code={code} language="mermaid" isIncomplete />;
   if (!parsed.ok) {
     return (

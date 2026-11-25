@@ -64,7 +64,8 @@ export function DiagramViewer(props: DiagramViewerProps) {
   const contentRef = useRef<[number, number]>([width, height]);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const opener = useRef<HTMLElement | null>(null);
+  const fullButton = useRef<HTMLButtonElement | null>(null);
+  const [placeholder, setPlaceholder] = useState(0);
   const hasSource = source !== undefined;
   const sourceShown = hasSource && showSource;
 
@@ -129,19 +130,44 @@ export function DiagramViewer(props: DiagramViewerProps) {
     [fit],
   );
 
-  // Esc leaves fullscreen wherever the focus is, unless something else already handled the key.
+  const exitFullscreen = useCallback(() => setFullscreen(false), []);
+
+  // Esc leaves fullscreen. The panel handles it first (below); this fallback covers focus outside the panel, unless
+  // the key already was handled or focus sits in another dialog or menu, which owns its own Esc.
   useEffect(() => {
     if (!fullscreen) return undefined;
     const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) setFullscreen(false);
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const owner = document.activeElement?.closest("[role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox']");
+      if (owner && owner !== panelRef.current) return;
+      event.preventDefault();
+      exitFullscreen();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [fullscreen, exitFullscreen]);
+
+  // A modal: the page behind does not scroll, focus stays inside, and it returns to the Full button on exit.
+  useEffect(() => {
+    if (!fullscreen) return undefined;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onFocusIn = (event: FocusEvent) => {
+      const panel = panelRef.current;
+      if (panel && event.target instanceof Node && !panel.contains(event.target)) panel.focus();
+    };
+    document.addEventListener("focusin", onFocusIn);
+    return () => {
+      document.body.style.overflow = previous;
+      document.removeEventListener("focusin", onFocusIn);
+    };
   }, [fullscreen]);
 
+  const wasFullscreen = useRef(false);
   useEffect(() => {
     if (fullscreen) panelRef.current?.focus();
-    else opener.current?.focus?.();
+    else if (wasFullscreen.current) fullButton.current?.focus();
+    wasFullscreen.current = fullscreen;
   }, [fullscreen]);
 
   useEffect(() => () => clearTimeout(copyTimer.current), []);
@@ -153,7 +179,8 @@ export function DiagramViewer(props: DiagramViewerProps) {
   };
 
   const toggleFullscreen = () => {
-    if (!fullscreen) opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // The inline panel is replaced by a placeholder of its own height, so the transcript does not jump.
+    if (!fullscreen) setPlaceholder(panelRef.current?.getBoundingClientRect().height ?? 0);
     fitted.current = false;
     touched.current = false;
     setFullscreen(!fullscreen);
@@ -279,7 +306,7 @@ export function DiagramViewer(props: DiagramViewerProps) {
       <button type="button" className={toolButton()} aria-label="Fit to view" onClick={fit}>
         Fit
       </button>
-      <button type="button" className={toolButton()} aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"} aria-pressed={fullscreen} onClick={toggleFullscreen}>
+      <button ref={fullButton} type="button" className={toolButton()} aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"} aria-pressed={fullscreen} onClick={toggleFullscreen}>
         {fullscreen ? "Exit" : "Full"}
       </button>
       {hasSource ? (
@@ -324,9 +351,35 @@ export function DiagramViewer(props: DiagramViewerProps) {
     </div>
   );
 
+  const onPanelKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!fullscreen) return;
+    if (event.key === "Escape" && !event.defaultPrevented) {
+      event.preventDefault();
+      event.stopPropagation();
+      exitFullscreen();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const items = [...panel.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])")];
+    const first = items[0];
+    const last = items.at(-1);
+    if (!first || !last) return;
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || active === panel)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   const panel = (
     <div
       ref={panelRef}
+      onKeyDown={onPanelKeyDown}
       tabIndex={-1}
       role={fullscreen ? "dialog" : "group"}
       aria-label={title}
@@ -345,7 +398,7 @@ export function DiagramViewer(props: DiagramViewerProps) {
   // A fixed overlay inside a transformed ancestor (the virtualised transcript) would be clipped: portal it to the body.
   return (
     <>
-      <div aria-hidden="true" style={{ height: boardHeight(height, props.boardHeight) + 46 }} />
+      <div aria-hidden="true" data-testid="diagram-placeholder" style={{ height: placeholder }} />
       {createPortal(
         <div className="fixed inset-0 z-[200] flex bg-black/55 p-0 sm:p-4" data-testid="diagram-fullscreen">
           {panel}

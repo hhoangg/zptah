@@ -6,6 +6,8 @@ use crate::visual::ThemeColor;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+#[cfg(test)]
+mod golden;
 pub mod layout;
 pub mod mermaid;
 #[cfg(test)]

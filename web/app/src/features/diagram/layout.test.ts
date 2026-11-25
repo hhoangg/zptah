@@ -180,7 +180,7 @@ describe("parity with the Rust layout (shared fixtures)", () => {
   it("has fixtures", () => expect(names.length).toBeGreaterThanOrEqual(5));
   it.each(names)("lays out %s like the desktop", (name) => {
     const golden = readGolden(name);
-    expect(golden, `fixtures/${name}.layout.json (generate it with the Rust dump test, see the PR)`).not.toBeNull();
+    expect(golden, `fixtures/${name}.layout.json (regenerate with ZPTAH_UPDATE_DIAGRAM_GOLDENS=1, see crates/monocode-core/src/diagram/golden.rs)`).not.toBeNull();
     expectMatchesRust(layout(readGraph(name)), golden!);
     assertClean(readGraph(name));
   });

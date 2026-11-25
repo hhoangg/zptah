@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiagramViewer } from "./DiagramViewer";
@@ -178,5 +178,82 @@ describe("DiagramViewer", () => {
     expect(zoom()).toBe("112%");
     await user.keyboard("0");
     expect(zoom()).toBe("93%");
+  });
+
+  it("is a modal: Tab cycles inside, the page does not scroll, and focus returns to Full on exit", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <button type="button">outside</button>
+        <DiagramViewer title="Approval" ariaLabel="Approval diagram" width={600} height={200} source="x">
+          <rect width={600} height={200} />
+        </DiagramViewer>
+      </>,
+    );
+    await user.click(screen.getByRole("button", { name: "Fullscreen" }));
+    expect(document.body.style.overflow).toBe("hidden");
+    const dialog = screen.getByRole("dialog", { name: "Approval" });
+    await waitFor(() => expect(dialog).toHaveFocus());
+    const buttons = within(dialog).getAllByRole("button");
+    const lastStop = within(dialog).getByTestId("diagram-board");
+    lastStop.focus();
+    await user.tab();
+    expect(buttons[0]).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(lastStop).toHaveFocus();
+    // Focus that escapes (to the page behind) is pulled back.
+    screen.getByRole("button", { name: "outside" }).focus();
+    expect(dialog).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(document.body.style.overflow).toBe("");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fullscreen" })).toHaveFocus());
+  });
+
+  it("leaves fullscreen on Esc only when nothing else handled it, and handles it once", async () => {
+    const user = userEvent.setup();
+    const outer = vi.fn();
+    document.addEventListener("keydown", outer);
+    view();
+    await user.click(screen.getByRole("button", { name: "Fullscreen" }));
+    const dialog = screen.getByRole("dialog", { name: "Approval" });
+    // A key another handler already took (defaultPrevented) does not close it.
+    const stop = (event: Event) => event.preventDefault();
+    within(dialog).getByRole("button", { name: "Zoom in" }).addEventListener("keydown", stop);
+    within(dialog).getByRole("button", { name: "Zoom in" }).focus();
+    await user.keyboard("{Escape}");
+    expect(screen.getByTestId("diagram-fullscreen")).toBeInTheDocument();
+    within(dialog).getByRole("button", { name: "Zoom in" }).removeEventListener("keydown", stop);
+    // Handled by the panel: propagation stops, so the page never sees the key.
+    outer.mockClear();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("diagram-fullscreen")).toBeNull();
+    expect(outer).not.toHaveBeenCalled();
+    document.removeEventListener("keydown", outer);
+  });
+
+  it("does not take Esc from another dialog that has the focus", async () => {
+    const user = userEvent.setup();
+    view();
+    await user.click(screen.getByRole("button", { name: "Fullscreen" }));
+    const other = document.createElement("div");
+    other.setAttribute("role", "dialog");
+    other.tabIndex = 0;
+    document.body.append(other);
+    // The focus trap would pull focus back, so test the window fallback directly with focus inside the other dialog.
+    vi.spyOn(document, "activeElement", "get").mockReturnValue(other);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByTestId("diagram-fullscreen")).toBeInTheDocument();
+    other.remove();
+  });
+
+  it("keeps the placeholder at the height the panel had", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const h = this.getAttribute("data-testid") === "diagram-viewer" ? 333 : this.getAttribute("data-testid") === "diagram-board" ? 300 : 0;
+      return { x: 0, y: 0, left: 0, top: 0, right: 600, bottom: h, width: 600, height: h, toJSON: () => ({}) } as DOMRect;
+    });
+    view();
+    await user.click(screen.getByRole("button", { name: "Fullscreen" }));
+    expect(screen.getByTestId("diagram-placeholder").style.height).toBe("333px");
   });
 });

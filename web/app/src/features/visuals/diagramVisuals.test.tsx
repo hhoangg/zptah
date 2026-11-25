@@ -1,9 +1,10 @@
 // The canvas and flow nodes of a visual tree (crates/monocode-core/src/visual/model.rs): label anchoring, rect radius
 // and stroke, arrows and dashes, chips, automatic ink, and the flow diagram in the shared viewer. All drawn from data.
-import { render, screen, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { act, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ASCENT } from "@/features/diagram/model";
 import { useAppearance } from "@/lib/appearance";
+import { setLabelMeasurer } from "./Canvas";
 import { INK_DARK, INK_LIGHT, inkOn, labelBackdrop, tokenRgb } from "./ink";
 import { parseVisualTree } from "./parse";
 import type { Shape, VisualNode } from "./types";
@@ -15,6 +16,10 @@ const canvas = (shapes: Shape[]): VisualNode => ({ kind: "canvas", width: 320, h
 const drawn = (shapes: Shape[]) => render(<VisualTree node={canvas(shapes)} />).container.querySelector("svg[data-visual='canvas']") as SVGSVGElement;
 
 beforeEach(() => useAppearance.setState({ scheme: "dark" }));
+afterEach(() => {
+  setLabelMeasurer(null);
+  vi.unstubAllGlobals();
+});
 
 describe("canvas shapes", () => {
   it("draws rects with a radius clamped to the half size, a stroke, and no fill", () => {
@@ -178,5 +183,50 @@ describe("canvas shapes from the desktop", () => {
       ],
     });
     expect(parseVisualTree({ kind: "canvas", width: 3, height: 3, shapes: [{ kind: "label", x: 0, y: 0, text: "t", align: "diagonal" }] })).toMatchObject({ shapes: [{ align: "start", baseline: "top", chip: false, color: null }] });
+  });
+});
+
+describe("canvas chips and fonts", () => {
+  it("measures a chip again once the web fonts have loaded", async () => {
+    let width = 50;
+    setLabelMeasurer(() => width);
+    let loaded: () => void = () => {};
+    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: new Promise<void>((resolve) => (loaded = resolve)), addEventListener() {}, removeEventListener() {} } });
+    const chipWidth = () => Number(document.querySelector("rect[data-chip]")!.getAttribute("width"));
+    render(<VisualTree node={canvas([label({ chip: true })])} />);
+    const pad = 12 * 0.35 * 2;
+    expect(chipWidth()).toBeCloseTo(50 + pad, 6);
+    width = 80;
+    await act(async () => {
+      loaded();
+      await Promise.resolve();
+    });
+    expect(chipWidth()).toBeCloseTo(80 + pad, 6);
+    Reflect.deleteProperty(document, "fonts");
+  });
+});
+
+describe("colour tokens from the wire", () => {
+  it("accept only known names, never inherited object keys", () => {
+    const node = parseVisualTree({
+      kind: "canvas",
+      width: 300,
+      height: 200,
+      shapes: [
+        { kind: "rect", x: 0, y: 0, width: 5, height: 5, color: "constructor", stroke: "__proto__" },
+        { kind: "label", x: 0, y: 0, text: "t", color: "toString" },
+      ],
+    });
+    expect(node).toMatchObject({ shapes: [{ color: "accent", stroke: null }, { color: null }] });
+    expect(parseVisualTree({ kind: "chart", chart_type: "bar", series: [{ label: "a", values: [1], color: "hasOwnProperty" }], labels: [], height: 200 })).toMatchObject({ series: [{ label: "a" }] });
+    const series = parseVisualTree({ kind: "chart", chart_type: "bar", series: [{ label: "a", values: [1], color: "constructor" }], labels: [], height: 200 });
+    expect(series && "series" in series && series.series[0]).not.toHaveProperty("color");
+    const flow = parseVisualTree({ kind: "flow", graph: { nodes: [{ id: "a", label: "A", color: "__proto__" }], edges: [] } });
+    expect(flow).toMatchObject({ graph: { nodes: [{ color: null }] } });
+  });
+
+  it("resolve an inherited key to the accent, not to a function", () => {
+    const { container } = render(<VisualTree node={canvas([rect({ color: "constructor" as never })])} />);
+    expect(container.querySelector("rect")!.getAttribute("fill")).toBe("var(--accent-color)");
   });
 });

@@ -64,4 +64,14 @@ describe("mermaid blocks", () => {
     for (const el of container.querySelectorAll("*")) expect([...el.attributes].some((a) => /^on/i.test(a.name))).toBe(false);
     warn.mockRestore();
   });
+
+  it("shows an oversized block as source without parsing it", () => {
+    const big = `\`\`\`mermaid\nflowchart LR\n${"A --> B\n".repeat(600)}\`\`\``;
+    render(<Markdown text={big} />);
+    expect(screen.getByTestId("mermaid-fallback")).toHaveTextContent(/too large/);
+    const wide = `\`\`\`mermaid\nflowchart LR\nA[${"x".repeat(33 * 1024)}] --> B\n\`\`\``;
+    const { unmount } = render(<Markdown text={wide} />);
+    expect(screen.getAllByTestId("mermaid-fallback")).toHaveLength(2);
+    unmount();
+  });
 });

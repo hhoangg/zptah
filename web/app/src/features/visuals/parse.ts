@@ -35,12 +35,18 @@ const optStr = (value: unknown): string | null | undefined => (value === undefin
 const arr = (value: unknown, max = MAX_VALUES): unknown[] => (Array.isArray(value) && value.length <= max ? value : bad());
 const nums = (value: unknown) => arr(value).map(num);
 const strs = (value: unknown) => arr(value).map(str);
-const color = (value: unknown): ThemeColor => (typeof value === "string" ? (value as ThemeColor) : "accent");
+const THEME_COLORS: Readonly<Record<ThemeColor, true>> = {
+  ink: true, muted: true, faint: true, accent: true, positive: true, negative: true, warning: true,
+  series1: true, series2: true, series3: true, series4: true, series5: true, series6: true,
+};
+/** A theme colour token from the wire: only the known names count (never an inherited key such as "constructor"). */
+const isThemeColor = (value: unknown): value is ThemeColor => typeof value === "string" && Object.hasOwn(THEME_COLORS, value);
+const color = (value: unknown): ThemeColor => (isThemeColor(value) ? value : "accent");
 const gap = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(value, 0), 64) : 8);
 const dimension = (value: unknown): number => Math.min(Math.max(num(value), 1), 4096);
 
 const oneOf = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T => (allowed.includes(value as T) ? (value as T) : fallback);
-const optColor = (value: unknown): ThemeColor | null => (typeof value === "string" ? (value as ThemeColor) : null);
+const optColor = (value: unknown): ThemeColor | null => (isThemeColor(value) ? value : null);
 const strokeWidth = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(value, 0), 64) : 1.5);
 
 function shape(value: unknown): Shape {
@@ -154,7 +160,7 @@ function node(value: unknown, budget: { nodes: number }, depth: number): VisualN
       if (type !== "bar" && type !== "line" && type !== "area") return bad();
       const series: Series[] = arr(value.series, MAX_SERIES).map((entry) => {
         if (!isRecord(entry)) return bad();
-        return { label: str(entry.label), values: nums(entry.values), ...(typeof entry.color === "string" ? { color: entry.color as ThemeColor } : {}) };
+        return { label: str(entry.label), values: nums(entry.values), ...(isThemeColor(entry.color) ? { color: entry.color } : {}) };
       });
       const height = typeof value.height === "number" && Number.isFinite(value.height) ? value.height : CHART_HEIGHT.fallback;
       return { kind: "chart", chart_type: type, series, labels: strs(value.labels ?? []), height: Math.min(Math.max(height, CHART_HEIGHT.min), CHART_HEIGHT.max) };
@@ -164,7 +170,7 @@ function node(value: unknown, budget: { nodes: number }, depth: number): VisualN
     case "donut": {
       const slices: Slice[] = arr(value.slices).map((entry) => {
         if (!isRecord(entry)) return bad();
-        return { label: str(entry.label), value: num(entry.value), ...(typeof entry.color === "string" ? { color: entry.color as ThemeColor } : {}) };
+        return { label: str(entry.label), value: num(entry.value), ...(isThemeColor(entry.color) ? { color: entry.color } : {}) };
       });
       return { kind: "donut", slices, label: optStr(value.label) ?? null, value: optStr(value.value) ?? null };
     }

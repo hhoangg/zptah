@@ -1,7 +1,7 @@
 // A `visual.canvas` drawn as one inline SVG, as the desktop's `drawing` in crates/monocode-gpui/src/visuals.rs: rects
 // with radius and stroke, circles, lines and polylines with arrowheads and dashes, and labels anchored by align and
 // baseline, optionally on a chip, with automatic dark or light ink. Data only; label text is a text child.
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { arrowhead } from "@/features/diagram/layout";
 import { ASCENT, LABEL_FONT, labelOrigin } from "@/features/diagram/model";
 import { useAppearance } from "@/lib/appearance";
@@ -13,21 +13,63 @@ const FONT_FAMILY = "ui-sans-serif, system-ui, sans-serif";
 const SVG_ANCHOR = { start: "start", center: "middle", end: "end" } as const;
 
 let context: CanvasRenderingContext2D | null | undefined;
+let measurer: ((text: string, font: number) => number) | null = null;
+const widths = new Map<string, number>();
 
-/** The advance of `text` in the label font: measured when the browser can, else a plain estimate. */
+/** Replaces the text measurer (tests); null restores the browser's canvas measurement. */
+export function setLabelMeasurer(next: ((text: string, font: number) => number) | null): void {
+  measurer = next;
+  widths.clear();
+}
+
+/** The advance of `text` in the label font: measured when the browser can, else a plain estimate. Cached per font and text. */
 export function measureLabel(text: string, font: number): number {
-  if (context === undefined) {
-    try {
-      context = typeof navigator !== "undefined" && /jsdom/i.test(navigator.userAgent) ? null : document.createElement("canvas").getContext("2d");
-    } catch {
-      context = null;
+  const key = `${font}|${text}`;
+  const known = widths.get(key);
+  if (known !== undefined) return known;
+  let width: number;
+  if (measurer) {
+    width = measurer(text, font);
+  } else {
+    if (context === undefined) {
+      try {
+        context = typeof navigator !== "undefined" && /jsdom/i.test(navigator.userAgent) ? null : document.createElement("canvas").getContext("2d");
+      } catch {
+        context = null;
+      }
+    }
+    if (context) {
+      context.font = `${font}px ${FONT_FAMILY}`;
+      width = context.measureText(text).width;
+    } else {
+      width = [...text].length * font * 0.56;
     }
   }
-  if (context) {
-    context.font = `${font}px ${FONT_FAMILY}`;
-    return context.measureText(text).width;
-  }
-  return [...text].length * font * 0.56;
+  if (widths.size > 512) widths.clear();
+  widths.set(key, width);
+  return width;
+}
+
+/** Bumps when the page's web fonts finish loading, after which cached widths are stale and chips are measured again. */
+function useFontsVersion(): number {
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    const fonts = typeof document !== "undefined" ? document.fonts : undefined;
+    if (!fonts) return undefined;
+    let live = true;
+    const refresh = () => {
+      if (!live) return;
+      widths.clear();
+      setVersion((v) => v + 1);
+    };
+    void fonts.ready.then(refresh, () => {});
+    fonts.addEventListener?.("loadingdone", refresh);
+    return () => {
+      live = false;
+      fonts.removeEventListener?.("loadingdone", refresh);
+    };
+  }, []);
+  return version;
 }
 
 const pointList = (points: readonly (readonly [number, number])[]) => points.map((p) => `${p[0]},${p[1]}`).join(" ");
@@ -48,6 +90,7 @@ export function CanvasShapes({ shapes }: { shapes: readonly Shape[] }) {
   const color = useVisualColor();
   const scheme = useAppearance((state) => state.scheme);
   const accent = useMemo<Rgb>(() => accentRgb(scheme), [scheme]);
+  useFontsVersion();
   return (
     <>
       {shapes.map((shape, index) => {
