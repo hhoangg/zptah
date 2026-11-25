@@ -52,7 +52,7 @@ class FakeApp {
       const want = b64encode(await extMac(o.key, this.extChal, this.appChal, hello.params.instance_id));
       if (f.params.mac !== want) return this.send({ v: 1, type: "res", id: f.id, ok: false, error: { code: "E_AUTH", message: "no" } });
       this.session = new Session(await sessionKey(o.key, this.extChal, this.appChal), DIR_APP_TO_EXT);
-      this.send(await this.session.seal({ v: 1, type: "res", id: f.id, ok: true, result: { roster: { monos: [] }, stopped: false } }));
+      this.send(await this.session.seal({ v: 1, type: "res", id: f.id, ok: true, result: { roster: [], stopped: false } }));
     } else if (f.method === "pair.begin") {
       this.send({ v: 1, type: "res", id: f.id, ok: true, result: { key: b64encode(o.newKey) } });
     }

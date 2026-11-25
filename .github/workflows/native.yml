@@ -33,6 +33,8 @@ concurrency:
 #              core-windows-build -> core-windows-test (shards)
 #   extension (zptah Browser extension: node tests, tsc, build; runs on every run, no path
 #              filter, so it can never stay pending)
+#   changes -> extension-e2e (headless Chrome for Testing end-to-end test; only when the
+#              `browser` filter matched)
 #   release-cache, release-cache-rpm (push to main only, never blocking)
 #   ci-passed waits for every job above and is the one check to require for merging.
 #
@@ -52,6 +54,7 @@ jobs:
       pull-requests: read
     outputs:
       native: ${{ steps.decide.outputs.native }}
+      browser: ${{ steps.decide.outputs.browser }}
     steps:
       - id: filter
         if: github.event_name == 'pull_request'
@@ -90,23 +93,45 @@ jobs:
               - 'package-lock.json'
               - '.github/workflows/native*.yml'
               - '.github/actions/**'
+            # What the headless browser end-to-end test (extension-e2e) builds or loads: the
+            # extension, the browser core, the app-side example, the build profiles and this file.
+            browser:
+              - 'extensions/**'
+              - 'crates/monocode-core/src/mono/browser.rs'
+              - 'crates/monocode-core/src/mono/browser/**'
+              - 'crates/monocode-core/examples/**'
+              - 'crates/monocode-core/Cargo.toml'
+              - 'crates/monocode-gpui/Cargo.toml'
+              - '**/Cargo.lock'
+              - '**/rust-toolchain*'
+              - '**/.cargo/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/native.yml'
       - id: decide
         env:
           EVENT: ${{ github.event_name }}
           FILTERED: ${{ steps.filter.outputs.native }}
+          FILTERED_BROWSER: ${{ steps.filter.outputs.browser }}
         run: |
           if [ "$EVENT" = "pull_request" ]; then
             native="$FILTERED"
+            browser="$FILTERED_BROWSER"
           else
             native=true
+            browser=true
           fi
           # Fail closed: an empty or unexpected filter result must not skip the jobs.
-          case "$native" in
-            true|false) ;;
-            *) echo "Unexpected native filter result: '$native'"; exit 1 ;;
-          esac
+          for value in "$native" "$browser"; do
+            case "$value" in
+              true|false) ;;
+              *) echo "Unexpected filter result: '$value'"; exit 1 ;;
+            esac
+          done
           echo "native=$native" >> "$GITHUB_OUTPUT"
           echo "native=$native"
+          echo "browser=$browser" >> "$GITHUB_OUTPUT"
+          echo "browser=$browser"
 
   # Core crate on Linux: native node tests, clippy and the tests in one job. The Windows
   # core tests are sharded below (core-windows-build and core-windows-test).
@@ -138,7 +163,7 @@ jobs:
       # native:test:dev are skipped.
       - run: npm ci
       - run: npm run native:test:dev
-      - run: cargo clippy --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-core --all-targets --profile native-dev -- -D warnings
+      - run: cargo clippy --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-core --all-targets --features test-support --profile native-dev -- -D warnings
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest@0.9.151
@@ -511,6 +536,41 @@ jobs:
       - run: npm run ext:check
       - run: npm run ext:build
 
+  # Headless end-to-end test of the zptah Browser extension against a pinned Chrome for Testing
+  # (spec 16.3): real extension, real native messaging host, app side from the monocode-core
+  # example `browser_e2e_app`. Heavier than `extension`, so it runs only when the extension or
+  # the browser core changed (the `browser` filter above). `ci-passed` accepts a skip only when
+  # the filter said it was not needed.
+  extension-e2e:
+    name: Extension e2e (ubuntu-latest)
+    needs: changes
+    if: needs.changes.outputs.browser == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/monocode-gpui
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install Linux core dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libdbus-1-dev pkg-config
+      # The pinned Chrome for Testing zip is verified by sha256 on every run; the cache only
+      # saves the download.
+      - uses: actions/cache@v4
+        with:
+          path: .cache/zptah-e2e
+          key: cft-${{ hashFiles('extensions/zptah-browser/test/e2e/cft-pin.json') }}
+      - run: npm ci --ignore-scripts
+      - run: npm run ext:e2e
+
   # The one check to require for merging. It runs on every pull request and push
   # (the workflow has no path filter), also when jobs failed or were skipped.
   ci-passed:
@@ -519,6 +579,7 @@ jobs:
     needs:
       - changes
       - extension
+      - extension-e2e
       - core
       - desktop-lint
       - desktop
@@ -537,10 +598,11 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           native="$(jq -r '.changes.outputs.native // ""' <<<"$NEEDS")"
+          browser="$(jq -r '.changes.outputs.browser // ""' <<<"$NEEDS")"
           changes_result="$(jq -r '.changes.result' <<<"$NEEDS")"
           failed=0
           printf '%-24s %-10s %s\n' JOB RESULT VERDICT
-          for job in changes extension core core-windows-build core-windows-test desktop-lint desktop desktop-test-build desktop-test release-cache release-cache-rpm; do
+          for job in changes extension extension-e2e core core-windows-build core-windows-test desktop-lint desktop desktop-test-build desktop-test release-cache release-cache-rpm; do
             result="$(jq -r --arg job "$job" '.[$job].result' <<<"$NEEDS")"
             reason=""
             case "$result" in
@@ -550,6 +612,13 @@ jobs:
                   release-cache|release-cache-rpm) ;; # main pushes only
                   changes) reason="the change detection must run" ;;
                   extension) reason="the extension job always runs" ;;
+                  extension-e2e)
+                    if [ "$changes_result" != success ]; then
+                      reason="skipped but change detection did not succeed"
+                    elif [ "$browser" = true ]; then
+                      reason="skipped although extension or browser core paths changed"
+                    fi
+                    ;;
                   *)
                     if [ "$changes_result" != success ]; then
                       reason="skipped but change detection did not succeed"
@@ -568,7 +637,7 @@ jobs:
               printf '%-24s %-10s ok\n' "$job" "$result"
             fi
           done
-          echo "native changes: ${native:-unknown}"
+          echo "native changes: ${native:-unknown}, browser changes: ${browser:-unknown}"
           if [ "$failed" -ne 0 ]; then
             echo "CI failed: see the FAIL rows above."
             exit 1
