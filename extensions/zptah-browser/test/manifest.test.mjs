@@ -18,6 +18,7 @@ test("permission snapshot", () => {
   ]);
   assert.deepEqual(manifest.optional_permissions, ["debugger"]);
   assert.deepEqual(manifest.host_permissions, ["<all_urls>"]);
+  assert.equal(manifest.incognito, "not_allowed");
 });
 
 test("manifest has no key, no external access and no remote surface", () => {

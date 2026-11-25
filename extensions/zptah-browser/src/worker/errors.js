@@ -1,6 +1,9 @@
 // Protocol errors raised by the read path and the reply helpers shared by the handlers.
 import { PROTOCOL } from "./config.js";
 
+/** Used when a request carries no deadline_ms. */
+export const DEFAULT_DEADLINE_MS = 30000;
+
 export class ZptahError extends Error {
   /** @param {string} code @param {string} message */
   constructor(code, message) {

@@ -46,7 +46,8 @@
   function find(args, env) {
     const doc = env?.doc ?? root.document;
     const st = ns.snapshot.state;
-    if (st.generation !== args.generation) ns.snapshot.beginGeneration(args.generation);
+    if (args.reset === true) ns.snapshot.beginGeneration(args.generation);
+    else if (st.generation !== args.generation) return { stale: true };
     const model = ns.snapshot.domToModel(doc.body ?? doc.documentElement, env);
     const matches = model ? findInModel(model, args.query, args.max ?? 20, ns.snapshot.refFor) : [];
     return { matches, url: String(root.location?.href ?? ""), title: String(doc.title ?? "") };

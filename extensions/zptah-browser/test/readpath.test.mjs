@@ -271,14 +271,14 @@ test("snapshot: child frames are stitched under their iframe and refs get the fr
     },
     content: {
       "1:0": () => snapAnswer({ text: '- main:\n  - iframe [ref=e3]:\n    \u0000slot:0\u0000\n  - paragraph: after', iframes: [{ src: "https://pay.test/frame" }] }),
-      "1:5": () => ({ text: '- textbox "Card" [ref=e1]: <filled 16 chars>', url: "https://pay.test/frame", title: "", hidden_dropped: 2, controls: 1, iframes: [], visibility: "visible" }),
+      "1:5": () => ({ text: '- textbox "Card" [ref=e1]: <filled>', url: "https://pay.test/frame", title: "", hidden_dropped: 2, controls: 1, iframes: [], visibility: "visible" }),
       "1:6": () => assert.fail("a challenge frame must not be injected"),
       "1:7": () => assert.fail("a blocked frame must not be injected"),
     },
   });
   const r = await s.call("page.snapshot", { tab: 1, mode: "full" });
   assert.equal(r.ok, true, JSON.stringify(r));
-  assert.equal(r.result.text, '- main:\n  - iframe [ref=e3]:\n    - textbox "Card" [ref=f5e1]: <filled 16 chars>\n  - paragraph: after');
+  assert.equal(r.result.text, '- main:\n  - iframe [ref=e3]:\n    - textbox "Card" [ref=f5e1]: <filled>\n  - paragraph: after');
   assert.equal(r.result.hidden_dropped, 3);
   assert.ok(!r.result.text.includes("\u0000"));
 });
@@ -372,7 +372,7 @@ test("find: matches from every frame with prefixed refs, generation and page hea
     frames: { 1: [{ frameId: 0, parentFrameId: -1, url: "https://shop.test/a" }, { frameId: 5, parentFrameId: 0, url: "https://pay.test/f" }] },
     content: {
       "1:0": (op, a) => ({ matches: [{ ref: "e4", role: "button", name: "Buy", context: "Cart" }], url: "https://shop.test/a", title: "Shop" }),
-      "1:5": () => ({ matches: [{ ref: "e1", role: "textbox", name: "Buy code", context: "" }], url: "u", title: "t" }),
+      "1:5": () => ({ matches: [{ ref: "e1", role: "textbox", name: "Buy code", context: "" }], url: "https://pay.test/f", title: "t" }),
     },
   });
   const r = await s.call("page.find", { tab: 1, query: "buy" });
@@ -563,4 +563,93 @@ test("no worker source activates a tab or focuses a window", () => {
     assert.ok(!/active\s*:\s*true|focused\s*:\s*true|highlighted\s*:|drawAttention|bringToFront|activateTarget/.test(text), name);
     assert.ok(!/tabs\s*\.\s*update|windows\s*\.\s*update/.test(text.replace(/\/\/.*$/gm, "")) || name === "main.js", name);
   }
+});
+
+// ---- review fixes ----
+
+test("scope_ref in a frame that is not readable is refused without injecting", async () => {
+  const s = setup({
+    frames: { 1: [{ frameId: 0, parentFrameId: -1, url: "https://shop.test/a" }, { frameId: 6, parentFrameId: 0, url: "https://challenges.cloudflare.com/c" }] },
+    content: { "1:0": () => snapAnswer(), "1:6": () => assert.fail("must not inject") },
+  });
+  await s.call("page.snapshot", { tab: 1, mode: "full" });
+  err(await s.call("page.snapshot", { tab: 1, mode: "full", scope_ref: "f6e1" }), "E_STALE_REF");
+  assert.ok(!s.calls.some((c) => c[1] === "1:6"));
+});
+
+test("a scoped snapshot does not replace the cached full snapshot", async () => {
+  const lines = Array.from({ length: 30 }, (_, i) => `- paragraph: line number ${i}`);
+  const s = setup({ content: { "1:0": (op, a) => (a.scope ? snapAnswer({ text: "- button \"Buy\" [ref=e2]" }) : snapAnswer({ text: lines.join("\n") })) } });
+  const full = (await s.call("page.snapshot", { tab: 1, mode: "full", max_bytes: 200 })).result;
+  const scoped = await s.call("page.snapshot", { tab: 1, mode: "full", scope_ref: "e2" });
+  assert.equal(scoped.result.generation, full.generation);
+  const next = await s.call("page.snapshot", { tab: 1, mode: "full", max_bytes: 200, from: full.next_from, generation: full.generation });
+  assert.equal(next.ok, true, JSON.stringify(next));
+  assert.ok(next.result.text.startsWith("- paragraph"));
+});
+
+test("find starts a new generation when a frame does not hold the cached one", async () => {
+  let held = true;
+  const seen = [];
+  const s = setup({ content: { "1:0": (op, a) => {
+    if (op === "snapshot") return snapAnswer();
+    seen.push(a);
+    return !held && !a.reset ? { stale: true } : { matches: [], url: "https://shop.test/a", title: "Shop" };
+  } } });
+  const snap = (await s.call("page.snapshot", { tab: 1, mode: "full" })).result;
+  held = true;
+  assert.equal((await s.call("page.find", { tab: 1, query: "x" })).result.generation, snap.generation);
+  held = false;
+  const after = (await s.call("page.find", { tab: 1, query: "x" })).result;
+  assert.ok(after.generation > snap.generation);
+  assert.equal(seen.at(-1).reset, true);
+  const fresh = setup({ content: { "1:0": (op, a) => ({ matches: [], url: "https://shop.test/a", title: "", seen: a }) } });
+  assert.equal((await fresh.call("page.find", { tab: 1, query: "x" })).ok, true);
+});
+
+test("about:blank and srcdoc frames under a blocked or challenge parent are not injected", async () => {
+  const s = setup({
+    frames: { 1: [
+      { frameId: 0, parentFrameId: -1, url: "https://shop.test/a" },
+      { frameId: 4, parentFrameId: 0, url: "https://challenges.cloudflare.com/c" },
+      { frameId: 8, parentFrameId: 4, url: "about:blank" },
+      { frameId: 9, parentFrameId: 4, url: "about:srcdoc" },
+      { frameId: 10, parentFrameId: 99, url: "about:blank" },
+      { frameId: 11, parentFrameId: 0, url: "about:srcdoc" },
+    ] },
+    content: { "1:0": () => snapAnswer(), "1:11": () => ({ text: "- paragraph: ok", url: "about:srcdoc", title: "", hidden_dropped: 0, controls: 0, iframes: [], visibility: "visible" }) },
+  });
+  assert.equal((await s.call("page.snapshot", { tab: 1, mode: "full" })).ok, true);
+  const touched = s.calls.filter((c) => c[0] === "executeScript").map((c) => c[1]);
+  assert.deepEqual([...new Set(touched)].sort(), ["1:0", "1:11"]);
+});
+
+test("a frame that moved to a blocked address is dropped from the answer; the main frame fails the call", async () => {
+  const frames = { 1: [{ frameId: 0, parentFrameId: -1, url: "https://shop.test/a" }, { frameId: 5, parentFrameId: 0, url: "https://pay.test/f" }] };
+  const s = setup({ frames, content: {
+    "1:0": () => snapAnswer({ text: "- main:\n  - iframe:\n    \u0000slot:0\u0000", iframes: [{ src: "https://pay.test/f" }] }),
+    "1:5": () => ({ text: "- paragraph: leaked", url: "https://bank.test/x", title: "", hidden_dropped: 0, controls: 0, iframes: [], visibility: "visible" }),
+  } });
+  const r = await s.call("page.snapshot", { tab: 1, mode: "full" });
+  assert.ok(!r.result.text.includes("leaked"));
+  const m = setup({ content: { "1:0": () => snapAnswer({ url: "https://bank.test/x" }) } });
+  err(await m.call("page.snapshot", { tab: 1, mode: "full" }), "E_ORIGIN_BLOCKED");
+});
+
+test("the snapshot cache keeps a bounded number of tabs", async () => {
+  const tabs = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [i + 1, { id: i + 1, windowId: 10, url: "https://shop.test/a", title: "t", active: false }]));
+  const content = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`${i + 1}:0`, () => snapAnswer()]));
+  const s = setup({ tabs, content });
+  for (let i = 1; i <= 12; i += 1) await s.call("page.snapshot", { tab: i, mode: "full" });
+  assert.ok(s.pages.snaps.size <= 8);
+  assert.ok(s.pages.snaps.has(12));
+});
+
+test("screenshot: a tab held by another debugger gets a clear error", async () => {
+  const base = { content: { "1:0": () => ({ visible: false }) }, debuggerPermission: true, attached: true };
+  const busy = setup(base);
+  busy.api.debugger.sendCommand = async () => {
+    throw new Error("Another debugger is already attached to the tab with id: 1.");
+  };
+  err(await busy.call("page.screenshot", { tab: 1 }), "E_DEBUGGER_BUSY");
 });

@@ -1,8 +1,8 @@
 // page.snapshot, page.read, page.find and page.wait (spec 6.1). Reads run in the content
 // script of every readable frame; the worker stitches frames, pages the text by bytes and
 // adds the tab-level hints (hidden tab, unrendered page).
-import { ZptahError } from "./errors.js";
-import { eligibleFrames, runInFrames } from "./inject.js";
+import { DEFAULT_DEADLINE_MS, ZptahError } from "./errors.js";
+import { eligibleFrames, frameAllowed, runInFrames } from "./inject.js";
 import { requireReadable } from "./origins.js";
 import { pageText } from "./paging.js";
 import { getReadableTab, tabUrl } from "./tabs.js";
@@ -11,6 +11,8 @@ const SNAPSHOT_BYTES = 60000;
 const READ_BYTES = 40000;
 const WAIT_POLL_MS = 250;
 const WAIT_MARGIN_MS = 1500;
+const CACHE_TABS = 8;
+const CACHE_BYTES = 8_000_000;
 const SLOT_RE = /^([ ]*)\u0000slot:(\d+)\u0000$/;
 
 /** `e12` or `f3e12` to its frame and local ref. @param {unknown} ref */
@@ -54,6 +56,23 @@ export function stitch(frameId, results, children) {
   return out.join("\n").replace(/\u0000/g, "");
 }
 
+/**
+ * Drops the answers of frames whose address, as the page reports it now, may not be read. A
+ * main frame that moved to a blocked page fails the whole call.
+ * @param {any} entry @param {{ frameId: number, result: any }[]} answers
+ */
+export function vet(entry, answers) {
+  return answers.filter((a) => {
+    const url = a.result?.url;
+    if (typeof url !== "string") return true;
+    if (a.frameId === 0) {
+      requireReadable(entry, url);
+      return true;
+    }
+    return frameAllowed(entry, url);
+  });
+}
+
 /** Hidden pages that show (almost) nothing: spec 6.4 F7. @param {number} controls */
 const looksUnrendered = (controls) => controls <= 2;
 
@@ -68,6 +87,20 @@ export function createPages({ api, now, sleep }) {
   const gens = new Map();
   /** @type {Map<number, { generation: number, url: string, text: string, title: string, hidden_dropped: number, visibility: string, unrendered: boolean }>} */
   const snaps = new Map();
+
+  /** Keeps the paged texts of a few tabs only. @param {number} tabId @param {any} value */
+  const remember = (tabId, value) => {
+    snaps.delete(tabId);
+    snaps.set(tabId, value);
+    let total = 0;
+    for (const v of snaps.values()) total += v.text.length;
+    for (const key of snaps.keys()) {
+      if (snaps.size <= CACHE_TABS && total <= CACHE_BYTES) break;
+      if (key === tabId) continue;
+      total -= snaps.get(key).text.length;
+      snaps.delete(key);
+    }
+  };
 
   /** @param {number} tabId */
   const nextGeneration = (tabId) => {
@@ -112,9 +145,11 @@ export function createPages({ api, now, sleep }) {
     let title = String(tab.title ?? "");
     if (p.scope_ref !== undefined) {
       const { frameId, ref } = parseRef(p.scope_ref);
+      const allowed = await frameSet(entry, tab.id);
+      if (!allowed.ids.includes(frameId)) throw new ZptahError("E_STALE_REF", "That ref is not in a readable frame. Take a new snapshot.");
       generation = gens.get(tab.id);
       if (generation === undefined) throw new ZptahError("E_STALE_REF", "Take a snapshot first.");
-      const [res] = await runInFrames(api, tab.id, [frameId], "snapshot", { generation, mode, depth: p.depth, scope: ref });
+      const [res] = vet(entry, await runInFrames(api, tab.id, [frameId], "snapshot", { generation, mode, depth: p.depth, scope: ref }));
       if (!res || res.result.stale) throw new ZptahError("E_STALE_REF", "That ref is gone. Take a new snapshot.");
       if (res.result.error) throw new ZptahError("E_INVALID", res.result.error);
       text = prefixRefs(res.result.text, frameId).replace(/^[ ]*\u0000slot:\d+\u0000\n?/gm, "").replace(/\u0000/g, "");
@@ -126,7 +161,7 @@ export function createPages({ api, now, sleep }) {
     } else {
       generation = nextGeneration(tab.id);
       const { ids, children } = await frameSet(entry, tab.id);
-      const answers = await runInFrames(api, tab.id, ids, "snapshot", { generation, mode, depth: p.depth });
+      const answers = vet(entry, await runInFrames(api, tab.id, ids, "snapshot", { generation, mode, depth: p.depth }));
       /** @type {Map<number, any>} */
       const results = new Map();
       for (const a of answers) if (!a.result.error && !a.result.stale) results.set(a.frameId, a.result);
@@ -145,14 +180,20 @@ export function createPages({ api, now, sleep }) {
     const after = await getReadableTab(api, entry, tab.id);
     requireReadable(entry, tabUrl(after));
     const unrendered = visibility === "hidden" && looksUnrendered(controls);
-    snaps.set(tab.id, { generation, url: tabUrl(after), text, title, hidden_dropped: hiddenDropped, visibility, unrendered });
-    return { ...pageText(text, 0, max), url, title, generation, hidden_dropped: hiddenDropped, visibility, ...(unrendered ? { unrendered: true } : {}) };
+    const first = pageText(text, 0, max);
+    if (p.scope_ref !== undefined) {
+      // A scoped text is not cached (it would replace the page's full snapshot), so it cannot be continued.
+      const { next_from: _unused, ...whole } = first;
+      return { ...whole, url, title, generation, hidden_dropped: hiddenDropped, visibility, ...(unrendered ? { unrendered: true } : {}) };
+    }
+    remember(tab.id, { generation, url: tabUrl(after), text, title, hidden_dropped: hiddenDropped, visibility, unrendered });
+    return { ...first, url, title, generation, hidden_dropped: hiddenDropped, visibility, ...(unrendered ? { unrendered: true } : {}) };
   }
 
   /** @param {any} entry @param {any} p */
   async function read(entry, p) {
     const tab = await getReadableTab(api, entry, p.tab);
-    const [main] = await runInFrames(api, tab.id, [0], "read", {});
+    const [main] = vet(entry, await runInFrames(api, tab.id, [0], "read", {}));
     if (!main || main.result.error) throw new ZptahError("E_INVALID", main?.result?.error ?? "the page did not answer");
     const r = main.result;
     await getReadableTab(api, entry, tab.id);
@@ -166,16 +207,22 @@ export function createPages({ api, now, sleep }) {
   /** @param {any} entry @param {any} p */
   async function find(entry, p) {
     const tab = await getReadableTab(api, entry, p.tab);
-    const generation = gens.get(tab.id) ?? nextGeneration(tab.id);
     const { ids } = await frameSet(entry, tab.id);
     const max = p.max ?? 20;
-    const answers = await runInFrames(api, tab.id, ids, "find", { generation, query: p.query, max });
+    // Refs are only valid for one generation: any frame that does not hold it (a reload, a new
+    // frame) makes a new generation, so a ref never points at a different element.
+    let generation = gens.get(tab.id);
+    let answers = generation === undefined ? [] : vet(entry, await runInFrames(api, tab.id, ids, "find", { generation, query: p.query, max }));
+    if (generation === undefined || answers.some((a) => a.result.stale)) {
+      generation = nextGeneration(tab.id);
+      answers = vet(entry, await runInFrames(api, tab.id, ids, "find", { generation, query: p.query, max, reset: true }));
+    }
     /** @type {any[]} */
     const matches = [];
     let url = tabUrl(tab);
     let title = String(tab.title ?? "");
     for (const a of answers) {
-      if (a.result.error) continue;
+      if (a.result.error || a.result.stale) continue;
       if (a.frameId === 0) {
         url = a.result.url;
         title = a.result.title;
@@ -190,7 +237,7 @@ export function createPages({ api, now, sleep }) {
   async function wait(entry, p) {
     const tab0 = await getReadableTab(api, entry, p.tab);
     const start = now();
-    const deadline = p.deadline_ms ?? 30000 + (p.time_ms ?? 0);
+    const deadline = p.deadline_ms ?? DEFAULT_DEADLINE_MS + (p.time_ms ?? 0);
     const sleepMs = p.time_ms ?? 0;
     if (sleepMs > 0) await sleep(sleepMs);
     const end = Math.max(start + deadline - WAIT_MARGIN_MS, start + sleepMs);
@@ -202,7 +249,7 @@ export function createPages({ api, now, sleep }) {
       if (p.load === true && tab.status !== "complete") met = false;
       if (met && (p.text !== undefined || p.text_gone !== undefined)) {
         const { ids } = await frameSet(entry, tab.id);
-        const answers = await runInFrames(api, tab.id, ids, "state", { text: p.text, text_gone: p.text_gone });
+        const answers = vet(entry, await runInFrames(api, tab.id, ids, "state", { text: p.text, text_gone: p.text_gone }));
         if (p.text !== undefined && !answers.some((a) => a.result.has === true)) met = false;
         if (p.text_gone !== undefined && answers.some((a) => a.result.gone === false)) met = false;
       }

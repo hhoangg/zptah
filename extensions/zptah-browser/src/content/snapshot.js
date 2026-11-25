@@ -9,7 +9,7 @@
     "role", "aria-label", "aria-hidden", "aria-expanded", "aria-checked", "aria-selected", "aria-pressed",
     "aria-disabled", "aria-current", "aria-level", "aria-haspopup", "href", "type", "value", "placeholder",
     "alt", "title", "id", "name", "src", "autocomplete", "disabled", "checked", "required", "readonly",
-    "multiple", "selected", "open", "list", "size", "for",
+    "multiple", "selected", "open", "list", "size", "for", "maxlength", "inputmode",
   ];
   const MAX_NODES = 30000;
   const MAX_DEPTH = 300;
@@ -215,8 +215,8 @@
     if (node.tag === "input" || node.tag === "textarea" || node.tag === "select") {
       const type = String(a.type ?? "").toLowerCase();
       if (role !== "checkbox" && role !== "radio" && role !== "button" && node.value) {
-        entry.value = ns.aria.isSensitiveField(node) ? `<filled ${String(node.value).length} chars>` : ns.aria.clean(node.value, 500);
-      } else if (type === "password" && node.value) entry.value = `<filled ${String(node.value).length} chars>`;
+        entry.value = ns.aria.isSensitiveField(node) ? "<filled>" : ns.aria.clean(node.value, 500);
+      } else if (type === "password" && node.value) entry.value = "<filled>";
     }
     if (node.tag === "iframe") {
       entry.slot = ctx.iframes.length;

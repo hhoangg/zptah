@@ -100,10 +100,23 @@ test("password, one-time code and card values print as filled N chars", () => {
     E("input", { type: "text", name: "card_number", "aria-label": "Card" }, [], { value: "4111111111111111" }),
   ]);
   const out = ns.snapshot.render(page, { mode: "full" }, refs());
-  assert.ok(out.text.includes("<filled 8 chars>"));
-  assert.ok(out.text.includes("<filled 6 chars>"));
-  assert.ok(out.text.includes("<filled 16 chars>"));
+  assert.equal(out.text.split("<filled>").length - 1, 3);
   assert.ok(!/hunter22|123456|4111/.test(out.text));
+});
+
+test("more sensitive fields are masked without their length", () => {
+  const ns = load();
+  const field = (attrs, value) => E("input", { type: "text", ...attrs }, [], { value });
+  const page = E("body", {}, [
+    field({ name: "cc-number" }, "4111"), field({ "aria-label": "Card number" }, "4222"), field({ id: "cvv" }, "123"),
+    field({ placeholder: "PIN" }, "9876"), field({ name: "iban" }, "DE89"), field({ "aria-label": "Security code" }, "555"),
+    field({ "aria-label": "Account number" }, "00123"), field({ "aria-label": "Verification code", inputmode: "numeric", maxlength: "6" }, "246810"),
+    field({ "aria-label": "Search" }, "shoes"),
+  ]);
+  const out = ns.snapshot.render(page, { mode: "full" }, refs());
+  assert.equal(out.text.split("<filled>").length - 1, 8);
+  assert.ok(out.text.includes("shoes"));
+  assert.ok(!/4111|4222|9876|DE89|246810|00123/.test(out.text));
 });
 
 test("depth limits the nesting and iframes leave a slot", () => {

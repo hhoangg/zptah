@@ -135,8 +135,10 @@
     if (type === "password") return true;
     const auto = String(a.autocomplete ?? "").toLowerCase();
     if (/one-time-code|cc-|current-password|new-password/.test(auto)) return true;
-    const hint = `${a.name ?? ""} ${a.id ?? ""}`.toLowerCase();
-    return /(^|[^a-z])(otp|passcode|cvv|cvc|ccnum|cardnumber|card-number|card_number|ssn)([^a-z]|$)/.test(hint);
+    const hint = `${a.name ?? ""} ${a.id ?? ""} ${a["aria-label"] ?? ""} ${a.placeholder ?? ""} ${node.labelText ?? ""}`.toLowerCase();
+    if (/(^|[^a-z])(otp|passcode|one.?time|cvv|cvc|cc[-_ ]?num|card|pin|security.?code|iban|account.?(number|no|num)|routing|ssn)/.test(hint)) return true;
+    const short = Number(a.maxlength) > 0 && Number(a.maxlength) <= 8;
+    return short && String(a.inputmode ?? "").toLowerCase() === "numeric" && /code|ma |m\u00e3|verif|auth|token/.test(hint);
   }
 
   /**

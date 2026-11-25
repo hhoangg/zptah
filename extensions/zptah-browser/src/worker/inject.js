@@ -16,6 +16,12 @@ export function mapChromeError(err) {
   return new ZptahError("E_INVALID", m.slice(0, 200));
 }
 
+/** Whether a frame at this address may be read. @param {import("./origins.js").RosterEntry | null} entry @param {string} url */
+export function frameAllowed(entry, url) {
+  if (url === "about:srcdoc" || url === "about:blank" || url === "") return true;
+  return checkUrl(entry, url) === "ok" && !isChallengeFrame(url);
+}
+
 /**
  * The frames of a tab whose address may be read, parent frames first.
  * @param {any} api @param {number} tabId @param {import("./origins.js").RosterEntry | null} entry
@@ -29,12 +35,23 @@ export async function eligibleFrames(api, tabId, entry) {
   } catch (err) {
     throw mapChromeError(err);
   }
-  const ok = frames.filter((f) => {
-    if (f.frameId === 0) return true;
-    if (f.url === "about:srcdoc" || f.url === "about:blank" || f.url === "") return true;
-    return checkUrl(entry, f.url) === "ok" && !isChallengeFrame(f.url);
-  });
-  return ok.sort((a, b) => a.frameId - b.frameId);
+  const byId = new Map(frames.map((f) => [f.frameId, f]));
+  /** @type {Map<number, boolean>} */
+  const memo = new Map();
+  /** A frame is readable when its own address is and every ancestor is too. @param {FrameInfo} f @returns {boolean} */
+  const ok = (f) => {
+    const known = memo.get(f.frameId);
+    if (known !== undefined) return known;
+    memo.set(f.frameId, false);
+    let self = f.frameId === 0 || f.url === "about:srcdoc" || f.url === "about:blank" || f.url === "" || frameAllowed(entry, f.url);
+    if (self && f.frameId !== 0) {
+      const parent = byId.get(f.parentFrameId);
+      self = parent !== undefined && ok(parent);
+    }
+    memo.set(f.frameId, self);
+    return self;
+  };
+  return frames.filter(ok).sort((a, b) => a.frameId - b.frameId);
 }
 
 /**

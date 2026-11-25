@@ -1,7 +1,7 @@
 // Registers the read-path methods on the link's dispatcher (tabs.list, page.snapshot,
 // page.read, page.find, page.screenshot, page.wait) plus roster.set, which the origin rules
 // need. Every request is Mono-scoped, checked against the roster and answered by its deadline.
-import { errorReply, okReply, withDeadline, ZptahError } from "./errors.js";
+import { DEFAULT_DEADLINE_MS, errorReply, okReply, withDeadline, ZptahError } from "./errors.js";
 import { currentRoster } from "./origins.js";
 import { createPages } from "./pages.js";
 import { canvasImaging, createScreenshotter } from "./screenshot.js";
@@ -44,7 +44,7 @@ export function registerReadPath(link, deps = {}) {
       try {
         const entry = entryFor(msg);
         const params = /** @type {any} */ (msg.params ?? {});
-        const deadline = Number.isInteger(params.deadline_ms) ? params.deadline_ms : 30000;
+        const deadline = Number.isInteger(params.deadline_ms) ? params.deadline_ms : DEFAULT_DEADLINE_MS;
         return okReply(id, await withDeadline(deadline, () => fn(entry, params)));
       } catch (err) {
         return errorReply(id, err);

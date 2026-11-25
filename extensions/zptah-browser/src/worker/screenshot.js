@@ -13,6 +13,7 @@ const CAPTURE_GAP_MS = 500;
 /** A base64 PNG must fit B64Bytes (1 MiB) with the rest of the frame. */
 export const MAX_PNG_BYTES = 750000;
 const DEFAULT_MAX = 700000;
+const DEBUGGER_TIMEOUT_MS = 10000;
 const MAX_FULL_PAGE_HEIGHT = 16384;
 const BACKGROUND_TEXT = "The tab is in the background; use browser_snapshot, or ask the user to show the tab";
 
@@ -156,11 +157,34 @@ export function createScreenshotter({ api, imaging, sleep, now, getGeneration, c
     const target = { tabId: tab.id };
     const params = { format: "png", ...(clip ? { clip } : {}), ...(beyond ? { captureBeyondViewport: true } : {}) };
     try {
-      const out = await api.debugger.sendCommand(target, "Page.captureScreenshot", params);
+      const out = await commandWithTimeout(target, "Page.captureScreenshot", params);
       return fromBase64(String(out?.data ?? ""));
     } catch (err) {
-      throw new ZptahError("E_UNSUPPORTED", `The debugger could not take the picture: ${String(err instanceof Error ? err.message : err).slice(0, 150)}`);
+      throw debuggerError(err);
     }
+  }
+
+  /** @param {{ tabId: number }} target @param {string} method @param {Record<string, unknown>} params */
+  async function commandWithTimeout(target, method, params) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new ZptahError("E_TIMEOUT", "The debugger did not answer in time.")), DEBUGGER_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([api.debugger.sendCommand(target, method, params), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** @param {unknown} err */
+  function debuggerError(err) {
+    if (err instanceof ZptahError) return err;
+    const m = String(err instanceof Error ? err.message : err);
+    if (/another debugger|already attached|not attached|detached|cannot attach/i.test(m)) {
+      return new ZptahError("E_DEBUGGER_BUSY", "Another debugger (for example DevTools) holds this tab, so zptah Browser cannot take the picture. Close it or use browser_snapshot.");
+    }
+    return new ZptahError("E_UNSUPPORTED", `The debugger could not take the picture: ${m.slice(0, 150)}`);
   }
 
   /** The debugger path needs the optional permission and an attach that already exists. @param {any} tab */
@@ -209,7 +233,9 @@ export function createScreenshotter({ api, imaging, sleep, now, getGeneration, c
     let crop;
     if (p.full_page === true) {
       if (!(await debuggerReady(tab))) throw new ZptahError("E_UNSUPPORTED", "A full-page picture needs the debugger, which is not attached to this tab. Take a picture of the visible part, or use browser_snapshot.");
-      const metrics = await api.debugger.sendCommand({ tabId: tab.id }, "Page.getLayoutMetrics", {});
+      const metrics = await commandWithTimeout({ tabId: tab.id }, "Page.getLayoutMetrics", {}).catch((e) => {
+        throw debuggerError(e);
+      });
       const size = metrics?.cssContentSize ?? metrics?.contentSize ?? { width: 1280, height: 800 };
       png = await captureDebugger(tab, { x: 0, y: 0, width: Math.ceil(size.width), height: Math.min(Math.ceil(size.height), MAX_FULL_PAGE_HEIGHT), scale: 1 }, true);
       method = "debugger";
