@@ -45,6 +45,8 @@ enum Phase {
     Installing,
 }
 enum Progress {
+    /// The re-check is over and the download is starting.
+    Started,
     Download(u64, Option<u64>),
     Installing,
 }
@@ -103,6 +105,8 @@ pub(crate) struct Updater {
     phase: Phase,
     pending: Option<Update>,
     progress: Option<u64>,
+    /// Re-reading the feed before the download starts.
+    rechecking: bool,
     message: Option<String>,
     poll: Option<gpui::Task<()>>,
     gate: Arc<Mutex<InstallGate>>,
@@ -127,6 +131,7 @@ impl Updater {
             store,
             pending: None,
             progress: None,
+            rechecking: false,
             message,
             poll: None,
             gate: Arc::new(Mutex::new(InstallGate::default())),
@@ -226,7 +231,8 @@ impl Updater {
         self.pending = Some(update);
         self.installation = Some(installation);
         self.remote_failed = Some(failed);
-        self.install(cx);
+        // Pinned: the requester was told this version and judges the outcome by it.
+        self.start_install(false, cx);
         Ok(())
     }
     /// Tells a remote requester why the install ended before the restart.
@@ -235,22 +241,32 @@ impl Updater {
             failed(error.to_owned(), cx);
         }
     }
+    /// The UI install: re-reads the feed first so a release newer than `pending` wins.
     fn install(&mut self, cx: &mut Context<Self>) {
+        self.start_install(true, cx);
+    }
+    fn start_install(&mut self, recheck: bool, cx: &mut Context<Self>) {
         if self.busy() {
             return;
         }
-        let (Some(update), Some(installation)) = (self.pending.clone(), self.installation.clone())
+        let (Some(pending), Some(installation)) = (self.pending.clone(), self.installation.clone())
         else {
             return;
         };
+        let config = self.config.clone().filter(|_| recheck);
         self.phase = Phase::Downloading;
         self.progress = Some(0);
+        self.rechecking = config.is_some();
         self.message = None;
         self.changed(cx); // Close the double-click window before starting I/O.
         let store = self.store.clone();
         let gate = self.gate.clone();
         let (tx, rx) = async_channel::bounded(8);
         let work = cx.background_executor().spawn(async move {
+            let update = choose(pending, config.as_ref(), |pending, config| {
+                app_update::latest(pending, config, &installation)
+            });
+            let _ = tx.send_blocking(Progress::Started);
             let result = (|| {
                 let mut last_bytes = 0;
                 let mut last_percent = None;
@@ -280,13 +296,14 @@ impl Updater {
                     .and_then(|store| store.save_setting("monocode.installedUpdate", ""));
             }
             gate.lock().unwrap_or_else(|e| e.into_inner()).installing = false;
-            result
+            (update, result)
         });
         cx.spawn(async move |this, cx| {
             while let Ok(progress) = rx.recv().await {
                 if this
                     .update(cx, |this, cx| {
                         match progress {
+                            Progress::Started => this.rechecking = false,
                             Progress::Download(n, total) => {
                                 this.progress = total
                                     .filter(|n| *n > 0)
@@ -301,40 +318,55 @@ impl Updater {
                     return;
                 }
             }
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| match result {
-                Ok(Installed::Relaunch(path)) => {
-                    if let Err(error) = app_update::schedule_relaunch(&path) {
+            let (update, result) = work.await;
+            let _ = this.update(cx, |this, cx| {
+                // Offer what was actually attempted, so a failed install retries the latest.
+                this.rechecking = false;
+                this.pending = Some(update);
+                match result {
+                    Ok(Installed::Relaunch(path)) => {
+                        if let Err(error) = app_update::schedule_relaunch(&path) {
+                            this.phase = Phase::Available;
+                            this.message = Some(error.clone());
+                            cx.emit(Event::Error(format!(
+                                "The update was installed. Reopen zptah to finish: {error}"
+                            )));
+                            this.changed(cx);
+                            this.tell_remote_failure(
+                                &format!(
+                                    "installed, but the app could not restart itself: {error}"
+                                ),
+                                cx,
+                            );
+                        } else {
+                            crate::quit(cx);
+                        }
+                    }
+                    Ok(Installed::InstallerStarted) => crate::quit(cx),
+                    Err(error) => {
                         this.phase = Phase::Available;
                         this.message = Some(error.clone());
                         cx.emit(Event::Error(format!(
-                            "The update was installed. Reopen zptah to finish: {error}"
+                            "Couldn’t install the update: {error}"
                         )));
                         this.changed(cx);
-                        this.tell_remote_failure(
-                            &format!("installed, but the app could not restart itself: {error}"),
-                            cx,
-                        );
-                    } else {
-                        crate::quit(cx);
-                    }
-                }
-                Ok(Installed::InstallerStarted) => crate::quit(cx),
-                Err(error) => {
-                    this.phase = Phase::Available;
-                    this.message = Some(error.clone());
-                    cx.emit(Event::Error(format!(
-                        "Couldn’t install the update: {error}"
-                    )));
-                    this.changed(cx);
-                    this.tell_remote_failure(&error, cx);
-                    if this.gate.lock().unwrap_or_else(|e| e.into_inner()).quitting {
-                        crate::quit(cx);
+                        this.tell_remote_failure(&error, cx);
+                        if this.gate.lock().unwrap_or_else(|e| e.into_inner()).quitting {
+                            crate::quit(cx);
+                        }
                     }
                 }
             });
         })
         .detach();
+    }
+}
+/// The update to install: `pending`, or what `latest` finds when the install re-checks the
+/// feed first (the UI paths do; a remote install stays pinned to the version it reported).
+fn choose<T, C>(pending: T, recheck: Option<&C>, latest: impl FnOnce(T, &C) -> T) -> T {
+    match recheck {
+        Some(config) => latest(pending, config),
+        None => pending,
     }
 }
 /// What the updater offers right now, for Settings' About button.
@@ -374,6 +406,7 @@ impl Updater {
     fn progress_label(&self) -> String {
         match self.phase {
             Phase::Installing => "Installing…".into(),
+            _ if self.rechecking => "Checking for the latest version…".into(),
             _ => self
                 .progress
                 .map(|p| format!("Downloading {p}%"))
@@ -478,6 +511,21 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     use std::sync::{Arc, Mutex};
+    #[test]
+    fn ui_installs_recheck_the_feed_and_remote_installs_stay_pinned() {
+        let mut calls = 0;
+        // Pending v3, the fresh feed says v4.
+        let chosen = choose(3, Some(&()), |_, _| {
+            calls += 1;
+            4
+        });
+        assert_eq!((chosen, calls), (4, 1));
+        let chosen = choose(3, None::<&()>, |_, _| {
+            calls += 1;
+            4
+        });
+        assert_eq!((chosen, calls), (3, 1));
+    }
     #[gpui::test]
     fn quit_waits_for_installation_to_finish(cx: &mut TestAppContext) {
         let store = Arc::new(Mutex::new(
