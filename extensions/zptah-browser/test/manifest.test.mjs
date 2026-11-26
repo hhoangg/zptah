@@ -15,8 +15,11 @@ test("permission snapshot", () => {
     "storage",
     "alarms",
     "webNavigation",
+    "debugger",
   ]);
-  assert.deepEqual(manifest.optional_permissions, ["debugger"]);
+  // Chrome lists `debugger` under "cannot be optional": declared optional it is dropped and
+  // permissions.request rejects. The user's switch in the options page gates its use instead.
+  assert.equal("optional_permissions" in manifest, false);
   assert.deepEqual(manifest.host_permissions, ["<all_urls>"]);
   assert.equal(manifest.incognito, "not_allowed");
 });

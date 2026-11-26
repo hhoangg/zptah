@@ -9,7 +9,7 @@ const justifications = read("../store/justifications.md");
 const listing = read("../store/listing.md");
 
 test("every manifest permission has a justification row", () => {
-  const all = [...manifest.permissions, ...manifest.optional_permissions, ...manifest.host_permissions];
+  const all = [...manifest.permissions, ...(manifest.optional_permissions ?? []), ...manifest.host_permissions];
   for (const p of all) assert.ok(justifications.includes(`| \`${p}\``), `justification for ${p}`);
 });
 

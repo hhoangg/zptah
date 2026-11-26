@@ -48,7 +48,7 @@ function setup(opts = {}) {
   const calls = [];
   const events = [];
   let clock = 1_000_000;
-  const listeners = { removed: [], committed: [], dbgEvent: [], dbgDetach: [], clicked: [], added: [] };
+  const listeners = { removed: [], committed: [], dbgEvent: [], dbgDetach: [], clicked: [], added: [], storage: [] };
   const tabs = new Map([[1, { id: 1, windowId: 10, url: world.location.href, title: "Checkout", active: true, status: "complete" }]]);
   const hang = new Set(opts.hangOps ?? []);
   const api = {
@@ -92,7 +92,8 @@ function setup(opts = {}) {
         return [{ frameId, result: out === undefined ? undefined : JSON.parse(JSON.stringify(out)) }];
       },
     },
-    permissions: { contains: async () => opts.debuggerPermission ?? false, onAdded: { addListener: (f) => listeners.added.push(f) } },
+    // `debugger` is a required permission; the user's switch is the pref.
+    storage: { local: { get: async (k) => ({ [k]: { use_debugger: opts.debuggerPermission ?? false } }) }, onChanged: { addListener: (f) => listeners.storage.push(f) } },
     debugger: {
       attach: async (target, v) => {
         calls.push(["dbg.attach", target.tabId, v]);
@@ -132,7 +133,7 @@ function setup(opts = {}) {
   const dbg = createDebugger({ api, now: () => clock, sleep, emit: (m, p) => link.sendEvent(m, p), setTimer: () => 0, clearTimer: () => {}, isStopped: () => link.stopped });
   const acts = registerActPath(link, { api, now: () => clock, sleep, read, dbg, lexicon: opts.noLexicon ? null : lexicon, effects: opts.effects, onStopState: opts.onStopState });
   const call = async (method, params, mono = MONO) => link.handlers.get(method)({ v: 1, type: "req", id: "a-1", method, mono, params });
-  return { world, api, link, call, calls, events, tabs, acts, dbg, read, listeners, owner, advance: (ms) => (clock += ms), now: () => clock, h };
+  return { world, api, link, call, calls, events, tabs, acts, dbg, read, listeners, owner, opts, advance: (ms) => (clock += ms), now: () => clock, h };
 }
 
 const refOf = (text, role, name) => {
@@ -551,6 +552,39 @@ test("the debugger is attached once per tab, only with the permission, and busy 
   assert.equal(s.calls.filter((c) => c[0] === "dbg.attach").length, 1);
   s = setup({ debuggerPermission: true, attachError: "Another debugger is already attached to the tab with id: 1." });
   await assert.rejects(() => s.dbg.attach(1), (e) => e.code === "E_DEBUGGER_BUSY");
+  finish(s);
+});
+
+test("turning the debugger switch off detaches every session and later commands are refused", async () => {
+  const s = setup({ debuggerPermission: true });
+  await s.dbg.attach(1);
+  assert.deepEqual(s.dbg.attachedTabs(), [1]);
+  // Other settings changing leaves the session alone.
+  s.listeners.storage.forEach((f) => f({ "zptah.prefs": { newValue: { use_debugger: true } } }, "local"));
+  s.listeners.storage.forEach((f) => f({ "zptah.prefs": { newValue: { use_debugger: false } } }, "sync"));
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(s.dbg.attachedTabs(), [1]);
+  s.opts.debuggerPermission = false;
+  s.listeners.storage.forEach((f) => f({ "zptah.prefs": { newValue: { cursor: true, off_sites: [], use_debugger: false } } }, "local"));
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(s.dbg.attachedTabs(), []);
+  assert.ok(s.calls.some((c) => c[0] === "dbg.detach" && c[1] === 1));
+  assert.ok(s.events.some((e) => e.method === "debugger.detached" && e.params.reason === "switch_off"));
+  // A pref removed altogether counts as off too.
+  s.opts.debuggerPermission = true;
+  await s.dbg.attach(1);
+  s.listeners.storage.forEach((f) => f({ "zptah.prefs": {} }, "local"));
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(s.dbg.attachedTabs(), []);
+  finish(s);
+});
+
+test("a command is refused and the session detached when the switch is off but the storage event has not arrived", async () => {
+  const s = setup({ debuggerPermission: true });
+  await s.dbg.attach(1);
+  s.opts.debuggerPermission = false;
+  await assert.rejects(() => s.dbg.send(1, "Input.insertText", { text: "x" }), (e) => e.code === "E_DEBUGGER_DENIED" && /turned off/.test(e.message));
+  assert.deepEqual(s.dbg.attachedTabs(), []);
   finish(s);
 });
 

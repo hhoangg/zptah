@@ -164,8 +164,8 @@ test("sites without effects: exact host or wildcard subdomains", () => {
   assert.equal(siteIsOff(list, "https://bank.test/"), false);
   assert.equal(siteIsOff(list, "https://notbank.test/"), false);
   assert.equal(siteIsOff(list, "not a url"), true, "an unreadable address gets no effects");
-  assert.deepEqual(parsePrefs({ cursor: false, off_sites: ["A.com", "a.com", "bad host"] }), { cursor: false, off_sites: ["a.com"] });
-  assert.deepEqual(parsePrefs(null), { cursor: true, off_sites: [] });
+  assert.deepEqual(parsePrefs({ cursor: false, off_sites: ["A.com", "a.com", "bad host"] }), { cursor: false, off_sites: ["a.com"], use_debugger: false });
+  assert.deepEqual(parsePrefs(null), { cursor: true, off_sites: [], use_debugger: false });
 });
 
 // ---- the effects of the worker ----

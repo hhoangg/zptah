@@ -22,8 +22,8 @@ which will be added to the same flow once the listing exists.
 2. If the extension is missing, the card says "Waiting for the extension" and asks you to install
    zptah Browser in that Chrome profile, then press Try again. Once it is installed, the app opens
    the extension's pairing page and the card says to finish in the browser tab that opened.
-3. The pairing page asks once for the optional debugger permission. Click Allow. It closes itself
-   and the card shows "Connected." with a row such as "Chrome, profile <name>".
+3. The pairing page shows its progress and closes itself after a short countdown (or press Close).
+   The card shows "Connected." with a row such as "Chrome, profile <name>".
 4. Repeat from each Mono that should use the browser. Several Monos can use one connection.
 
 Pairing is open for 5 minutes with a single-use code. No token is shown or pasted. Disconnect in the

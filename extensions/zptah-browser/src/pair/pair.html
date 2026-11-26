@@ -2,12 +2,59 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>zptah Browser</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Connect zptah Browser</title>
     <link rel="icon" type="image/png" href="../../icons/icon-32.png" />
+    <link rel="stylesheet" href="../ui/zptah.css" />
   </head>
   <body>
-    <p><img src="../../icons/icon-128.png" width="32" height="32" alt="zptah" /></p>
-    <p id="msg">Connecting to zptah...</p>
+    <main class="pair-wrap">
+      <section class="pair-card" aria-labelledby="pair-title">
+        <div class="brand">
+          <img src="../../icons/icon-128.png" width="40" height="40" alt="" />
+          <div>
+            <div class="brand-name">zptah</div>
+            <div class="brand-sub">Browser extension</div>
+          </div>
+        </div>
+
+        <div id="state" class="pair-state tone-busy" role="status" aria-live="polite" aria-atomic="true">
+          <div id="glyph" class="pair-glyph" aria-hidden="true"><div class="spinner"></div></div>
+          <h1 id="pair-title">Connecting</h1>
+          <p id="body" class="muted">Starting.</p>
+          <p id="reason" class="small muted" hidden></p>
+        </div>
+        <p id="countdown" class="small pair-countdown" hidden></p>
+
+        <div>
+          <ol id="steps" class="steps" aria-hidden="true">
+            <li></li>
+            <li></li>
+            <li></li>
+          </ol>
+          <div class="steps-labels" aria-hidden="true">
+            <span>Reach zptah</span>
+            <span>Verify</span>
+            <span>Connected</span>
+          </div>
+        </div>
+
+        <div class="pair-actions">
+          <button id="retry" type="button" class="primary" hidden>Retry</button>
+          <button id="close" type="button" hidden>Close</button>
+        </div>
+
+        <div class="next">
+          <h2>What happens next</h2>
+          <ul id="next">
+            <li>zptah and this browser exchange a one-time secret on this computer. Nothing leaves your machine.</li>
+            <li>When it says Connected, this tab closes by itself.</li>
+            <li>Then pick which Monos may use this browser in zptah.</li>
+          </ul>
+        </div>
+      </section>
+    </main>
     <script src="pair.js" type="module"></script>
   </body>
 </html>

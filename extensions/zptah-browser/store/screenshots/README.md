@@ -17,7 +17,7 @@ addresses or payment pages.
 1. The Mono's tab group: a window with a colored, named group holding two or three tabs the Mono
    opened, and the glow and "Stop <Mono>" button on the active tab.
 2. The virtual cursor: the Mono's cursor mid-click on a demo page (use a public demo form).
-3. The options page (`src/options/options.html`): pairing status, the optional debugger grant and
+3. The options page (`src/options/options.html`): pairing status, the debugger fallback switch and
    the cursor settings.
 4. An approval card in the zptah app: a risky step (for example a demo "Delete project" button)
    with the screenshot preview and the Allow once, Allow in this conversation and Deny buttons.
