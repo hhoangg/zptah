@@ -95,7 +95,7 @@ How production serves it (`worker/src/landing.ts`, `run_worker_first` of `wrangl
 - `GET /privacy`: the privacy policy of the zptah Browser extension (`landing/privacy/`), for everyone, no cookie variance.
 - `GET /home`: always the landing page. Both answers carry `Vary: Cookie` and `Cache-Control: no-store`; HEAD behaves the same.
 - The PWA `start_url` is `/app` (redirects to the last place, or to `/login` when signed out); `scope` and `id` stay `/`.
-- Service worker: `/`, `/home` and `/landing/` are on the navigation denylist (queries included) and precaching has
+- Service worker: `/`, `/home`, `/landing/` and `/privacy` are on the navigation denylist (queries included) and precaching has
   `directoryIndex: ""`, so a signed-out visitor with the new service worker gets the landing page. Navigations to exactly `/` go
   network first, and fall back to the precached shell when offline, so an app installed with the old `start_url` `/` still opens
   offline. Online, such an installed app is sent from the landing page to `/app` by `landing/src/js/boot.js` (standalone display mode).

@@ -222,6 +222,10 @@ export function SettingsNav({ admin }: { admin: boolean }) {
           ) : null}
         </>
       )}
+      {/* Plain anchor: /privacy is a static page of the Worker, not an SPA route. */}
+      <a href="/privacy" className="self-start px-3 py-1 text-meta text-muted-text underline-offset-2 hover:text-content hover:underline">
+        Privacy
+      </a>
     </nav>
   );
 }

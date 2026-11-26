@@ -7,8 +7,8 @@ export const NAVIGATION_FALLBACK = "/index.html";
 
 /**
  * Navigations that must reach the network and never get the shell: the API and the relay (a response of either is
- * private, cookies and ciphertext frames, and is never stored in Cache Storage), and the landing page. `/` is the
- * landing page when the request has no session cookie and `/home` always is, and only the Worker can tell: a cached
+ * private, cookies and ciphertext frames, and is never stored in Cache Storage), the landing page and the privacy
+ * policy page (`/privacy`, a static page of the Worker, not an SPA route). `/` is the landing page when the request has no session cookie and `/home` always is, and only the Worker can tell: a cached
  * shell must not hide the landing from a signed-out visitor. The installed app starts at `/app` (the manifest), which
  * is cached like every other route. `/landing/` holds the landing's own files.
  */
@@ -19,6 +19,7 @@ export const NAVIGATION_DENYLIST: readonly RegExp[] = [
   /^\/(\?.*)?$/,
   /^\/home\/?(\?.*)?$/,
   /^\/landing(\/|\?|$)/,
+  /^\/privacy(\/|\?|$)/,
 ];
 
 /**

@@ -11,14 +11,14 @@ describe("service worker routing config", () => {
     expect(NAVIGATION_FALLBACK).toBe("/index.html");
   });
 
-  it.each(["/api/me", "/api/desktops/abc", "/relay/room", "/relay/", "/", "/home", "/home/", "/landing", "/landing/", "/landing/landing.css", "/?utm_source=hn", "/home?ref=x", "/home/?ref=x", "/landing?x=1"])("denies the shell for %s", (target) => {
+  it.each(["/api/me", "/api/desktops/abc", "/relay/room", "/relay/", "/", "/home", "/home/", "/landing", "/landing/", "/landing/landing.css", "/?utm_source=hn", "/home?ref=x", "/home/?ref=x", "/landing?x=1", "/privacy", "/privacy/", "/privacy?x=1"])("denies the shell for %s", (target) => {
     // Workbox matches a denylist entry against pathname + search.
     const url = new URL(target, "https://zptah.app");
     expect(isShellNavigation(url.pathname, url.search)).toBe(false);
     expect(NAVIGATION_DENYLIST.some((pattern) => pattern.test(url.pathname + url.search))).toBe(true);
   });
 
-  it.each(["/app", "/app?x=1", "/desktops", "/homework", "/landingpage", "/d/dk1/s/s9", "/settings", "/settings/notifications", "/apiary", "/relayed"])("serves the shell for %s", (pathname) => {
+  it.each(["/app", "/app?x=1", "/desktops", "/homework", "/landingpage", "/privacyx", "/d/dk1/s/s9", "/settings", "/settings/notifications", "/apiary", "/relayed"])("serves the shell for %s", (pathname) => {
     expect(isShellNavigation(pathname)).toBe(true);
   });
 
