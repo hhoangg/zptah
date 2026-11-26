@@ -53,6 +53,7 @@ function buildVariant(variant, outDir) {
   cpSync(join(ROOT, "src/worker"), join(outDir, "src/worker"), { recursive: true });
   cpSync(join(ROOT, "src/pair"), join(outDir, "src/pair"), { recursive: true });
   cpSync(join(ROOT, "src/options"), join(outDir, "src/options"), { recursive: true });
+  cpSync(join(ROOT, "icons"), join(outDir, "icons"), { recursive: true });
   writeFileSync(join(outDir, "src/worker/lexicon-data.js"), lexiconModule());
   mkdirSync(join(outDir, "src/content"), { recursive: true });
   writeFileSync(join(outDir, "src/content/index.js"), bundleContent(join(ROOT, "src/content")));

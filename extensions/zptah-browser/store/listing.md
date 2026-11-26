@@ -18,6 +18,15 @@ manifest, the privacy page or the behavior it describes.
 | Support URL | https://github.com/hhoangg/zptah/issues |
 | Publisher | the maintainer's verified publisher account (2-step verification on) |
 
+## Graphic assets
+
+Generated from the zptah app logo by `scripts/gen-icons.py` (Pillow; the build only copies the
+committed `icons/`):
+
+- Store icon 128x128: `store/icon-128.png`
+- Small promo tile 440x280: `store/promo-tile-440x280.png`
+- Toolbar and manifest icons (16, 32, 48, 128): `icons/`
+
 ## Single purpose statement
 
 Lets the zptah desktop app's assistants (Monos) read and act in your browser tabs when you ask

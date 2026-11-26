@@ -80,3 +80,24 @@ test("the test hook exists only in the dev build", () => {
     rmSync(out, { recursive: true, force: true });
   }
 });
+
+test("every icon the manifest references is built and is a PNG of the declared size", () => {
+  const out = mkdtempSync(join(tmpdir(), "zptah-ext-i-"));
+  try {
+    build({ outRoot: out });
+    for (const variant of ["store", "dev"]) {
+      const dir = join(out, variant);
+      const m = manifest(dir);
+      const refs = [...Object.entries(m.icons), ...Object.entries(m.action.default_icon)];
+      assert.equal(refs.length, 8);
+      for (const [size, rel] of refs) {
+        const png = readFileSync(join(dir, rel));
+        assert.equal(png.subarray(1, 4).toString(), "PNG");
+        assert.equal(png.readUInt32BE(16), Number(size));
+        assert.equal(png.readUInt32BE(20), Number(size));
+      }
+    }
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
