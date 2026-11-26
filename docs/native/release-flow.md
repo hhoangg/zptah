@@ -289,9 +289,12 @@ One-time setup (maintainer): create the Web Store item and its first listing by 
 the privacy policy at `https://zptah.app/privacy`. Then create the GitHub environment
 `chrome-web-store` on `hhoangg/zptah` with a required reviewer, and add to it only the secrets
 `CWS_PUBLISHER_ID`, `CWS_ITEM_ID` and `CWS_SERVICE_ACCOUNT_KEY` (service account JSON; the account is
-invited to the publisher in the dashboard). Once the item has an id, fill `STORE_EXTENSION_IDS`
-(`links/manifest_install.rs`, `host_mode.rs`) and add the Web Store listing step to the Connect flow
-in an app release; until then release builds keep Connect disabled.
+invited to the publisher in the dashboard). The item id is `fmimbbckbgogjapagnhpegfkkjebipcp`
+(`https://chromewebstore.google.com/detail/fmimbbckbgogjapagnhpegfkkjebipcp`). It lives in one
+place in code, `STORE_EXTENSION_ID` in `crates/monocode-core/src/mono/browser/links/manifest_install.rs`;
+the release host manifest, the pair page URL, host mode (`host_mode.rs`) and the "Open Chrome Web
+Store" button of the Connect card all read it. Keep the first version `Unlisted` and switch the
+listing to `Public` after the app release that knows the id is out.
 
 Environment protection: set the deployment tag policy of `chrome-web-store` to `ext-v*` only (no branches), keep the required reviewer, and do not allow administrators to bypass the protection rules. Without these a branch workflow or an admin could reach the secrets.
 

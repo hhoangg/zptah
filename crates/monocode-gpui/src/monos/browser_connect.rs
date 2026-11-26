@@ -157,6 +157,16 @@ impl Monos {
         self.browser_connect_refresh(cx);
     }
 
+    /// Opens the extension's Chrome Web Store page in the chosen Chrome profile.
+    pub(super) fn browser_connect_open_store(&mut self, cx: &mut Context<Self>) {
+        let Some(service) = self.browser_ui.connect.service() else {
+            return;
+        };
+        let (dir, _) = self.browser_ui.connect.chosen();
+        self.browser_ui.connect.error = service.open_store_page(&dir).err();
+        cx.notify();
+    }
+
     pub(super) fn browser_connect_cancel(&mut self, cx: &mut Context<Self>) {
         if let Some(service) = self.browser_ui.connect.service() {
             service.cancel_pairing();
@@ -266,12 +276,17 @@ impl Monos {
             _ => "Connect extension",
         };
         let mut buttons = div().px_3().py_2().flex().items_center().gap_2();
-        let can_connect =
-            phase != Phase::NoBrowser && !status.starting && status.unavailable.is_none();
+        let can_connect = phase != Phase::NoBrowser && !status.starting;
         if can_connect {
             buttons = buttons.child(
                 action("mono-connect-start", label)
                     .on_click(cx.listener(|this, _, _, cx| this.browser_connect_start(cx))),
+            );
+        }
+        if status.store_page && phase == Phase::WaitingForInstall {
+            buttons = buttons.child(
+                action("mono-connect-store", "Open Chrome Web Store")
+                    .on_click(cx.listener(|this, _, _, cx| this.browser_connect_open_store(cx))),
             );
         }
         if phase == Phase::Pairing {
@@ -286,13 +301,6 @@ impl Monos {
                 "mono-connect-starting",
                 "Starting the browser link...",
                 0.6,
-            )));
-        }
-        if let Some(reason) = &status.unavailable {
-            card_ = card_.child(div().px_3().pb_2().child(note(
-                "mono-connect-unavailable",
-                reason.clone(),
-                0.7,
             )));
         }
         if status.keys_in_fallback {

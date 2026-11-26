@@ -58,6 +58,10 @@ struct Card {
 }
 
 fn open(cx: &mut TestAppContext, with_chrome: bool) -> Card {
+    open_flavor(cx, with_chrome, true)
+}
+
+fn open_flavor(cx: &mut TestAppContext, with_chrome: bool, flavor_dev: bool) -> Card {
     let s = setup(cx);
     cx.update(|cx| {
         cx.set_reduce_motion(true);
@@ -79,7 +83,7 @@ fn open(cx: &mut TestAppContext, with_chrome: bool) -> Card {
         local_app_data: Some(home.0.join("local")),
         app_data_dir: home.0.join("app"),
         exe: std::env::current_exe().unwrap(),
-        flavor_dev: true,
+        flavor_dev,
         storage: Storage::Memory,
         real_registry: false,
         opener: opener.clone(),
@@ -199,6 +203,38 @@ fn cancelling_a_pairing_returns_to_the_manifest_written_state(cx: &mut TestAppCo
     card.click("mono-connect-cancel");
     assert_eq!(card.phase(), Phase::ManifestWritten);
     assert!(!card.on("mono-connect-cancel") && card.on("mono-connect-start"));
+}
+
+#[gpui::test]
+fn the_release_card_offers_the_store_page_in_the_chosen_profile_while_waiting(
+    cx: &mut TestAppContext,
+) {
+    let mut card = open_flavor(cx, true, false);
+    assert!(!card.on("mono-connect-store"), "only while waiting");
+    card.click("mono-connect-profile-Profile 6");
+    *card.opener.fail.lock().unwrap() = true;
+    card.click("mono-connect-start");
+    assert_eq!(card.phase(), Phase::WaitingForInstall);
+    assert!(card.on("mono-connect-store") && card.on("mono-connect-start"));
+    *card.opener.fail.lock().unwrap() = false;
+    card.click("mono-connect-store");
+    let opened = card.opener.opened.lock().unwrap().clone();
+    assert_eq!(
+        opened,
+        vec![(
+            "Profile 6".to_string(),
+            "https://chromewebstore.google.com/detail/fmimbbckbgogjapagnhpegfkkjebipcp".to_string()
+        )]
+    );
+}
+
+#[gpui::test]
+fn the_dev_card_has_no_store_button(cx: &mut TestAppContext) {
+    let mut card = open(cx, true);
+    *card.opener.fail.lock().unwrap() = true;
+    card.click("mono-connect-start");
+    assert_eq!(card.phase(), Phase::WaitingForInstall);
+    assert!(!card.on("mono-connect-store"));
 }
 
 #[gpui::test]

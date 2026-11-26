@@ -12,7 +12,8 @@ manifest, the privacy page or the behavior it describes.
 | Category | Developer Tools (fallback: Productivity) |
 | Default language | English |
 | Additional language | Vietnamese (Tiếng Việt) |
-| Visibility | Public |
+| Visibility | Unlisted for the first version; switch to Public after the app release that knows the item id is out |
+| Store URL | https://chromewebstore.google.com/detail/fmimbbckbgogjapagnhpegfkkjebipcp |
 | Privacy policy URL | https://zptah.app/privacy |
 | Homepage URL | https://zptah.app |
 | Support URL | https://github.com/hhoangg/zptah/issues |

@@ -15,10 +15,16 @@ pub(crate) const HOST_NAME: &str = "app.zptah.browser_host";
 pub(crate) const DEV_HOST_NAME: &str = "app.zptah.browser_host_dev";
 /// Fixed by the `key` in `extensions/zptah-browser/manifest.dev.json`.
 pub(crate) const DEV_EXTENSION_ID: &str = "bmmfejkhajglhijajgdgfckhonddijjh";
-/// Chrome Web Store id of zptah Browser. PLACEHOLDER: the listing does not exist yet (spec 13.4).
-/// Replace it with the real id when the listing is created; `store_ids_are_valid` keeps the
-/// format honest meanwhile. Host mode compiles its own list from the same constant.
-pub(crate) const STORE_EXTENSION_IDS: &[&str] = &["pppppppppppppppppppppppppppppppp"];
+/// Chrome Web Store item id of zptah Browser.
+pub(crate) const STORE_EXTENSION_ID: &str = "fmimbbckbgogjapagnhpegfkkjebipcp";
+/// Every Web Store id a release build trusts. The single source: the release host manifest, the
+/// pair page URL and host mode (`host_mode::parse_launch`) all read it; `store_ids_are_valid`
+/// keeps the format honest.
+pub(crate) const STORE_EXTENSION_IDS: &[&str] = &[STORE_EXTENSION_ID];
+/// The Chrome Web Store page of zptah Browser.
+pub(crate) fn store_page_url() -> String {
+    format!("https://chromewebstore.google.com/detail/{STORE_EXTENSION_ID}")
+}
 
 /// Manifests of other products that trust a public dev id; the app only warns about them
 /// (spec 12.1) and never touches them.
