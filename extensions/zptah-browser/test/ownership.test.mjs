@@ -109,7 +109,6 @@ function chrome(opts = {}) {
     },
     webNavigation: { onCreatedNavigationTarget: ev.navTarget },
     storage: { session: { get: async (k) => (storage.has(k) ? { [k]: storage.get(k) } : {}), set: async (o) => Object.entries(o).forEach(([k, v]) => storage.set(k, structuredClone(v))) } },
-    permissions: { contains: async () => false },
   };
   return { api, tabs, groups, calls, ev, add, storage };
 }

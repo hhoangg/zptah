@@ -71,10 +71,12 @@ Requirements
   does nothing on its own. Get it at https://zptah.app.
 - Chrome 120 or newer. Not available in Incognito windows.
 
-Optional permission
-- "Debugging this browser" (the debugger permission) is asked only when you allow it, for sites that
-  ignore simulated input, rich text editors and page dialogs. Chrome shows its debugging bar while
-  it is attached, and it is released when the work ends or you press Stop.
+Debugger permission
+- Chrome shows a warning about "debugging this browser" when you install, because it does not allow
+  this permission to be optional. The extension does not use it unless you turn on "Use the debugger
+  fallback" in its options (off by default), for sites that ignore simulated input, rich text editors
+  and page dialogs. Chrome shows its debugging bar while it is attached, and it is released when the
+  work ends or you press Stop.
 
 Privacy policy: https://zptah.app/privacy
 Source code: https://github.com/hhoangg/zptah
@@ -109,10 +111,11 @@ Yêu cầu
   Tải tại https://zptah.app.
 - Chrome 120 trở lên. Không dùng được trong cửa sổ ẩn danh.
 
-Quyền tùy chọn
-- Quyền "debugger" chỉ được hỏi khi bạn cho phép, dùng cho các trang bỏ qua thao tác giả lập, trình
-  soạn thảo văn bản phong phú và hộp thoại của trang. Chrome hiện thanh gỡ lỗi khi quyền này đang dùng,
-  và nó được thả khi việc xong hoặc khi bạn bấm Dừng.
+Quyền debugger
+- Chrome hiện cảnh báo "gỡ lỗi trình duyệt này" khi cài đặt, vì Chrome không cho quyền này là tùy chọn.
+  Tiện ích không dùng nó trừ khi bạn bật "Use the debugger fallback" trong trang cài đặt (mặc định tắt),
+  dùng cho các trang bỏ qua thao tác giả lập, trình soạn thảo văn bản phong phú và hộp thoại của trang.
+  Chrome hiện thanh gỡ lỗi khi quyền này đang dùng, và nó được thả khi việc xong hoặc khi bạn bấm Dừng.
 
 Chính sách quyền riêng tư: https://zptah.app/privacy
 Mã nguồn: https://github.com/hhoangg/zptah

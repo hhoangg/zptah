@@ -11,10 +11,10 @@
     "scripting",
     "storage",
     "alarms",
-    "webNavigation"
+    "webNavigation",
+    "debugger"
   ],
   "incognito": "not_allowed",
-  "optional_permissions": ["debugger"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "src/worker/main.js",

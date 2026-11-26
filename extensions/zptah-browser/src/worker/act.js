@@ -10,6 +10,7 @@
 import { b64encode, toHex } from "./bytes.js";
 import { randomBytes } from "./crypto.js";
 import { createDebugger } from "./debugger.js";
+import { PREFS_KEY } from "./prefs.js";
 import { DEFAULT_DEADLINE_MS, errorReply, okReply, withDeadline, ZptahError } from "./errors.js";
 import { focusGuard } from "./focus-guard.js";
 import { eligibleFrames, runInFrames } from "./inject.js";
@@ -314,7 +315,7 @@ export function registerActPath(link, deps) {
     const generation = read.gens.get(tab.id);
     if (generation === undefined) throw new ZptahError("E_STALE_REF", "Take a snapshot first.");
     if (action.kind === "upload") takeUpload(action, entry.id);
-    if (action.kind === "drag" && !(await dbg.permitted())) throw new ZptahError("E_DEBUGGER_DENIED", "Dragging needs the optional debugger permission. Allow it in the zptah Browser options page.");
+    if (action.kind === "drag" && !(await dbg.permitted())) throw new ZptahError("E_DEBUGGER_DENIED", "Dragging needs the debugger fallback. Turn on \"Use the debugger fallback\" in the zptah Browser options page.");
 
     const id = toHex(randomBytes(16));
     /** @param {number} f */
@@ -946,7 +947,7 @@ export function registerActPath(link, deps) {
   api.webNavigation?.onDOMContentLoaded?.addListener((/** @type {{ tabId: number, frameId: number }} */ d) => {
     if (d.frameId === 0) void deps.effects?.reapply(d.tabId);
   });
-  // chrome.debugger only exists once the optional permission is granted.
+  // chrome.debugger is a required permission, so it exists from the start; whether it is used is the user's switch.
   let debuggerWired = false;
   function wireDebuggerEvents() {
     if (debuggerWired || !api.debugger?.onEvent) return;
@@ -955,7 +956,10 @@ export function registerActPath(link, deps) {
     api.debugger.onDetach?.addListener((/** @type {any} */ source, /** @type {string} */ reason) => dbg.onDetach(source, reason));
   }
   wireDebuggerEvents();
-  api.permissions?.onAdded?.addListener(wireDebuggerEvents);
+  // Turning the switch off ends every debugger session at once (the yellow bar goes away).
+  api.storage?.onChanged?.addListener((/** @type {Record<string, any>} */ changes, /** @type {string} */ area) => {
+    if (area === "local" && changes[PREFS_KEY] && changes[PREFS_KEY].newValue?.use_debugger !== true) void dbg.detachAll("switch_off");
+  });
   api.action?.onClicked?.addListener(() => {
     link.stopped = true;
     deps.onStopState?.();

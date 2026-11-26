@@ -593,7 +593,7 @@ Lifecycle:
   while no debugger was attached could not be seen or answered: a late `Page.enable` never returned,
   `handleJavaScriptDialog` failed with "No dialog is showing", and `chrome.scripting` calls stayed
   pending (only a reload was seen to clear the dialog; `prompt()` was not tested). So:
-  - **Pre-attach.** When the `debugger` permission is granted, the extension attaches at **prepare**
+  - **Pre-attach.** When the debugger fallback switch is on, the extension attaches at **prepare**
     time for an action whose signals put it in `destructive` or `payment` (where confirmation
     dialogs are likely; an assumption, not a measurement), waits for the 57 px infobar resize to
     settle, and only then gathers signals, geometry and the screenshot, so commit's re-check sees the
@@ -614,8 +614,14 @@ Lifecycle:
   chrome-use soft-detaches here and re-attaches on the agent's next command
   (`CU-EXT/background.js:2808-2816`); we deliberately go further, because the user's Cancel is a
   refusal.
-- The `debugger` permission is **optional** (section 13.2). Without it, actions that need it fail
-  with `E_DEBUGGER_DENIED` and a hint to allow it in the options page.
+- The `debugger` permission is **required in the manifest** (section 13.2), because Chrome lists it
+  as "cannot be optional": declared under `optional_permissions` it is dropped and
+  `chrome.permissions.request` rejects with "Only permissions specified in the manifest may be
+  requested" (measured in Chrome for Testing 158). The user's control is a switch in the options page,
+  "Use the debugger fallback", off by default (`use_debugger` in the prefs). While it is off, actions
+  that need the debugger fail with `E_DEBUGGER_DENIED` and a hint to turn it on in the options page, and
+  the extension never attaches. Turning the switch off detaches every attached session at once (the worker watches the pref), and a
+  command sent after the switch was turned off is refused and detaches that tab.
 
 ### 6.4 Technique trade-offs (D8)
 
@@ -1433,14 +1439,17 @@ New requirement (D9), modelled on how Claude in Chrome marks a tab it is working
 - Per-site off list, "Sites without in-page effects": no cursor and no overlay there (10, 10a).
   Add a host (`example.com` or `*.example.com`), remove. Stored in `chrome.storage.local` (not
   `sync`, to keep the list on this device).
-- Debugger fallback: a button to grant the optional `debugger` permission (a user gesture is
-  required by `chrome.permissions.request`), with one sentence about the infobar.
+- Debugger fallback: a switch "Use the debugger fallback", off by default (the `debugger` permission
+  itself is required in the manifest, 6.3), with plain copy: what it is, that it is used only for
+  sites that ignore script clicks (some banking and booking sites), that Chrome's yellow "zptah Browser
+  started debugging this browser" bar stays while the Mono works on that tab, and that Chrome warns
+  about debugging at install.
 - Version, extension id, a link to `https://zptah.app/privacy`. Nothing else.
 
 Two explicit additions to "tiny options page" (D2), both for reasons outside our control: the
-debugger grant button, because `chrome.permissions.request` only works from a user gesture on an
-extension page; and `pair.html`, a one-time page that shows "Connecting to zptah..." and closes
-itself, because it is how the app tells the extension which profile it is in (12.3). Neither is a
+debugger switch, because Chrome does not allow `debugger` as an optional permission, so the user's
+choice lives in the extension; and `pair.html`, a one-time page that shows the pairing progress
+(waiting, verifying, connected or the failure with Retry) and closes itself after a short countdown, because it is how the app tells the extension which profile it is in (12.3). Neither is a
 panel or a place to talk to the Mono.
 
 ## 12. Install and pairing
@@ -1521,8 +1530,8 @@ row (`:1147`):
    today, `B:672`, `B:705`), and sends it once in
    the `pair.begin` result. The extension stores `K` in `chrome.storage.local`. The normal handshake
    (5.3) follows.
-7. The page offers the optional `debugger` permission (one click, the required user gesture) and
-   then closes itself. The card shows "Connected: Chrome, profile Work".
+7. The page shows "Connected", counts down 5 seconds and closes itself (or the user presses
+   Close). The card shows "Connected: Chrome, profile Work".
 8. The user binds the Mono to that connection (one dropdown). Several Monos can bind to one
    connection.
 
@@ -1581,7 +1590,7 @@ connected) and removes the binding.
 | `alarms` | yes | Reconnects to the zptah app after the browser wakes up or the background worker restarts. |
 | `webNavigation` | yes | Finds the frames of a page to read it fully, and restores your front tab when a page a Mono works in opens a popup. |
 | host permissions `<all_urls>` | yes | Monos work on the sites you ask them to use. Nothing runs on a page until a Mono reads or acts on it. |
-| `debugger` | **optional**, granted on the pairing page or in options | Used only for sites that ignore simulated input, for rich text editors, and for page dialogs (attached before a delete or payment step so its confirmation dialog can be read). When a tab needs it, it stays attached while the assistant works in that tab and is detached when the work ends or the user presses Stop; Chrome shows its debugging bar while attached. |
+| `debugger` | yes (Chrome does not allow it as optional); off until the user turns on "Use the debugger fallback" in options | Chrome shows its warning at install. Used only for sites that ignore simulated input, for rich text editors, and for page dialogs (attached before a delete or payment step so its confirmation dialog can be read). When a tab needs it, it stays attached while the assistant works in that tab and is detached when the work ends or the user presses Stop; Chrome shows its debugging bar while attached. |
 
 Not requested: `identity`, `downloads`, `cookies`, `history`, `bookmarks`, `webRequest`,
 `declarativeNetRequest`, `notifications`, `sidePanel`, `activeTab`, `management`, `clipboard*`.
@@ -1612,8 +1621,9 @@ This is the conservative reading, chosen by the user (answer 6).
   strictest review (chrome-use's own submission notes say the same, `CU/extensions/store/SUBMISSION.html`).
   The figure is an estimate; check Google's published review guidance at submission time.
 - Updates without new permissions are usually faster. Adding a permission later re-triggers
-  warnings for users and a deeper review, so v1 requests everything it needs, with `debugger`
-  optional.
+  warnings for users and a deeper review, so v1 requests everything it needs. `debugger` is
+  in the required list because Chrome does not allow it as optional; it warns at install and the
+  extension does not use it until the user turns the switch on.
 - The submission goes in during M5 while M6 is in progress, so review overlaps development.
 
 ### 13.5 Versioning and protocol
@@ -1919,7 +1929,7 @@ M0.4 (Arc) moved out of v1 with answer 12. Results: section 19.
 | 1 | Mono emoji | Add an emoji field to Mono, default from the mascot | 9.1, 15.3 |
 | 2 | "Ask every action" level | Removed | 8.1, 15.3 |
 | 3 | Cookie banners | Accept all automatically; not treated as accepting terms | 7.3, Appendix A.7 |
-| 4 | Debugger permission | Optional | 6.3, 13.2 |
+| 4 | Debugger permission | Required in the manifest (Chrome: "cannot be optional"), used only while the user's switch is on, off by default (revised from "Optional") | 6.3, 11.3, 13.2, 13.4 |
 | 5 | Stores | Chrome Web Store only for now; Edge and other stores later | 13.6 |
 | 6 | Data disclosure | Conservative | 13.3 |
 | 7 | Unknown extension build | Refuse to connect | 13.5 |

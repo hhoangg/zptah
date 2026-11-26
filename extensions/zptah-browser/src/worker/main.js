@@ -144,13 +144,22 @@ chrome.runtime.onMessage.addListener(
               ext_id: chrome.runtime.id,
               instance_id: link.instanceId,
               browser: browserInfo(),
+              active_monos: effects?.activeMonos() ?? 0,
+              detail: link.lastDetail,
             }
-          : { status: link.status },
+          : { status: link.status, detail: link.lastDetail, app_version: link.appVersion },
       );
       return false;
     }
     if (fromOptions && m?.type === "zptah.unpair") {
       link.unpair().then(
+        () => sendResponse({ ok: true }),
+        () => sendResponse({ ok: false }),
+      );
+      return true;
+    }
+    if (fromOptions && m?.type === "zptah.reconnect") {
+      link.reconnect().then(
         () => sendResponse({ ok: true }),
         () => sendResponse({ ok: false }),
       );

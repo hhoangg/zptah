@@ -4,6 +4,7 @@
 // before destructive and payment actions (decision 6), and detached on Stop, on tab loss, when
 // the tab leaves the Mono's origins and 2 minutes after the last use (decision 4).
 import { ZptahError } from "./errors.js";
+import { debuggerAllowed } from "./prefs.js";
 
 export const IDLE_DETACH_MS = 120000;
 export const SETTLE_MS = 400;
@@ -93,13 +94,7 @@ export function createDebugger(deps) {
   const attachedTabs = () => [...tabs].filter(([, s]) => s.attached).map(([t]) => t).sort((a, b) => a - b);
 
   /** @returns {Promise<boolean>} */
-  async function permitted() {
-    try {
-      return (await api.permissions.contains({ permissions: ["debugger"] })) === true;
-    } catch {
-      return false;
-    }
-  }
+  const permitted = () => debuggerAllowed(api);
 
   /**
    * Attaches once per tab; later calls only count as use. Waits for the infobar to settle before
@@ -115,7 +110,7 @@ export function createDebugger(deps) {
       return false;
     }
     if (!(await permitted())) {
-      throw new ZptahError("E_DEBUGGER_DENIED", "This needs the optional debugger permission. Allow it in the zptah Browser options page.");
+      throw new ZptahError("E_DEBUGGER_DENIED", "This needs the debugger fallback. Turn on \"Use the debugger fallback\" in the zptah Browser options page.");
     }
     try {
       await api.debugger.attach({ tabId: tab }, CDP_VERSION);
@@ -151,6 +146,11 @@ export function createDebugger(deps) {
   async function send(tab, method, params = {}) {
     refuseStopped();
     if (!isAttached(tab)) throw new ZptahError("E_DEBUGGER_DENIED", "The debugger is not attached to this tab.");
+    // The user's switch may have been turned off since the attach: nothing is sent then.
+    if (!(await permitted())) {
+      await detach(tab, "switch_off");
+      throw new ZptahError("E_DEBUGGER_DENIED", "The debugger fallback was turned off.");
+    }
     touch(tab);
     try {
       return await sendRaw(tab, method, params);

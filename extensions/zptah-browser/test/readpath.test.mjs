@@ -76,7 +76,7 @@ function setup(opts = {}) {
         return [{ frameId: target.frameIds[0], result: await fn(args[0], args[1]) }];
       },
     },
-    permissions: { contains: async () => opts.debuggerPermission ?? false },
+    storage: { local: { get: async (k) => ({ [k]: { use_debugger: opts.debuggerPermission ?? false } }) } },
     debugger: {
       getTargets: async () => (opts.attached ? [{ tabId: 1, attached: true }] : [{ tabId: 1, attached: false }]),
       sendCommand: async (target, method, params) => {

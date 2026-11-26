@@ -79,6 +79,9 @@ export class BrowserLink {
   /** The app's version from the last hello, for the options page. */
   appVersion = "";
 
+  /** Short reason of the last status change, for the pairing page (never a secret). */
+  lastDetail = "";
+
   /** @param {LinkDeps} deps */
   constructor(deps) {
     this.#deps = deps;
@@ -108,6 +111,7 @@ export class BrowserLink {
   #setStatus(status, detail) {
     console.debug("zptah-link", status, detail instanceof Error ? detail.message : detail ?? "");
     this.#status = status;
+    this.lastDetail = detail instanceof Error ? detail.message.slice(0, 120) : typeof detail === "string" ? detail.slice(0, 120) : "";
     this.#deps.onStatus?.(status, detail);
   }
 
@@ -152,6 +156,16 @@ export class BrowserLink {
     this.#closePort();
     this.#pairNonce = nonce;
     this.#connect(true);
+  }
+
+  /** The options page's Reconnect: drops the backoff and connects now. Does nothing while unpaired. */
+  async reconnect() {
+    await this.load();
+    if (this.#keyB64 === null || this.#pairNonce !== null) return;
+    this.#closePort();
+    this.#attempts = 0;
+    this.#nextAttemptAt = 0;
+    this.#connect(false);
   }
 
   /** Forgets the key (the app was told first, or the user chose Disconnect). */

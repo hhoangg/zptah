@@ -392,3 +392,37 @@ test("storage access is restricted to trusted contexts before any read or write"
   assert.deepEqual(calls.slice(0, 2), ["access:TRUSTED_CONTEXTS", "get"]);
   assert.equal(calls.indexOf("set") > 0, true);
 });
+
+test("lastDetail names why the last status was set, for the pairing page", async () => {
+  const nonce = b64encode(randomBytes(16));
+  const h = harness({ key: KEY, stored: undefined, script: (app, f) => app.send({ v: 1, type: "res", id: f.id, ok: false, error: { code: "E_NOT_PAIRED", message: "x" } }) });
+  await h.link.start();
+  await h.link.pair(nonce);
+  await until(() => h.link.status === "pair_failed", "pair_failed");
+  assert.equal(h.link.lastDetail, "E_NOT_PAIRED");
+  const bad = harness({ key: KEY, stored: undefined });
+  await bad.link.start();
+  await assert.rejects(bad.link.pair("not-base64!"));
+  assert.equal(bad.link.lastDetail, "bad nonce");
+  const gone = harness({ key: KEY, stored: undefined, missingHost: true });
+  await gone.link.start();
+  await gone.link.pair(nonce);
+  assert.match(gone.link.lastDetail, /not found/);
+});
+
+test("reconnect drops the backoff and connects now; it does nothing while unpaired", async () => {
+  const h = harness({ key: KEY, stored: paired, missingHost: true });
+  await h.link.start();
+  await h.link.tick();
+  const before = h.ports.length;
+  await h.link.reconnect();
+  assert.equal(h.link.status, "host_missing");
+  const unpaired = harness({ key: KEY, stored: undefined });
+  await unpaired.link.start();
+  await unpaired.link.reconnect();
+  assert.equal(unpaired.ports.length, 0);
+  const ok = harness({ key: KEY, stored: paired });
+  await ok.link.reconnect();
+  await until(() => ok.link.status === "ready", "ready after reconnect");
+  assert.equal(before, 0);
+});

@@ -1,11 +1,12 @@
 // page.screenshot (spec 6.4 "Screenshots", F5). captureVisibleTab only for the active tab of a
 // visible window, under a timeout (it hangs on hidden pages); chrome.debugger only when the
-// optional permission is granted AND the debugger is already attached to the tab. Never
+// user has turned the debugger fallback on AND the debugger is already attached to the tab. Never
 // activates a tab or window. The PNG is scaled down until it fits `max_bytes`.
 import { ZptahError } from "./errors.js";
 import { runInFrames } from "./inject.js";
 import { requireReadable } from "./origins.js";
 import { parseRef } from "./pages.js";
+import { debuggerAllowed } from "./prefs.js";
 import { getReadableTab, tabUrl } from "./tabs.js";
 
 export const CAPTURE_TIMEOUT_MS = 2000;
@@ -191,10 +192,10 @@ export function createScreenshotter({ api, imaging, sleep, now, getGeneration, c
     return new ZptahError("E_UNSUPPORTED", `The debugger could not take the picture: ${m.slice(0, 150)}`);
   }
 
-  /** The debugger path needs the optional permission and an attach that already exists. @param {any} tab */
+  /** The debugger path needs the user's switch and an attach that already exists. @param {any} tab */
   async function debuggerReady(tab) {
     try {
-      if (!(await api.permissions.contains({ permissions: ["debugger"] }))) return false;
+      if (!(await debuggerAllowed(api))) return false;
       if (isAttached) return isAttached(tab.id);
       /** @type {any[]} */
       const targets = await api.debugger.getTargets();
