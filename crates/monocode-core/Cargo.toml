@@ -83,6 +83,7 @@ libc = "0.2"
 test-support = []
 
 [dev-dependencies]
+minisign = "0.10.0"
 tempfile = "3"
 # `tokio::time::pause` for the web heartbeat test
 tokio = { version = "1.54.1", features = ["test-util"] }

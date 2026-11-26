@@ -230,6 +230,15 @@ pub fn schedule_relaunch(executable: &Path) -> Result<(), String> {
 
 fn https_url(value: &str) -> Result<(), String> {
     let url = url::Url::parse(value).map_err(|e| e.to_string())?;
+    // Tests talk to a loopback fake server; production builds never take this branch.
+    #[cfg(test)]
+    if url.scheme() == "http"
+        && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
+        && url.username().is_empty()
+        && url.password().is_none()
+    {
+        return Ok(());
+    }
     if url.scheme() != "https"
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -300,6 +309,9 @@ fn request(url: &str) -> Result<ureq::Response, String> {
         .get(url)
         .set("User-Agent", "zptah-Updater")
         .set("Accept-Encoding", "identity")
+        // Never accept a cached feed: a stale copy would hide a newer release.
+        .set("Cache-Control", "no-cache")
+        .set("Pragma", "no-cache")
         .call()
         .map_err(|e| e.to_string())?;
     https_url(response.get_url())?;
@@ -321,6 +333,29 @@ pub fn check(config: &Config, installation: &Installation) -> Result<Option<Upda
         return Err("Native update feed exceeds its size limit".into());
     }
     verify_feed(&bytes, config, &installation.target()?)
+}
+
+/// The update to install when the user asks for `pending` (found by an earlier check):
+/// re-reads the signed feed and returns a newer release if one appeared since, so a
+/// stale pending version is never installed over the current latest. When the fresh
+/// check fails (offline) or finds nothing newer, `pending` is kept: it is still a signed
+/// update newer than the running version. Blocking: run it off the UI thread.
+pub fn latest(pending: Update, config: &Config, installation: &Installation) -> Update {
+    newest(pending, check(config, installation))
+}
+
+fn newest(pending: Update, fresh: Result<Option<Update>, String>) -> Update {
+    match fresh {
+        Ok(Some(fresh)) if fresh.version > pending.version => fresh,
+        Ok(_) => pending,
+        Err(error) => {
+            eprintln!(
+                "update re-check failed, keeping v{}: {error}",
+                pending.version
+            );
+            pending
+        }
+    }
 }
 
 impl Update {
