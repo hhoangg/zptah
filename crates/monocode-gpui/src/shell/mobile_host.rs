@@ -2580,10 +2580,22 @@ impl Shell {
                     _ => None,
                 };
                 let settings = model_settings(params);
+                // The account is checked against the provider the turn will use
+                // before anything changes, so a refused pick changes nothing.
+                let kind = model
+                    .as_ref()
+                    .map(|(kind, _)| *kind)
+                    .unwrap_or_else(|| Kind::from_id(&view.read(cx).summary.provider));
+                let account = mobile_account_pick(kind, params, cx)?;
                 view.update(cx, |v, cx| {
                     v.load(cx);
                     v.mobile_configure(model, &settings, access, cx);
-                });
+                    match account {
+                        Some(profile) => v.mobile_switch_account(profile, cx),
+                        None => Ok(()),
+                    }
+                })?;
+                self.update_usage_provider(cx);
                 Ok(reply)
             }
             ("session.rename", Target::Session(id)) => {
@@ -3994,6 +4006,34 @@ fn message_text(params: &Value) -> Result<String, String> {
 }
 
 /// A model sheet's settings, keeping only well-formed ones.
+/// The account a phone picked for a running conversation, checked as a new
+/// session's pick is: `None` when it sent none.
+fn mobile_account_pick(
+    kind: Kind,
+    params: &Value,
+    cx: &App,
+) -> Result<Option<monocode_core::accounts::Profile>, String> {
+    let Some(id) = params.get("providerAccountId").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let unavailable =
+        || "Account is no longer available. Choose another account in the model picker.";
+    let id = id.as_str().ok_or_else(unavailable)?;
+    if id == monocode_core::accounts::DEFAULT {
+        return Ok(Some(Default::default()));
+    }
+    if !monocode_core::accounts::supports_profiles(kind) {
+        return Err("This provider does not support account switching".into());
+    }
+    let center = crate::accounts::get(cx).ok_or_else(unavailable)?;
+    let center = center.read(cx);
+    if center.book.exists(kind, id) {
+        Ok(Some(center.profile(id)))
+    } else {
+        Err(unavailable().into())
+    }
+}
+
 fn model_settings(params: &Value) -> HashMap<String, String> {
     params["modelSettings"]
         .as_object()
@@ -5415,6 +5455,67 @@ mod tests {
                 let read = json!({"monoId": "m1", "file": "soul"});
                 let answer = ask(shell, window, cx, &web_control, "mono.file", read);
                 assert_ne!(answer, Some(Err(policy::Code::Forbidden.failure())));
+            })
+            .unwrap();
+    }
+
+    /// The web's account picker sends `providerAccountId` with `session.configure`. It used to be
+    /// dropped and answered "ok", so the switch never happened; now it is applied like the
+    /// desktop picker, and a pick that cannot be applied is an error that changes nothing.
+    #[gpui::test]
+    fn session_configure_switches_the_account_or_refuses(cx: &mut gpui::TestAppContext) {
+        let (window, codex, claude) = super::super::tests::window(cx);
+        window
+            .update(cx, |shell, window, cx| {
+                if crate::accounts::get(cx).is_none() {
+                    crate::accounts::install(shell.store.clone(), cx);
+                }
+                let center = crate::accounts::get(cx).unwrap();
+                let (work, other) = center.update(cx, |center, _| {
+                    let work = center.book.add(Kind::Claude, "Work").unwrap().id;
+                    let other = center.book.add(Kind::Claude, "Other").unwrap().id;
+                    (work, other)
+                });
+                let device = web(None, None);
+                let conversation = shell.mobile_session_id(claude);
+                let configure = |shell: &mut Shell,
+                                 window: &mut Window,
+                                 cx: &mut Context<Shell>,
+                                 account: &str| {
+                    let params =
+                        json!({"conversationId": conversation, "providerAccountId": account});
+                    shell.mobile_session_command(&device, "session.configure", &params, window, cx)
+                };
+                let account = |shell: &Shell, cx: &App| {
+                    shell.sessions[&claude].read(cx).settings.account.id.clone()
+                };
+
+                assert!(configure(shell, window, cx, &work).is_ok());
+                assert_eq!(account(shell, cx), work);
+                // The same pick again (the web resends it with every change) stays ok.
+                assert!(configure(shell, window, cx, &work).is_ok());
+                assert_eq!(account(shell, cx), work);
+
+                assert!(configure(shell, window, cx, "missing-account").is_err());
+                assert_eq!(account(shell, cx), work);
+
+                shell.sessions[&claude].update(cx, |v, _| v.busy = true);
+                assert!(configure(shell, window, cx, &other).is_err());
+                assert_eq!(account(shell, cx), work);
+                shell.sessions[&claude].update(cx, |v, _| v.busy = false);
+
+                // A Claude account is not one of a Codex conversation's accounts.
+                let codex_id = shell.mobile_session_id(codex);
+                let params = json!({"conversationId": codex_id, "providerAccountId": other});
+                assert!(
+                    shell
+                        .mobile_session_command(&device, "session.configure", &params, window, cx)
+                        .is_err()
+                );
+                assert_eq!(
+                    shell.sessions[&codex].read(cx).settings.account.id,
+                    monocode_core::accounts::DEFAULT
+                );
             })
             .unwrap();
     }

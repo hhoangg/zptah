@@ -431,6 +431,32 @@ impl Conversation {
         .detach();
         cx.notify();
     }
+    /// The phone's account pick, applied as the desktop pickers apply it: a
+    /// conversation with history moves in place, a blank one just takes the
+    /// account. Refuses what the desktop would ignore, so the phone never
+    /// hears "ok" for a switch that did not happen.
+    pub(crate) fn mobile_switch_account(
+        &mut self,
+        profile: Profile,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.settings.account.id == profile.id {
+            return Ok(());
+        }
+        if self.busy || self.stopping || self.account_switching || self.editing_last_turn.pending()
+        {
+            return Err("Wait for the reply to finish before changing the account".into());
+        }
+        if self.summary.has_messages
+            || self.needs_history_restore()
+            || self.account_recovery_limit(cx).is_some()
+        {
+            self.switch_account(profile, cx);
+        } else {
+            self.set_blank_account(profile, cx);
+        }
+        Ok(())
+    }
     pub(crate) fn account_unavailable(&mut self, cx: &mut Context<Self>) {
         self.stop_if_busy(cx);
         self.follow_ups.state.paused = true;
