@@ -37,6 +37,8 @@ mod notifications;
 mod overview;
 mod panel_stack;
 mod panels;
+#[cfg(test)]
+mod peer_tests;
 mod recipes_ui;
 mod reset;
 mod scheduler;
@@ -227,6 +229,8 @@ pub(crate) struct Monos {
     #[cfg(test)]
     dispatch_limit: Option<usize>,
     inflight: HashMap<String, Message>,
+    /// When each Mono last sent `monos.send` messages, for the rate limit.
+    peer_sends: HashMap<String, std::collections::VecDeque<u64>>,
     card_refresh: HashMap<String, u64>,
     session_filters: filters::Filters,
     session_filter_anchor: AnchorSlot,
@@ -545,6 +549,7 @@ impl Monos {
             #[cfg(test)]
             dispatch_limit: None,
             inflight: HashMap::new(),
+            peer_sends: HashMap::new(),
             card_refresh: HashMap::new(),
             session_filters,
             session_filter_anchor: AnchorSlot::default(),
@@ -1112,6 +1117,8 @@ impl Monos {
         if let Some(mono) = self.roster.get_mut(source) {
             if remove {
                 mono.outbox.retain(|m| m.id != id);
+                let inflight = self.inflight.get(source).map(|m| m.id.as_str());
+                mono::peers::forget_discarded(mono, inflight);
             } else if let Some(message) = mono.outbox.iter_mut().find(|m| m.id == id) {
                 message.error = None;
             }
@@ -1147,6 +1154,65 @@ impl Monos {
                 self.push_emoji(id, &view, cx);
             }
         }
+    }
+    /// A turn that handled a message from another Mono ended: its reply goes back to the
+    /// sender's chat, the way a delegated completion report does.
+    fn peer_turn_finished(
+        &mut self,
+        id: &str,
+        sent: &str,
+        requeued: Option<&str>,
+        outcome: mono::peers::Outcome,
+        cx: &mut Context<Self>,
+    ) {
+        let reply = self
+            .chats
+            .get(id)
+            .map(|v| monocode_core::response::final_reply(v.read(cx).mono_rows(cx)))
+            .unwrap_or_default();
+        let had = self
+            .roster
+            .get(id)
+            .is_some_and(|m| !m.peer_inbox.is_empty());
+        let routed =
+            mono::peers::turn_finished(&mut self.roster, id, sent, requeued, &reply, outcome);
+        if let Some((to, text, depth)) = routed {
+            self.enqueue_peer(id, &to, text, depth, false, cx);
+        } else if had {
+            self.save(cx);
+        }
+    }
+    /// Queues a message from another Mono in `to`'s chat and remembers it for the reply.
+    pub(super) fn enqueue_peer(
+        &mut self,
+        from: &str,
+        to: &str,
+        text: String,
+        depth: u8,
+        notify_on_reply: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let mono = self.roster.get_mut(to)?;
+        let message_id = mono::new_id();
+        mono.peer_inbox.push(mono::peers::PeerMessage {
+            message_id: message_id.clone(),
+            from: from.to_owned(),
+            depth,
+            notify_on_reply,
+        });
+        mono.outbox.push(Message {
+            id: message_id.clone(),
+            text,
+            sent_at: Some(monocode_core::time::now_ms()),
+            internal: true,
+            error: None,
+            attachments: Vec::new(),
+        });
+        self.save(cx);
+        self.configure_chat(to, cx);
+        self.dispatch(to, cx);
+        self.ensure_chat(to, cx);
+        Some(message_id)
     }
     fn enqueue(
         &mut self,
@@ -1330,19 +1396,30 @@ impl Monos {
         if finished {
             if let Some(mut sent) = self.inflight.remove(id) {
                 let (ok, status) = self.chats[id].read(cx).external_outcome(cx);
-                if !ok && !status.starts_with("Stopped") {
+                let sent_id = sent.id.clone();
+                let stopped = status.starts_with("Stopped");
+                let mut requeued = None;
+                if !ok && !stopped {
                     if let Some(mono) = self.roster.get_mut(id) {
                         if let Some(queued) = mono.outbox.iter_mut().find(|m| m.id == sent.id) {
                             queued.error = Some(report_error(&status));
+                            requeued = Some(queued.id.clone());
                         } else {
                             sent.id = mono::new_id();
                             sent.error = Some(report_error(&status));
+                            requeued = Some(sent.id.clone());
                             mono.outbox.insert(0, sent);
                         }
                     }
                     self.save(cx);
                     self.configure_chat(id, cx);
                 }
+                let outcome = match (ok, stopped) {
+                    (true, _) => mono::peers::Outcome::Replied,
+                    (false, true) => mono::peers::Outcome::Stopped,
+                    (false, false) => mono::peers::Outcome::Failed,
+                };
+                self.peer_turn_finished(id, &sent_id, requeued.as_deref(), outcome, cx);
             }
             self.check_completions(cx);
             self.reload_files(id, cx);

@@ -42,6 +42,9 @@ pub fn validate_operator(action: &str, input: &Value) -> Result<(), String> {
         if crate::mono::move_api::is_move_action(action) {
             return Err(crate::mono::move_api::MONO_ONLY.into());
         }
+        if action.starts_with("monos.") {
+            return Err(crate::mono::peers::MONO_ONLY.into());
+        }
         if action == "cloud.delete" {
             return Err("Deleting a cloud instance is only available to a Mono".into());
         }
