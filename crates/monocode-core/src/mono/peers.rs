@@ -270,10 +270,13 @@ mod tests {
     }
 
     #[test]
-    fn peer_messages_are_off_by_default() {
-        assert!(!Mono::default().accept_peer_messages);
+    fn peer_messages_are_on_by_default() {
+        assert!(Mono::default().accept_peer_messages);
         let old: Mono = serde_json::from_str(r#"{"id":"x","name":"Old"}"#).unwrap();
-        assert!(!old.accept_peer_messages && old.peer_inbox.is_empty());
+        assert!(old.accept_peer_messages && old.peer_inbox.is_empty());
+        let off: Mono =
+            serde_json::from_str(r#"{"id":"x","name":"Old","acceptPeerMessages":false}"#).unwrap();
+        assert!(!off.accept_peer_messages);
     }
 
     #[test]

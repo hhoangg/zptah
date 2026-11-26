@@ -90,8 +90,10 @@ pub struct Mono {
     /// Real Chrome through the zptah Browser extension (see `browser::MonoBrowser`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub browser: Option<browser::MonoBrowser>,
-    /// Takes messages from other Monos (`monos.send`). Off by default: another Mono's request
-    /// reaches this Mono's projects only after the user allowed it here.
+    /// Takes messages from other Monos (`monos.send`). On by default, also for rosters saved
+    /// before the field existed (the struct's serde default is `Default`). All Monos run as the
+    /// same user on the same machine, so the switch is no hard boundary; it keeps a Mono
+    /// undisturbed or shuts out Monos whose powers live elsewhere.
     pub accept_peer_messages: bool,
     /// Messages from other Monos queued or being handled, so a reply can go back.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -233,7 +235,7 @@ impl Default for Mono {
             emoji: emoji::MonoEmoji::default(),
             badge_emoji: None,
             browser: None,
-            accept_peer_messages: false,
+            accept_peer_messages: true,
             peer_inbox: Vec::new(),
         }
     }
