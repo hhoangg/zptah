@@ -89,7 +89,7 @@ describe("static asset headers (generated at build time, see vite-plugins/header
       "worker-src 'self'",
       "frame-ancestors 'self'",
       "require-trusted-types-for 'script'",
-      "trusted-types default",
+      "trusted-types default dompurify;",
     ]) {
       expect(csp).toContain(directive);
     }

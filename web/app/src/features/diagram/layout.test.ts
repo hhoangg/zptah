@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { fixtureNames, readGolden, readGraph, readMermaid, readParsed } from "./fixtures";
+import { fixtureNames, readGolden, readGraph } from "./fixtures";
 import { type Layout, arrowhead, bottom, intersects, layout, right, smooth, textWidth, wrapLabel } from "./layout";
-import { parseFlowchart } from "./mermaid";
 import type { Direction, FlowEdge, FlowGraph, FlowNode } from "./model";
 import { MAX_FLOW_NODES, validateGraph } from "./model";
 
@@ -183,15 +182,5 @@ describe("parity with the Rust layout (shared fixtures)", () => {
     expect(golden, `fixtures/${name}.layout.json (regenerate with ZPTAH_UPDATE_DIAGRAM_GOLDENS=1, see crates/monocode-core/src/diagram/golden.rs)`).not.toBeNull();
     expectMatchesRust(layout(readGraph(name)), golden!);
     assertClean(readGraph(name));
-  });
-  it.each(fixtureNames(".mmd"))("parses and lays out mermaid %s like the desktop", (name) => {
-    const rust = readParsed(name);
-    expect(rust, `fixtures/${name}.parsed.json`).not.toBeNull();
-    const parsed = parseFlowchart(readMermaid(name));
-    expect(parsed.ok).toBe(true);
-    if (!parsed.ok) return;
-    expect(parsed.graph).toEqual(rust!.graph);
-    expectMatchesRust(layout(parsed.graph), rust!.layout);
-    assertClean(parsed.graph);
   });
 });

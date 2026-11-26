@@ -18,7 +18,7 @@ The old Tauri React app (`src/`, with `src-tauri/`) may be reused, but its sourc
 
 - **Markdown renderer.** The web renderer is a port of `mobile/src/features/sessions/markdownParser.ts` to an AST rendered as React elements with no HTML sink (security.md section 8). The streamdown, react-markdown, rehype and `rehype-harden` stack of `src/` is NOT copied as the renderer. From it only pieces that fit are reused: the shiki highlighting engine and config, and the code block UI, rendered from `codeToTokens` tokens as React elements (never `codeToHtml`, never `dangerouslySetInnerHTML`).
 - **Transcript projection.** Not reused from `src/`: the desktop already projects turns for mobile (`crates/monocode-gpui/src/mobile/transcript.rs`, 1386 LOC, a Rust port of `src/features/mobile/model/mobileTranscript.ts:137`; shape in `mobile/src/features/workspace/types.ts:184`). The web `Turn` renderer ports `mobile/src/features/sessions/TranscriptTurn.tsx`.
-- **Mermaid** (`src/features/sessions/ui/AgentMarkdown.tsx:996`, `dangerouslySetInnerHTML={{ __html: svg }}`) is dropped.
+- **Mermaid** (`src/features/sessions/ui/AgentMarkdown.tsx:996`, `dangerouslySetInnerHTML={{ __html: svg }}`) is dropped (the web app draws Mermaid with the `mermaid` package into a `blob:` image instead, never as markup: security.md 8.2, "Mermaid").
 - **FileTypeIcon raw SVG** (`src/features/files/ui/FileTypeIcon.tsx:78`, `dangerouslySetInnerHTML={markup}`) is replaced: hugeicons per file kind, or SVG shipped as build-time React components, never an HTML string.
 
 ## 3. Candidates by area
