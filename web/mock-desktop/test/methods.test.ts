@@ -191,7 +191,7 @@ describe("fixture hygiene", () => {
 });
 
 describe("visual.dispatch", () => {
-  const params = (handler: string, value: unknown) => ({ conversationId: "sess-visuals", itemId: "sess-visuals-v4", documentId: "interactive-deploys", handler, value });
+  const params = (handler: string, value: unknown) => ({ conversationId: "sess-visual-controls", itemId: "sess-visual-controls-v1", documentId: "interactive-deploys", handler, value });
 
   it("advertises visualControls to every device and answers the next tree", async () => {
     const read = await setup({ permission: "read" });

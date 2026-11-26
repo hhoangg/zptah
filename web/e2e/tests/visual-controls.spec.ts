@@ -1,7 +1,7 @@
 // The controls of a native visual in a chat (tabs, button, toggle, select, slider, input) work on the web app, in Chromium
 // (desktop) and in WebKit with an iPhone profile (project `webkit-mobile`, real touch taps). The page is the production
 // build of the dev preview served with the Worker's real security headers and talks to an in-browser mock desktop whose
-// `visual.dispatch` answers the next tree of the fixture visual of `sess-visuals` (web/mock-desktop/src/visual.ts), as the
+// `visual.dispatch` answers the next tree of the fixture visual of `sess-visual-controls` (web/mock-desktop/src/visual.ts), as the
 // real desktop runs the program in its own sandbox. No relay, account or passkey is involved.
 import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { startPreviewServer, type PreviewServer } from "../lib/preview-server.ts";
@@ -48,7 +48,7 @@ test.describe("controls of a visual in a chat", () => {
       },
     );
     page = await context.newPage();
-    await page.goto(`/?to=/d/${DESKTOP_ID}/s/sess-visuals&theme=dark`);
+    await page.goto(`/?to=/d/${DESKTOP_ID}/s/sess-visual-controls&theme=dark`);
     await expect(figure()).toBeVisible({ timeout: 60_000 });
     await figure().scrollIntoViewIfNeeded();
     await expect(figure().getByRole("tab")).toHaveCount(3);

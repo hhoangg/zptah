@@ -153,7 +153,7 @@ export class MockWorld {
   readonly now: () => number;
   capabilities: WorldCapabilities;
   readonly sessions = new Map<string, SessionRecord>();
-  /** The interactive visual of `sess-visuals` (`visual.dispatch`). */
+  /** The interactive visual of `sess-visual-controls` (`visual.dispatch`). */
   readonly visual = new MockVisual();
   readonly instances = new Map<string, CloudInstanceRecord>();
   /** Desktop app version and the newest version of the update feed; a test sets `latestVersion`. */
@@ -279,7 +279,6 @@ export class MockWorld {
             ],
           },
         },
-        { type: "visual", id: `${visuals.id}-v4`, documentId: "interactive-deploys", title: "Interactive deploys", tree: this.visual.tree() },
         {
           type: "visual",
           id: `${visuals.id}-v3`,
@@ -294,6 +293,15 @@ export class MockWorld {
           },
         },
       ],
+    });
+    // An interactive visual (`visual.dispatch`) in a session of its own, so the specs of `sess-visuals` see what they always saw.
+    const controls = this.#addSession({ id: "sess-visual-controls", projectId: "proj-alpha", title: "Visual controls", target: { kind: "local" } });
+    controls.turns.push({
+      id: `${controls.id}-t3`,
+      stampAt: at - 30_000,
+      completedAt: at - 20_000,
+      durationMs: 10_000,
+      items: [{ type: "visual", id: `${controls.id}-v1`, documentId: "interactive-deploys", title: "Interactive deploys", tree: this.visual.tree() }],
     });
     this.#addSession({ id: "sess-remote-1", projectId: "proj-beta", title: "Work on a remote machine", target: { kind: "remote", instance: "example-remote" }, cloudState: "available" });
   }
@@ -1098,7 +1106,7 @@ export const FIXTURE_HANDLERS: { [M in MethodName]: HandlerOf<M> } = {
 
   "visual.dispatch": (p, { world }) => {
     const s = world.session(p.conversationId);
-    if (s.id !== "sess-visuals" || p.itemId !== `${s.id}-v4` || p.documentId !== "interactive-deploys") throw new FixtureError("This visual is no longer available", "not_found");
+    if (s.id !== "sess-visual-controls" || p.itemId !== `${s.id}-v1` || p.documentId !== "interactive-deploys") throw new FixtureError("This visual is no longer available", "not_found");
     try {
       return world.visual.dispatch(p.handler, p.value);
     } catch (error) {
