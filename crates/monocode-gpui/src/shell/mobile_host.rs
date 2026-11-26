@@ -3506,7 +3506,16 @@ impl Shell {
         };
         let result = if request.method == "mono.create" {
             let result = monos.update(cx, |monos, cx| monos.mobile_create(cx));
-            if result.is_ok() {
+            if let Ok(created) = &result {
+                // The creator must be able to open and edit what it made, even
+                // when its selection lists only some Monos.
+                if let (Some(host), Some(new_id)) =
+                    (self.mobile.host.as_ref(), string(created, "monoId"))
+                    && let Err(error) =
+                        host.grant_mono(&request.device.id, request.device.kind, &new_id)
+                {
+                    return request.reply(Err(error.into()));
+                }
                 self.publish_mobile_catalog(cx);
             }
             result
