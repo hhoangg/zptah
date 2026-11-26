@@ -150,6 +150,7 @@ fn mcp(provider: &str, name: &str, enabled: bool) -> McpConnection {
         config_path: "/x".into(),
         transport: "http".into(),
         enabled,
+        auth: crate::mcp::AuthKind::None,
     }
 }
 

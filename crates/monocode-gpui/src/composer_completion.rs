@@ -1849,6 +1849,7 @@ mod tests {
                     config_path: "/repo/config.toml".into(),
                     transport: "stdio".into(),
                     enabled: true,
+                    auth: monocode_core::mcp::AuthKind::None,
                 }];
                 view.open_mcp(cx);
                 view.pick(0, window, cx);
@@ -2122,6 +2123,7 @@ mod tests {
                         config_path: String::new(),
                         transport: "stdio".into(),
                         enabled: true,
+                        auth: monocode_core::mcp::AuthKind::None,
                     },
                 ));
                 let sent = view.prepare_prompt(&format!(

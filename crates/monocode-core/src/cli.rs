@@ -26,23 +26,73 @@ pub fn configured(kind: Kind) -> Option<PathBuf> {
         .filter(|p| !p.trim().is_empty())
         .map(PathBuf::from)
 }
+/// Environment changes for a child process: variables to set and variables to remove.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Env {
+    pub set: Vec<(String, std::ffi::OsString)>,
+    pub remove: Vec<String>,
+}
+/// Names only: values can be credentials.
+impl std::fmt::Debug for Env {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Env")
+            .field("set", &self.set.iter().map(|(k, _)| k).collect::<Vec<_>>())
+            .field("remove", &self.remove)
+            .finish()
+    }
+}
+impl Env {
+    pub fn apply(&self, command: &mut Command) {
+        for (key, value) in &self.set {
+            command.env(key, value);
+        }
+        for key in &self.remove {
+            command.env_remove(key);
+        }
+    }
+}
 pub fn output(
     binary: &Path,
     args: &[String],
     cwd: &Path,
     timeout: Duration,
 ) -> Result<String, String> {
+    output_with(binary, args, cwd, timeout, &Env::default(), None)
+}
+/// Like [`output`], with environment changes and optional bytes written to the child's stdin
+/// (for data that must never appear in the argument list).
+pub fn output_with(
+    binary: &Path,
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+    env: &Env,
+    stdin: Option<&[u8]>,
+) -> Result<String, String> {
     let mut command = Command::new(binary);
     crate::scm::shell::apply_gui_env(&mut command);
+    env.apply(&mut command);
     command
         .args(args)
         .current_dir(cwd)
-        .stdin(Stdio::null())
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     crate::process::isolate(&mut command);
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let _registration = crate::process::register(child.id());
+    if let (Some(data), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        let data = data.to_vec();
+        // A thread, so a child that does not read cannot block the deadline below.
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let _ = pipe.write_all(&data);
+        });
+    }
     let read = |mut pipe: Box<dyn Read + Send>| {
         std::thread::spawn(move || {
             let mut result = Vec::new();
