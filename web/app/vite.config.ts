@@ -7,6 +7,7 @@ import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { headersPlugin } from "./vite-plugins/headers.ts";
 import { landingPlugin } from "./vite-plugins/landing.ts";
+import { lazyMermaidPrecache } from "./vite-plugins/lazyMermaidPrecache.ts";
 import { staticLibraryCss } from "./vite-plugins/staticLibraryCss.ts";
 import { xtermStaticStyles } from "./vite-plugins/xtermStaticStyles.ts";
 
@@ -17,6 +18,8 @@ import { xtermStaticStyles } from "./vite-plugins/xtermStaticStyles.ts";
 // An e2e spec that serves the dev preview next to the harness's own `wrangler dev` sets MONOPTAH_PREVIEW_STATE to a
 // temp dir: its Miniflare then keeps its state there (not under web/app/.wrangler) and opens no inspector port.
 const previewState = process.env["MONOPTAH_PREVIEW_STATE"];
+// The mermaid chunks are lazy and large: see vite-plugins/lazyMermaidPrecache.ts.
+const mermaidPrecache = lazyMermaidPrecache();
 
 export default defineConfig({
   plugins: [
@@ -37,6 +40,8 @@ export default defineConfig({
     staticLibraryCss(),
     // The terminal: xterm.js builds three <style> elements at run time, which the same CSP blocks; see xtermStaticStyles.ts.
     xtermStaticStyles(),
+    // The mermaid chunks stay out of the service worker precache.
+    mermaidPrecache.plugin,
     // Workbox injectManifest: src/sw.ts is compiled to /sw.js with the precache list injected. The
     // manifest stays public/manifest.webmanifest and registration is src/features/offline/registerSw.ts
     // (Trusted Types aware), so the plugin only builds the worker.
@@ -51,6 +56,8 @@ export default defineConfig({
         globPatterns: ["**/*.{js,css,html,woff2,svg,png,ico,webmanifest}"],
         // The landing page is decided by the Worker (never the cached shell) and is not part of the app shell.
         globIgnores: ["landing/**"],
+        // Mermaid and its diagram chunks (about 5 MiB) are fetched when a diagram is first drawn, not at install.
+        manifestTransforms: [(entries) => ({ manifest: entries.filter((entry) => !mermaidPrecache.isLazy(entry.url)), warnings: [] })],
         // The shell is a few hundred kB per chunk; a chunk over 2 MiB is a regression, not something to precache.
         maximumFileSizeToCacheInBytes: 2 * 1024 * 1024,
       },

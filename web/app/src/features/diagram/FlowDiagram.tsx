@@ -1,4 +1,4 @@
-// A laid-out flow diagram (Mermaid flowchart or `visual.flow`) in the shared viewer, drawn as React SVG elements from
+// A laid-out flow diagram (the native `visual.flow` node) in the shared viewer, drawn as React SVG elements from
 // data only: labels are text children, never markup. Mirrors paint_flow in crates/monocode-gpui/src/diagram_viewer.rs.
 import { useMemo } from "react";
 import { alpha, useVisualColor } from "@/features/visuals/charts";

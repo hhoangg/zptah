@@ -252,7 +252,7 @@ test.describe("web terminal", () => {
     expect(await page.evaluate(() => window.__csp ?? [])).toEqual([]);
     // Control: the strict policy is really in force and the listener sees a violation, so the empty list above means something.
     const policy = await page.evaluate(async () => (await fetch("/")).headers.get("content-security-policy"));
-    expect(policy).toContain("style-src 'self'; style-src-attr 'unsafe-inline'");
+    expect(policy).toContain("style-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; style-src-attr 'unsafe-inline'"); // the hash is the empty string (security.md 8.1)
     expect(policy).toContain("require-trusted-types-for 'script'");
     await page.evaluate(() => {
       const style = document.createElement("style");

@@ -1,5 +1,5 @@
-// The shared diagram model, ported from crates/monocode-core/src/diagram.rs: one graph type for Mermaid flowcharts and
-// the native `visual.flow` node, plus the canvas label anchoring math. Pure data and functions, no DOM.
+// The shared diagram model, ported from crates/monocode-core/src/diagram.rs: one graph type for the native
+// `visual.flow` node (the web app draws Mermaid with the `mermaid` library, not with this model), plus the canvas label anchoring math. Pure data and functions, no DOM.
 import type { ThemeColor } from "@/features/visuals/types";
 
 export const MAX_FLOW_NODES = 120;

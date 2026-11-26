@@ -1,7 +1,8 @@
-// The diagram viewer and the native visuals in a transcript, in headless Chromium: a Mermaid flowchart, a Mermaid
-// diagram the web app shows as source, a `visual.flow`, a canvas with anchored labels, and a stat with a chart, against
+// The diagram viewer and the native visuals in a transcript, in headless Chromium: a Mermaid flowchart and a Mermaid
+// sequence diagram (both drawn by the `mermaid` library), a Mermaid block that does not parse, a `visual.flow`, a canvas with anchored labels, and a stat with a chart, against
 // the dev preview of the app (an in-browser mock desktop whose `sess-visuals` session carries them), which the spec
-// serves itself with `vite`. It needs no relay, account or passkey. Two environments: a mouse desktop and a 390 px phone
+// serves itself with `vite` (so without the production CSP: tests/mermaid-csp.spec.ts runs mermaid under it). It needs no
+// relay, account or passkey. Two environments: a mouse desktop and a 390 px phone
 // with real touch input through CDP (pinch, double tap, drag).
 //
 // Set DIAGRAM_SHOTS=<dir> to also save screenshots there.
@@ -81,7 +82,7 @@ test.describe("diagram viewer and native visuals", () => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: base }).catch(() => {});
     page = await context.newPage();
     await page.goto(`${base}${SESSION(theme)}`);
-    await expect(page.getByTestId("mermaid-diagram")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("mermaid-diagram").first()).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId("visual-flow")).toBeVisible();
   }
   async function shot(name: string): Promise<void> {
@@ -90,11 +91,12 @@ test.describe("diagram viewer and native visuals", () => {
 
   test("desktop: mermaid is drawn, panned, zoomed at the pointer, fitted, fullscreened and copied", async () => {
     await open({ viewport: { width: 1100, height: 900 } });
-    const viewer = page.getByTestId("mermaid-diagram");
+    const viewer = page.getByTestId("mermaid-diagram").first();
     await viewer.scrollIntoViewIfNeeded();
-    await expect(viewer.locator("[data-flow-node]")).toHaveCount(6);
-    await expect(viewer.getByText("Mono request")).toBeVisible();
-    await expect(viewer.getByText("risky", { exact: true })).toBeVisible();
+    // Mermaid's SVG is a blob image on the board, not markup: the labels are inside the image.
+    await expect(viewer.locator("image[data-testid='mermaid-image']")).toHaveCount(1);
+    expect(await viewer.locator("image").getAttribute("href")).toMatch(/^blob:/);
+    await expect(viewer.locator("text, [data-flow-node], foreignObject")).toHaveCount(0);
     const fitted = await zoomOf(viewer);
     expect(fitted).toBeGreaterThan(30);
     // The background is dotted and keeps pace with the content.
@@ -160,11 +162,20 @@ test.describe("diagram viewer and native visuals", () => {
     await expect(overlay).toHaveCount(0);
   });
 
-  test("desktop: a mermaid diagram that is not a flowchart stays source, and the visuals are drawn", async () => {
+  test("desktop: a sequence diagram is drawn too, one that does not parse stays source, and the visuals are drawn", async () => {
     await open({ viewport: { width: 1100, height: 900 } }, "light");
+    // The flowchart and the sequence diagram of the same reply are both drawn as images in the viewer.
+    const viewers = page.getByTestId("mermaid-diagram");
+    await expect(viewers).toHaveCount(2);
+    await expect(viewers.nth(1).locator("image[data-testid='mermaid-image']")).toHaveCount(1);
+    await viewers.nth(1).scrollIntoViewIfNeeded();
+    await shot("desktop-sequence-light");
+    await viewers.nth(1).getByRole("button", { name: "Show source" }).click();
+    await expect(viewers.nth(1).getByTestId("diagram-source")).toContainText("sequenceDiagram");
     const fallback = page.getByTestId("mermaid-fallback");
-    await expect(fallback).toContainText("sequenceDiagram");
-    await expect(fallback).toContainText("Shown as source");
+    await expect(fallback).toHaveCount(1);
+    await expect(fallback).toContainText("flowchart LR");
+    await expect(fallback).toContainText("Shown as source: could not draw this diagram");
     // visual.flow in the same viewer, with its edge labels, and no Source button.
     const flow = page.getByTestId("visual-flow");
     await expect(flow.locator("[data-flow-node]")).toHaveCount(5);
@@ -184,7 +195,7 @@ test.describe("diagram viewer and native visuals", () => {
 
   test("phone: the viewer fits 390 px, pinches, double taps, drags, and the page does not scroll sideways", async () => {
     await open({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
-    const viewer = page.getByTestId("mermaid-diagram");
+    const viewer = page.getByTestId("mermaid-diagram").first();
     await viewer.scrollIntoViewIfNeeded();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     const panel = (await viewer.boundingBox())!;

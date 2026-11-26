@@ -1,4 +1,4 @@
-// The diagram code (layout, parser, viewer) is a separate chunk: a transcript without a diagram never downloads it.
+// The diagram code (the viewer, the flow layout, and mermaid itself) is a separate chunk: a transcript without a diagram never downloads it.
 import { type ComponentProps, Suspense, lazy } from "react";
 import { CodeBlock } from "@/features/markdown/CodeBlock";
 

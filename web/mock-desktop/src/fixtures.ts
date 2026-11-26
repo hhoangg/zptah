@@ -223,7 +223,10 @@ export class MockWorld {
         },
       ],
     });
-    // Visuals: a reply with a Mermaid flowchart and a Mermaid diagram the web app shows as source, then the native visuals
+    // One reply with a Mermaid block of each type the production e2e (tests/mermaid-csp.spec.ts) checks, in this order.
+    const types = this.#addSession({ id: "sess-mermaid-types", projectId: "proj-alpha", title: "Mermaid diagram types", target: { kind: "local" } });
+    types.turns.push({ id: `${types.id}-t3`, stampAt: at - 30_000, completedAt: at - 20_000, durationMs: 10_000, items: [{ type: "text", id: `${types.id}-a2`, text: "Every diagram type:\n\n```mermaid\nflowchart LR\n  A[Start] --> B{Ok?}\n  B -- yes --> C[Go]\n```\n\n```mermaid\nsequenceDiagram\n  Alice->>Bob: hi\n  Bob-->>Alice: hello\n```\n\n```mermaid\nclassDiagram\n  Animal <|-- Duck\n  Animal : +int age\n  class Duck{\n    +swim()\n  }\n```\n\n```mermaid\nstateDiagram-v2\n  [*] --> Still\n  Still --> Moving : go\n  Moving --> [*]\n```\n\n```mermaid\nerDiagram\n  CUSTOMER ||--o{ ORDER : places\n  ORDER ||--|{ LINEITEM : contains\n```\n\n```mermaid\ngantt\n  title Plan\n  dateFormat YYYY-MM-DD\n  section S\n  Task one :a1, 2024-01-01, 30d\n  Task two :after a1, 20d\n```\n\n```mermaid\npie title Pets\n  \"Dogs\" : 386\n  \"Cats\" : 85\n```\n\n```mermaid\ngitGraph\n  commit\n  branch dev\n  commit\n  checkout main\n  merge dev\n```\n\n```mermaid\nmindmap\n  root((mind))\n    Origins\n    Tools\n```\n\n```mermaid\narchitecture-beta\n  group api(cloud)[API]\n  service db(database)[Database] in api\n  service srv(server)[Server] in api\n  db:L -- R:srv\n```\n\n```mermaid\nflowchart LR\n  A[\"Euler: $$e^{i\\pi} + 1 = 0$$\"] --> B[End]\n```\n\n```mermaid\nflowchart LR\n  A@{ icon: \"fa:user\", form: \"square\", label: \"User\" } --> B[Next]\n```\n\n```mermaid\n%%{init: {\"htmlLabels\": true}}%%\nflowchart LR\n  A[Hi] --> B[There]\n```" }] });
+    // Visuals: a reply with a Mermaid flowchart, a Mermaid sequence diagram and a Mermaid block that does not parse, then the native visuals
     // the desktop rendered inline (a flow, a canvas with anchored labels, and a stat with a chart), as `visual` items.
     const visuals = this.#addSession({ id: "sess-visuals", projectId: "proj-alpha", title: "Diagrams and visuals", target: { kind: "local" } });
     const flowNode = (id: string, label: string, kind: string, color: string | null = null) => ({ id, label, kind, color });
@@ -233,7 +236,7 @@ export class MockWorld {
       completedAt: at - 20_000,
       durationMs: 10_000,
       items: [
-        { type: "text", id: `${visuals.id}-a2`, text: "The approval path:\n\n```mermaid\nflowchart LR\n  A[Mono request] --> B{Risk?}\n  B -- safe --> C[Auto act]\n  B -- risky --> D[Ask user]\n  D -- allow --> E[Commit]\n  D -- deny --> F[Stop]\n```\n\nA sequence the web app does not draw:\n\n```mermaid\nsequenceDiagram\n  A->>B: hi\n```\n\n![Approval flow](visual:approval)" },
+        { type: "text", id: `${visuals.id}-a2`, text: "The approval path:\n\n```mermaid\nflowchart LR\n  A[Mono request] --> B{Risk?}\n  B -- safe --> C[Auto act]\n  B -- risky --> D[Ask user]\n  D -- allow --> E[Commit]\n  D -- deny --> F[Stop]\n```\n\nA sequence diagram:\n\n```mermaid\nsequenceDiagram\n  participant A as Alice\n  participant B as Bob\n  A->>B: hi\n  B-->>A: hello\n```\n\nA diagram that does not parse:\n\n```mermaid\nflowchart LR\n  A --> --> B[\n```\n\n![Approval flow](visual:approval)" },
         {
           type: "visual",
           id: `${visuals.id}-v1`,
