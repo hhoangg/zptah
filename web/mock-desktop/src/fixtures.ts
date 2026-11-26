@@ -26,6 +26,7 @@ import type { METHODS } from "@monoptah/protocol";
 import { MockTerminals } from "./terminal.ts";
 import { MENTION_MESSAGE, MentionError, mentionedFile } from "./mentioned.ts";
 import { MockTransfers } from "./transfer.ts";
+import { MockVisual } from "./visual.ts";
 import type { z } from "zod";
 
 /** Time used by default so fixtures are deterministic. */
@@ -152,6 +153,8 @@ export class MockWorld {
   readonly now: () => number;
   capabilities: WorldCapabilities;
   readonly sessions = new Map<string, SessionRecord>();
+  /** The interactive visual of `sess-visuals` (`visual.dispatch`). */
+  readonly visual = new MockVisual();
   readonly instances = new Map<string, CloudInstanceRecord>();
   /** Desktop app version and the newest version of the update feed; a test sets `latestVersion`. */
   appVersion: string;
@@ -276,6 +279,7 @@ export class MockWorld {
             ],
           },
         },
+        { type: "visual", id: `${visuals.id}-v4`, documentId: "interactive-deploys", title: "Interactive deploys", tree: this.visual.tree() },
         {
           type: "visual",
           id: `${visuals.id}-v3`,
@@ -1092,6 +1096,15 @@ export const FIXTURE_HANDLERS: { [M in MethodName]: HandlerOf<M> } = {
     return { message: `Example ${p.action} done` };
   },
 
+  "visual.dispatch": (p, { world }) => {
+    const s = world.session(p.conversationId);
+    if (s.id !== "sess-visuals" || p.itemId !== `${s.id}-v4` || p.documentId !== "interactive-deploys") throw new FixtureError("This visual is no longer available", "not_found");
+    try {
+      return world.visual.dispatch(p.handler, p.value);
+    } catch (error) {
+      throw new FixtureError(error instanceof Error ? error.message : "Invalid value for this visual control");
+    }
+  },
   "mono.document": (p) => ({ id: p.documentId, title: "Example document", kind: "note" }),
   "mono.profile": (p) => ({ id: p.monoId, name: "Example Mono", ...(p.monoId === MONO_EMOJI_FIXTURE_MONO_ID ? { resetFiles: { label: "Claude Code", supported: true } } : {}) }),
   "mono.emoji": (p) => {

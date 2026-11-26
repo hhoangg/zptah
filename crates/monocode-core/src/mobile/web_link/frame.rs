@@ -519,6 +519,7 @@ pub const KNOWN_CAPABILITIES: &[&str] = &[
     "slashCommands",
     "monoEmoji",
     "monoReset",
+    "visualControls",
 ];
 
 /// Codes in the ERROR relay frame body.

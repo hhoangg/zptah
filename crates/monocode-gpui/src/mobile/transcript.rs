@@ -328,16 +328,14 @@ fn notice(rows: &[Row], at: usize, end: usize) -> Option<Value> {
             .filter(|note| !note.text.trim().is_empty())
             .map(|note| json!({"type": "notice", "id": id, "text": note.text})),
         "visual" => {
-            let document = serde_json::from_str::<monocode_core::visual::VisualDocument>(&text)
-                .ok()
-                .filter(|document| document.validate().is_ok());
+            let document = visual_document(&text);
             // Drawn inline on the phone from its first render; its source and
             // its handlers stay here.
             if let Some(document) = &document
                 && let Some(tree) = visual_tree(&document.source)
             {
                 return Some(
-                    json!({"type": "visual", "id": id, "title": document.title, "tree": tree}),
+                    json!({"type": "visual", "id": id, "documentId": document.id, "title": document.title, "tree": tree}),
                 );
             }
             let title = document
@@ -352,6 +350,27 @@ fn notice(rows: &[Row], at: usize, end: usize) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+/// The visual document a `visual` row holds, when it is a valid one.
+fn visual_document(text: &str) -> Option<monocode_core::visual::VisualDocument> {
+    serde_json::from_str::<monocode_core::visual::VisualDocument>(text)
+        .ok()
+        .filter(|document| document.validate().is_ok())
+}
+
+/// The visual of the transcript item `item_id` (`r<row>`, as `notice` names it) in `rows`: what `visual.dispatch`
+/// runs, found the way the snapshot's own item was.
+pub(crate) fn visual_document_at(
+    rows: &[Row],
+    item_id: &str,
+) -> Option<monocode_core::visual::VisualDocument> {
+    let at: usize = item_id.strip_prefix('r')?.parse().ok()?;
+    let row = rows.get(at)?;
+    if row.role != "visual" {
+        return None;
+    }
+    visual_document(&joined(&rows[at..message_end(rows, at)]))
 }
 
 /// A visual's first render, kept by its source: the phone's transcript is

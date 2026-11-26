@@ -317,6 +317,11 @@
       "transport": "host"
     },
     {
+      "name": "visual.dispatch",
+      "class": "read",
+      "transport": "app"
+    },
+    {
       "name": "workspace.list",
       "class": "read",
       "transport": "host"

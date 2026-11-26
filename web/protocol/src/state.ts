@@ -24,6 +24,8 @@ export const KNOWN_CAPABILITIES = [
   "monoEmoji",
   /** The desktop accepts `mono.reset` from a web device: advertised only to Control devices. */
   "monoReset",
+  /** The desktop answers `visual.dispatch`: the controls of an inline visual (tabs, slider, button...) work on the web. */
+  "visualControls",
 ] as const;
 export type KnownCapability = (typeof KNOWN_CAPABILITIES)[number];
 

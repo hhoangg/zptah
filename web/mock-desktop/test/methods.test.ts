@@ -190,6 +190,32 @@ describe("fixture hygiene", () => {
   });
 });
 
+describe("visual.dispatch", () => {
+  const params = (handler: string, value: unknown) => ({ conversationId: "sess-visuals", itemId: "sess-visuals-v4", documentId: "interactive-deploys", handler, value });
+
+  it("advertises visualControls to every device and answers the next tree", async () => {
+    const read = await setup({ permission: "read" });
+    expect(read.client.state?.capabilities).toContain("visualControls");
+    const reply = await read.client.request("visual.dispatch", params("1:0", 2));
+    expect(reply).toMatchObject({ ok: true, result: { reset: false } });
+    const tree = (reply as { result: { tree: { children: { chart_type?: string; selected?: number }[] } } }).result.tree;
+    expect(tree.children[0]?.selected).toBe(2);
+    expect(tree.children[1]?.chart_type).toBe("area");
+  });
+
+  it("answers the first render with reset for a stale handler and refuses a value the control cannot take", async () => {
+    const s = await setup();
+    expect(await s.client.request("visual.dispatch", params("9:0", 1))).toMatchObject({ ok: true, result: { reset: true } });
+    expect((await s.client.request("visual.dispatch", params("1:0", 7))).ok).toBe(false);
+    expect((await s.client.request("visual.dispatch", { ...params("1:0", 1), itemId: "nope" })).ok).toBe(false);
+  });
+
+  it("answers like an older desktop without the visualControls capability", async () => {
+    const s = await setup({ desktop: { capabilities: ["cloud"] } });
+    expect((await s.client.request("visual.dispatch", params("1:0", 1))).ok).toBe(false);
+  });
+});
+
 describe("Mono emoji and reset", () => {
   it("advertises monoEmoji to every device and monoReset only to a Control device", async () => {
     const control = await setup();

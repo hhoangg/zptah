@@ -74,6 +74,8 @@ pub(super) struct Mobile {
     /// session, with the update time it was read at: read again only once
     /// the conversation has changed.
     mono_previews: HashMap<i64, MonoPreview>,
+    /// A web device's own runtimes of the visuals it taps (`visual.dispatch`), apart from the ones on screen here.
+    visuals: crate::mobile::visual_remote::Remote,
 }
 
 #[derive(Clone)]
@@ -1250,6 +1252,7 @@ impl Shell {
             "commands.list" => self.mobile_commands_list(request, cx),
             "accounts.usage" => self.mobile_usage(request, cx),
             "desktop.updateStatus" | "desktop.update" => self.mobile_update(request, cx),
+            "visual.dispatch" => self.mobile_visual_dispatch(request, cx),
             "mono.document" => self.mobile_document(request, cx),
             "mono.profile" | "mono.update" | "mono.delete" | "mono.create" => {
                 self.mobile_mono(request, cx)
@@ -3326,8 +3329,115 @@ impl Shell {
             .detach();
     }
 
-    /// The desktop footer's usage windows for a provider's accounts, from the
-    /// same cache; only an explicit refresh probes again.
+    /// `visual.dispatch`: a control of an inline visual was used on a web device. The event runs in that device's own
+    /// runtime of the visual (never the one on screen here) and the answer is the tree that follows. Class Read: it
+    /// reaches no file, network or shell and changes nothing here or on another device.
+    fn mobile_visual_dispatch(&mut self, request: Request, cx: &mut Context<Self>) {
+        use crate::mobile::visual_remote::{Key, MAX_VALUE_BYTES};
+        let ask = match VisualDispatch::read(&request.params) {
+            Ok(ask) => ask,
+            Err(error) => return request.reply(Err(error.into())),
+        };
+        let target = match self.mobile_target(&ask.conversation_id, &request.device, cx) {
+            Ok(target) => target,
+            Err(error) => return request.reply(Err(error)),
+        };
+        if ask.value.to_string().len() > MAX_VALUE_BYTES {
+            return request.reply(Err("Visual event payload is too large".into()));
+        }
+        // After the shape and the selection, before any work: a device that taps faster than it can read, or whose
+        // taps have used up its share of the foreground thread, waits.
+        if !self.mobile.visuals.allow(&request.device.id) {
+            return request.reply(Err(policy::Code::Busy.failure()));
+        }
+        let key = Key {
+            device: request.device.id.clone(),
+            conversation: ask.conversation_id.clone(),
+            turn: ask.turn_id.clone().unwrap_or_default(),
+            item: ask.item_id.clone(),
+        };
+        let item = ask.item_id.clone();
+        // The document of the row, with its id: the row index can move, the id says it is still the visual asked for.
+        let find = |rows: &[Row], item: &str| {
+            turns::visual_document_at(rows, item).map(|d| (d.id, d.source))
+        };
+        let page = ask.turn_id.as_deref().and_then(page_turn);
+        // The open chat's rows are in memory and may change: always read them (a page turn is never among them).
+        if page.is_none()
+            && let Some(found) =
+                self.with_live_snapshot(&target, &request.device, cx, |s| find(s.rows, &item))
+        {
+            return self.finish_visual_dispatch(request, key, ask, Ok(found));
+        }
+        // A conversation that is not open does not change: a runtime kept for this document answers with its own
+        // source and the session is not read again for every tap.
+        if let Some(cached) = self.mobile.visuals.cached_source(&key, &ask.document_id) {
+            return self.finish_visual_dispatch(request, key, ask, Ok(Some(cached)));
+        }
+        // A turn of an older page is read from the store at its page's cursor; the rest from the saved rows.
+        if let Some((cursor, _)) = page {
+            let session = match &target {
+                Target::Session(id) => Some(*id),
+                Target::Mono(mono) => self
+                    .monos
+                    .as_ref()
+                    .and_then(|m| m.read(cx).roster.get(mono)?.session_id),
+            };
+            let Some(session) = session else {
+                return request.reply(Err(visual_gone()));
+            };
+            let store = self.store.clone();
+            let work = cx.background_executor().spawn(async move {
+                let page = locked(&store)?.load_before(session, cursor, false)?;
+                Ok::<_, String>(
+                    turns::visual_document_at(&page.rows, &item).map(|d| (d.id, d.source)),
+                )
+            });
+            cx.spawn(async move |this, cx| {
+                let found = work.await;
+                let _ = this.update(cx, |this, _| {
+                    this.finish_visual_dispatch(request, key, ask, found)
+                });
+            })
+            .detach();
+            return;
+        }
+        let load = self.load_saved(&target, &request.device, cx);
+        cx.spawn(async move |this, cx| {
+            let found = load.await.map(|saved| find(&saved.rows, &item));
+            let _ = this.update(cx, |this, _| {
+                this.finish_visual_dispatch(request, key, ask, found)
+            });
+        })
+        .detach();
+    }
+
+    fn finish_visual_dispatch(
+        &mut self,
+        request: Request,
+        key: crate::mobile::visual_remote::Key,
+        ask: VisualDispatch,
+        found: Result<Option<(String, String)>, String>,
+    ) {
+        use crate::mobile::visual_remote::Outcome;
+        let (document, source) = match found {
+            // The row is not the visual the device asked for (the rows moved): never another visual's tree.
+            Ok(Some((document, source))) if document == ask.document_id => (document, source),
+            Ok(_) => return request.reply(Err(visual_gone())),
+            Err(error) => return request.reply(Err(error.into())),
+        };
+        match self
+            .mobile
+            .visuals
+            .dispatch(key, &document, &source, &ask.handler, ask.value)
+        {
+            Outcome::Tree { tree, reset } => {
+                request.reply(Ok(json!({"tree": tree, "reset": reset})))
+            }
+            Outcome::Failed(error) => request.reply(Err(error.into())),
+        }
+    }
+
     /// A document a Mono wrote, for the phone's reader: only one a Mono's
     /// chat lists, read from the store when the roster has no body for it.
     fn mobile_document(&mut self, request: Request, cx: &mut Context<Self>) {
@@ -3582,6 +3692,8 @@ impl Shell {
             .detach();
     }
 
+    /// The desktop footer's usage windows for a provider's accounts, from the
+    /// same cache; only an explicit refresh probes again.
     fn mobile_usage(&mut self, request: Request, cx: &mut Context<Self>) {
         let kind = match request.params["provider"].as_str() {
             Some("claude") => Kind::Claude,
@@ -3708,6 +3820,56 @@ fn tone_id(tone: Tone) -> &'static str {
         Tone::Checking => "checking",
         _ => "unknown",
     }
+}
+
+/// The parameters of `visual.dispatch`, read strictly: an unknown or misshapen field is refused.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct VisualDispatch {
+    conversation_id: String,
+    #[serde(default)]
+    turn_id: Option<String>,
+    item_id: String,
+    /// The visual document's id, from the snapshot item: the row `item_id` names must still hold this document.
+    document_id: String,
+    handler: String,
+    value: Value,
+}
+
+impl VisualDispatch {
+    fn read(params: &Value) -> Result<Self, String> {
+        let ask: Self = serde_json::from_value(params.clone())
+            .map_err(|_| "Invalid visual event".to_owned())?;
+        let item_ok = ask.item_id.strip_prefix('r').is_some_and(|row| {
+            (1..=9).contains(&row.len()) && row.bytes().all(|b| b.is_ascii_digit())
+        });
+        let value_ok = match &ask.value {
+            Value::Null | Value::Bool(_) => true,
+            Value::String(text) => text.len() <= 4096,
+            Value::Number(number) => number.as_f64().is_some_and(f64::is_finite),
+            _ => false,
+        };
+        if ask.conversation_id.is_empty()
+            || ask.conversation_id.len() > 256
+            || ask
+                .turn_id
+                .as_ref()
+                .is_some_and(|t| t.is_empty() || t.len() > 64)
+            || !item_ok
+            || ask.document_id.is_empty()
+            || ask.document_id.len() > 96
+            || ask.handler.is_empty()
+            || ask.handler.len() > 64
+            || !value_ok
+        {
+            return Err("Invalid visual event".into());
+        }
+        Ok(ask)
+    }
+}
+
+fn visual_gone() -> Failure {
+    "This visual is no longer available".into()
 }
 
 /// An older page's turn ID, `p{cursor}t{row}`: its page's store cursor and
@@ -4703,6 +4865,248 @@ mod tests {
                 assert_ne!(answer, denied);
             })
             .unwrap();
+    }
+
+    const TABS_VISUAL: &str = "const s=visual.state({tab:0});return () => visual.column([visual.tabs(['Bar','Line','Area'],s.tab,i=>s.tab=i),visual.text('tab '+s.tab)]);";
+
+    fn tap(
+        window: &gpui::WindowHandle<Shell>,
+        cx: &mut gpui::TestAppContext,
+        device: &DeviceContext,
+        params: Value,
+    ) -> Result<Value, Failure> {
+        let (request, mut answer) =
+            Request::with_receiver("c-visual", "visual.dispatch", params, device.clone());
+        window
+            .update(cx, |shell, window, cx| {
+                shell.handle_mobile_request(request, window, cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        answer.try_recv().expect("visual.dispatch answered")
+    }
+
+    fn web_device(id: &str, permission: Permission) -> DeviceContext {
+        DeviceContext {
+            id: id.into(),
+            permission,
+            ..web(None, None)
+        }
+    }
+
+    #[gpui::test]
+    fn a_web_devices_visual_taps_run_in_its_own_runtime_and_leave_the_desktop_alone(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (window, id, _) = super::super::tests::window(cx);
+        let document = monocode_core::visual::VisualDocument {
+            id: "tabs".into(),
+            title: "Tabs".into(),
+            source: TABS_VISUAL.into(),
+        };
+        let conversation = window
+            .update(cx, |shell, _, _| {
+                let row = |role: &str, text: String| Row {
+                    role: role.into(),
+                    text,
+                    first: true,
+                    sent_at: None,
+                };
+                locked(&shell.store)
+                    .unwrap()
+                    .write_rows(
+                        id,
+                        0,
+                        &[
+                            row("user", "show tabs".into()),
+                            row("visual", serde_json::to_string(&document).unwrap()),
+                        ],
+                    )
+                    .unwrap();
+                // Read from the saved rows, as a conversation that is not open.
+                shell.sessions.remove(&id);
+                shell.mobile_session_id(id)
+            })
+            .unwrap();
+        let first = serde_json::to_value(
+            monocode_core::visual::VisualRuntime::new(TABS_VISUAL)
+                .unwrap()
+                .render()
+                .unwrap(),
+        )
+        .unwrap();
+        let handler = first["children"][0]["handler"].as_str().unwrap().to_owned();
+        let params = |handler: &str, value: Value| json!({"conversationId": conversation, "itemId": "r1", "documentId": "tabs", "handler": handler, "value": value});
+        let control = web_device("tab-control", Permission::Control);
+        let viewer = web_device("tab-viewer", Permission::Read);
+
+        // A tap on a tab answers the changed tree.
+        let moved = tap(&window, cx, &control, params(&handler, json!(2))).unwrap();
+        assert_eq!(moved["reset"], false);
+        assert_eq!(moved["tree"]["children"][0]["selected"], 2);
+        assert_eq!(moved["tree"]["children"][1]["text"], "tab 2");
+        // A Viewer device may tap too, and its runtime is its own: the first tap of the other device did not move it.
+        let other = tap(&window, cx, &viewer, params(&handler, json!(1))).unwrap();
+        assert_eq!(other["reset"], false);
+        assert_eq!(other["tree"]["children"][1]["text"], "tab 1");
+        // The device lost its view (reopened chat, another tab) and taps with the first render's handler again: the
+        // tap is applied on a fresh runtime, not dropped as stale.
+        let reopened = tap(&window, cx, &control, params(&handler, json!(1))).unwrap();
+        assert_eq!(reopened["reset"], false);
+        assert_eq!(reopened["tree"]["children"][1]["text"], "tab 1");
+        // A handler no runtime has is the only stale one: it gets the first render and `reset`.
+        let reset = tap(&window, cx, &control, params("9:9", json!(1))).unwrap();
+        assert_eq!(reset["reset"], true);
+        assert_eq!(reset["tree"], first);
+        // The snapshot every device and the desktop read is still the first render.
+        let read = tap_read(&window, cx, &control, &conversation);
+        assert_eq!(read["tree"]["children"][1]["text"], "tab 0");
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.mobile.visuals.count("tab-control"), 1);
+                assert_eq!(shell.mobile.visuals.count("tab-viewer"), 1);
+            })
+            .unwrap();
+    }
+
+    /// The visual item of the conversation, as `conversation.read` sends it.
+    fn tap_read(
+        window: &gpui::WindowHandle<Shell>,
+        cx: &mut gpui::TestAppContext,
+        device: &DeviceContext,
+        conversation: &str,
+    ) -> Value {
+        let (request, mut answer) = Request::with_receiver(
+            "c-read",
+            "conversation.read",
+            json!({"conversationId": conversation}),
+            device.clone(),
+        );
+        window
+            .update(cx, |shell, window, cx| {
+                shell.handle_mobile_request(request, window, cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let read = answer.try_recv().expect("read answered").unwrap();
+        read["turns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|turn| turn["items"].as_array().unwrap().iter())
+            .find(|item| item["type"] == "visual")
+            .cloned()
+            .expect("a visual item")
+    }
+
+    #[gpui::test]
+    fn visual_dispatch_refuses_bad_shapes_unknown_items_other_selections_and_a_flood(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (window, id, _) = super::super::tests::window(cx);
+        let (conversation, own) = window
+            .update(cx, |shell, _, cx| {
+                let document = monocode_core::visual::VisualDocument {
+                    id: "tabs".into(),
+                    title: "Tabs".into(),
+                    source: TABS_VISUAL.into(),
+                };
+                let rows = [Row {
+                    role: "visual".into(),
+                    text: serde_json::to_string(&document).unwrap(),
+                    first: true,
+                    sent_at: None,
+                }];
+                locked(&shell.store)
+                    .unwrap()
+                    .write_rows(id, 0, &rows)
+                    .unwrap();
+                shell.sessions.remove(&id);
+                let key = monocode_core::files::path_key(&shell.session_summaries[&id].cwd);
+                let own = shell
+                    .mobile_projects(cx)
+                    .iter()
+                    .find(|p| monocode_core::files::path_key(p) == key)
+                    .map(|p| project_id(p))
+                    .unwrap();
+                (shell.mobile_session_id(id), own)
+            })
+            .unwrap();
+        let device = web_device("tab-refused", Permission::Control);
+        let ok = |value: Value| json!({"conversationId": conversation, "itemId": "r0", "documentId": "tabs", "handler": "1:0", "value": value});
+        let with = |field: &str, value: Value| {
+            let mut params = ok(json!(1));
+            params[field] = value;
+            params
+        };
+        let invalid = Err(Failure::from("Invalid visual event"));
+        for params in [
+            with("extra", json!(true)),
+            with("itemId", json!("r1; drop")),
+            with("itemId", json!("x0")),
+            with("handler", json!("")),
+            with("handler", json!("h".repeat(65))),
+            with("value", json!({"a": 1})),
+            with("value", json!([1])),
+            with("value", json!("v".repeat(4097))),
+            with("turnId", json!("")),
+            json!({"conversationId": conversation, "itemId": "r0", "documentId": "tabs", "handler": "1:0"}),
+            json!({"conversationId": conversation, "itemId": "r0", "handler": "1:0", "value": 1}),
+            with("documentId", json!("")),
+        ] {
+            assert_eq!(
+                tap(&window, cx, &device, params.clone()),
+                invalid,
+                "{params}"
+            );
+        }
+        // An item that is not there, and a conversation that is not.
+        let gone = Err(Failure::from("This visual is no longer available"));
+        assert_eq!(tap(&window, cx, &device, with("itemId", json!("r7"))), gone);
+        // The row holds another visual than the one the device names (the rows moved): never that visual's tree.
+        assert_eq!(
+            tap(&window, cx, &device, with("documentId", json!("other"))),
+            gone
+        );
+        assert!(tap(&window, cx, &device, with("conversationId", json!("nope"))).is_err());
+        // A device that did not select the project cannot run the visual.
+        let narrowed = DeviceContext {
+            projects: Some(vec!["other".into()]),
+            ..web_device("tab-narrowed", Permission::Read)
+        };
+        assert_eq!(
+            tap(&window, cx, &narrowed, ok(json!(1))),
+            Err(policy::Code::NotSelected.failure())
+        );
+        let selected = DeviceContext {
+            projects: Some(vec![own]),
+            ..web_device("tab-selected", Permission::Read)
+        };
+        assert!(tap(&window, cx, &selected, ok(json!(1))).is_ok());
+        // A flood: the burst gets through, then the device is told to slow down while another device is not.
+        let flood = web_device("tab-flood", Permission::Read);
+        let answers: Vec<_> = (0..60)
+            .map(|_| tap(&window, cx, &flood, ok(json!(1))))
+            .collect();
+        assert!(
+            answers[..3].iter().all(Result::is_ok),
+            "the first taps pass"
+        );
+        assert!(
+            answers
+                .iter()
+                .any(|a| *a == Err(policy::Code::Busy.failure())),
+            "a device over its rate is refused"
+        );
+        assert!(
+            tap(
+                &window,
+                cx,
+                &web_device("tab-calm", Permission::Read),
+                ok(json!(1))
+            )
+            .is_ok()
+        );
     }
 
     #[gpui::test]

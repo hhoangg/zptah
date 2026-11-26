@@ -59,7 +59,7 @@ export type ChoicesItem = { type: "choices"; id: string; options: string[]; chos
 export type DocumentItem = { type: "document"; id: string; documentId: string; title: string; kind: string };
 
 /** A native visual the desktop rendered inline: its title and its component tree (data, parsed by `parseVisualTree`). */
-export type VisualItem = { type: "visual"; id: string; title: string; tree: unknown };
+export type VisualItem = { type: "visual"; id: string; title: string; tree: unknown; /** The visual document's id; the desktop checks that the row still holds it. Absent from an older desktop. */ documentId?: string };
 
 export type TurnItem = UserItem | TextItem | HeaderItem | WorkItem | NoticeItem | SessionsItem | ChoicesItem | DocumentItem | VisualItem;
 
@@ -198,7 +198,7 @@ export function readItem(raw: unknown): TurnItem | null {
     case "document":
       return { type: "document", id, documentId: str(raw.documentId), title: str(raw.title), kind: str(raw.kind) };
     case "visual":
-      return { type: "visual", id, title: str(raw.title), tree: raw.tree };
+      return { type: "visual", id, title: str(raw.title), tree: raw.tree, ...(typeof raw.documentId === "string" && raw.documentId ? { documentId: raw.documentId } : {}) };
     default:
       return null;
   }

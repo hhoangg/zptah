@@ -327,6 +327,8 @@ export const CloudStartOptionsResultSchema = z.looseObject({
 // --- Mono ---
 
 const MonoFile = z.enum(["soul", "memory"]);
+/** What a visual control sends: null (button), a boolean (toggle), text of at most 4096 bytes (input), an index (select, tabs) or a number (slider). */
+const VisualEventValue = z.union([z.null(), z.boolean(), z.string().max(4096), z.number()]);
 const MonoEmojiHash = z.string().regex(/^[0-9a-f]{64}$/);
 const MonoEmojiMime = z.enum(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 /** `mono.profile` stays open; `resetFiles` is what the desktop's reset dialog offers (absent without a saved conversation or on an old desktop; a malformed one reads as absent). */
@@ -733,6 +735,22 @@ export const METHODS = {
     transport: "app",
     params: GitActionParamsSchema,
     result: z.looseObject({ message: z.string().optional(), url: z.string().optional() }),
+  }),
+
+  // A control event of an inline visual. The desktop runs it in this device's own sandbox copy of the visual and
+  // answers the tree that follows; `reset: true` says the handler was stale and `tree` is the first render again.
+  "visual.dispatch": method({
+    class: "read", // confined to this device's private sandbox copy: nothing on the desktop or another device changes
+    transport: "app",
+    params: z.strictObject({
+      conversationId: z.string().min(1).max(256),
+      turnId: z.string().min(1).max(64).optional(),
+      itemId: z.string().min(1).max(64), // the desktop checks the shape of its own ids
+      documentId: z.string().min(1).max(96), // the visual document of the snapshot item: the row must still hold it
+      handler: z.string().min(1).max(64),
+      value: VisualEventValue,
+    }),
+    result: z.looseObject({ tree: z.unknown(), reset: z.boolean() }),
   }),
 
   // Monos

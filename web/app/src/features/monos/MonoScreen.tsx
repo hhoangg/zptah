@@ -23,6 +23,7 @@ import { useRememberPlace } from "@/features/sessions/lastPlace";
 import { useConfirmedMissing } from "@/features/sessions/useConfirmedMissing";
 import { markMonoSeen, markMonoUnread } from "@/features/sessions/monoSeen";
 import { WIDE_QUERY, useReadOnly } from "@/features/sessions/WorkspaceFrame";
+import { useVisualController } from "@/features/visuals/useVisual";
 import { Transcript } from "@/features/transcript/Transcript";
 import type { TranscriptActions } from "@/features/transcript/context";
 import { useOlderTurns } from "@/features/transcript/useOlderTurns";
@@ -83,8 +84,10 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
   const replies = useGuardedReplies({ desktopId, sessionId: conversationId, target: null, send, retry: retryTurn });
   // A Mono chat has no project: every file mention opens the preview.
   const mentions = useMentionPreview({ desktopId, conversationId });
+  const visuals = useVisualController(conversationId);
   const actions = useMemo<TranscriptActions>(
     () => ({
+      ...(visuals ? { visuals } : {}),
       onOpenFile: mentions.onOpenFile,
       onNavigate: (href) => void navigate({ to: href as never }),
       // A document card opens the profile's document page: it reads the document's own body and visual tree.
@@ -101,7 +104,7 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
             onChoose: replies.onChoose,
           }),
     }),
-    [catalog, desktopId, mentions.onOpenFile, monoId, navigate, readOnly, replies.onChoose],
+    [catalog, desktopId, mentions.onOpenFile, monoId, navigate, readOnly, replies.onChoose, visuals],
   );
 
 

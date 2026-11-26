@@ -13,6 +13,7 @@ import { Transcript } from "@/features/transcript/Transcript";
 import type { TranscriptActions } from "@/features/transcript/context";
 import { latestSessionError } from "@/features/transcript/sessionError";
 import { useOlderTurns } from "@/features/transcript/useOlderTurns";
+import { useVisualController } from "@/features/visuals/useVisual";
 import type { DocumentItem } from "@/features/transcript/turnItems";
 import { Badge } from "@/ui/badge";
 import { Glass } from "@/ui/Glass";
@@ -47,8 +48,10 @@ export function SessionScreen({ desktopId, sessionId }: { desktopId: string; ses
   const mentions = useMentionPreview({ desktopId, conversationId: sessionId, projectId });
   // Retry and a tapped choice go through the send-guard like a typed message.
   const replies = useGuardedReplies({ desktopId, sessionId, target: session?.target ?? null, send, retry: retryTurn });
+  const visuals = useVisualController(sessionId);
   const actions = useMemo<TranscriptActions>(
     () => ({
+      ...(visuals ? { visuals } : {}),
       onOpenFile: mentions.onOpenFile,
       onNavigate: (href) => void navigate({ to: href as never }),
       onOpenDocument: setDocument,
@@ -63,7 +66,7 @@ export function SessionScreen({ desktopId, sessionId }: { desktopId: string; ses
             onChoose: replies.onChoose,
           }),
     }),
-    [catalog, desktopId, mentions.onOpenFile, navigate, readOnly, replies.onChoose],
+    [catalog, desktopId, mentions.onOpenFile, navigate, readOnly, replies.onChoose, visuals],
   );
 
   // An archived or just-created session may be absent from a stale catalog, so the notice also needs a conversation without turns.
