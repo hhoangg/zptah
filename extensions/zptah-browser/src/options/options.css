@@ -29,3 +29,8 @@ ul {
 li button {
   margin-left: 8px;
 }
+.brand {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
