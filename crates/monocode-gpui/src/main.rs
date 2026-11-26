@@ -13,6 +13,7 @@ mod assets;
 mod attachment_tray;
 mod automations;
 mod changes;
+mod cli_auth;
 mod cloud_actions;
 mod cloud_checks;
 mod cloud_dialog_ui;

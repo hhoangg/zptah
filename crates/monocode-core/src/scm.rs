@@ -25,6 +25,21 @@ pub(crate) use shell::{expand_home, path_to_js};
 pub fn terminal_search_path() -> String {
     shell::gui_search_path()
 }
+/// The environment the app gives a CLI it starts (PATH, HOME, USER, SHELL, LANG), the same as
+/// `cli::output` applies, for callers that spawn through a pseudo-terminal.
+pub fn gui_env() -> Vec<(String, String)> {
+    let mut command = std::process::Command::new("env");
+    shell::apply_gui_env(&mut command);
+    command
+        .get_envs()
+        .filter_map(|(key, value)| {
+            Some((
+                key.to_string_lossy().into_owned(),
+                value?.to_string_lossy().into_owned(),
+            ))
+        })
+        .collect()
+}
 /// Resolve a CLI using the login-shell PATH available to Finder-launched apps.
 pub fn resolve_gui_binary(name: &str) -> Option<std::path::PathBuf> {
     shell::resolve_gui_binary(name)
