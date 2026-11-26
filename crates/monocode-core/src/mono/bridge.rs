@@ -391,7 +391,7 @@ pub fn configure_codex(
 pub fn tool_definitions() -> Vec<Value> {
     vec![json!({
         "name": "app",
-        "description": format!("Run a zptah app action: sessions, worktrees, folders, notes, artifacts, soul, memory, habits, chat cards, projects (projects.add, projects.list) and app updates (app.update). Pass the action name and its JSON input. Retry an uncertain mutation with the same requestId and identical input.\n\n{HELP}"),
+        "description": format!("Run a zptah app action: sessions, worktrees, folders, notes, artifacts, soul, memory, habits, chat cards, other Monos (monos.list, monos.send), projects (projects.add, projects.list) and app updates (app.update). Pass the action name and its JSON input. Retry an uncertain mutation with the same requestId and identical input.\n\n{HELP}"),
         "inputSchema": {
             "type": "object",
             "properties": {

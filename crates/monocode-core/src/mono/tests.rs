@@ -310,6 +310,23 @@ fn the_prompt_and_help_describe_workflows() {
             "{name} is not an app action"
         );
     }
+    for name in ["monos.list", "monos.send"] {
+        assert!(
+            bridge::HELP.contains(&format!("{name} {{")),
+            "help lacks {name}"
+        );
+    }
+    assert!(api::validate("monos.list", &serde_json::json!({})).is_ok());
+    assert!(api::validate(
+        "monos.send",
+        &serde_json::json!({"mono":"b","message":"m","notifyOnReply":false})
+    )
+    .is_ok());
+    assert!(api::validate("monos.send", &serde_json::json!({"notifyOnReply":"yes"})).is_err());
+    assert!(
+        crate::mono::instructions(&crate::mono::Mono::default(), std::path::Path::new("/x"))
+            .contains("## Other Monos")
+    );
     for needle in [
         "always saved paused, however clean it is",
         "needing review",
