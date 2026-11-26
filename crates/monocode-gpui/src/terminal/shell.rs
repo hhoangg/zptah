@@ -83,7 +83,7 @@ fn resolve_windows_shell(program: &str, search_path: &str) -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
-pub(super) fn pty_program(program: &str) -> String {
+pub(crate) fn pty_program(program: &str) -> String {
     // Alacritty escapes arguments on Windows, but inserts the program verbatim
     // into CreateProcessW's command line. PowerShell 7 lives under Program Files.
     #[cfg(windows)]

@@ -887,7 +887,14 @@ fn mcp_key_values(
     Ok(args)
 }
 
-pub fn login(cwd: &str, provider: &str, name: &str) -> Result<(), String> {
+/// The command that signs in to an MCP server: binary, arguments and the (home-expanded) working
+/// directory. The caller runs it on a pseudo-terminal, because the provider CLIs refuse to sign in
+/// without one.
+pub fn login_command(
+    cwd: &str,
+    provider: &str,
+    name: &str,
+) -> Result<(PathBuf, Vec<String>, PathBuf), String> {
     if name.trim().is_empty() || name.chars().any(char::is_control) {
         return Err("Invalid MCP server name".into());
     }
@@ -896,13 +903,11 @@ pub fn login(cwd: &str, provider: &str, name: &str) -> Result<(), String> {
         "opencode" => "auth",
         _ => return Err("Unsupported MCP provider".into()),
     };
-    mcp_command(
+    Ok((
         resolve_mcp_binary(provider, None)?,
         vec!["mcp".into(), action.into(), name.into()],
-        cwd.into(),
-        Duration::from_secs(180),
-    )
-    .map(|_| ())
+        expand_home(cwd),
+    ))
 }
 pub fn remove(cwd: &str, name: &str, scope: &str) -> Result<(), String> {
     if name.is_empty()
@@ -1001,6 +1006,22 @@ pub fn parse_claude_health(text: &str) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_command_rejects_bad_input_before_resolving_a_binary() {
+        assert_eq!(
+            login_command("/p", "claude", "bad\nname").unwrap_err(),
+            "Invalid MCP server name"
+        );
+        assert_eq!(
+            login_command("/p", "claude", " ").unwrap_err(),
+            "Invalid MCP server name"
+        );
+        assert_eq!(
+            login_command("/p", "nope", "x").unwrap_err(),
+            "Unsupported MCP provider"
+        );
+    }
 
     #[test]
     fn parses_claude_health_statuses() {

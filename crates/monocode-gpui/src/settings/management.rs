@@ -276,6 +276,7 @@ impl SettingsView {
                             &tree.tree.path,
                         )
                     {
+                        self.cancel_sign_in();
                         self.selected_project = self.discovery.worktrees.main.clone();
                     }
                     self.management = None;
@@ -308,6 +309,7 @@ impl SettingsView {
         if ok {
             self.selected_trees.remove(&done.path);
             if monocode_core::files::is_equal_or_inside(&self.selected_project, &done.path) {
+                self.cancel_sign_in();
                 self.selected_project = self.discovery.worktrees.main.clone();
             }
         }

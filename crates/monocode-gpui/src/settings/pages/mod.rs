@@ -11,7 +11,7 @@ mod general;
 mod import;
 mod inbox;
 mod keybindings;
-mod mcp;
+pub(super) mod mcp;
 pub(super) mod mobile;
 mod monos;
 mod providers;
