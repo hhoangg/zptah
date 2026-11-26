@@ -210,8 +210,18 @@ describe("login", () => {
     await screen.findByRole("heading", { level: 1, name: "Sign in to zptah" });
     expect(screen.getByRole("link", { name: /Lost your passkey/ })).toHaveAttribute("href", "/recover");
     expect(screen.getByRole("link", { name: /Install the app/ })).toHaveAttribute("href", "/install");
+    expect(within(screen.getByTestId("auth-footer")).getByRole("link", { name: "Privacy" })).toHaveAttribute("href", "/privacy");
     await user.click(screen.getByRole("button", { name: /Sign in with passkey/ }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/settings/desktops"));
+  });
+});
+
+describe("privacy link", () => {
+  it.each(["/login", "/register", "/recover"])("%s shows a plain Privacy link to /privacy", async (path) => {
+    install({ signedIn: false });
+    mount(path);
+    await screen.findByRole("heading", { level: 1 });
+    expect(within(screen.getByTestId("auth-footer")).getByRole("link", { name: "Privacy" })).toHaveAttribute("href", "/privacy");
   });
 });
 

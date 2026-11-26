@@ -7,6 +7,7 @@ import { ApiError } from "@/features/accounts/api";
 import { meQuery } from "@/features/accounts/queries";
 import { cn } from "@/lib/utils";
 import { AuthBrand } from "./AuthBrand";
+import { AuthFooter } from "./AuthFooter";
 import { Glass } from "./Glass";
 import { AppNav } from "./AppNav";
 import { TooltipProvider } from "./tooltip";
@@ -79,6 +80,7 @@ export function Shell() {
       >
         {signInFamily ? <AuthBrand /> : null}
         <Outlet />
+        {signInFamily ? <AuthFooter /> : null}
       </main>
     </div>
     <ViewportDebugGate />

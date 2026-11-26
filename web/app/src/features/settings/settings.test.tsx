@@ -133,6 +133,13 @@ describe("settings pages", () => {
     expect(back.className).toContain("lg:hidden");
   });
 
+  it("the settings nav ends with a plain Privacy link to /privacy", async () => {
+    install();
+    mount("/settings/security");
+    await screen.findByRole("heading", { level: 1, name: "Security" });
+    expect(within(screen.getByRole("navigation", { name: "Settings" })).getByRole("link", { name: "Privacy" })).toHaveAttribute("href", "/privacy");
+  });
+
   it("keeps the forced regenerate screen while the codes are unconfirmed", async () => {
     install({ recoveryAckAt: null });
     mount("/settings/profile");
