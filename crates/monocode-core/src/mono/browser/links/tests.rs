@@ -1252,7 +1252,7 @@ mod install {
     #[test]
     fn the_release_manifest_lists_the_store_id_and_never_the_dev_id() {
         let text = manifest_json(Flavor::Release, &exe()).unwrap();
-        assert!(text.contains("chrome-extension://pppppppppppppppppppppppppppppppp/"));
+        assert!(text.contains("chrome-extension://fmimbbckbgogjapagnhpegfkkjebipcp/"));
         assert!(!text.contains(DEV_EXTENSION_ID));
         let v: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["name"], "app.zptah.browser_host");
@@ -1276,6 +1276,14 @@ mod install {
             assert_eq!(id.len(), 32);
             assert!(id.bytes().all(|b| (b'a'..=b'p').contains(&b)), "{id}");
         }
+    }
+
+    #[test]
+    fn the_store_page_url_is_built_from_the_store_id() {
+        assert_eq!(
+            store_page_url(),
+            "https://chromewebstore.google.com/detail/fmimbbckbgogjapagnhpegfkkjebipcp"
+        );
     }
 
     #[test]

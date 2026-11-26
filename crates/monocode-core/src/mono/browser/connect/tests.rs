@@ -86,7 +86,11 @@ fn rig(with_chrome: bool) -> Rig {
 }
 
 fn manifest_path(rig: &Rig) -> PathBuf {
-    let file = format!("{}.json", manifest_install::DEV_HOST_NAME);
+    manifest_path_of(rig, manifest_install::DEV_HOST_NAME)
+}
+
+fn manifest_path_of(rig: &Rig, host_name: &str) -> PathBuf {
+    let file = format!("{host_name}.json");
     if cfg!(windows) {
         // Windows keeps the file in the app data dir and points the registry at it.
         rig.home.join("app").join("browser-host").join(file)
@@ -262,7 +266,7 @@ fn disconnect_all_removes_the_manifest_and_resets_the_card() {
 }
 
 #[test]
-fn the_release_flavor_refuses_connect_until_the_store_listing_exists() {
+fn the_release_flavor_connects_with_the_store_id_and_offers_the_store_page() {
     let mut rig = rig(true);
     rig.connect = BrowserConnect::new(ConnectOptions {
         app_version: "9.9.9-test".into(),
@@ -276,16 +280,55 @@ fn the_release_flavor_refuses_connect_until_the_store_listing_exists() {
         opener: rig.opener.clone(),
         socket_dir: None,
     });
-    assert_eq!(
-        rig.connect.status().unavailable.as_deref(),
-        Some(NOT_IN_STORE_YET)
+    const STORE_ID: &str = "fmimbbckbgogjapagnhpegfkkjebipcp";
+    assert!(rig.connect.status().store_page);
+    rig.connect.connect("Default", "Personal").unwrap();
+    let opened = rig.opener.opened.lock().unwrap().clone();
+    assert_eq!(opened.len(), 1);
+    assert!(
+        opened[0].1.starts_with(&format!(
+            "chrome-extension://{STORE_ID}/src/pair/pair.html#n="
+        )),
+        "{}",
+        opened[0].1
     );
-    assert_eq!(
-        rig.connect.connect("Default", "Personal").unwrap_err(),
-        NOT_IN_STORE_YET
-    );
+    let manifest =
+        std::fs::read_to_string(manifest_path_of(&rig, manifest_install::HOST_NAME)).unwrap();
+    assert!(manifest.contains(&format!("chrome-extension://{STORE_ID}/")));
+    assert!(!manifest.contains(manifest_install::DEV_EXTENSION_ID));
+}
+
+#[test]
+fn the_store_page_opens_in_the_chosen_profile_for_the_release_flavor_only() {
+    let mut rig = rig(true);
+    assert!(!rig.connect.status().store_page);
+    assert!(rig.connect.open_store_page("Default").is_err());
     assert!(rig.opener.opened.lock().unwrap().is_empty());
-    assert!(!manifest_path(&rig).exists());
+    rig.connect = BrowserConnect::new(ConnectOptions {
+        app_version: "9.9.9-test".into(),
+        home: rig.home.clone(),
+        local_app_data: Some(rig.home.join("local")),
+        app_data_dir: rig.home.join("app"),
+        exe: std::env::current_exe().unwrap(),
+        flavor_dev: false,
+        storage: Storage::Memory,
+        real_registry: false,
+        opener: rig.opener.clone(),
+        socket_dir: None,
+    });
+    assert!(rig.connect.open_store_page("../evil").is_err());
+    rig.connect.open_store_page("Profile 6").unwrap();
+    assert_eq!(
+        rig.opener.opened.lock().unwrap().clone(),
+        vec![(
+            "Profile 6".to_string(),
+            "https://chromewebstore.google.com/detail/fmimbbckbgogjapagnhpegfkkjebipcp".to_string()
+        )]
+    );
+    assert!(
+        !manifest_path_of(&rig, manifest_install::HOST_NAME).exists(),
+        "opening the store writes nothing"
+    );
 }
 
 #[test]

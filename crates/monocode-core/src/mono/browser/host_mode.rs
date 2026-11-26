@@ -15,6 +15,7 @@ use super::link::frame::{read_frame, write_frame, FrameError, FrameFormat};
 use super::link::protocol::{
     negotiate, Envelope, ErrorCode, HelloParams, Method, ProtocolError, Sender,
 };
+use super::links::manifest_install::STORE_EXTENSION_IDS;
 #[cfg(windows)]
 use super::peer::windows_pipe;
 use super::peer::{self, Flavor, PeerPolicy};
@@ -28,10 +29,6 @@ mod tests;
 /// Extension id of the dev build (fixed by `manifest.dev.json` `key`). Accepted in debug builds only:
 /// its public key is in the repo, so a release binary must never trust it.
 pub const DEV_EXTENSION_ID: &str = "bmmfejkhajglhijajgdgfckhonddijjh";
-
-/// Chrome Web Store extension ids. Filled in when the listing exists (ticket T18); until then a
-/// release binary accepts no extension, which is the safe default.
-pub const STORE_EXTENSION_IDS: &[&str] = &[];
 
 const ORIGIN_PREFIX: &str = "chrome-extension://";
 

@@ -74,8 +74,9 @@ pub struct ConnectStatus {
     pub server_error: Option<String>,
     /// The listener is still starting (the app image is being hashed first).
     pub starting: bool,
-    /// Why Connect is off (the release extension has no store listing yet).
-    pub unavailable: Option<String>,
+    /// The release flavor installs the extension from the Chrome Web Store, so the card offers a
+    /// way to open its page. The dev flavor loads an unpacked build and has none.
+    pub store_page: bool,
     /// The last thing worth telling the user (a refused connection, a failed open).
     pub alert: Option<String>,
     /// When the open pairing window closes, in ms since the epoch.
@@ -196,16 +197,6 @@ pub struct BrowserConnect {
 struct ServerState {
     starting: bool,
     error: Option<String>,
-}
-
-/// The message shown while the release extension has no Chrome Web Store listing.
-pub const NOT_IN_STORE_YET: &str = "Available after the Chrome Web Store listing is published.";
-
-/// The placeholder id is `p` repeated; a real store id is never that.
-fn store_listing_exists() -> bool {
-    manifest_install::STORE_EXTENSION_IDS
-        .iter()
-        .any(|id| id.bytes().any(|b| b != b'p'))
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -361,15 +352,10 @@ impl BrowserConnect {
         let _ = lock(&self.server).take();
     }
 
-    fn unavailable(&self) -> Option<String> {
-        (self.flavor == Flavor::Release && !store_listing_exists())
-            .then(|| NOT_IN_STORE_YET.to_string())
-    }
-
     fn extension_id(&self) -> &'static str {
         match self.flavor {
             Flavor::Dev => manifest_install::DEV_EXTENSION_ID,
-            Flavor::Release => manifest_install::STORE_EXTENSION_IDS[0],
+            Flavor::Release => manifest_install::STORE_EXTENSION_ID,
         }
     }
 
@@ -477,7 +463,7 @@ impl BrowserConnect {
             keys_in_fallback: self.manager.keys_in_fallback(),
             server_error: state.error.clone(),
             starting: state.starting,
-            unavailable: self.unavailable(),
+            store_page: self.flavor == Flavor::Release,
             alert,
             pairing_expires_ms: match pairing {
                 PairingState::Waiting { expires_ms } => Some(expires_ms),
@@ -490,9 +476,6 @@ impl BrowserConnect {
     /// window for `profile_dir` and opens the pair page in that profile. `profile_name` is the
     /// label shown on the card (the profile's own name when empty).
     pub fn connect(&self, profile_dir: &str, profile_name: &str) -> Result<(), String> {
-        if let Some(reason) = self.unavailable() {
-            return Err(reason);
-        }
         if !valid_profile_dir(profile_dir) {
             return Err("Choose a browser profile first.".into());
         }
@@ -545,6 +528,21 @@ impl BrowserConnect {
             self.manager.cancel_pairing();
         }
         opened
+    }
+
+    /// Opens the Chrome Web Store page of the extension in `profile_dir`, so the user can install
+    /// it in the profile they chose. Only the release flavor installs from the store.
+    pub fn open_store_page(&self, profile_dir: &str) -> Result<(), String> {
+        if self.flavor != Flavor::Release {
+            return Err(
+                "The development extension is not installed from the Chrome Web Store.".into(),
+            );
+        }
+        if !valid_profile_dir(profile_dir) {
+            return Err("Choose a browser profile first.".into());
+        }
+        self.opener
+            .open(profile_dir, &manifest_install::store_page_url())
     }
 
     /// Stops a pairing in progress.

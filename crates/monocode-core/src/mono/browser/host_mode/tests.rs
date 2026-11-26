@@ -35,8 +35,28 @@ fn the_dev_id_is_accepted_only_when_dev_is_allowed_and_uses_the_dev_flavor() {
 }
 
 #[test]
+fn the_compiled_in_store_id_is_accepted_and_other_ids_are_not() {
+    const REAL: &str = "fmimbbckbgogjapagnhpegfkkjebipcp";
+    let launch = parse_launch(&args(&[&origin(REAL)])).unwrap().unwrap();
+    assert_eq!(launch.extension_id, REAL);
+    assert_eq!(launch.flavor, Flavor::Release);
+    // A well-formed id that is not ours is refused.
+    assert_eq!(
+        parse_launch(&args(&[&origin(STORE)])).unwrap(),
+        Err(LaunchError::UnknownExtension)
+    );
+    // With dev disallowed (a release build) the dev id is refused while the store id still works.
+    let strict = |id: &str| parse_launch_with(&args(&[&origin(id)]), STORE_EXTENSION_IDS, false);
+    assert_eq!(
+        strict(DEV_EXTENSION_ID).unwrap(),
+        Err(LaunchError::UnknownExtension)
+    );
+    assert!(strict(REAL).unwrap().is_ok());
+}
+
+#[test]
 fn release_builds_compile_in_no_dev_id() {
-    // `parse_launch` passes `cfg!(debug_assertions)`; the store list is empty until T18.
+    // `parse_launch` passes `cfg!(debug_assertions)`.
     let dev = origin(DEV_EXTENSION_ID);
     let result = parse_launch(&args(&[&dev])).unwrap();
     if cfg!(debug_assertions) {
