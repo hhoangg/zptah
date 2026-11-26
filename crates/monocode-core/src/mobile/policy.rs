@@ -442,6 +442,13 @@ pub const METHODS: &[Entry] = &[
     app("folder.rename", Class::Control),
     app("folder.move", Class::Control),
     app("folder.delete", Class::Control),
+    // A visual's control event (tap a tab, move a slider) sent by a paired web device. It is Read, so a Viewer device
+    // may use it: the event runs in that device's own sandboxed copy of the visual (no filesystem, network or shell,
+    // each call stops after 60 ms; each runtime holds at most 16 MiB and the desktop keeps at most 16 of them, so 256 MiB
+    // at worst), changes nothing on the desktop and nothing another device sees, and the desktop limits how often and
+    // how much foreground time one device and all devices together may use. Only a device that already passed the
+    // relay's pairing reaches it.
+    app("visual.dispatch", Class::Read),
     app("mono.document", Class::Read),
     app("mono.profile", Class::Read),
     app("mono.update", Class::Control),
@@ -863,6 +870,10 @@ pub fn device_capabilities(flags: &PolicyFlags, device: &Device) -> Vec<String> 
         // Mono emoji pictures are display only: every web device gets them.
         if !hidden("monoEmoji") {
             list.push("monoEmoji".to_owned());
+        }
+        // A visual's controls run in a private sandbox copy per device: every web device gets them.
+        if !hidden("visualControls") {
+            list.push("visualControls".to_owned());
         }
         // Resetting a Mono is a Control action (and needs a fresh passkey ticket).
         if device.permission == Permission::Control && !hidden("monoReset") {
@@ -2156,6 +2167,8 @@ mod tests {
         assert!(has(&web_control, "monoReset") && has(&web_control, "monoEmoji"));
         assert!(!has(&web_read, "monoReset") && has(&web_read, "monoEmoji"));
         assert!(!has(&phone, "monoReset") && !has(&phone, "monoEmoji"));
+        assert!(has(&web_control, "visualControls") && has(&web_read, "visualControls"));
+        assert!(!has(&phone, "visualControls"));
     }
 
     #[test]

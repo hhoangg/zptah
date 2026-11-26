@@ -133,6 +133,7 @@ const fixtures: Record<MethodName, { params: unknown; result: unknown }> = {
     result: { branch: "main", files: 2, remote: true, remoteName: "origin", upstream: true, defaultBranch: "main", ahead: 1, behind: 0, aheadOfDefault: 1, pr: { number: 5, url: "https://example.com/pr/5" } },
   },
   "project.gitAction": { params: { projectId: "p1", action: "commit", message: "fix", paths: ["a.ts"] }, result: { message: "ok" } },
+  "visual.dispatch": { params: { conversationId: "s1", turnId: "t1", itemId: "r4", documentId: "d1", handler: "1:0", value: 2 }, result: { tree: { kind: "text" }, reset: false } },
   "mono.document": { params: { documentId: "d1" }, result: { id: "d1", title: "Doc" } },
   "mono.profile": { params: { monoId: "m1" }, result: { id: "m1" } },
   "mono.file": { params: { monoId: "m1", file: "soul" }, result: { text: "soul", hash: "abc" } },

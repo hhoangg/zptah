@@ -22,7 +22,8 @@ import { Shimmer } from "./Shimmer";
 import { CopyFallbackDialog, TurnMetricsDialog } from "./TurnDialogs";
 import { useCollapsedToolCalls } from "./toolCallsSetting";
 import { readItems, readMetrics, type HeaderItem, type NoticeItem, type UserItem, type VisualItem, type WorkKind, type WorkPhase } from "./turnItems";
-import { VisualTree, parseVisualTree } from "@/features/visuals/VisualTree";
+import { VisualTree } from "@/features/visuals/VisualTree";
+import { useVisual } from "@/features/visuals/useVisual";
 import { safeClipboardText } from "@/lib/clipboardText";
 
 const WORK_TEXT = "text-body";
@@ -68,7 +69,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({ turn, agent }: Tran
           case "document":
             return <DocumentCard key={item.id} document={item} />;
           case "visual":
-            return <VisualFigure key={item.id} item={item} />;
+            return <VisualFigure key={item.id} item={item} turnId={turn.id} />;
           case "notice":
             return item.error ? (
               <ErrorNotice key={item.id} item={item} onPress={() => onError?.(item)} />
@@ -84,12 +85,18 @@ export const TranscriptTurn = memo(function TranscriptTurn({ turn, agent }: Tran
   );
 });
 
-/** A native visual of the reply, drawn from its component tree; a tree the web app cannot draw says so instead. */
-function VisualFigure({ item }: { item: VisualItem }) {
-  const tree = parseVisualTree(item.tree);
+/**
+ * A native visual of the reply, drawn from its component tree; a tree the web app cannot draw says so instead. Its
+ * controls act through the conversation's visual controller (the desktop runs them), or are disabled without one.
+ */
+function VisualFigure({ item, turnId }: { item: VisualItem; turnId: string }) {
+  const { visuals } = useTranscriptActions();
+  const ref = useMemo(() => ({ turnId, itemId: item.id, documentId: item.documentId ?? "" }), [turnId, item.id, item.documentId]);
+  // Without the document id (an older desktop) the desktop cannot check the row: the controls stay disabled.
+  const { node, pending, error, onDispatch } = useVisual(item.documentId ? visuals : undefined, `${turnId}/${item.id}`, ref, item.tree);
   return (
     <figure aria-label={item.title || "Visual"} data-testid="transcript-visual" className="min-w-0 px-5 py-2">
-      {tree ? <VisualTree node={tree} /> : <p className="text-small text-[color:var(--content-a50)]">{item.title || "Visual"} {"\u00b7"} Open it on your desktop to see it.</p>}
+      {node ? <VisualTree node={node} onDispatch={onDispatch} pending={pending} error={error} /> : <p className="text-small text-[color:var(--content-a50)]">{item.title || "Visual"} {"\u00b7"} Open it on your desktop to see it.</p>}
     </figure>
   );
 }

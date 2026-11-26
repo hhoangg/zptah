@@ -5,3 +5,4 @@ pub(crate) mod catalog;
 pub(crate) mod cloud;
 pub(crate) mod project;
 pub(crate) mod transcript;
+pub(crate) mod visual_remote;

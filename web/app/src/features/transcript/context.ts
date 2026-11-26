@@ -2,6 +2,7 @@
 // of WS-P later). Everything is optional: a host that does not provide an action gets a read-only
 // transcript (chips and cards disabled, file links shown unlinked).
 import { createContext, use } from "react";
+import type { VisualController } from "@/features/visuals/VisualController";
 import type { DocumentItem, NoticeItem } from "./turnItems";
 
 /** Who a Mono's turns are by, in place of the model and provider mark. */
@@ -28,6 +29,8 @@ export interface TranscriptActions {
   onOpenSession?: (projectId: string, sessionId: string) => void | Promise<void>;
   /** False for a project outside this device's selection: the card shows "Not on this device's projects". */
   isProjectAvailable?: (projectId: string) => boolean;
+  /** Runs the controls of an inline visual on the desktop. Absent (an older desktop): the controls are disabled. */
+  visuals?: VisualController;
 }
 
 export const TranscriptActionsContext = createContext<TranscriptActions>({});

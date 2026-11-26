@@ -80,6 +80,7 @@ pub(super) const APP_METHODS: &[&str] = &[
     "folder.rename",
     "folder.move",
     "folder.delete",
+    "visual.dispatch",
     "mono.document",
     "mono.profile",
     "mono.update",

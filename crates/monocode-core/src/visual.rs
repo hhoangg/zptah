@@ -18,6 +18,9 @@ pub const MEMORY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 const TREE_BYTES: usize = 1024 * 1024;
 const CALL_DEADLINE: Duration = Duration::from_millis(60);
 
+/// The error [`VisualRuntime::dispatch`] answers for a handler that is not in the current render.
+pub const STALE_CONTROL: &str = "This visual control is stale; use the current view";
+
 /// An isolated program. Keep it alive to preserve state between native events.
 /// Field order ensures all persistent JS values are dropped before their VM.
 pub struct VisualRuntime {
@@ -73,6 +76,11 @@ impl VisualRuntime {
         self.call("render", None)
     }
 
+    /// True once a call failed in script (error, deadline or memory): the runtime refuses every further call.
+    pub fn is_stopped(&self) -> bool {
+        self.stopped
+    }
+
     /// Dispatch only the current render's handler. Values are checked against the
     /// original control before script code sees them (slider bounds, tab index,
     /// boolean toggle). Stale callbacks cannot mutate a replacement render.
@@ -83,7 +91,7 @@ impl VisualRuntime {
         self.current
             .as_ref()
             .and_then(|node| validate_event(node, handler, &value))
-            .unwrap_or_else(|| Err("This visual control is stale; use the current view".into()))?;
+            .unwrap_or_else(|| Err(STALE_CONTROL.into()))?;
         let payload = serde_json::to_string(&value).map_err(|e| e.to_string())?;
         if payload.len() > 32 * 1024 {
             return Err("Visual event payload is too large".into());

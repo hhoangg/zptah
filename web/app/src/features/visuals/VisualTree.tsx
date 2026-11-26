@@ -1,13 +1,16 @@
 // F-73: a visual's component tree drawn as React elements and inline SVG, as the desktop's VisualView lays it
 // out (ported from mobile/src/features/visuals/VisualTree.tsx at 8b4d76ae). The tree is data from the desktop,
-// never HTML: text goes through React children, so a hostile string is only text. Interactive nodes (button,
-// toggle, input, select, slider, tabs) show their state but do not act: the visual runs on the desktop. 3D
-// scenes are not drawn.
-import { Component, type ReactNode } from "react";
+// never HTML: text goes through React children, so a hostile string is only text. The visual's program runs on
+// the desktop, never in the browser (no eval, see web/docs/security.md), so a control here only reports what the
+// user did through `onDispatch(handler, value)` and the host answers with the next tree. Without `onDispatch`
+// (an older desktop, a document dialog) the controls are drawn disabled with one hint per visual. 3D scenes are
+// not drawn.
+import { Component, createContext, use, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Cartesian, Donut, Gauge, Heatmap, Progress, Trend, alpha, useVisualColor } from "./charts";
 import { LazyFlowDiagram } from "@/features/diagram/lazy";
 import { CanvasShapes } from "./Canvas";
+import { MAX_INPUT_BYTES, controlsOf, utf8Length, type VisualEventValue } from "./controls";
 import type { TextSize, VisualNode } from "./types";
 
 export { parseVisualTree } from "./parse";
@@ -32,12 +35,274 @@ class VisualBoundary extends Component<{ children: ReactNode }, { failed: boolea
   }
 }
 
-export function VisualTree({ node }: { node: VisualNode }) {
+/** What the controls of a tree do. `dispatch` is undefined when nothing can act on them. */
+const ControlsContext = createContext<{ dispatch: ((handler: string, value: VisualEventValue) => void) | undefined }>({ dispatch: undefined });
+
+export const OPEN_ON_DESKTOP_HINT = "Open on desktop to interact";
+
+export interface VisualTreeProps {
+  node: VisualNode;
+  /** Reports a used control. Absent: the controls are disabled. */
+  onDispatch?: ((handler: string, value: VisualEventValue) => void) | undefined;
+  /** An event is on its way to the desktop. */
+  pending?: boolean;
+  /** Why the last event failed; shown under the tree. */
+  error?: string | null;
+}
+
+export function VisualTree({ node, onDispatch, pending = false, error = null }: VisualTreeProps) {
+  const interactive = controlsOf(node).length > 0;
   return (
-    <div data-testid="visual-tree" className="min-w-0">
-      <VisualBoundary>
-        <Node node={node} />
-      </VisualBoundary>
+    <div data-testid="visual-tree" className="min-w-0 transition-opacity aria-busy:opacity-70" aria-busy={pending || undefined}>
+      <ControlsContext value={{ dispatch: onDispatch }}>
+        <VisualBoundary>
+          <Node node={node} />
+        </VisualBoundary>
+      </ControlsContext>
+      {interactive && !onDispatch ? (
+        <p className="pt-2 text-meta text-muted-text" data-testid="visual-hint">
+          {OPEN_ON_DESKTOP_HINT}
+        </p>
+      ) : null}
+      {error ? (
+        <p role="alert" className="pt-2 text-meta text-deletions" data-testid="visual-error">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** The most often a slider sends while it is dragged. */
+const SLIDER_SEND_MS = 100;
+/** An input sends this long after the last keystroke, or at once on Enter or blur. */
+const INPUT_IDLE_MS = 800;
+const BUTTON_BASE = "inline-flex min-h-11 items-center justify-center rounded-row px-3 text-small pointer-fine:min-h-8";
+
+function useDispatcher(handler: string): ((value: VisualEventValue) => void) | undefined {
+  const { dispatch } = use(ControlsContext);
+  return dispatch && handler ? (value) => dispatch(handler, value) : undefined;
+}
+
+function Button({ node }: { node: Extract<VisualNode, { kind: "button" }> }) {
+  const send = useDispatcher(node.handler);
+  const disabled = node.disabled || !send;
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => send?.(null)}
+      className={cn(BUTTON_BASE, "self-start bg-[var(--content-a08)] enabled:hover:bg-[var(--content-a07)] enabled:active:bg-[var(--content-a07)]", disabled && "opacity-40")}
+      data-visual="button"
+    >
+      {node.label}
+    </button>
+  );
+}
+
+function Toggle({ node }: { node: Extract<VisualNode, { kind: "toggle" }> }) {
+  const send = useDispatcher(node.handler);
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={node.value}
+      disabled={!send}
+      onClick={() => send?.(!node.value)}
+      className={cn("flex min-h-11 w-full items-center justify-between gap-3 text-left text-small pointer-fine:min-h-8", !send && "opacity-60")}
+      data-visual="toggle"
+    >
+      <span className="min-w-0 flex-1">{node.label}</span>
+      <span aria-hidden="true" className="inline-flex h-5 w-[34px] shrink-0 items-center rounded-pill p-0.5" style={{ background: node.value ? "var(--accent-color)" : alpha("var(--content)", 15) }}>
+        <span className={cn("size-4 rounded-pill bg-inverse", node.value && "ml-3.5")} />
+      </span>
+    </button>
+  );
+}
+
+function Tabs({ node }: { node: Extract<VisualNode, { kind: "tabs" }> }) {
+  const send = useDispatcher(node.handler);
+  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+  const count = node.labels.length;
+  // Arrow keys, Home and End move to a tab and select it, as a tablist does (the tab in the tab order is the selected one).
+  const go = (to: number) => {
+    if (!send || count === 0) return;
+    const index = (to + count) % count;
+    buttons.current[index]?.focus();
+    if (index !== node.selected) send(index);
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const keys: Record<string, number> = { ArrowRight: node.selected + 1, ArrowDown: node.selected + 1, ArrowLeft: node.selected - 1, ArrowUp: node.selected - 1, Home: 0, End: count - 1 };
+    const to = keys[event.key];
+    if (to === undefined) return;
+    event.preventDefault();
+    go(to);
+  };
+  return (
+    <div role="tablist" onKeyDown={onKeyDown} className="flex flex-wrap gap-1 self-start rounded-row bg-[var(--content-a05)] p-[3px]" data-visual="tabs">
+      {node.labels.map((label, i) => (
+        <button
+          key={`${label}${i}`}
+          ref={(element) => {
+            buttons.current[i] = element;
+          }}
+          type="button"
+          role="tab"
+          aria-selected={i === node.selected}
+          tabIndex={i === node.selected ? 0 : -1}
+          disabled={!send}
+          onClick={() => {
+            if (i !== node.selected) send?.(i);
+          }}
+          className={cn("min-h-11 rounded-[8px] px-3 text-small text-muted-text pointer-fine:min-h-7 pointer-fine:px-2.5", i === node.selected && "bg-[var(--content-a08)] text-content", !send && "opacity-60")}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Select({ node }: { node: Extract<VisualNode, { kind: "select" }> }) {
+  const send = useDispatcher(node.handler);
+  const id = useId();
+  return (
+    <div className="flex items-center justify-between gap-3 text-small" data-visual="select">
+      <label htmlFor={id} className="min-w-0 flex-1">
+        {node.label}
+      </label>
+      <select
+        id={id}
+        value={node.selected}
+        disabled={!send}
+        onChange={(event) => send?.(Number(event.target.value))}
+        className="min-h-11 max-w-[60%] rounded-row border border-stroke bg-transparent px-2 text-small text-content pointer-fine:min-h-8 disabled:opacity-60"
+      >
+        {node.options.map((option, i) => (
+          <option key={`${option}${i}`} value={i}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function Slider({ node }: { node: Extract<VisualNode, { kind: "slider" }> }) {
+  const send = useDispatcher(node.handler);
+  const id = useId();
+  // What the thumb shows while it is dragged; the desktop's value takes over with the next tree.
+  const [draft, setDraft] = useState<number | null>(null);
+  // A drag in progress, or a value not sent yet, keeps the thumb where the user put it: a reply must not pull it back.
+  const [holding, setHolding] = useState(false);
+  const [unsent, setUnsent] = useState(false);
+  const [seen, setSeen] = useState(node);
+  if (seen !== node) {
+    setSeen(node);
+    if (!holding && !unsent) setDraft(null);
+  }
+  const latest = useRef<number | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const flush = () => {
+    clearTimeout(timer.current);
+    timer.current = undefined;
+    const value = latest.current;
+    latest.current = null;
+    setUnsent(false);
+    if (value !== null) send?.(value);
+  };
+  const release = () => {
+    setHolding(false);
+    flush();
+  };
+  const shown = draft ?? node.value;
+  return (
+    <div className="flex flex-col gap-1.5" data-visual="slider">
+      <div className="flex items-center justify-between gap-3 text-small">
+        <label htmlFor={id} className="min-w-0 flex-1">
+          {node.label}
+        </label>
+        <span className="font-mono text-meta text-muted-text">{shown}</span>
+      </div>
+      <input
+        id={id}
+        type="range"
+        min={node.min}
+        max={node.max}
+        step={node.step > 0 ? node.step : "any"}
+        value={shown}
+        disabled={!send}
+        onChange={(event) => {
+          const value = Number(event.target.value);
+          setDraft(value);
+          setUnsent(true);
+          latest.current = value;
+          // While dragging, send at most every SLIDER_SEND_MS (the first move at once, the last one at the end).
+          if (timer.current === undefined) {
+            flush();
+            timer.current = setTimeout(() => {
+              timer.current = undefined;
+              flush();
+            }, SLIDER_SEND_MS);
+          }
+        }}
+        onPointerDown={() => setHolding(true)}
+        onPointerUp={release}
+        onPointerCancel={release}
+        onKeyUp={flush}
+        onBlur={release}
+        className="min-h-11 w-full accent-[var(--accent-color)] pointer-fine:min-h-6 disabled:opacity-60"
+      />
+    </div>
+  );
+}
+
+function TextInput({ node }: { node: Extract<VisualNode, { kind: "input" }> }) {
+  const send = useDispatcher(node.handler);
+  const id = useId();
+  const [draft, setDraft] = useState<string | null>(null);
+  // Text typed and not sent yet stays: a reply to an earlier send must not overwrite what the user is typing.
+  const [unsent, setUnsent] = useState(false);
+  const [seen, setSeen] = useState(node);
+  if (seen !== node) {
+    setSeen(node);
+    if (!unsent) setDraft(null);
+  }
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const commit = (text: string) => {
+    clearTimeout(timer.current);
+    timer.current = undefined;
+    setUnsent(false);
+    if (text !== node.value) send?.(text);
+  };
+  const shown = draft ?? node.value;
+  return (
+    <div className="flex flex-col gap-1.5" data-visual="input">
+      <label htmlFor={id} className="text-meta text-muted-text">
+        {node.label}
+      </label>
+      <input
+        id={id}
+        type="text"
+        value={shown}
+        placeholder={node.placeholder ?? ""}
+        disabled={!send}
+        onChange={(event) => {
+          const text = event.target.value;
+          if (utf8Length(text) > MAX_INPUT_BYTES) return;
+          setDraft(text);
+          setUnsent(true);
+          clearTimeout(timer.current);
+          timer.current = setTimeout(() => commit(text), INPUT_IDLE_MS);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") commit(event.currentTarget.value);
+        }}
+        onBlur={(event) => commit(event.currentTarget.value)}
+        className="min-h-11 rounded-row border border-stroke bg-transparent px-2.5 text-small text-content pointer-fine:min-h-8 disabled:opacity-60"
+      />
     </div>
   );
 }
@@ -155,59 +420,17 @@ function Node({ node }: { node: VisualNode }) {
     case "progress":
       return <Progress label={node.label} value={node.value} max={node.max} detail={node.detail ?? null} tint={color(node.color)} />;
     case "button":
-      return (
-        <span className={cn("inline-flex h-8 items-center self-start rounded-row bg-[var(--content-a08)] px-3 text-small", node.disabled && "opacity-40")} data-visual="button">
-          {node.label}
-        </span>
-      );
+      return <Button node={node} />;
     case "toggle":
-      return (
-        <div className="flex items-center justify-between gap-3 text-small" data-visual="toggle">
-          <span className="min-w-0 flex-1">{node.label}</span>
-          <span aria-hidden="true" className="inline-flex h-5 w-[34px] items-center rounded-pill p-0.5" style={{ background: node.value ? "var(--accent-color)" : alpha("var(--content)", 15) }}>
-            <span className={cn("size-4 rounded-pill bg-inverse", node.value && "ml-3.5")} />
-          </span>
-          <span className="sr-only">{node.value ? "On" : "Off"}</span>
-        </div>
-      );
+      return <Toggle node={node} />;
     case "input":
-      return (
-        <div className="flex flex-col gap-1.5" data-visual="input">
-          <span className="text-meta text-muted-text">{node.label}</span>
-          <span className="rounded-row border border-stroke px-2.5 py-2 text-small">{node.value || <span className="text-muted-text">{node.placeholder ?? ""}</span>}</span>
-        </div>
-      );
+      return <TextInput node={node} />;
     case "select":
-      return (
-        <div className="flex items-center justify-between gap-3 text-small" data-visual="select">
-          <span className="min-w-0 flex-1">{node.label}</span>
-          <span className="text-muted-text">{node.options[node.selected] ?? ""}</span>
-        </div>
-      );
-    case "slider": {
-      const share = Math.min(Math.max((node.value - node.min) / (node.max - node.min || 1), 0), 1);
-      return (
-        <div className="flex flex-col gap-1.5" data-visual="slider">
-          <div className="flex items-center justify-between gap-3 text-small">
-            <span className="min-w-0 flex-1">{node.label}</span>
-            <span className="font-mono text-meta text-muted-text">{node.value}</span>
-          </div>
-          <div className="h-1 overflow-hidden rounded-pill bg-[var(--content-a08)]">
-            <div className="h-1" style={{ width: `${share * 100}%`, background: "var(--accent-color)" }} />
-          </div>
-        </div>
-      );
-    }
+      return <Select node={node} />;
+    case "slider":
+      return <Slider node={node} />;
     case "tabs":
-      return (
-        <div className="flex flex-wrap gap-1 self-start rounded-row bg-[var(--content-a05)] p-[3px]" data-visual="tabs">
-          {node.labels.map((label, i) => (
-            <span key={`${label}${i}`} className={cn("rounded-[8px] px-2.5 py-1 text-small text-muted-text", i === node.selected && "bg-[var(--content-a08)] text-content")}>
-              {label}
-            </span>
-          ))}
-        </div>
-      );
+      return <Tabs node={node} />;
     case "canvas":
       return (
         <svg

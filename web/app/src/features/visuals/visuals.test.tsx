@@ -1,5 +1,6 @@
 // F-73, F-74: the visual tree renderer draws every node kind as React elements and inline SVG, with no HTML sink.
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -65,22 +66,160 @@ describe("visual tree (F-73)", () => {
     expect(container.querySelectorAll("svg").length).toBeGreaterThanOrEqual(2);
   });
 
-  it("shows interactive nodes as static state, never as live controls", () => {
-    const tree: VisualNode = {
-      kind: "column",
-      gap: 4,
-      children: [
-        { kind: "button", label: "Run", handler: "h", disabled: false },
-        { kind: "toggle", label: "Auto", value: true, handler: "h" },
-        { kind: "input", label: "Name", value: "x", handler: "h" },
-        { kind: "select", label: "Mode", options: ["a", "b"], selected: 1, handler: "h" },
-        { kind: "slider", label: "Level", value: 5, min: 0, max: 10, step: 1, handler: "h" },
-        { kind: "tabs", labels: ["One", "Two"], selected: 0, handler: "h" },
-      ],
-    };
-    const { container } = render(<VisualTree node={tree} />);
+  const controls: VisualNode = {
+    kind: "column",
+    gap: 4,
+    children: [
+      { kind: "button", label: "Run", handler: "1:0", disabled: false },
+      { kind: "toggle", label: "Auto", value: true, handler: "1:1" },
+      { kind: "input", label: "Name", value: "x", handler: "1:2" },
+      { kind: "select", label: "Mode", options: ["a", "b"], selected: 1, handler: "1:3" },
+      { kind: "slider", label: "Level", value: 5, min: 0, max: 10, step: 1, handler: "1:4" },
+      { kind: "tabs", labels: ["One", "Two"], selected: 0, handler: "1:5" },
+    ],
+  };
+
+  it("draws every control disabled, with one hint for the visual, when nothing can act on it", () => {
+    const { container } = render(<VisualTree node={controls} />);
     expect(screen.getByText("Run")).toBeInTheDocument();
-    expect(container.querySelector("button, input, select, textarea")).toBeNull();
+    const live = [...container.querySelectorAll("button, input, select")];
+    expect(live).toHaveLength(7);
+    expect(live.every((control) => (control as HTMLButtonElement).disabled)).toBe(true);
+    expect(screen.getAllByText("Open on desktop to interact")).toHaveLength(1);
+    // A visual without controls has nothing to say.
+    render(<VisualTree node={{ kind: "text", text: "plain", size: "body", color: "ink" }} />);
+    expect(screen.getAllByText("Open on desktop to interact")).toHaveLength(1);
+  });
+
+  it("reports each control with the handler and the value it takes", async () => {
+    const user = userEvent.setup();
+    const onDispatch = vi.fn();
+    render(<VisualTree node={controls} onDispatch={onDispatch} />);
+    expect(screen.queryByText("Open on desktop to interact")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    expect(onDispatch).toHaveBeenLastCalledWith("1:0", null);
+    const toggle = screen.getByRole("switch", { name: "Auto" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    await user.click(toggle);
+    expect(onDispatch).toHaveBeenLastCalledWith("1:1", false);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Mode" }), "0");
+    expect(onDispatch).toHaveBeenLastCalledWith("1:3", 0);
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["true", "false"]);
+    await user.click(screen.getByRole("tab", { name: "Two" }));
+    expect(onDispatch).toHaveBeenLastCalledWith("1:5", 1);
+    // The tab that is already selected sends nothing.
+    onDispatch.mockClear();
+    await user.click(screen.getByRole("tab", { name: "One" }));
+    expect(onDispatch).not.toHaveBeenCalled();
+  });
+
+  it("sends an input on Enter or blur and not per keystroke, and never more than the desktop accepts", async () => {
+    const user = userEvent.setup();
+    const onDispatch = vi.fn();
+    const { rerender } = render(<VisualTree node={controls} onDispatch={onDispatch} />);
+    const input = screen.getByRole("textbox", { name: "Name" });
+    await user.type(input, "yz");
+    expect(onDispatch).not.toHaveBeenCalled();
+    await user.keyboard("{Enter}");
+    expect(onDispatch).toHaveBeenCalledTimes(1);
+    expect(onDispatch).toHaveBeenLastCalledWith("1:2", "xyz");
+    await user.type(input, "!");
+    await user.tab();
+    expect(onDispatch).toHaveBeenLastCalledWith("1:2", "xyz!");
+    // The desktop's next tree holds the text: a blur that changed nothing sends nothing.
+    const next = structuredClone(controls) as Extract<VisualNode, { children: VisualNode[] }>;
+    next.children[2] = { kind: "input", label: "Name", value: "xyz!", handler: "2:2" };
+    rerender(<VisualTree node={next} onDispatch={onDispatch} />);
+    onDispatch.mockClear();
+    await user.click(input);
+    await user.tab();
+    expect(onDispatch).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "é".repeat(2049) } });
+    expect(input).toHaveValue("xyz!");
+  });
+
+  it("sends a slider at once, throttled while it is dragged, and the last value when it is released", () => {
+    vi.useFakeTimers();
+    try {
+      const onDispatch = vi.fn();
+      render(<VisualTree node={controls} onDispatch={onDispatch} />);
+      const slider = screen.getByRole("slider", { name: "Level" });
+      fireEvent.change(slider, { target: { value: "6" } });
+      expect(onDispatch).toHaveBeenCalledTimes(1);
+      expect(onDispatch).toHaveBeenLastCalledWith("1:4", 6);
+      fireEvent.change(slider, { target: { value: "7" } });
+      fireEvent.change(slider, { target: { value: "8" } });
+      expect(onDispatch).toHaveBeenCalledTimes(1);
+      // Released before the throttle ended: the last value goes now.
+      fireEvent.pointerUp(slider);
+      expect(onDispatch).toHaveBeenCalledTimes(2);
+      expect(onDispatch).toHaveBeenLastCalledWith("1:4", 8);
+      expect(screen.getByText("8")).toBeInTheDocument();
+      // Nothing is left over to send later.
+      vi.advanceTimersByTime(1000);
+      expect(onDispatch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a reply overwrite what is being typed or dragged", async () => {
+    const user = userEvent.setup();
+    const onDispatch = vi.fn();
+    const withValues = (level: number, name: string, tag: string): VisualNode => {
+      const next = structuredClone(controls) as Extract<VisualNode, { children: VisualNode[] }>;
+      next.children[2] = { kind: "input", label: "Name", value: name, handler: `${tag}:2` };
+      next.children[4] = { kind: "slider", label: "Level", value: level, min: 0, max: 10, step: 1, handler: `${tag}:4` };
+      return next;
+    };
+    const { rerender } = render(<VisualTree node={controls} onDispatch={onDispatch} />);
+    const input = screen.getByRole("textbox", { name: "Name" });
+    await user.type(input, "yz");
+    // A reply of an earlier send arrives while the text is not sent: the text stays.
+    rerender(<VisualTree node={withValues(5, "x", "2")} onDispatch={onDispatch} />);
+    expect(input).toHaveValue("xyz");
+    await user.keyboard("{Enter}");
+    // After the send, the desktop's value takes over.
+    rerender(<VisualTree node={withValues(5, "xyz", "3")} onDispatch={onDispatch} />);
+    expect(input).toHaveValue("xyz");
+    rerender(<VisualTree node={withValues(5, "snapped", "4")} onDispatch={onDispatch} />);
+    expect(input).toHaveValue("snapped");
+
+    const slider = screen.getByRole("slider", { name: "Level" });
+    fireEvent.pointerDown(slider);
+    fireEvent.change(slider, { target: { value: "8" } });
+    rerender(<VisualTree node={withValues(3, "snapped", "5")} onDispatch={onDispatch} />);
+    expect(screen.getByText("8")).toBeInTheDocument();
+    fireEvent.pointerUp(slider);
+    rerender(<VisualTree node={withValues(3, "snapped", "6")} onDispatch={onDispatch} />);
+    expect(screen.getByText("3")).toBeInTheDocument();
+  });
+
+  it("moves between tabs with the arrow keys, Home and End, and only the selected tab is in the tab order", async () => {
+    const user = userEvent.setup();
+    const onDispatch = vi.fn();
+    const tabs: VisualNode = { kind: "tabs", labels: ["One", "Two", "Three"], selected: 1, handler: "1:0" };
+    render(<VisualTree node={tabs} onDispatch={onDispatch} />);
+    expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("tabindex"))).toEqual(["-1", "0", "-1"]);
+    screen.getByRole("tab", { name: "Two" }).focus();
+    await user.keyboard("{ArrowRight}");
+    expect(onDispatch).toHaveBeenLastCalledWith("1:0", 2);
+    expect(screen.getByRole("tab", { name: "Three" })).toHaveFocus();
+    await user.keyboard("{Home}");
+    expect(onDispatch).toHaveBeenLastCalledWith("1:0", 0);
+    await user.keyboard("{End}");
+    expect(onDispatch).toHaveBeenLastCalledWith("1:0", 2);
+    await user.keyboard("{ArrowLeft}");
+    expect(onDispatch).toHaveBeenLastCalledWith("1:0", 0);
+  });
+
+  it("keeps a disabled button off and shows a pending state and an error", () => {
+    const onDispatch = vi.fn();
+    render(<VisualTree node={{ kind: "button", label: "Off", handler: "1:0", disabled: true }} onDispatch={onDispatch} pending error="Too many taps" />);
+    expect(screen.getByRole("button", { name: "Off" })).toBeDisabled();
+    expect(screen.getByTestId("visual-tree")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("alert")).toHaveTextContent("Too many taps");
   });
 
   it("renders hostile text as text, and the sources contain no HTML sink", () => {

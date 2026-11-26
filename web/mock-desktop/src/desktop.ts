@@ -125,6 +125,7 @@ function requiredCapability(method: MethodName): string | undefined {
   if (method.startsWith("commands.")) return "slashCommands";
   if (method === "mono.emoji") return "monoEmoji";
   if (method === "mono.reset") return "monoReset";
+  if (method === "visual.dispatch") return "visualControls";
   return undefined;
 }
 

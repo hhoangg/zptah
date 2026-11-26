@@ -811,7 +811,8 @@
       "terminal",
       "slashCommands",
       "monoEmoji",
-      "monoReset"
+      "monoReset",
+      "visualControls"
     ],
     "messages": [
       {
@@ -837,7 +838,8 @@
           "terminal",
           "slashCommands",
           "monoEmoji",
-          "monoReset"
+          "monoReset",
+          "visualControls"
         ],
         "desktop": {
           "name": "Example Desktop",

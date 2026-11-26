@@ -37,6 +37,7 @@ export const SAMPLE_PARAMS: Record<MethodName, Record<string, unknown>> = {
   "project.fileHighlight": { job: "job-1" },
   "project.git": { projectId: "proj-alpha" },
   "project.gitAction": { projectId: "proj-alpha", action: "stage", paths: ["src/example.txt"] },
+  "visual.dispatch": { conversationId: "sess-visual-controls", itemId: "sess-visual-controls-v1", documentId: "interactive-deploys", handler: "1:0", value: 1 },
   "mono.document": { documentId: "doc-1" },
   "mono.profile": { monoId: "mono-example" },
   "mono.file": { monoId: "mono-example", file: "soul" },
