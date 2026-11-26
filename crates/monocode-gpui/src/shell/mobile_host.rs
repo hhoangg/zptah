@@ -3227,20 +3227,21 @@ impl Shell {
                         },
                     }
                 }),
-            None => self
-                .mobile_project_path(
-                    &string(&params, "projectId").unwrap_or_default(),
-                    &request.device,
-                    cx,
-                )
-                .map(|cwd| {
-                    let (kind, model, access) = self.mobile_defaults(&cwd, cx);
-                    let mut settings = HashMap::new();
-                    if let Some(effort) = crate::conversation::preferred_effort(kind.id(), cx) {
-                        settings.insert("effort".into(), effort);
-                    }
-                    (cwd, kind, model, settings, access, None)
-                }),
+            // The protocol makes both scopes optional: the web's transcript model names, the
+            // default-model settings and the Mono editor ask without one. Unscoped, the catalog
+            // is the desktop-wide one (no project's own preferences), not a refusal.
+            None => match string(&params, "projectId").filter(|id| !id.is_empty()) {
+                Some(id) => self.mobile_project_path(&id, &request.device, cx),
+                None => Ok(String::new()),
+            }
+            .map(|cwd| {
+                let (kind, model, access) = self.mobile_defaults(&cwd, cx);
+                let mut settings = HashMap::new();
+                if let Some(effort) = crate::conversation::preferred_effort(kind.id(), cx) {
+                    settings.insert("effort".into(), effort);
+                }
+                (cwd, kind, model, settings, access, None)
+            }),
         };
         let (cwd, kind, model, settings, access, account) = match current {
             Ok(current) => current,
@@ -4524,6 +4525,40 @@ mod tests {
             Request::with_receiver(&format!("c-{method}"), method, params, device.clone());
         shell.handle_mobile_request(request, window, cx);
         answer.try_recv().ok()
+    }
+
+    /// The web asks `models.list` with no scope (transcript model names, default-model settings,
+    /// the Mono editor), which the protocol allows. It used to fail with "Project is no longer
+    /// available" on every call.
+    #[gpui::test]
+    fn an_unscoped_model_list_answers_with_the_desktop_wide_catalog(cx: &mut gpui::TestAppContext) {
+        let (window, _, _) = super::super::tests::window(cx);
+        let mut answers = Vec::new();
+        window
+            .update(cx, |shell, window, cx| {
+                for (device, params) in [
+                    (web(None, None), json!({})),
+                    (web(None, None), json!({"projectId": ""})),
+                    (web(Some(vec!["other".into()]), None), json!({})),
+                ] {
+                    let (request, answer) =
+                        Request::with_receiver("c-models", "models.list", params, device);
+                    shell.handle_mobile_request(request, window, cx);
+                    answers.push(answer);
+                }
+            })
+            .unwrap();
+        cx.run_until_parked();
+        for mut answer in answers {
+            let catalog = answer
+                .try_recv()
+                .expect("answered")
+                .expect("an unscoped models.list succeeds");
+            assert!(catalog["models"].is_array(), "{catalog}");
+            assert!(catalog["harnesses"].is_array(), "{catalog}");
+            assert!(catalog["current"]["harness"].is_string(), "{catalog}");
+            assert!(catalog.get("providerAccountId").is_none());
+        }
     }
 
     #[gpui::test]
