@@ -532,10 +532,7 @@ mod tests {
         let env = account_env(&Profile::new("work", root.path())).unwrap();
         let dir = root.path().join("provider-accounts/claude/work");
         for key in ["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"] {
-            assert!(env
-                .set
-                .iter()
-                .any(|(k, v)| k == key && v == dir.as_os_str()));
+            assert!(env.set.iter().any(|(k, v)| k == key && Path::new(v) == dir));
         }
         assert!(env.remove.contains(&"ANTHROPIC_API_KEY".to_owned()));
         assert!(env.remove.contains(&"CLAUDE_CODE_OAUTH_TOKEN".to_owned()));
