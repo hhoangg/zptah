@@ -11,6 +11,7 @@ use super::act_tests::{
 use super::fake_page::El;
 use super::review2_tests::page_with_links;
 use super::review_tests::{categories, gate_for, gate_tool, SESSIONS};
+use super::tests::set_mtime;
 use super::tests::{launch_context, no_limits, rig, PROFILE};
 use super::upstream::*;
 use crate::mono::browser::gate::{Policy, Upstream};
@@ -487,24 +488,6 @@ fn the_staging_folder_is_outside_every_folder_a_mono_can_write_to() {
         #[cfg(not(target_os = "macos"))]
         None => {}
     }
-}
-
-/// Sets the modification time of a file or a folder. A folder is opened for its attributes only
-/// on Windows (`File::open` of a folder is refused there).
-pub(super) fn set_mtime(path: &std::path::Path, at: std::time::SystemTime) {
-    #[cfg(windows)]
-    let file = {
-        use std::os::windows::fs::OpenOptionsExt;
-        // FILE_WRITE_ATTRIBUTES, and FILE_FLAG_BACKUP_SEMANTICS to open a folder.
-        std::fs::OpenOptions::new()
-            .access_mode(0x100)
-            .custom_flags(0x0200_0000)
-            .open(path)
-            .unwrap()
-    };
-    #[cfg(not(windows))]
-    let file = std::fs::File::open(path).unwrap();
-    file.set_modified(at).unwrap();
 }
 
 #[test]

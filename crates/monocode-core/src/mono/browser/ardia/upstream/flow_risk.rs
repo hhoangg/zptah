@@ -193,7 +193,10 @@ impl ArdiaUpstream {
             refusal: None,
             flow: flow.clone(),
         };
+        // The grant book is read once for the whole check, not once per step and address.
+        self.with_trust(id, |state, _| state.hold_grants());
         self.classify_flow_into(id, &flow, params, &mut c);
+        self.with_trust(id, |state, _| state.release_grants());
         c.categories = c
             .risks
             .iter()

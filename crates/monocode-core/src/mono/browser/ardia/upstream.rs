@@ -434,7 +434,7 @@ impl ArdiaUpstream {
     pub fn controller(&self) -> &Arc<Controller> {
         &self.controller
     }
-    fn config(&self) -> Config {
+    pub(super) fn config(&self) -> Config {
         self.config
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -979,8 +979,8 @@ impl ArdiaUpstream {
     }
 
     fn history(&self, id: i64, command: &str) -> Result<String, String> {
-        if command == "reload" {
-            self.ask_before_reload(id)?;
+        if matches!(command, "reload" | "back") {
+            self.ask_before_reload(id, command)?;
         }
         let (data, tab) = self.in_tab(id, &[command], &[])?;
         // The page is another document now: nothing is waiting to be sent again from it.

@@ -259,6 +259,58 @@ pub struct Step {
     pub action_value: Option<String>,
     /// A word of the command (or the recorded value) is a file path.
     pub names_path: bool,
+    /// Every way the step can find its target: the recorded candidates and fingerprint, and the
+    /// `find` of its own command.
+    pub selectors: Vec<Selector>,
+}
+
+/// One way to find an element: `find <by> <value> ... [--name <name>]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Selector {
+    pub by: String,
+    pub value: String,
+    pub name: Option<String>,
+}
+
+/// The selector a `find <by> <value> <verb> ... [--name <name>]` argv names.
+fn selector_of(argv: &[&str]) -> Option<Selector> {
+    if argv.first() != Some(&"find") {
+        return None;
+    }
+    let name = argv
+        .iter()
+        .position(|w| *w == "--name")
+        .and_then(|at| argv.get(at + 1))
+        .map(|n| (*n).to_owned());
+    Some(Selector {
+        by: (*argv.get(1)?).to_owned(),
+        value: (*argv.get(2)?).to_owned(),
+        name,
+    })
+}
+
+/// Whether what a run did at a step (`attempts[].argv` of tier `selector`) is a `find` of the
+/// target the approved step names: the same way of finding it (role, name or text) as one of the
+/// approved candidates, fingerprint or command, with the same verb as the approved command.
+pub fn selector_matches(argv: &[&str], step: &Step, params: &BTreeMap<String, String>) -> bool {
+    let Some(ran) = selector_of(argv) else {
+        return false;
+    };
+    let approved_verb = step
+        .command
+        .first()
+        .filter(|w| w.as_str() == "find")
+        .and_then(|_| step.command.get(3));
+    if let Some(verb) = approved_verb {
+        if argv.get(3).copied() != Some(substitute(verb, params).as_str()) {
+            return false;
+        }
+    }
+    step.selectors.iter().any(|sel| {
+        sel.by == ran.by
+            && substitute(&sel.value, params) == ran.value
+            && sel.name.as_deref().map(|n| substitute(n, params)) == ran.name
+    })
 }
 
 /// How a declared parameter gets its value when a flow is recorded.
@@ -505,6 +557,25 @@ fn parse_step(v: &Value) -> Result<Step, String> {
         .flatten()
         .map(|r| r["method"].as_str().unwrap_or("?").to_uppercase())
         .collect();
+    let mut selectors: Vec<Selector> = Vec::new();
+    for cand in action["candidates"].as_array().into_iter().flatten() {
+        if let (Some(by), Some(value)) = (cand["by"].as_str(), cand["value"].as_str()) {
+            selectors.push(Selector {
+                by: by.to_owned(),
+                value: value.to_owned(),
+                name: cand["name"].as_str().map(str::to_owned),
+            });
+        }
+    }
+    if let Some(role) = action["fingerprint"]["role"].as_str() {
+        selectors.push(Selector {
+            by: "role".into(),
+            value: role.to_owned(),
+            name: action["fingerprint"]["name"].as_str().map(str::to_owned),
+        });
+    }
+    let words: Vec<&str> = command.iter().map(String::as_str).collect();
+    selectors.extend(selector_of(&words));
     let names_path = command_names_path(&command)
         || (!matches!(kind, StepKind::Open(_))
             && action_value.as_deref().is_some_and(looks_like_path));
@@ -522,6 +593,7 @@ fn parse_step(v: &Value) -> Result<Step, String> {
         methods,
         action_value,
         names_path,
+        selectors,
     })
 }
 
@@ -814,22 +886,77 @@ pub fn mask_value(value: &str) -> String {
     }
 }
 
-/// A command with the typed or chosen value masked ([`mask_value`]).
+/// Where the key of a `press` is: `press KEY`, or `find <by> <value> press KEY`.
+fn key_index(command: &[String]) -> usize {
+    if command.first().map(|c| c.as_str()) == Some("find") {
+        4
+    } else {
+        1
+    }
+}
+
+/// Whether a `press` types one character (a letter, a digit, a sign) rather than a named key
+/// (`Enter`, `Tab`): such presses can spell out a password one key at a time.
+fn is_typed_key(key: &str) -> bool {
+    key.chars().count() == 1
+}
+
+/// Where the words a step types begin when it is a kind zptah does not know, and so can not tell
+/// from a value: after the verb (`keyboard type <text>`: after `type`, so the verb stays).
+fn unknown_value_from(command: &[String]) -> usize {
+    match command.first().map(|c| c.to_lowercase()).as_deref() {
+        Some("find") => 4,
+        Some("keyboard") => 2,
+        _ => 1,
+    }
+}
+
+/// A command with the typed or chosen value masked ([`mask_value`]): the value of a `fill`,
+/// `type` or `select`, the text of `keyboard type`, a one-character `press`, and everything after
+/// the verb of a command zptah does not know.
 pub fn masked_command(command: &[String]) -> Vec<String> {
     let mut out = command.to_vec();
-    if matches!(
-        kind_of(command, ""),
-        StepKind::Fill | StepKind::Type | StepKind::Select
-    ) {
-        if let Some(word) = out.get_mut(value_index(command)) {
-            *word = mask_value(word);
+    match kind_of(command, "") {
+        StepKind::Fill | StepKind::Type | StepKind::Select => {
+            if let Some(word) = out.get_mut(value_index(command)) {
+                *word = mask_value(word);
+            }
         }
+        StepKind::Press(key) if is_typed_key(&key) => {
+            if let Some(word) = out.get_mut(key_index(command)) {
+                *word = mask_value(word);
+            }
+        }
+        StepKind::Unknown(_) => {
+            for word in out.iter_mut().skip(unknown_value_from(command)) {
+                *word = mask_value(word);
+            }
+        }
+        _ => {}
     }
     out
 }
 
-/// A recorded intent with the literal typed or chosen value (when the step has one) masked.
+/// A recorded intent with the literal typed or chosen value (when the step has one) masked. The
+/// intent of a step that types in a way zptah can not tell from a value (an unknown command, a
+/// one-character `press`) is not shown: it names the characters.
 pub fn masked_text(text: &str, step: &Step) -> String {
+    match &step.kind {
+        StepKind::Press(key) if is_typed_key(key) => return "press a key".to_owned(),
+        StepKind::Unknown(_) => {
+            let mut out = text.to_owned();
+            let typed = step
+                .command
+                .iter()
+                .skip(unknown_value_from(&step.command))
+                .chain(step.value.as_ref());
+            for word in typed.filter(|w| !w.is_empty() && mask_value(w) != **w) {
+                out = out.replace(word.as_str(), &mask_value(word));
+            }
+            return out;
+        }
+        _ => {}
+    }
     match step.value.as_deref().filter(|v| {
         !v.is_empty()
             && !is_placeholder(v)

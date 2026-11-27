@@ -715,17 +715,35 @@ impl Rig {
     }
 }
 
+/// The cards `quiet_act` answered, per queue (the key is the queue's address; a queue starts
+/// with an empty record).
+static QUIET_CARDS: std::sync::LazyLock<
+    Mutex<HashMap<usize, Vec<crate::mono::browser::trust::approval::PendingApproval>>>,
+> = std::sync::LazyLock::new(Default::default);
+
 /// The act settings of a Mono that only reads: a card queue that answers Allow once at once, so
 /// a read tool that asks (an address outside the task) goes through. Without act settings a
-/// browser has nothing to judge with and refuses to open or read a page.
+/// browser has nothing to judge with and refuses to open or read a page. The cards it answered
+/// are recorded: a test whose addresses are part of the task checks that [`assert_no_cards`].
 pub(super) fn quiet_act(mono: &str) -> crate::mono::browser::gate::ActConfig {
     use crate::mono::browser::trust::approval::{ApprovalQueue, UserAnswer};
     let queue = ApprovalQueue::new(mono);
+    let key = Arc::as_ptr(&queue) as usize;
+    QUIET_CARDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, Vec::new());
     let weak = Arc::downgrade(&queue);
     // The subscription lives as long as the process: the queue is the test's own.
     let sub = queue.subscribe(move || {
         let Some(queue) = weak.upgrade() else { return };
         for card in queue.pending() {
+            QUIET_CARDS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(key)
+                .or_default()
+                .push(card.clone());
             queue.answer(&card.id, UserAnswer::AllowOnce);
         }
     });
@@ -739,6 +757,36 @@ pub(super) fn quiet_act(mono: &str) -> crate::mono::browser::gate::ActConfig {
         approval_timeout: Duration::from_secs(10),
         queue,
     }
+}
+
+/// The cards the `quiet_act` queue of this upstream answered so far.
+pub(super) fn answered_cards(
+    up: &ArdiaUpstream,
+) -> Vec<crate::mono::browser::trust::approval::PendingApproval> {
+    let Some(act) = up.config().act else {
+        return Vec::new();
+    };
+    QUIET_CARDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&(Arc::as_ptr(&act.queue) as usize))
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// No card was asked: a read tool on an address that is part of the task asks nothing, and
+/// `quiet_act` would answer a card silently, hiding a regression where every navigation asks.
+pub(super) fn assert_no_cards(up: &ArdiaUpstream) {
+    let cards = answered_cards(up);
+    assert!(
+        cards.is_empty(),
+        "no card was expected, but {} were answered: {:?}",
+        cards.len(),
+        cards
+            .iter()
+            .map(|c| c.facts.url.clone())
+            .collect::<Vec<_>>()
+    );
 }
 
 pub(super) fn upstream(
@@ -1077,6 +1125,8 @@ fn the_quit_button_quits_a_zptah_ardia_and_the_next_check_closes_its_tabs() {
 fn open_makes_a_tab_in_the_profile_holds_it_and_binds_it() {
     let r = rig(true);
     let up = upstream(&r, no_limits(), None);
+    // The address is part of the task: it asks nothing.
+    up.note_user_domain(0, "https://example.com");
     let (error, text) = call(&up, "browser_open", json!({"url": "https://example.com"}));
     assert!(!error, "{text}");
     assert!(text.contains("- Page URL: https://example.com"), "{text}");
@@ -1105,12 +1155,15 @@ fn open_makes_a_tab_in_the_profile_holds_it_and_binds_it() {
             .count("browse --session zptah-mono-1-0 --json open"),
         0
     );
+    assert_no_cards(&up);
 }
 
 #[test]
 fn navigate_without_a_tab_opens_one_in_the_profile_instead_of_sending_open() {
     let r = rig(true);
     let up = upstream(&r, no_limits(), None);
+    // The address is part of the task: it asks nothing.
+    up.note_user_domain(0, "https://example.com");
     let (error, _) = call(
         &up,
         "browser_navigate",
@@ -1131,6 +1184,7 @@ fn navigate_without_a_tab_opens_one_in_the_profile_instead_of_sending_open() {
     assert!(!error && text.contains("example.com/b"), "{text}");
     assert_eq!(r.runner.count("tabs open"), 1);
     assert_eq!(r.runner.count("open -- https://example.com/b"), 1);
+    assert_no_cards(&up);
 }
 
 #[test]
@@ -1437,18 +1491,22 @@ fn screenshots_go_into_the_output_folder() {
         act: Some(quiet_act("mono-1")),
         ..Config::default()
     });
+    up.note_user_domain(0, "https://example.com");
     call(&up, "browser_open", json!({"url": "https://example.com"}));
     let (error, text) = call(&up, "browser_screenshot", json!({}));
     assert!(!error, "{text}");
     let shown = dir.path().to_string_lossy().into_owned();
     assert!(text.contains(&shown), "{text}");
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    assert_no_cards(&up);
 }
 
 #[test]
 fn scroll_back_console_and_errors_answer_with_the_page_header() {
     let r = rig(true);
     let up = upstream(&r, no_limits(), None);
+    // The address is part of the task: it asks nothing.
+    up.note_user_domain(0, "https://example.com");
     call(&up, "browser_open", json!({"url": "https://example.com"}));
     for (tool, args, expect) in [
         (
@@ -1471,6 +1529,7 @@ fn scroll_back_console_and_errors_answer_with_the_page_header() {
         .calls()
         .iter()
         .any(|c| c.ends_with("scroll -- down 300")));
+    assert_no_cards(&up);
 }
 
 #[test]
@@ -1610,7 +1669,7 @@ fn a_launch_runs_the_static_checks_only_and_wires_both_harnesses() {
     // gate-only tools (approval request, declared intent).
     assert_eq!(
         listed["result"]["tools"].as_array().unwrap().len(),
-        TOOLS.len() + ACT_TOOLS.len() + 2
+        TOOLS.len() + ACT_TOOLS.len() + 2 - usize::from(!crate::mono::browser::uploads_available())
     );
     assert!(!runtime.claude_disallowed().contains("browser_click"));
 }
@@ -2007,6 +2066,46 @@ pub(super) fn gate_call(gate: &Gate, route: &str, tool: &str, args: Value) -> Va
     )
     .unwrap()["result"]
         .clone()
+}
+
+/// Sets the modification time of a file or a folder. A folder is opened for its attributes only
+/// on Windows (`File::open` of a folder is refused there).
+pub(super) fn set_mtime(path: &std::path::Path, at: std::time::SystemTime) {
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_WRITE_ATTRIBUTES, and FILE_FLAG_BACKUP_SEMANTICS to open a folder.
+        std::fs::OpenOptions::new()
+            .access_mode(0x100)
+            .custom_flags(0x0200_0000)
+            .open(path)
+            .unwrap()
+    };
+    #[cfg(not(windows))]
+    let file = std::fs::File::open(path).unwrap();
+    file.set_modified(at).unwrap();
+}
+
+/// Waits (up to 15 seconds, the file system of a CI machine can be slow) until the fake `ardia`
+/// is hanging on a command, or until the call that should have reached it has returned: then the
+/// reply of the call and every command the fake received are in the message.
+pub(super) fn reach_hang(r: &Rig, done: &Arc<Mutex<Option<(bool, String)>>>) -> Result<(), String> {
+    for _ in 0..1500 {
+        if r.runner.lock().hanging == 1 {
+            return Ok(());
+        }
+        if let Some(reply) = done.lock().unwrap().clone() {
+            return Err(format!(
+                "the call returned before it reached the fake: {reply:?}; commands: {:?}",
+                r.runner.calls()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Err(format!(
+        "the call never reached the fake; commands: {:?}",
+        r.runner.calls()
+    ))
 }
 
 pub(super) fn wait_until(mut done: impl FnMut() -> bool) -> bool {

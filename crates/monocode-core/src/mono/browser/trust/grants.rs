@@ -42,6 +42,9 @@ pub struct GrantBook {
     conversation: i64,
     store: Option<MonoBrowserStore>,
     memory: BTreeMap<String, BTreeSet<Category>>,
+    /// How many times the book was read (a test counts them).
+    #[cfg(test)]
+    reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl GrantBook {
@@ -51,6 +54,8 @@ impl GrantBook {
             conversation,
             store: None,
             memory: BTreeMap::new(),
+            #[cfg(test)]
+            reads: Default::default(),
         }
     }
 
@@ -91,8 +96,35 @@ impl GrantBook {
         granted
     }
 
+    /// How many times the book was read (tests).
+    #[cfg(test)]
+    pub fn reads(&self) -> usize {
+        self.reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Every live grant of this conversation, by site: the whole book in one read.
+    pub fn snapshot(&self) -> BTreeMap<String, BTreeSet<Category>> {
+        #[cfg(test)]
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut by_site: BTreeMap<String, BTreeSet<Category>> = BTreeMap::new();
+        let listed = match &self.store {
+            Some(store) => store.list_grants(&self.mono_id, Some(self.conversation)),
+            None => self
+                .memory
+                .iter()
+                .flat_map(|(site, cats)| cats.iter().map(|c| (site.clone(), *c)))
+                .collect(),
+        };
+        for (site, category) in listed.into_iter().filter(|(_, c)| !never_granted(*c)) {
+            by_site.entry(site).or_default().insert(category);
+        }
+        by_site
+    }
+
     /// The categories a live grant covers on `site`.
     pub fn covered(&self, site: &str) -> BTreeSet<Category> {
+        #[cfg(test)]
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         match &self.store {
             Some(store) => store.grants_for(&self.mono_id, self.conversation, site),
             None => self.memory.get(site).cloned().unwrap_or_default(),

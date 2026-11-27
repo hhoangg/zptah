@@ -573,6 +573,11 @@ Flows (section 7):
   4 s `wait` never ran).
 - `flow list --json`: `data.flows[] {site, name, description, params, verified, kind, writes}`.
   Typed passwords are kept as params with no value (`<redacted>` in `flow steps`).
+- Measured 2026-11-28: `flow steps --all` recorded only `open` and `scroll` from a session that
+  also ran `tab list`, `form`, `cdp --target browser -- Target.getTargets`, `get url`, `get title`,
+  `get text`, `read`, `console` and `errors`. With the earlier measurement (`snapshot`, `eval`,
+  `get attr` and `get count` not recorded), the gate's own probes never end up in a saved flow. The
+  gate's own `open` for a target=_blank link is recorded like any `open`.
 
 Ardia closed, launch and quit (section 2a):
 

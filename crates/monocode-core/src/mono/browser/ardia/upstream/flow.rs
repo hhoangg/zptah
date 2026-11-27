@@ -44,6 +44,8 @@ const FLOW_TIMEOUT: Duration = Duration::from_secs(300);
 /// How often a changed flow is checked and asked again before the call fails.
 const MAX_ROUNDS: usize = 3;
 const MAX_LISTED: usize = 100;
+/// The most `flow show` calls one `flow_list` (or one lookup of a site) makes.
+const MAX_SHOWS: usize = 20;
 const MAX_DESCRIPTION: usize = 200;
 
 /// What a `flow_run` call asked for.
@@ -55,6 +57,24 @@ struct RunRequest {
     opts: RunOptions,
     purpose: Option<String>,
     declared: Vec<Category>,
+}
+
+/// The flows `flow show` read during one call: a flow is read once, whoever asks for it.
+#[derive(Default)]
+struct ShowCache {
+    /// `None`: the show failed (or was not a flow zptah can read).
+    flows: HashMap<(String, String), Option<Flow>>,
+    /// How many `flow show` processes ran.
+    shows: usize,
+}
+
+/// What looking at one flow found.
+enum Looked {
+    Flow(Box<Flow>),
+    /// The show failed or the reply was not a flow zptah reads.
+    Failed,
+    /// The cap of shows was reached before this flow: it was not looked at.
+    Unchecked,
 }
 
 /// How the run was allowed.
@@ -145,8 +165,15 @@ impl ArdiaUpstream {
     }
 
     /// Whether a flow is one this Mono may not know about: its origin, start address or one of its
-    /// hosts is blocked (or is not a web page). It is hidden from `flow_list` and `flow_show`.
+    /// hosts is blocked, is not a web page, or is outside the Mono's allowed list. It is hidden
+    /// from `flow_list` and `flow_show`.
     fn hidden(&self, flow: &Flow) -> bool {
+        self.hidden_by(flow, true)
+    }
+
+    /// [`Self::hidden`]; with `not_allowed` false a flow that only reaches outside the allowed
+    /// list is not hidden (a run of it is risky, not forbidden: spec section 7).
+    fn hidden_by(&self, flow: &Flow, not_allowed: bool) -> bool {
         let origins = self.config().origins;
         let mut places: Vec<&str> = vec![flow.start_url.as_str()];
         places.push(flow.raw["origin"].as_str().unwrap_or(""));
@@ -157,18 +184,79 @@ impl ArdiaUpstream {
                 .flatten()
                 .filter_map(Value::as_str),
         );
-        places.iter().filter(|u| !u.trim().is_empty()).any(|u| {
-            matches!(
-                origins.check(u),
-                Err(ReadRefusal::Blocked | ReadRefusal::Restricted)
-            )
-        })
+        places
+            .iter()
+            .filter(|u| !u.trim().is_empty())
+            .any(|u| match origins.check(u) {
+                Err(ReadRefusal::Blocked | ReadRefusal::Restricted) => true,
+                Err(ReadRefusal::NotAllowed) => not_allowed,
+                Ok(()) => false,
+            })
+    }
+
+    /// Whether the site a flow is saved for (`example.com`, `localhost:8765`) can be one this Mono
+    /// may use: the origin rules, asked for both schemes (a flow list names no scheme).
+    fn site_usable(&self, site: &str, not_allowed: bool) -> bool {
+        let origins = self.config().origins;
+        ["https", "http"].iter().any(
+            |scheme| match origins.check(&format!("{scheme}://{site}/")) {
+                Ok(()) => true,
+                Err(ReadRefusal::NotAllowed) => !not_allowed,
+                Err(_) => false,
+            },
+        )
+    }
+
+    /// `flow show` of one flow, read once per call (the cache). `Err` only when Ardia can not be
+    /// reached or the turn was stopped.
+    fn look(
+        &self,
+        id: i64,
+        cache: &mut ShowCache,
+        name: &str,
+        site: &str,
+    ) -> Result<Looked, String> {
+        let key = (name.to_owned(), site.to_owned());
+        if let Some(known) = cache.flows.get(&key) {
+            return Ok(known
+                .clone()
+                .map_or(Looked::Failed, |f| Looked::Flow(Box::new(f))));
+        }
+        if cache.shows >= MAX_SHOWS {
+            return Ok(Looked::Unchecked);
+        }
+        cache.shows += 1;
+        let parsed = match self.flow_browse(
+            id,
+            &["flow", "show", "--site", site],
+            &[name],
+            BROWSE_TIMEOUT,
+        ) {
+            Ok(shown) => model::parse_flow(&shown, name, site).ok(),
+            Err(
+                failure @ (Failure::Unreachable(_)
+                | Failure::Cancelled
+                | Failure::ControlOff
+                | Failure::NotInstalled),
+            ) => return Err(self.fail(id, failure)),
+            Err(_) => None,
+        };
+        cache.flows.insert(key, parsed.clone());
+        Ok(parsed.map_or(Looked::Failed, |f| Looked::Flow(Box::new(f))))
     }
 
     /// The site of the flow the Mono means: the one it named, else the only site that has a flow
-    /// of that name (not counting the flows hidden from this Mono). Asks for `site` when there
-    /// are several.
-    fn resolve_site(&self, id: i64, name: &str, requested: &Value) -> Result<String, String> {
+    /// of that name. A site whose flow can not be read, or is hidden from this Mono (or was not
+    /// looked at, past the cap of shows), does not count, and is not named. Asks for `site` when
+    /// there are several.
+    fn resolve_site(
+        &self,
+        id: i64,
+        cache: &mut ShowCache,
+        name: &str,
+        requested: &Value,
+        for_run: bool,
+    ) -> Result<String, String> {
         if let Some(site) = requested.as_str().map(str::trim).filter(|s| !s.is_empty()) {
             return model::site_name(site);
         }
@@ -187,15 +275,18 @@ impl ArdiaUpstream {
                 sites.push(site);
             }
         }
-        // A flow this Mono may not know about does not count (its site is not named either).
-        if sites.len() > 1 {
-            sites.retain(|site| {
-                self.show_flow(id, name, site)
-                    .map(|f| !self.hidden(&f))
-                    .unwrap_or(true)
-            });
+        let mut usable: Vec<String> = Vec::new();
+        for site in sites {
+            if !self.site_usable(&site, !for_run) {
+                continue;
+            }
+            if let Looked::Flow(f) = self.look(id, cache, name, &site)? {
+                if !self.hidden_by(&f, !for_run) {
+                    usable.push(site);
+                }
+            }
         }
-        match sites.as_slice() {
+        match usable.as_slice() {
             [] => Err(format!(
                 "No saved flow named {name} (`flow_list` shows the saved flows)."
             )),
@@ -241,6 +332,8 @@ impl ArdiaUpstream {
             .ok_or_else(|| unreadable("list of flows", "no `flows` list"))?;
         let mut out = String::from("### Flows\n");
         let mut listed = 0;
+        let mut cache = ShowCache::default();
+        let mut unchecked = 0;
         for flow in flows.iter().take(MAX_LISTED) {
             let name = flow["name"].as_str().unwrap_or("");
             let Some(site) = flow["site"].as_str().and_then(|s| model::site_name(s).ok()) else {
@@ -249,20 +342,19 @@ impl ArdiaUpstream {
             if name.is_empty() {
                 continue;
             }
-            // A flow of a place this Mono may not use is not shown to it: the list has no
-            // addresses, so each flow is read.
-            match self.flow_browse(
-                id,
-                &["flow", "show", "--site", site.as_str()],
-                &[name],
-                BROWSE_TIMEOUT,
-            ) {
-                Ok(shown) => match model::parse_flow(&shown, name, &site) {
-                    Ok(parsed) if !self.hidden(&parsed) => {}
-                    _ => continue,
-                },
-                Err(failure @ Failure::Unreachable(_)) => return Err(self.fail(id, failure)),
-                Err(_) => continue,
+            // A flow of a place this Mono may not use is not shown to it. The site is checked
+            // first (no process); the list has no addresses, so the flows that pass are read,
+            // each once and at most MAX_SHOWS of them.
+            if !self.site_usable(&site, true) {
+                continue;
+            }
+            match self.look(id, &mut cache, name, &site)? {
+                Looked::Flow(parsed) if !self.hidden(&parsed) => {}
+                Looked::Unchecked => {
+                    unchecked += 1;
+                    continue;
+                }
+                _ => continue,
             }
             let kind = match &flow["kind"] {
                 Value::Null => Kind::Data,
@@ -294,6 +386,11 @@ impl ArdiaUpstream {
         if listed == 0 {
             out.push_str("No flows are saved.\n");
         }
+        if unchecked > 0 {
+            out.push_str(&format!(
+                "{unchecked} more flow(s) were not checked (at most {MAX_SHOWS} are read per call) and are not shown.\n"
+            ));
+        }
         if flows.len() > MAX_LISTED {
             out.push_str(&format!("... and {} more.\n", flows.len() - MAX_LISTED));
         }
@@ -303,8 +400,13 @@ impl ArdiaUpstream {
 
     pub(super) fn flow_show(&self, id: i64, args: &Value) -> Result<String, String> {
         let name = model::flow_name(args["name"].as_str().unwrap_or("").trim())?;
-        let site = self.resolve_site(id, &name, &args["site"])?;
-        let flow = self.show_flow(id, &name, &site)?;
+        let mut cache = ShowCache::default();
+        let site = self.resolve_site(id, &mut cache, &name, &args["site"], false)?;
+        // A flow resolve_site already read is not read again.
+        let flow = match cache.flows.get(&(name.clone(), site.clone())) {
+            Some(Some(flow)) => flow.clone(),
+            _ => self.show_flow(id, &name, &site)?,
+        };
         if self.hidden(&flow) {
             return Err(format!(
                 "No saved flow named {name} (`flow_list` shows the saved flows)."
@@ -451,21 +553,28 @@ impl ArdiaUpstream {
     }
 
     /// `flow show` and the check of it. An unreadable reply fails the call (nothing runs).
-    fn check_flow(&self, id: i64, req: &RunRequest) -> Result<Classified, String> {
-        let flow = self
-            .show_flow(id, &req.name, &req.site)
-            .inspect_err(|text| {
-                self.flow_row(
-                    id,
-                    "flow_run",
-                    None,
-                    "",
-                    &format!("flow {}: its description could not be read", req.name),
-                    AuditDecision::Blocked,
-                    text,
-                    None,
-                );
-            })?;
+    fn check_flow(
+        &self,
+        id: i64,
+        req: &RunRequest,
+        known: Option<Flow>,
+    ) -> Result<Classified, String> {
+        let flow = match known {
+            Some(flow) => Ok(flow),
+            None => self.show_flow(id, &req.name, &req.site),
+        }
+        .inspect_err(|text| {
+            self.flow_row(
+                id,
+                "flow_run",
+                None,
+                "",
+                &format!("flow {}: its description could not be read", req.name),
+                AuditDecision::Blocked,
+                text,
+                None,
+            );
+        })?;
         let mut cls = self.classify_flow(id, flow, &req.params);
         // What the Mono declared can only add questions.
         if !req.declared.is_empty() {
@@ -499,8 +608,29 @@ impl ArdiaUpstream {
             );
             return Err("flow_run does not run in the user's own tab. Let go of it (browser_tabs close) and open a tab of your own with browser_open, then run the flow there.".into());
         }
-        req.site = self.resolve_site(id, &req.name, &args["site"])?;
-        let mut cls = self.check_flow(id, &req)?;
+        let mut cache = ShowCache::default();
+        req.site = match self.resolve_site(id, &mut cache, &req.name, &args["site"], true) {
+            Ok(site) => site,
+            Err(text) => {
+                self.flow_row(
+                    id,
+                    "flow_run",
+                    None,
+                    "",
+                    &format!("flow {}: no flow of that name is available", req.name),
+                    AuditDecision::Blocked,
+                    "no saved flow of that name this Mono may use",
+                    None,
+                );
+                return Err(text);
+            }
+        };
+        // What resolving the site just read is the first check (no second read of it).
+        let first = cache
+            .flows
+            .remove(&(req.name.clone(), req.site.clone()))
+            .flatten();
+        let mut cls = self.check_flow(id, &req, first)?;
         if !cls.flow.is_data() && !req.opts.is_empty() {
             return Err("`limit`, `fields` and `where` shape the data of a flow that only reads. This flow changes pages.".into());
         }
@@ -520,6 +650,14 @@ impl ArdiaUpstream {
                 if refusal.secret {
                     self.post_password_notice(&cls.flow.start_url);
                 }
+                // A flow hidden from this Mono is not described to it: the refusal would name
+                // the address that is blocked.
+                if self.hidden_by(&cls.flow, false) {
+                    return Err(format!(
+                        "No saved flow named {} (`flow_list` shows the saved flows).",
+                        req.name
+                    ));
+                }
                 return Err(refusal.text);
             }
             let approval = self.approve_flow(id, &act, &req, &cls)?;
@@ -530,7 +668,7 @@ impl ArdiaUpstream {
             }
             self.not_stopped(id)?;
             // Right before the run: only the content that was checked (and approved) runs.
-            let again = self.check_flow(id, &req)?;
+            let again = self.check_flow(id, &req, None)?;
             if again.hash == cls.hash {
                 return self.execute_flow(id, &req, &again, approval);
             }
@@ -757,6 +895,9 @@ impl ArdiaUpstream {
                 // Unreachable after the command was sent, a timeout, an unreadable reply or a
                 // Stop: nobody knows whether it ran. Never repeated (see `call_tool`).
                 let stopped = matches!(other, Failure::Cancelled);
+                if Self::flow_posted(cls, &Value::Null) {
+                    self.conv(id, |c| c.posted.insert(tab.clone()));
+                }
                 let cleanup = self.watch_after(id, &tab, watch).lines();
                 let unreachable = matches!(other, Failure::Unreachable(_));
                 let _ = self.fail(id, other);
@@ -810,6 +951,10 @@ impl ArdiaUpstream {
             ));
         }
         self.after_state(id, &tab, &before, &after);
+        // A reload (or a step back) of a page a flow posted to may send the form again.
+        if Self::flow_posted(cls, &data) {
+            self.conv(id, |c| c.posted.insert(tab.clone()));
+        }
         let steps: Vec<&Value> = data["steps"].as_array().into_iter().flatten().collect();
         let failed = data["ok"] == false || steps.iter().any(|s| s["ok"] == false);
         let mut summary = format!(
@@ -904,8 +1049,8 @@ impl ArdiaUpstream {
         }
         let steps = match data["steps"].as_array() {
             Some(steps) => steps,
-            // A flow that reads may answer with its data alone (not measured).
-            None if cls.flow.is_data() => return None,
+            // A flow that reads and has no steps may answer with its data alone (not measured).
+            None if cls.flow.is_data() && cls.flow.steps.is_empty() => return None,
             None => return Some("the reply lists no steps".into()),
         };
         let approved = &cls.flow.steps;
@@ -920,11 +1065,12 @@ impl ArdiaUpstream {
             if ran["seq"].as_i64() != step.seq {
                 return Some("a step has another number".into());
             }
+            let n = step.seq.map_or("?".to_owned(), |n| n.to_string());
             if ran["intent"].as_str().unwrap_or("") != step.intent {
-                return Some(format!(
-                    "step {} does something else",
-                    step.seq.map_or("?".to_owned(), |n| n.to_string())
-                ));
+                return Some(format!("step {n} does something else"));
+            }
+            if let Some(detail) = Self::attempt_mismatch(ran, step, &req.params) {
+                return Some(format!("step {n} {detail}"));
             }
         }
         if data["ok"] != false && steps.len() != approved.len() {
@@ -935,6 +1081,81 @@ impl ArdiaUpstream {
             ));
         }
         None
+    }
+
+    /// How what Ardia did at one step differs from the step that was approved: the tier it ran
+    /// by must be one zptah knows (`command`, `selector`), a `command` attempt must be the
+    /// approved command (parameters filled in), and a `selector` attempt must find the target by
+    /// one of the approved candidates. A step with no attempts has nothing to compare.
+    fn attempt_mismatch(
+        ran: &Value,
+        step: &model::Step,
+        params: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        let known = |tier: &str| matches!(tier, "command" | "selector");
+        let tier = ran["tier"].as_str().unwrap_or("");
+        if !known(tier) {
+            return Some(format!(
+                "ran in a way zptah does not know ({})",
+                short(tier, 20)
+            ));
+        }
+        let approved: Vec<String> = step
+            .command
+            .iter()
+            .map(|w| model::substitute(w, params))
+            .collect();
+        for attempt in ran["attempts"].as_array().into_iter().flatten() {
+            let tier = attempt["tier"].as_str().unwrap_or("");
+            let argv: Option<Vec<&str>> = attempt["argv"]
+                .as_array()
+                .map(|words| words.iter().map(Value::as_str).collect())
+                .unwrap_or(None);
+            let Some(argv) = argv else {
+                return Some("ran a command zptah can not read".into());
+            };
+            match tier {
+                "command" if argv != approved.iter().map(String::as_str).collect::<Vec<_>>() => {
+                    return Some("ran another command than the flow has".into());
+                }
+                "command" => {}
+                "selector" if !model::selector_matches(&argv, step, params) => {
+                    return Some("looked for another target than the flow names".into());
+                }
+                "selector" => {}
+                other => {
+                    return Some(format!(
+                        "tried a way zptah does not know ({})",
+                        short(other, 20)
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    /// Whether a flow that ran sent a POST (or another write): it says so itself (`writes`), a
+    /// step recorded one, or the reply names one.
+    fn flow_posted(cls: &Classified, data: &Value) -> bool {
+        let write = |m: &str| !matches!(m.to_uppercase().as_str(), "GET" | "HEAD" | "OPTIONS");
+        cls.flow.writes == Some(true)
+            || cls
+                .flow
+                .steps
+                .iter()
+                .any(|s| s.methods.iter().any(|m| write(m)))
+            || [&data["requests"], &data["network"]]
+                .into_iter()
+                .chain(
+                    data["steps"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|s| &s["requests"]),
+                )
+                .filter_map(Value::as_array)
+                .flatten()
+                .any(|r| r["method"].as_str().is_some_and(write))
     }
 
     /// The tab's address after a flow: read, and checked against the origin lists. A page that

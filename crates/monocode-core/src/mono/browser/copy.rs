@@ -135,6 +135,8 @@ pub enum ActionDesc {
     },
     /// Reload the page.
     Reload,
+    /// Go back to the previous page.
+    GoBack,
 }
 
 /// What the card needs to know. All text is what the page or the Mono said: it is clipped and
@@ -366,6 +368,8 @@ fn verb_phrase(lang: Lang, facts: &CardFacts) -> String {
         (ActionDesc::Other, Lang::Vi) => "làm một việc cần bạn đồng ý".into(),
         (ActionDesc::Reload, Lang::En) => "reload the page".into(),
         (ActionDesc::Reload, Lang::Vi) => "tải lại trang".into(),
+        (ActionDesc::GoBack, Lang::En) => "go back to the previous page".into(),
+        (ActionDesc::GoBack, Lang::Vi) => "quay lại trang trước".into(),
         (ActionDesc::FlowRun { name, .. }, Lang::En) => {
             format!("run the flow {}", quoted(name, MAX_LABEL))
         }
@@ -661,6 +665,12 @@ fn tail(lang: Lang, category: Category, facts: &CardFacts) -> Option<String> {
         }
         (Category::Unclear, Lang::Vi) if matches!(facts.action, ActionDesc::Reload) => {
             "Tải lại trang có thể gửi lại biểu mẫu.".into()
+        }
+        (Category::Unclear, Lang::En) if matches!(facts.action, ActionDesc::GoBack) => {
+            "Going back may send the form again.".into()
+        }
+        (Category::Unclear, Lang::Vi) if matches!(facts.action, ActionDesc::GoBack) => {
+            "Quay lại trang trước có thể gửi lại biểu mẫu.".into()
         }
         (Category::Unclear, Lang::En) if matches!(facts.action, ActionDesc::FlowRun { .. }) => {
             "zptah could not tell what some steps of this flow do.".into()

@@ -155,6 +155,9 @@ impl Conversation {
     ) {
         let attachments = std::mem::take(&mut self.attachments);
         let mut message = self.message(prompt, attachments, mode, cx);
+        // The marks of this send travel with the message (see `launch_message`).
+        message.automated = std::mem::take(&mut self.settings.automated);
+        message.automatic_resume = std::mem::take(&mut self.settings.automatic_resume);
         message.steer = message.can_steer() && self.steers_follow_up(invert, cx);
         if invert && self.busy && message.steer {
             self.follow_ups.requested = Some(message.id.clone());
@@ -447,6 +450,8 @@ impl Conversation {
         self.settings.attachments = message.attachments;
         let previous_prepared = self.settings.prepared_prompt.take();
         self.settings.prepared_prompt = message.prepared_prompt;
+        (self.settings.automated, self.settings.automatic_resume) =
+            (message.automated, message.automatic_resume);
         self.launch_prompt(message.text, cx);
         self.settings.prepared_prompt = previous_prepared;
         self.attachments = composer_attachments;

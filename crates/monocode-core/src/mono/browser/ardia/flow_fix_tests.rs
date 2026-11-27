@@ -564,11 +564,19 @@ fn a_flow_grant_is_labeled_with_the_flow_and_its_site() {
 fn a_stop_says_the_flow_may_have_run_partly() {
     let a = flow_act();
     a.r.runner.lock().hang_on = Some("flow run".into());
+    let done = std::sync::Arc::new(std::sync::Mutex::new(None));
     let worker = std::thread::spawn({
         let up = a.up.clone();
-        move || call(&up, "flow_run", json!({"name": NAME}))
+        let done = done.clone();
+        move || {
+            let reply = call(&up, "flow_run", json!({"name": NAME}));
+            *done.lock().unwrap() = Some(reply.clone());
+            reply
+        }
     });
-    assert!(wait_until(|| a.r.runner.lock().hanging == 1));
+    if let Err(why) = reach_hang(&a.r, &done) {
+        panic!("{why}");
+    }
     a.up.stop_turn(0);
     let (error, text) = worker.join().unwrap();
     assert!(
@@ -876,10 +884,7 @@ fn a_popup_when_the_opener_of_the_tab_is_unknown_is_reported_as_unchecked() {
 fn a_staging_folder_is_swept_by_the_newest_entry_inside_not_its_own_time() {
     let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 24 * 60 * 60);
     let set_old = |path: &std::path::Path| {
-        std::fs::File::open(path)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        set_mtime(path, old);
     };
     let a = act();
     a.on_login();

@@ -289,6 +289,13 @@ impl ArdiaUpstream {
         Some(f(state, &act))
     }
 
+    /// How many times this conversation's grant book was read (tests).
+    #[cfg(test)]
+    pub(in crate::mono::browser::ardia) fn grant_reads(&self, session: i64) -> usize {
+        self.with_trust(session, |state, _| state.grants().reads())
+            .unwrap_or(0)
+    }
+
     /// `message` is what the user typed (empty for a run no user message started).
     pub(super) fn begin_run_trust(&self, session: i64, message: &str) {
         self.with_trust(session, |state, _| state.begin_run(message));
@@ -1602,9 +1609,15 @@ impl ArdiaUpstream {
         }
     }
 
-    /// A reload of a tab whose last act sent a POST may send the form again: it asks first (an
-    /// unclear step, never granted for the conversation).
-    pub(super) fn ask_before_reload(&self, id: i64) -> Result<(), String> {
+    /// A reload (or a step back) of a tab whose last act sent a POST may send the form again: it
+    /// asks first (an unclear step, never granted for the conversation). `command` is `reload`
+    /// or `back`.
+    pub(super) fn ask_before_reload(&self, id: i64, command: &str) -> Result<(), String> {
+        let (tool, desc) = if command == "back" {
+            ("browser_back", ActionDesc::GoBack)
+        } else {
+            ("browser_reload", ActionDesc::Reload)
+        };
         let Some(tab) = self.conv(id, |c| c.bound.clone()) else {
             return Ok(());
         };
@@ -1621,23 +1634,22 @@ impl ArdiaUpstream {
             tier: Tier::Act,
             categories: [Category::Unclear].into_iter().collect(),
             site: registrable_domain_of(&page).unwrap_or_default(),
-            reason: "reloading may send the form again".into(),
+            reason: if command == "back" {
+                "going back may send the form again".into()
+            } else {
+                "reloading may send the form again".into()
+            },
         };
-        let mut facts = CardFacts::new(
-            &act.mono_label,
-            &ev.site,
-            ActionDesc::Reload,
-            vec![Category::Unclear],
-        );
+        let mut facts = CardFacts::new(&act.mono_label, &ev.site, desc, vec![Category::Unclear]);
         facts.url = page.clone();
         facts.site_kind = site_category(&page);
-        let summary = format!("reload {}", audit_url(&page));
-        match self.ask_card(&act, id, "browser_reload", facts, &ev) {
+        let summary = format!("{command} {}", audit_url(&page));
+        match self.ask_card(&act, id, tool, facts, &ev) {
             Ok((_, card)) => {
                 self.conv(id, |c| c.posted.remove(&tab));
                 self.row(
                     id,
-                    "browser_reload",
+                    tool,
                     &page,
                     &summary,
                     user_tab,
@@ -1651,7 +1663,7 @@ impl ArdiaUpstream {
             Err((text, audit, card)) => {
                 self.row(
                     id,
-                    "browser_reload",
+                    tool,
                     &page,
                     &summary,
                     user_tab,

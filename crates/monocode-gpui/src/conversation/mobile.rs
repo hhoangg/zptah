@@ -964,6 +964,63 @@ mod usage_tests {
         });
     }
 
+    /// An automation's prompt that is queued (the conversation is busy) carries its mark with the
+    /// message: the next message the user types is typed, and the queued one is still automated
+    /// when it is delivered. An early return of the launch hands the mark to nobody.
+    #[gpui::test]
+    fn a_queued_automation_prompt_keeps_its_mark_and_the_next_typed_message_is_typed(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let store = Arc::new(std::sync::Mutex::new(
+            monocode_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ));
+        let summary = locked(&store)
+            .unwrap()
+            .create("claude", "/fixture")
+            .unwrap();
+        let view = cx.new(|cx| Conversation::new(summary, store.clone(), cx));
+        cx.run_until_parked();
+        view.update(cx, |v, cx| {
+            v.loaded = true;
+            // The turn is running: the automation's prompt is queued.
+            v.set_busy_for_test(true);
+            let mut settings = v.settings.clone();
+            settings.automated = true;
+            v.quick_submit("check the status page".into(), settings, cx);
+            assert!(
+                !v.settings.automated,
+                "the mark moved to the queued message"
+            );
+            assert!(v.launched_marks.is_empty(), "nothing launched yet");
+            let queued = v.follow_ups.state.messages.clone();
+            assert_eq!(queued.len(), 1);
+            assert!(queued[0].automated && !queued[0].automatic_resume);
+            // The turn ends and the user types: a typed message, not an automated one.
+            v.set_busy_for_test(false);
+            v.follow_ups.state.paused = true;
+            v.input.update(cx, |input, cx| {
+                input.set_text("what is the status".into(), cx)
+            });
+            v.send(cx);
+            assert_eq!(v.launched_marks, [(false, false)]);
+            // The queued prompt, when it is delivered, is still the automation's.
+            v.set_busy_for_test(false);
+            v.launch_message(queued[0].clone(), cx);
+            assert_eq!(v.launched_marks, [(false, false), (true, false)]);
+            assert!(!v.settings.automated && !v.settings.automatic_resume);
+            // An early return of the launch (the account is switching) drops the mark.
+            v.set_busy_for_test(false);
+            v.account_switching = true;
+            v.settings.automated = true;
+            v.launch_prompt("lost".into(), cx);
+            v.account_switching = false;
+            assert!(!v.settings.automated, "an early return clears the mark");
+            v.set_busy_for_test(false);
+            v.launch_prompt("typed after".into(), cx);
+            assert_eq!(v.launched_marks[2..], [(false, false)]);
+        });
+    }
+
     #[gpui::test]
     fn mobile_controls_persist_the_desktop_preference_and_use_its_mono_resume_and_scheduler(
         cx: &mut gpui::TestAppContext,

@@ -23,6 +23,8 @@ mod act_tests;
 #[cfg(test)]
 mod fake_page;
 #[cfg(test)]
+mod final_tests;
+#[cfg(test)]
 mod flow_fix_tests;
 #[cfg(test)]
 mod flow_tests;

@@ -370,6 +370,9 @@ pub struct TrustState {
     /// Words read from pages in this run, with the domain they came from. Memory only.
     read_tokens: BTreeMap<String, String>,
     injection: bool,
+    /// The grant book read once, for a check that evaluates many actions in a row (a flow).
+    /// While it is held, [`TrustState::evaluate`] uses it instead of reading the book again.
+    grant_snapshot: Option<BTreeMap<String, BTreeSet<Category>>>,
 }
 
 impl TrustState {
@@ -383,7 +386,17 @@ impl TrustState {
             seen_sensitive: BTreeSet::new(),
             read_tokens: BTreeMap::new(),
             injection: false,
+            grant_snapshot: None,
         }
+    }
+
+    /// Reads the grant book once; every [`TrustState::evaluate`] until [`TrustState::release_grants`]
+    /// uses that reading.
+    pub fn hold_grants(&mut self) {
+        self.grant_snapshot = Some(self.grants.snapshot());
+    }
+    pub fn release_grants(&mut self) {
+        self.grant_snapshot = None;
     }
 
     pub fn grants(&self) -> &GrantBook {
@@ -640,6 +653,8 @@ impl TrustState {
         // A tier K action always asks: a grant never covers it.
         let covered = if tier == Tier::Always {
             BTreeSet::new()
+        } else if let Some(held) = &self.grant_snapshot {
+            held.get(&site).cloned().unwrap_or_default()
         } else {
             self.grants.covered(&site)
         };

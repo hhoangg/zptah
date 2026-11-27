@@ -167,7 +167,35 @@ impl State {
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .map(|s| json!({"seq": s["seq"], "intent": s["action"]["intent"], "ok": true, "tier": "command", "attempts": []}))
+                    .map(|s| {
+                        // What Ardia replays: the recorded command with the parameters filled in
+                        // (a `find` goes by selector, as measured).
+                        let argv: Vec<String> = s["command"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .map(|w| {
+                                let mut w = w.to_owned();
+                                for (at, flag) in flags.iter().enumerate() {
+                                    if *flag == "--param" {
+                                        if let Some((k, v)) =
+                                            flags.get(at + 1).and_then(|kv| kv.split_once('='))
+                                        {
+                                            w = w.replace(&format!("{{{{{k}}}}}"), v);
+                                        }
+                                    }
+                                }
+                                w
+                            })
+                            .collect();
+                        let tier = if argv.first().map(String::as_str) == Some("find") {
+                            "selector"
+                        } else {
+                            "command"
+                        };
+                        json!({"seq": s["seq"], "intent": s["action"]["intent"], "ok": true, "tier": tier, "attempts": [{"tier": tier, "argv": argv, "ok": true}]})
+                    })
                     .collect();
                 let ends = self.flow_ends_on.clone().or_else(|| {
                     flow["steps"]
@@ -874,10 +902,18 @@ fn a_blocked_address_anywhere_in_the_flow_refuses_the_run() {
         edit(&mut flow);
         let a = flow_act_with(BrowserLevel::Act, blocked(evil), flow);
         let (error, text) = run(&a, json!({"name": NAME}));
-        assert!(
-            error && text.contains("Not run") && text.contains("evil.example"),
-            "{place}: {text}"
-        );
+        if matches!(place, "startUrl" | "hosts" | "origin") {
+            // A flow of a blocked place is hidden from the Mono: no address is named.
+            assert!(
+                error && text.contains("No saved flow named") && !text.contains("evil.example"),
+                "{place}: {text}"
+            );
+        } else {
+            assert!(
+                error && text.contains("Not run") && text.contains("evil.example"),
+                "{place}: {text}"
+            );
+        }
         assert!(runs(&a).is_empty(), "{place}");
         assert!(
             a.cards().is_empty(),
@@ -1147,7 +1183,8 @@ fn an_unreadable_flow_show_never_runs_the_flow() {
     let a = flow_act();
     a.r.runner.lock().flow_show_raw = Some("not json".into());
     let (error, text) = run(&a, json!({"name": NAME}));
-    assert!(error && text.contains("can not read"), "{text}");
+    // A flow that can not be read does not count: the name is not known.
+    assert!(error && text.contains("No saved flow named"), "{text}");
     assert!(runs(&a).is_empty());
     assert_eq!(a.r.runner.count("tabs open"), 0);
     // The read right before the run is unreadable.
@@ -1200,22 +1237,21 @@ fn a_flow_that_ends_on_a_blocked_origin_stops_the_tab() {
 fn a_stop_kills_a_running_flow_and_says_it_may_have_run() {
     let a = flow_act();
     a.r.runner.lock().hang_on = Some("flow run".into());
+    let done = std::sync::Arc::new(std::sync::Mutex::new(None));
     let worker = std::thread::spawn({
         let up = a.up.clone();
-        move || call(&up, "flow_run", json!({"name": NAME}))
-    });
-    // Before the run, the check of a flow reads the grant book (a sqlite file) for every step and
-    // address, and opens the tab: on a slow file system (Windows CI) that takes longer than the
-    // 1.5 seconds `wait_until` gives. The fake hangs for 20 seconds once it is reached.
-    let mut reached = false;
-    for _ in 0..1500 {
-        if a.r.runner.lock().hanging == 1 {
-            reached = true;
-            break;
+        let done = done.clone();
+        move || {
+            let reply = call(&up, "flow_run", json!({"name": NAME}));
+            *done.lock().unwrap() = Some(reply.clone());
+            reply
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+    });
+    // Before the run, the check of a flow reads the grant book and opens the tab: on a slow file
+    // system (Windows CI) that takes a while. The fake hangs for 20 seconds once it is reached.
+    if let Err(why) = reach_hang(&a.r, &done) {
+        panic!("{why}");
     }
-    assert!(reached, "the flow run never reached the fake");
     assert!(a.up.working(0));
     a.up.stop_turn(0);
     let (error, text) = worker.join().unwrap();
