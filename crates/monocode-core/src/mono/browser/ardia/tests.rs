@@ -37,7 +37,7 @@ const DAEMON_GONE: &str = include_str!("fixtures/browse_daemon_unreachable.json"
 const EVENTS: &str = include_str!("fixtures/events.jsonl");
 const CONTROL_OFF: &str = include_str!("fixtures/call_control_off.stderr.txt");
 const UNREACHABLE: &str = include_str!("fixtures/call_unreachable.stderr.txt");
-const PROFILE: &str = "p-mwz3kap1pqq0-8";
+pub(super) const PROFILE: &str = "p-mwz3kap1pqq0-8";
 
 pub(super) fn json_of(text: &str) -> Value {
     serde_json::from_str(text).unwrap()
@@ -86,6 +86,26 @@ pub(super) struct State {
     pub daemon_only: bool,
     /// What a snapshot reports as its `origin`.
     pub snapshot_origin: Option<String>,
+    // ---- the act tools (see `fake_page`) ----
+    /// What the tab shows: elements, forms, focus.
+    pub page: super::fake_page::Page,
+    /// The page a link or an address leads to, by URL.
+    pub pages: HashMap<String, super::fake_page::Page>,
+    /// A ref whose commands fail with this code (`stale_ref`, `vocab_superseded`, `unknown_ref`).
+    pub broken: HashMap<String, &'static str>,
+    /// A command that blocks until its call is cancelled (matched on the joined argv).
+    pub hang_on: Option<String>,
+    /// How many calls are blocked now, and how many were killed by a cancel.
+    pub hanging: usize,
+    pub killed: usize,
+    /// The next command of this name (`click`, `fill`, ...) fails like this.
+    pub fail_on: Option<(String, super::fake_page::FailKind)>,
+    /// `press Enter` lands on this address.
+    pub enter_to: Option<String>,
+    /// Every act command that reached the fake: the command, then its values.
+    pub act_sent: Vec<Vec<String>>,
+    /// The user's own active tab: id, address, title.
+    pub user_tab: Option<(String, String, String)>,
 }
 
 pub(super) struct FakeRunner {
@@ -243,11 +263,22 @@ impl Runner for FakeRunner {
                         stderr: String::new(),
                     });
                 }
-                let cmd: Vec<&str> = args[3..]
-                    .iter()
-                    .map(String::as_str)
-                    .take_while(|a| *a != "--json")
-                    .collect();
+                // `browse --session S --json <cmd...> [-- <values...>]`: nothing follows the values.
+                assert_eq!(arg(1), "--session", "{args:?}");
+                assert_eq!(
+                    arg(3),
+                    "--json",
+                    "--json comes right after the session: {args:?}"
+                );
+                let rest: Vec<&str> = args[4..].iter().map(String::as_str).collect();
+                let split = rest.iter().position(|a| *a == "--");
+                let (cmd, values): (Vec<&str>, Vec<&str>) = match split {
+                    Some(at) => (rest[..at].to_vec(), rest[at + 1..].to_vec()),
+                    None => (rest.clone(), Vec::new()),
+                };
+                if let Some(reply) = st.page_reply(&cmd, &values) {
+                    return reply;
+                }
                 match cmd.as_slice() {
                     ["tab", "list"] => {
                         // The recorded list: the first entry is the tab the session is bound to.
@@ -276,8 +307,9 @@ impl Runner for FakeRunner {
                         reply["data"]["url"] = json!(st.url);
                         ok(reply.to_string())
                     }
-                    ["open", url] => {
-                        let landed = st.redirects.get(*url).cloned().unwrap_or((*url).to_owned());
+                    ["open"] => {
+                        let url = values[0];
+                        let landed = st.redirects.get(url).cloned().unwrap_or(url.to_owned());
                         st.url = landed.clone();
                         let mut reply = json_of(OPEN);
                         reply["data"]["url"] = json!(landed);
@@ -300,8 +332,9 @@ impl Runner for FakeRunner {
                     }
                     ["console"] => ok(CONSOLE.into()),
                     ["errors"] => browse_ok(json!({"errors": [], "dropped": 0, "started": true})),
-                    ["scroll", ..] => ok(SCROLL.into()),
-                    ["screenshot", path] => {
+                    ["scroll"] => ok(SCROLL.into()),
+                    ["screenshot"] => {
+                        let path = values[0];
                         let mut reply = json_of(SHOT);
                         reply["data"]["path"] = json!(path);
                         let _ = std::fs::write(path, b"png");
@@ -318,6 +351,39 @@ impl Runner for FakeRunner {
             }
             other => panic!("unexpected command {other}"),
         }
+    }
+    fn run_cancellable(
+        &self,
+        args: &[String],
+        timeout: Duration,
+        cancel: &CancelToken,
+    ) -> Result<Output, RunFailure> {
+        if cancel.is_cancelled() {
+            return Err(RunFailure::Cancelled);
+        }
+        let hangs = {
+            let st = self.lock();
+            st.hang_on
+                .as_ref()
+                .is_some_and(|needle| args.join(" ").contains(needle.as_str()))
+        };
+        if hangs {
+            self.lock().calls.push(args.to_vec());
+            self.lock().hanging += 1;
+            // Like the real process: it runs until it is killed.
+            let started = std::time::Instant::now();
+            while !cancel.is_cancelled() && started.elapsed() < Duration::from_secs(20) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            let mut st = self.lock();
+            st.hanging -= 1;
+            if cancel.is_cancelled() {
+                st.killed += 1;
+                return Err(RunFailure::Cancelled);
+            }
+            return Err(RunFailure::TimedOut);
+        }
+        self.run(args, timeout)
     }
     fn watch(&self, _args: &[String]) -> Result<Box<dyn LineStream>, RunFailure> {
         let mut st = self.lock();
@@ -462,10 +528,14 @@ impl Rig {
     }
 }
 
-fn upstream(rig: &Rig, origins: Origins, database: Option<PathBuf>) -> Arc<ArdiaUpstream> {
+pub(super) fn upstream(
+    rig: &Rig,
+    origins: Origins,
+    database: Option<PathBuf>,
+) -> Arc<ArdiaUpstream> {
     upstream_of(rig, "mono-1", origins, database)
 }
-fn upstream_of(
+pub(super) fn upstream_of(
     rig: &Rig,
     mono: &str,
     origins: Origins,
@@ -478,13 +548,14 @@ fn upstream_of(
         origins,
         output_dir: Some(std::env::temp_dir()),
         database,
+        ..Config::default()
     });
     upstream
 }
-fn no_limits() -> Origins {
+pub(super) fn no_limits() -> Origins {
     Origins::default()
 }
-fn call(up: &ArdiaUpstream, tool: &str, args: Value) -> (bool, String) {
+pub(super) fn call(up: &ArdiaUpstream, tool: &str, args: Value) -> (bool, String) {
     let message = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": tool, "arguments": args}});
     let (reply, _) = up.post("", None, &message).unwrap();
@@ -811,7 +882,11 @@ fn open_makes_a_tab_in_the_profile_holds_it_and_binds_it() {
         r.runner.count("tabs.hold") >= 2,
         "the hold is renewed on every call"
     );
-    assert_eq!(r.runner.count("browse --session zptah-mono-1-0 open"), 0);
+    assert_eq!(
+        r.runner
+            .count("browse --session zptah-mono-1-0 --json open"),
+        0
+    );
 }
 
 #[test]
@@ -826,7 +901,7 @@ fn navigate_without_a_tab_opens_one_in_the_profile_instead_of_sending_open() {
     assert!(!error);
     assert_eq!(r.runner.count("tabs open"), 1);
     assert_eq!(
-        r.runner.count("zptah-mono-1-0 open"),
+        r.runner.count("zptah-mono-1-0 --json open"),
         0,
         "no browse open without a bound tab"
     );
@@ -837,7 +912,7 @@ fn navigate_without_a_tab_opens_one_in_the_profile_instead_of_sending_open() {
     );
     assert!(!error && text.contains("example.com/b"), "{text}");
     assert_eq!(r.runner.count("tabs open"), 1);
-    assert_eq!(r.runner.count("open https://example.com/b"), 1);
+    assert_eq!(r.runner.count("open -- https://example.com/b"), 1);
 }
 
 #[test]
@@ -891,7 +966,7 @@ fn a_blocked_origin_is_refused_before_anything_is_sent() {
     );
 }
 
-fn audit_database() -> (tempfile::TempDir, PathBuf) {
+pub(super) fn audit_database() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("native.db");
     rusqlite::Connection::open(&path).unwrap();
@@ -1046,7 +1121,8 @@ fn ardia_closed_mid_call_is_started_again_and_the_read_is_repeated_once() {
     assert!(!error && text.contains("### Content"), "{text}");
     assert_eq!(r.platform.launches.load(Ordering::SeqCst), 2);
     assert_eq!(
-        r.runner.count("browse --session zptah-mono-1-0 read"),
+        r.runner
+            .count("browse --session zptah-mono-1-0 --json read"),
         2,
         "once more, no more"
     );
@@ -1140,6 +1216,7 @@ fn screenshots_go_into_the_output_folder() {
         origins: no_limits(),
         output_dir: Some(dir.path().to_path_buf()),
         database: None,
+        ..Config::default()
     });
     call(&up, "browser_open", json!({"url": "https://example.com"}));
     let (error, text) = call(&up, "browser_screenshot", json!({}));
@@ -1174,7 +1251,7 @@ fn scroll_back_console_and_errors_answer_with_the_page_header() {
         .runner
         .calls()
         .iter()
-        .any(|c| c.ends_with("scroll down 300 --json")));
+        .any(|c| c.ends_with("scroll -- down 300")));
 }
 
 #[test]
@@ -1194,12 +1271,39 @@ fn only_read_tools_are_offered_and_listed() {
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(names, TOOLS.map(String::from));
-    for act in ACT_TOOLS {
-        assert!(!names.iter().any(|n| n == act));
-    }
-    let (error, text) = call(&up, "browser_click", json!({}));
+    // The upstream defines the read tools and the act tools; the gate lists the act tools only
+    // at the act level (see `act_tests`).
+    let expected: Vec<String> = TOOLS
+        .iter()
+        .chain(&ACT_TOOLS)
+        .map(|t| t.to_string())
+        .collect();
+    assert_eq!(names, expected);
+    // A Mono with no act settings loaded runs no act tool.
+    let (error, text) = call(&up, "browser_click", json!({"ref": "e1"}));
+    assert!(error && text.contains("no act settings"), "{text}");
+    let (error, text) = call(&up, "browser_eval", json!({}));
     assert!(error && text.contains("not an available"));
+    // Behind a read-only gate only the read tools are listed.
+    let gate = Gate::start(
+        up.clone(),
+        Policy::ardia(BrowserLevel::ReadOnly, vec![]),
+        "ardia-ro",
+    )
+    .unwrap();
+    let listed = gate
+        .handle(
+            &gate.route_for(Some(1)),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        )
+        .unwrap();
+    let at_read: Vec<String> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(at_read, TOOLS.map(String::from));
 }
 
 // ---- the launch path ----
@@ -1268,10 +1372,13 @@ fn a_launch_runs_the_static_checks_only_and_wires_both_harnesses() {
             json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
         )
         .unwrap();
+    // A Mono's browser starts at the act level: the read tools, the act tools and the two
+    // gate-only tools (approval request, declared intent).
     assert_eq!(
         listed["result"]["tools"].as_array().unwrap().len(),
-        TOOLS.len()
+        TOOLS.len() + ACT_TOOLS.len() + 2
     );
+    assert!(!runtime.claude_disallowed().contains("browser_click"));
 }
 
 #[test]
@@ -1413,7 +1520,7 @@ fn a_value_that_looks_like_an_option_never_reaches_the_command_line() {
         "--new-tab",
         "--session=evil",
         "tabs open",
-        "zptah-mono-1-0 open",
+        "--json open",
     ] {
         assert!(
             !sent.contains(forbidden),
@@ -1643,6 +1750,7 @@ fn changing_the_ardia_profile_closes_the_old_tabs_and_never_rebinds_them() {
         origins: no_limits(),
         output_dir: None,
         database: None,
+        ..Config::default()
     });
     // A tab of the old profile is not this Mono's any more, whether or not it is closed yet.
     assert!(!r.controller.owns_tab(session, "default", "tab-fake-1"));
@@ -1657,7 +1765,7 @@ fn changing_the_ardia_profile_closes_the_old_tabs_and_never_rebinds_them() {
     assert!(r.runner.lock().tabs.is_empty(), "the old tabs are closed");
 }
 
-fn gate_call(gate: &Gate, route: &str, tool: &str, args: Value) -> Value {
+pub(super) fn gate_call(gate: &Gate, route: &str, tool: &str, args: Value) -> Value {
     gate.handle(
         route,
         json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": tool, "arguments": args}}),
@@ -1666,7 +1774,7 @@ fn gate_call(gate: &Gate, route: &str, tool: &str, args: Value) -> Value {
         .clone()
 }
 
-fn wait_until(mut done: impl FnMut() -> bool) -> bool {
+pub(super) fn wait_until(mut done: impl FnMut() -> bool) -> bool {
     for _ in 0..300 {
         if done() {
             return true;
@@ -1772,6 +1880,7 @@ fn only_a_browser_turned_off_or_a_new_profile_ends_sessions_not_an_origin_edit()
         origins: Origins::new(&[], &["https://x.example".to_owned()]),
         output_dir: None,
         database: None,
+        ..Config::default()
     });
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(r.runner.lock().tabs.len(), 1);
@@ -2084,6 +2193,7 @@ fn a_tab_on_a_page_the_mono_may_not_use_is_not_described_in_the_list() {
         origins: Origins::new(&[], &["https://example.com".to_owned()]),
         output_dir: None,
         database: None,
+        ..Config::default()
     });
     let (error, text) = call(&up, "browser_tabs", json!({"action": "list"}));
     assert!(!error, "{text}");

@@ -1,5 +1,7 @@
 //! The gate's upstream for Ardia: answers the gate's MCP messages itself by running the `ardia`
-//! command (design spec sections 4, 5 and 12b). M1 offers the read tools only.
+//! command (design spec sections 4, 5, 6, 9 and 12b). The read tools run as before; the act
+//! tools (`act`) read the page fresh, classify the action with the shared risk classifier, ask
+//! through the approval queue and audit every call.
 //!
 //! Rules kept here:
 //!
@@ -18,7 +20,10 @@ use super::super::defense;
 use super::super::gate::extension::refusal_text as tabs_origin_refusal;
 use super::super::gate::{audit_url, Origins, RunContext, Upstream};
 use super::controller::{controller, Controller, Readiness};
-use super::runner::{plain_value, web_url, Failure};
+use super::runner::{plain_value, web_url, CancelToken, Failure, BROWSE_TIMEOUT};
+use crate::mono::browser::gate::{ActConfig, APPROVAL_TOOL};
+use crate::mono::browser::trust::grants::GrantBook;
+use crate::mono::browser::trust::TrustState;
 use crate::mono::browser::{AuditEntry, MonoBrowserStore};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -26,6 +31,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::Duration;
+
+mod act;
+mod fresh;
+mod uploads;
+
+pub use fresh::CHANGED;
 
 /// Tabs one conversation keeps open at most.
 pub const MAX_TABS: usize = 8;
@@ -50,8 +61,8 @@ pub const TOOLS: [&str; 12] = [
     "browser_scroll",
 ];
 
-/// The act tools of the next milestone. Not offered yet; listed so a read-only Mono's harness
-/// disables them by name once they exist.
+/// The act tools. Offered and allowed at the act level only (`Policy::ardia`); a read-only Mono's
+/// harness disables them by name.
 pub const ACT_TOOLS: [&str; 8] = [
     "browser_click",
     "browser_type",
@@ -64,16 +75,66 @@ pub const ACT_TOOLS: [&str; 8] = [
 ];
 
 /// What a Mono's Ardia upstream needs from its setting.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Config {
     /// The Ardia profile id.
     pub profile: String,
     pub origins: Origins,
-    /// Where screenshots go.
+    /// Where screenshots go, and the folder uploads may come from.
     pub output_dir: Option<PathBuf>,
     /// The store database, for audit rows.
     pub database: Option<PathBuf>,
+    /// What the act tools need: the level, soul rules, store, labels, approval timeout and queue
+    /// (the same `ActConfig` the extension upstream got). `None`: no act tool runs.
+    pub act: Option<ActConfig>,
+    /// The Mono's project folders: an upload from inside one is allowed.
+    pub project_dirs: Vec<PathBuf>,
+    /// The user's home folder (where credentials live). `None`: the process's own.
+    pub home: Option<PathBuf>,
 }
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("profile", &self.profile)
+            .field("origins", &self.origins)
+            .field("output_dir", &self.output_dir)
+            .field("act", &self.act.as_ref().map(|a| a.level))
+            .field("project_dirs", &self.project_dirs)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Whether a call that failed because Ardia went away may be run again. The only place that
+/// decides it: the tools that read or move the view may, the act tools and the approval request
+/// never (see `call_tool`).
+fn may_repeat(tool: &str) -> bool {
+    TOOLS.contains(&tool)
+}
+
+/// Counts a tool call as running for as long as it lives.
+struct Flight<'a> {
+    upstream: &'a ArdiaUpstream,
+    conversation: i64,
+}
+impl<'a> Flight<'a> {
+    fn start(upstream: &'a ArdiaUpstream, conversation: i64) -> Self {
+        upstream.conv(conversation, |c| c.in_flight += 1);
+        Self {
+            upstream,
+            conversation,
+        }
+    }
+}
+impl Drop for Flight<'_> {
+    fn drop(&mut self) {
+        if let Some(conv) = self.upstream.convs().get_mut(&self.conversation) {
+            conv.in_flight = conv.in_flight.saturating_sub(1);
+        }
+    }
+}
+
+/// What a stopped turn is told for every further call.
+pub const STOPPED: &str = "The user stopped the browser. Do not use it again in this turn; tell the user you stopped, and wait for their next message.";
 
 #[derive(Default)]
 struct Conv {
@@ -85,6 +146,20 @@ struct Conv {
     page: String,
     /// A call found Ardia gone (see `fail`): the dispatcher checks again and retries once.
     lost: bool,
+    /// The user pressed Stop in this turn: every further call is refused until the next message.
+    stopped: bool,
+    /// Kills the `ardia` processes of this turn's calls (replaced at every new turn).
+    cancel: CancelToken,
+    /// Tool calls running now (the "Working in Ardia" row).
+    in_flight: usize,
+    /// The refs of the last snapshots the Mono took, per tab: an act tool only runs on these.
+    seen: HashMap<String, fresh::SeenRefs>,
+    /// The user's own tab the Mono asked for and the user approved (never closed, only unbound).
+    user_tab: Option<String>,
+    /// The user's tabs already approved in this conversation (no second card for the same tab).
+    approved_user_tabs: HashSet<String>,
+    /// What the user wrote in this conversation (a path in it may be uploaded).
+    user_messages: Vec<String>,
 }
 
 pub struct ArdiaUpstream {
@@ -92,6 +167,8 @@ pub struct ArdiaUpstream {
     controller: Arc<Controller>,
     config: Mutex<Config>,
     convs: Mutex<HashMap<i64, Conv>>,
+    /// What the gate remembers per conversation: grants, task domains, taint.
+    trust: Mutex<HashMap<i64, TrustState>>,
     shots: AtomicU64,
     bind_delay: Duration,
 }
@@ -126,6 +203,17 @@ pub fn upstream_for(mono_id: &str) -> Option<Arc<ArdiaUpstream>> {
         .iter()
         .filter_map(Weak::upgrade)
         .find(|u| u.mono_id == mono_id)
+}
+
+/// Whether a browser call of conversation `conversation` is running now (any Mono): a cheap
+/// lookup for the "Working in Ardia" row.
+pub fn browser_working(conversation: i64) -> bool {
+    registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter_map(Weak::upgrade)
+        .any(|u| u.working(conversation))
 }
 
 /// A conversation was closed, cleared or deleted: its tabs close and its holds end. Runs on a
@@ -165,6 +253,7 @@ impl ArdiaUpstream {
             controller,
             config: Mutex::new(Config::default()),
             convs: Mutex::new(HashMap::new()),
+            trust: Mutex::new(HashMap::new()),
             shots: AtomicU64::new(0),
             bind_delay,
         });
@@ -220,9 +309,30 @@ impl ArdiaUpstream {
         self.controller
             .session_tabs_in(&self.session(conversation), &self.config().profile)
     }
+    /// A tab zptah opened for this conversation (in the Mono's current profile). Only these are
+    /// ever closed.
     fn owns(&self, conversation: i64, tab: &str) -> bool {
         self.controller
             .owns_tab(&self.session(conversation), &self.config().profile, tab)
+    }
+    /// The user's own tab the conversation was given ([`act`]): never closed, only unbound.
+    fn is_user_tab(&self, conversation: i64, tab: &str) -> bool {
+        self.conv(conversation, |c| c.user_tab.as_deref() == Some(tab))
+    }
+    /// A tab the conversation may bind and act in: its own, or the user's one it was given.
+    fn usable(&self, conversation: i64, tab: &str) -> bool {
+        self.owns(conversation, tab) || self.is_user_tab(conversation, tab)
+    }
+    /// `ardia browse` in the conversation's session. A Stop of the turn kills the process.
+    fn browse(&self, id: i64, cmd: &[&str], values: &[&str]) -> Result<Value, Failure> {
+        let cancel = self.conv(id, |c| c.cancel.clone());
+        self.controller.cli().browse_cancellable(
+            &self.session(id),
+            cmd,
+            values,
+            BROWSE_TIMEOUT,
+            Some(&cancel),
+        )
     }
     fn turn_key(&self, conversation: i64) -> String {
         format!("{}:{conversation}", self.mono_id)
@@ -233,19 +343,56 @@ impl ArdiaUpstream {
         self.controller.end_session(&self.session(conversation));
         self.convs().remove(&conversation);
         self.controller.turn_ended(&self.turn_key(conversation));
+        self.end_trust(conversation);
+    }
+
+    // ---- Stop (design spec section 9) ----
+
+    /// The user pressed Stop on the conversation: kills the `ardia` process of the call in
+    /// flight, withdraws the open approval cards, releases the holds (on a thread, the caller is
+    /// the UI) and refuses every further browser call until the next user message
+    /// ([`Upstream::run_started`]).
+    pub fn stop_turn(&self, conversation: i64) {
+        let cancel = self.conv(conversation, |c| {
+            c.stopped = true;
+            c.cancel.clone()
+        });
+        cancel.cancel();
+        self.stopped_by_user(conversation);
+        let session = self.session(conversation);
+        let controller = self.controller.clone();
+        std::thread::spawn(move || {
+            let _ = controller.cli().call(
+                "tabs.release",
+                &super::runner::session_params(&session, json!({})),
+            );
+        });
+    }
+    /// Whether a browser call of this conversation is running now.
+    pub fn working(&self, conversation: i64) -> bool {
+        self.convs()
+            .get(&conversation)
+            .is_some_and(|c| c.in_flight > 0)
     }
 
     // ---- one tool call ----
 
     fn call_tool(&self, name: &str, args: &Value) -> Value {
         let conversation = RunContext::current().map_or(0, |c| c.session_id);
+        if self.conv(conversation, |c| c.stopped) {
+            return json!({"content": [{"type": "text", "text": STOPPED}], "isError": true});
+        }
         let _busy = self.controller.begin_call(&self.turn_key(conversation));
+        let _flight = Flight::start(self, conversation);
         self.conv(conversation, |c| c.lost = false);
         let mut outcome = self.dispatch(conversation, name, args);
-        // Ardia went away during a read call: check again (which starts it where zptah can) and
-        // run the call once more. Every M1 tool only reads or moves the view, so a repeat is
-        // safe. M2: never repeat an act call whose outcome is unknown.
-        if outcome.is_err() && self.conv(conversation, |c| std::mem::take(&mut c.lost)) {
+        // The one place that decides whether a call is repeated: when Ardia went away during a
+        // call that only reads or moves the view, check again (which starts Ardia where zptah
+        // can) and run it once more. An act call is NEVER repeated, whether the command was sent
+        // or not: its outcome may be unknown, and a second click, fill or upload could run twice
+        // (the act path reports "may or may not have run" and leaves the decision to the Mono).
+        let lost = self.conv(conversation, |c| std::mem::take(&mut c.lost));
+        if outcome.is_err() && lost && may_repeat(name) {
             outcome = self.dispatch(conversation, name, args);
         }
         match outcome {
@@ -259,6 +406,12 @@ impl ArdiaUpstream {
     }
 
     fn dispatch(&self, id: i64, name: &str, args: &Value) -> Result<String, String> {
+        if name == APPROVAL_TOOL {
+            return self.request_approval(id, args);
+        }
+        if ACT_TOOLS.contains(&name) {
+            return self.act_tool(id, name, args);
+        }
         if !TOOLS.contains(&name) {
             return Err(format!("{name} is not an available browser tool."));
         }
@@ -318,6 +471,7 @@ impl ArdiaUpstream {
                 }
                 _ => message,
             },
+            Failure::Cancelled => STOPPED.into(),
             Failure::ControlOff => Readiness::ControlOff.message(),
             other => other.text(),
         }
@@ -372,10 +526,9 @@ impl ArdiaUpstream {
 
     /// Binds the session to one of its own tabs, waiting for a sleeping tab to load.
     fn bind(&self, id: i64, tab: &str) -> Result<Value, String> {
-        let session = self.session(id);
         for attempt in 1..=BIND_TRIES {
             self.hold(id)?;
-            match self.controller.cli().browse(&session, &["tab", tab]) {
+            match self.browse(id, &["tab", tab], &[]) {
                 Ok(data) => {
                     self.conv(id, |c| {
                         c.bound = Some(tab.to_owned());
@@ -431,7 +584,7 @@ impl ArdiaUpstream {
     /// was relaunched and restored it).
     fn bound_tab(&self, id: i64) -> Result<String, String> {
         if let Some(tab) = self.conv(id, |c| c.bound.clone()) {
-            if self.owns(id, &tab) {
+            if self.usable(id, &tab) {
                 return Ok(tab);
             }
         }
@@ -447,21 +600,19 @@ impl ArdiaUpstream {
     }
 
     /// One `ardia browse` command in the bound tab. `Err` when the tab was stopped this turn.
-    fn in_tab(&self, id: i64, cmd: &[&str]) -> Result<(Value, String), String> {
+    /// `values` go after `--` (see `runner::browse_args`).
+    fn in_tab(&self, id: i64, cmd: &[&str], values: &[&str]) -> Result<(Value, String), String> {
         let tab = self.bound_tab(id)?;
         if self.conv(id, |c| c.halted.contains(&tab)) {
             return Err("This tab was stopped for the rest of the turn because it reached a page this Mono may not use. Do not go back to it.".into());
         }
         self.hold(id)?;
-        let session = self.session(id);
-        let data = match self.controller.cli().browse(&session, cmd) {
+        let data = match self.browse(id, cmd, values) {
             Err(failure) if failure.code() == Some("no_session_tab") => {
                 // The browse session lost its tab (Ardia restarted): bind it again, once.
                 self.conv(id, |c| c.bound = None);
                 let tab = self.bound_tab(id)?;
-                self.controller
-                    .cli()
-                    .browse(&session, cmd)
+                self.browse(id, cmd, values)
                     .map(|d| (d, tab))
                     .map_err(|f| self.fail(id, f))?
             }
@@ -472,7 +623,7 @@ impl ArdiaUpstream {
     }
 
     fn current_url(&self, id: i64) -> Result<String, String> {
-        let (data, _) = self.in_tab(id, &["get", "url"])?;
+        let (data, _) = self.in_tab(id, &["get", "url"], &[])?;
         Ok(data["url"].as_str().unwrap_or("").to_owned())
     }
 
@@ -507,10 +658,15 @@ impl ArdiaUpstream {
         });
         let session = self.session(id);
         let closed = self.owns(id, tab) && self.controller.close_tab(&session, tab).is_ok();
-        if closed {
+        // The user's own tab is never closed: it is left open and unbound.
+        let unbound_user_tab = self.is_user_tab(id, tab);
+        if closed || unbound_user_tab {
             self.conv(id, |c| {
                 if c.bound.as_deref() == Some(tab) {
                     c.bound = None;
+                }
+                if unbound_user_tab {
+                    c.user_tab = None;
                 }
             });
         }
@@ -528,7 +684,13 @@ impl ArdiaUpstream {
             "Stopped: after {action} the page was on {}. {} Further calls in this tab are refused for the rest of the turn{}. What was read was withheld.",
             audit_url(url),
             tabs_origin_refusal(refusal),
-            if closed { ", and the tab was closed" } else { "" },
+            if closed {
+                ", and the tab was closed"
+            } else if unbound_user_tab {
+                ", and the tab was released (it stays open for the user)"
+            } else {
+                ""
+            },
         ))
     }
 
@@ -545,7 +707,10 @@ impl ArdiaUpstream {
     ) -> Result<String, String> {
         self.after(id, tab, url, action)?;
         self.audit(id, action, url, action);
-        Ok(format!("{}{}", header(url, &clean(title)), clean(&body)))
+        let body = clean(&body);
+        // What the Mono reads is remembered (in memory) to spot it being sent to another site.
+        self.note_read(id, url, &body);
+        Ok(format!("{}{}", header(url, &clean(title)), body))
     }
 
     fn open(&self, id: i64, url: &str) -> Result<String, String> {
@@ -564,10 +729,13 @@ impl ArdiaUpstream {
     fn navigate(&self, id: i64, url: &str) -> Result<String, String> {
         self.precheck(url)?;
         // `open` without a bound tab would make a tab in the default profile: make our own.
-        if self.bound_tab(id).is_err() {
-            return self.open(id, url);
+        match self.bound_tab(id) {
+            Err(_) => return self.open(id, url),
+            // The user's own tab is never moved without the normal rules (spec section 4).
+            Ok(tab) if self.is_user_tab(id, &tab) => self.user_tab_navigation(id, url, &tab)?,
+            Ok(_) => {}
         }
-        let (data, tab) = self.in_tab(id, &["open", url])?;
+        let (data, tab) = self.in_tab(id, &["open"], &[url])?;
         let shown = data["url"].as_str().unwrap_or(url);
         let title = data["title"].as_str().unwrap_or("");
         let lines: Vec<&str> = data["changes"]["text"]["lines"]
@@ -585,7 +753,7 @@ impl ArdiaUpstream {
     }
 
     fn history(&self, id: i64, command: &str) -> Result<String, String> {
-        let (data, tab) = self.in_tab(id, &[command])?;
+        let (data, tab) = self.in_tab(id, &[command], &[])?;
         let url = data["url"].as_str().unwrap_or("").to_owned();
         let url = if url.is_empty() {
             self.current_url(id)?
@@ -604,12 +772,20 @@ impl ArdiaUpstream {
         if let Some(selector) = args["selector"].as_str().filter(|s| !s.trim().is_empty()) {
             cmd.extend(["-s", plain_value("selector", selector)?]);
         }
-        let (data, tab) = self.in_tab(id, &cmd)?;
+        let (data, tab) = self.in_tab(id, &cmd, &[])?;
         // The snapshot names the page it read: that origin is checked too.
         if let Some(origin) = data["origin"].as_str().filter(|o| o.starts_with("http")) {
             self.after(id, &tab, origin, "browser_snapshot")?;
         }
         let url = self.current_url(id)?;
+        // The refs the Mono now holds: an act tool runs only on one of these (spec section 6).
+        let (refs, epoch) = (fresh::refs_of(&data), data["epoch"].as_u64());
+        self.conv(id, |c| {
+            c.seen
+                .entry(tab.clone())
+                .or_default()
+                .note(&url, epoch, refs)
+        });
         let text = data["snapshot"].as_str().unwrap_or("");
         let body = format!("### Snapshot\n{}\n", cap(text));
         self.page_reply(id, &tab, "browser_snapshot", &url, "", body)
@@ -620,7 +796,7 @@ impl ArdiaUpstream {
         if let Some(selector) = args["selector"].as_str().filter(|s| !s.trim().is_empty()) {
             cmd.extend(["-s", plain_value("selector", selector)?]);
         }
-        let (data, tab) = self.in_tab(id, &cmd)?;
+        let (data, tab) = self.in_tab(id, &cmd, &[])?;
         let url = data["finalUrl"]
             .as_str()
             .or_else(|| data["url"].as_str())
@@ -649,7 +825,7 @@ impl ArdiaUpstream {
         );
         let path = dir.join(name);
         let shown = path.to_string_lossy().into_owned();
-        let (_, tab) = self.in_tab(id, &["screenshot", &shown])?;
+        let (_, tab) = self.in_tab(id, &["screenshot"], &[&shown])?;
         let url = self.current_url(id)?;
         if let Err(error) = self.after(id, &tab, &url, "browser_screenshot") {
             let _ = std::fs::remove_file(&path);
@@ -663,7 +839,7 @@ impl ArdiaUpstream {
     }
 
     fn console(&self, id: i64, command: &str) -> Result<String, String> {
-        let (data, tab) = self.in_tab(id, &[command])?;
+        let (data, tab) = self.in_tab(id, &[command], &[])?;
         let url = self.current_url(id)?;
         let mut lines = Vec::new();
         let key = if command == "console" {
@@ -701,7 +877,7 @@ impl ArdiaUpstream {
             .unwrap_or(600)
             .clamp(1, 20_000)
             .to_string();
-        let (_, tab) = self.in_tab(id, &["scroll", direction, &amount])?;
+        let (_, tab) = self.in_tab(id, &["scroll"], &[direction, &amount])?;
         let url = self.current_url(id)?;
         let body = format!("### Result\nScrolled {direction} by {amount}.\n");
         self.page_reply(id, &tab, "browser_scroll", &url, "", body)
@@ -713,7 +889,9 @@ impl ArdiaUpstream {
         match args["action"].as_str().unwrap_or("list") {
             "list" => {
                 let (data, _) = self.in_tab_or_list(id)?;
-                let own = self.own_tabs(id);
+                let mut own = self.own_tabs(id);
+                let user_tab = self.conv(id, |c| c.user_tab.clone());
+                own.extend(user_tab.clone());
                 let bound = self.conv(id, |c| c.bound.clone());
                 let mut out = String::from("### Tabs\n");
                 let mut any = false;
@@ -732,7 +910,12 @@ impl ArdiaUpstream {
                         continue;
                     }
                     out.push_str(&format!(
-                        "- {app_id}{} [{}]({})\n",
+                        "- {app_id}{}{} [{}]({})\n",
+                        if user_tab.as_deref() == Some(app_id) {
+                            " (the user's tab)"
+                        } else {
+                            ""
+                        },
                         if bound.as_deref() == Some(app_id) {
                             " (current)"
                         } else {
@@ -752,8 +935,9 @@ impl ArdiaUpstream {
                 let url = args["url"].as_str().unwrap_or("").trim();
                 self.open(id, url)
             }
+            "adopt_active" => self.adopt_active(id, args),
             action @ ("select" | "close") => {
-                if !self.owns(id, &tab) {
+                if !self.usable(id, &tab) {
                     self.audit(
                         id,
                         "tab_rejected",
@@ -767,6 +951,25 @@ impl ArdiaUpstream {
                     let url = data["url"].as_str().unwrap_or("").to_owned();
                     return self.page_reply(id, &tab, "browser_tabs", &url, "", String::new());
                 }
+                // The user's own tab is never closed: closing it lets go of it.
+                if self.is_user_tab(id, &tab) {
+                    self.conv(id, |c| {
+                        c.user_tab = None;
+                        if c.bound.as_deref() == Some(tab.as_str()) {
+                            c.bound = None;
+                        }
+                        c.seen.remove(&tab);
+                    });
+                    self.audit(
+                        id,
+                        "browser_tabs",
+                        "",
+                        "released the user's tab (left open)",
+                    );
+                    return Ok(format!(
+                        "Let go of tab {tab}. It is the user's tab, so it stays open.\n"
+                    ));
+                }
                 self.controller
                     .close_tab(&session, &tab)
                     .map_err(|f| self.fail(id, f))?;
@@ -774,26 +977,24 @@ impl ArdiaUpstream {
                     if c.bound.as_deref() == Some(tab.as_str()) {
                         c.bound = None;
                     }
+                    c.seen.remove(&tab);
                 });
                 self.audit(id, "browser_tabs", "", "close tab");
                 Ok(format!("Closed tab {tab}.\n"))
             }
             other => Err(format!(
-                "`action` is list, new, select or close, not `{other}`."
+                "`action` is list, new, select, close or adopt_active, not `{other}`."
             )),
         }
     }
 
     /// `tab list` needs a session; a conversation with no tab yet has none to list.
     fn in_tab_or_list(&self, id: i64) -> Result<(Value, String), String> {
-        let session = self.session(id);
-        if self.own_tabs(id).is_empty() {
+        if self.own_tabs(id).is_empty() && self.conv(id, |c| c.user_tab.is_none()) {
             return Ok((json!({"tabs": []}), String::new()));
         }
         self.hold(id)?;
-        self.controller
-            .cli()
-            .browse(&session, &["tab", "list"])
+        self.browse(id, &["tab", "list"], &[])
             .map(|d| (d, String::new()))
             .map_err(|f| self.fail(id, f))
     }
@@ -841,12 +1042,27 @@ impl Upstream for ArdiaUpstream {
     fn session_survives(&self, _error: &str) -> bool {
         true
     }
-    fn run_started(&self, session: i64, _user_message: &str) {
-        self.conv(session, |c| c.halted.clear());
+    fn run_started(&self, session: i64, user_message: &str) {
+        self.conv(session, |c| {
+            c.halted.clear();
+            // A new user message ends a Stop: the turn may use the browser again.
+            c.stopped = false;
+            c.cancel = CancelToken::new();
+            if !user_message.trim().is_empty() {
+                c.user_messages.push(user_message.to_owned());
+                let extra = c.user_messages.len().saturating_sub(50);
+                c.user_messages.drain(..extra);
+            }
+        });
+        self.begin_run_trust(session, user_message);
         self.controller.turn_ended(&self.turn_key(session));
     }
     fn run_ended(&self, session: i64) {
+        self.end_run_cards(session);
         self.controller.turn_ended(&self.turn_key(session));
+    }
+    fn injection_found(&self, session: i64) {
+        self.flag_injection(session);
     }
 }
 
@@ -888,6 +1104,10 @@ fn header(url: &str, title: &str) -> String {
 fn tool_definitions() -> Vec<Value> {
     let object = |properties: Value, required: Value| json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false});
     let tool = |name: &str, title: &str, description: &str, schema: Value| json!({"name": name, "title": title, "description": description, "inputSchema": schema, "annotations": {"readOnlyHint": true}});
+    let act = |name: &str, title: &str, description: &str, schema: Value| json!({"name": name, "title": title, "description": description, "inputSchema": schema, "annotations": {"readOnlyHint": false, "destructiveHint": false}});
+    let target = json!({"type": "string", "description": "The element ref from a browser_snapshot, such as e12."});
+    let purpose = json!({"type": "string", "description": "Why you are doing this, in one sentence (shown to the user when they are asked)."});
+    let declared = json!({"type": "array", "items": {"type": "string"}, "description": "Risk categories you know this call has (payment, destructive, account_security, sharing, send_unnamed, post_public, upload, credential_entry, terms). It can only add questions for the user, never remove one."});
     let url = json!({"type": "string", "description": "An http or https address."});
     vec![
         tool("browser_open", "Open a page in a new tab", "Open an address in a new background tab of this Mono's Ardia profile and make it this conversation's tab. Use it for the first page, or when the user wants another tab. To move the current tab to another address use browser_navigate.", object(json!({"url": url}), json!(["url"]))),
@@ -898,9 +1118,17 @@ fn tool_definitions() -> Vec<Value> {
         tool("browser_snapshot", "Page snapshot", "The accessibility snapshot of the tab: roles and names with an [ref=eN] for each element. interactive shows only controls and links; selector (CSS) limits it to one part of the page.", object(json!({"interactive": {"type": "boolean"}, "selector": {"type": "string", "description": "CSS selector of the part to snapshot."}}), json!([]))),
         tool("browser_read", "Read the page text", "The main text of the tab. Cheaper than a snapshot for articles and documents. selector (CSS) reads one part.", object(json!({"selector": {"type": "string"}}), json!([]))),
         tool("browser_screenshot", "Screenshot", "Save a screenshot of the tab into this Mono's output folder and return its path.", object(json!({}), json!([]))),
-        tool("browser_tabs", "This conversation's tabs", "list the tabs this conversation opened, new (open a tab at url), select or close one of them by its tab id. Tabs of the user are never shown or touched.", object(json!({"action": {"type": "string", "enum": ["list", "new", "select", "close"]}, "tab": {"type": "string", "description": "A tab id from list."}, "url": {"type": "string"}}), json!(["action"]))),
+        tool("browser_tabs", "This conversation's tabs", "list the tabs this conversation opened, new (open a tab at url), select or close one of them by its tab id. adopt_active asks the user to let you work in the tab they have open now (only when they asked you to use their own tab); closing that tab only lets go of it. Other tabs of the user are never shown or touched.", object(json!({"action": {"type": "string", "enum": ["list", "new", "select", "close", "adopt_active"]}, "tab": {"type": "string", "description": "A tab id from list."}, "url": {"type": "string"}}), json!(["action"]))),
         tool("browser_console", "Console messages", "The console messages the page printed.", object(json!({}), json!([]))),
         tool("browser_errors", "Page errors", "The errors the page raised.", object(json!({}), json!([]))),
         tool("browser_scroll", "Scroll", "Scroll the page.", object(json!({"direction": {"type": "string", "enum": ["up", "down", "left", "right"]}, "amount": {"type": "integer", "description": "Pixels, default 600."}}), json!([]))),
+        act("browser_click", "Click", "Click an element. zptah reads the element fresh first and asks the user before a risky click (payment, deletion, sending, posting, account changes). Take a browser_snapshot first: only refs from a snapshot work, and a ref that changed since fails.", object(json!({"ref": target, "purpose": purpose, "declared_risk": declared}), json!(["ref"]))),
+        act("browser_type", "Type text", "Type text into a field, key by key. Never into a password or one-time code field (zptah refuses).", object(json!({"ref": target, "text": {"type": "string"}, "purpose": purpose, "declared_risk": declared}), json!(["ref", "text"]))),
+        act("browser_fill", "Fill a field", "Set the value of a field. Never a password or one-time code field (zptah refuses).", object(json!({"ref": target, "text": {"type": "string"}, "purpose": purpose, "declared_risk": declared}), json!(["ref", "text"]))),
+        act("browser_press", "Press a key", "Press a key in the page (Enter, Tab, Escape, ArrowDown, ...). Enter can submit a form. A character key is only sent when zptah can tell the focus is not a password field.", object(json!({"key": {"type": "string"}, "purpose": purpose, "declared_risk": declared}), json!(["key"]))),
+        act("browser_select", "Choose an option", "Choose an option of a select or dropdown by its text or value.", object(json!({"ref": target, "value": {"type": "string"}, "purpose": purpose, "declared_risk": declared}), json!(["ref", "value"]))),
+        act("browser_check", "Check or uncheck", "Tick (checked true, the default) or untick (checked false) a checkbox or radio.", object(json!({"ref": target, "checked": {"type": "boolean"}, "purpose": purpose, "declared_risk": declared}), json!(["ref"]))),
+        act("browser_hover", "Hover", "Point at an element (opens menus and tooltips). It changes nothing.", object(json!({"ref": target}), json!(["ref"]))),
+        act("browser_upload", "Upload files", "Attach files to a file input. The user is ALWAYS asked, with each path and its size. Only files inside this Mono's project folder or output folder, or a path the user wrote in the conversation; never dotfiles, credentials or app data.", object(json!({"ref": target, "paths": {"type": "array", "items": {"type": "string"}, "description": "Absolute file paths."}, "purpose": purpose, "declared_risk": declared}), json!(["ref", "paths"]))),
     ]
 }

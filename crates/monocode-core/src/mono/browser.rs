@@ -962,6 +962,23 @@ pub(crate) fn resolve_ardia_with(
     attach
 }
 
+/// The user pressed Stop on the conversation `conversation` of Mono `mono_id` (design spec
+/// section 9): the `ardia` process of the call in flight is killed, the open approval cards are
+/// withdrawn, the holds on the tabs are released and every further browser call of the turn is
+/// refused until the next user message. Cheap and non-blocking (the release runs on a thread), so
+/// the UI thread may call it.
+pub fn stop_browser(mono_id: &str, conversation: i64) {
+    if let Some(upstream) = ardia::upstream::upstream_for(mono_id) {
+        upstream.stop_turn(conversation);
+    }
+}
+
+/// Whether a browser call of `conversation` is running now (the "Working in Ardia" row). A cheap
+/// lookup, no process.
+pub fn browser_working(conversation: i64) -> bool {
+    ardia::upstream::browser_working(conversation)
+}
+
 /// The launch for a Mono that has its browser on: the gate runs the `ardia` command for it.
 fn attach_ardia(
     ctx: &crate::agent::MonoContext,
@@ -985,13 +1002,27 @@ fn attach_ardia(
     controller.set_idle_minutes(ardia::controller::idle_minutes_in(&database));
     let upstream = ardia::upstream::upstream_for(&ctx.mono.id)
         .unwrap_or_else(|| ardia::ArdiaUpstream::new(&ctx.mono.id, controller.clone()));
+    let queue = trust::approval::queue_for(&ctx.mono.id);
+    // The rules the gate applies: the soul's, reconciled with what the user confirmed.
+    let soul = load_files_soul(ctx);
+    let rules = trust::rules::status(&store, &ctx.mono.id, &soul);
     upstream.configure(ardia::upstream::Config {
         profile: browser.ardia_profile.clone(),
         origins: gate::Origins::new(&browser.allowed_origins, &browser.blocked_origins),
         output_dir: Some(dir.clone()),
         database: Some(database.clone()),
+        act: Some(gate::ActConfig {
+            level: browser.trust,
+            rules: rules.active,
+            store: Some(store.clone()),
+            mono_label: ctx.mono.label(),
+            profile: Some(browser.ardia_profile.clone()).filter(|n| !n.is_empty()),
+            approval_timeout: gate::APPROVAL_TIMEOUT,
+            queue: queue.clone(),
+        }),
+        project_dirs: ctx.mono.projects.iter().map(PathBuf::from).collect(),
+        home: None,
     });
-    let queue = trust::approval::queue_for(&ctx.mono.id);
     let gate = match servers.gate_for_ardia(&ctx.mono.id, upstream, browser.policy()) {
         Ok(gate) => gate,
         Err(error) => {
@@ -1111,7 +1142,6 @@ fn attach(
     })
 }
 
-#[cfg(test)]
 /// The text of the Mono's `SOUL.md`, or nothing when it cannot be read (no rules then).
 fn load_files_soul(ctx: &crate::agent::MonoContext) -> String {
     super::load_files(&ctx.root, &ctx.mono)

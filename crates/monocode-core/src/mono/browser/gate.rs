@@ -54,6 +54,8 @@ pub const SHARED_ROUTE: &str = "shared";
 pub const SUGGEST_ID_PREFIX: &str = "browser-gate-suggest-";
 /// The tool the gate adds for the actions it can not detect itself.
 pub const APPROVAL_TOOL: &str = "browser_request_approval";
+/// What a turn is told when its gate was shut down mid-turn.
+pub(crate) const STOPPED_GATE: &str = "This browser was turned off or changed while you were working, so it is no longer available in this turn. Tell the user; a new message starts again with the current settings.";
 /// How long the gate waits for the user. Codex is told to wait a minute longer.
 pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
@@ -251,11 +253,19 @@ impl Policy {
         Verdict::Allow
     }
 
-    /// The decision for one call on an Ardia gate (M1: the read tools only, each allowed at
-    /// every level; addresses are limited to http and https).
+    /// The decision for one call on an Ardia gate: the read tools are allowed at every level, the
+    /// act tools and the approval tool only at the act level (the upstream then decides what
+    /// needs the user's answer, spec 6); addresses are limited to http and https.
     fn evaluate_ardia(&self, tool: &str, args: &Value) -> Verdict {
-        if !ardia::upstream::TOOLS.contains(&tool) {
+        let acts = ardia::upstream::ACT_TOOLS.contains(&tool) || tool == APPROVAL_TOOL;
+        if !acts && !ardia::upstream::TOOLS.contains(&tool) {
             return Verdict::Deny(format!("{tool} is not an available browser tool."));
+        }
+        let adopts = tool == "browser_tabs" && args["action"] == "adopt_active";
+        if (acts || adopts) && self.trust == BrowserLevel::ReadOnly {
+            return Verdict::Deny(format!(
+                "{tool} is not available: this Mono can only read the browser. Tell the user what to do, or that the browser level must be raised."
+            ));
         }
         match unsafe_address(tool, args) {
             Some(reason) => Verdict::Deny(reason),
@@ -266,7 +276,9 @@ impl Policy {
     /// Whether the gate lists `tool` to the agent.
     pub fn offers(&self, tool: &str) -> bool {
         if self.ardia {
-            return ardia::upstream::TOOLS.contains(&tool);
+            return ardia::upstream::TOOLS.contains(&tool)
+                || (self.trust != BrowserLevel::ReadOnly
+                    && ardia::upstream::ACT_TOOLS.contains(&tool));
         }
         self.trust.offers(tool)
     }
@@ -670,6 +682,9 @@ struct Inner {
     calls: AtomicU64,
     generation: AtomicU64,
     next_id: AtomicU64,
+    /// The Mono's browser was turned off or changed ([`Gate::shut_down`]): the turn that still
+    /// holds this gate's address gets a refusal for every further call.
+    stopped: AtomicBool,
     /// Tests: selectors are not turned into refs (see [`Gate::pass_selectors_through`]).
     #[cfg(test)]
     selectors_through: AtomicBool,
@@ -751,6 +766,7 @@ impl Gate {
             calls: AtomicU64::new(0),
             generation: AtomicU64::new(0),
             next_id: AtomicU64::new(100),
+            stopped: AtomicBool::new(false),
             #[cfg(test)]
             selectors_through: AtomicBool::new(false),
             timeout,
@@ -839,6 +855,18 @@ impl Gate {
         if let Some(workspace) = self.inner.workspace() {
             output::clear(&workspace.output_dir);
         }
+    }
+
+    /// The Mono's browser was turned off or changed: this gate refuses every further call, so a
+    /// turn that still holds its address can not keep using the browser. The server keeps
+    /// answering (with the refusal) until the last holder lets go of the gate.
+    pub fn shut_down(&self) {
+        self.inner.stopped.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether [`Gate::shut_down`] was called.
+    pub fn is_shut_down(&self) -> bool {
+        self.inner.stopped.load(Ordering::SeqCst)
     }
 
     /// Applies a new policy to the calls that follow, keeping the server.
@@ -970,14 +998,20 @@ impl Inner {
         let policy = self.lock_state().policy.clone();
         let upstream = self.upstream_rpc("tools/list", json!({}))?;
         if policy.ardia {
-            // M1 offers the Ardia read tools only: no approval, intent or recipe tools yet.
-            return Ok(upstream["tools"]
+            // The read tools, the act tools at the act level, and the two gate-only tools (the
+            // approval request and the declared intent). No recipe tools on Ardia.
+            let mut tools: Vec<Value> = upstream["tools"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter(|tool| tool["name"].as_str().is_some_and(|n| policy.offers(n)))
                 .cloned()
-                .collect());
+                .collect();
+            if policy.trust != BrowserLevel::ReadOnly {
+                tools.push(approval_tool_definition());
+                tools.push(defense::declare_tool_definition());
+            }
+            return Ok(tools);
         }
         let mut tools: Vec<Value> = upstream["tools"]
             .as_array()
@@ -1104,7 +1138,13 @@ impl Inner {
             route: route.to_owned(),
             session_id: self.session_of(route),
         });
+        if self.stopped.load(Ordering::SeqCst) {
+            return tool_text(STOPPED_GATE, true);
+        }
         if self.lock_state().policy.ardia {
+            if name == defense::DECLARE_TOOL {
+                return self.declare_intent(route, &args);
+            }
             return self.call_ardia_tool(route, name, args);
         }
         if name == defense::DECLARE_TOOL {

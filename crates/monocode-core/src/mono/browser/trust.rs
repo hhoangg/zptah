@@ -118,11 +118,14 @@ impl BrowserLevel {
     }
 
     /// The tools a harness must not offer on an Ardia gate at this level: at read only the act
-    /// tools (not offered yet), always the tools no level allows.
+    /// tools and the two gate-only tools (approval request, declared intent), always the tools no
+    /// level allows.
     pub fn disabled_tools_ardia(self) -> Vec<&'static str> {
         let mut tools = ALWAYS_BLOCKED_TOOLS.to_vec();
         if self == Self::ReadOnly {
             tools.extend(super::ardia::upstream::ACT_TOOLS);
+            tools.push(super::gate::APPROVAL_TOOL);
+            tools.push(super::defense::DECLARE_TOOL);
         }
         tools
     }

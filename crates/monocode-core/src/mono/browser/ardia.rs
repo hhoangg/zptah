@@ -16,8 +16,12 @@ pub mod upstream;
 pub use controller::{
     controller, ArdiaProfile, Controller, IdleOutcome, LiveInfo, Owner, Readiness, Report,
 };
-pub use upstream::{end_conversation_everywhere, ArdiaUpstream};
+pub use upstream::{browser_working, end_conversation_everywhere, ArdiaUpstream};
 
+#[cfg(test)]
+mod act_tests;
+#[cfg(test)]
+mod fake_page;
 #[cfg(test)]
 mod tests;
 #[cfg(all(test, unix))]

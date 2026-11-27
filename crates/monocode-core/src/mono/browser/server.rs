@@ -112,6 +112,8 @@ impl BrowserServers {
             .unwrap_or_else(|e| e.into_inner())
             .remove(mono_id);
         if let Some(gate) = gate {
+            // A turn that still holds the old address gets a refusal, not a working browser.
+            gate.shut_down();
             gate.clear_output();
         }
     }
@@ -139,6 +141,7 @@ impl BrowserServers {
             .drain()
             .collect();
         for (mono_id, gate) in gates {
+            gate.shut_down();
             gate.clear_output();
             self.end_sessions(&mono_id);
         }

@@ -33,12 +33,12 @@ fn exit_codes_become_data_refusals_and_unreachable() {
 esac"#,
     );
     let cli = cli(dir.path());
-    let data = cli.browse("s", &["get", "url"]).unwrap();
+    let data = cli.browse("s", &["get", "url"], &[]).unwrap();
     assert_eq!(data["url"], "https://example.com/");
-    let refused = cli.browse("s", &["stale"]).unwrap_err();
+    let refused = cli.browse("s", &["stale"], &[]).unwrap_err();
     assert_eq!(refused.code(), Some("stale_ref"));
     assert!(matches!(
-        cli.browse("s", &["anything"]),
+        cli.browse("s", &["anything"], &[]),
         Err(Failure::Unreachable(_))
     ));
     assert_eq!(cli.call("hello", &json!({})), Err(Failure::ControlOff));
@@ -135,8 +135,89 @@ fn a_command_that_prints_too_much_fails_with_a_clear_error() {
         "head -c 9000000 /dev/zero | tr '\\\\0' 'a'; exit 0",
     );
     let cli = cli(dir.path());
-    match cli.browse("s", &["read"]) {
+    match cli.browse("s", &["read"], &[]) {
         Err(Failure::Malformed(why)) => assert!(why.contains("size limit"), "{why}"),
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn values_reach_the_command_after_a_double_dash_and_last() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.txt");
+    script(
+        dir.path(),
+        &format!(
+            r#"printf '%s\n' "$*" >> '{}'; echo '{{"success":true,"data":{{}},"error":null}}'"#,
+            log.display()
+        ),
+    );
+    let cli = cli(dir.path());
+    // A Mono's text may look like an option: after `--` it is data, and nothing follows it.
+    cli.browse("s", &["fill"], &["@e1", "--json", "--session=x", "-5"])
+        .unwrap();
+    cli.browse("s", &["snapshot", "-i", "-s", "main"], &[])
+        .unwrap();
+    cli.browse("s", &["press"], &["--"]).unwrap();
+    let argv = std::fs::read_to_string(log).unwrap();
+    let lines: Vec<&str> = argv.lines().collect();
+    assert_eq!(
+        lines[0],
+        "browse --session s --json fill -- @e1 --json --session=x -5"
+    );
+    assert_eq!(lines[1], "browse --session s --json snapshot -i -s main");
+    assert_eq!(lines[2], "browse --session s --json press -- --");
+}
+
+#[test]
+fn a_cancelled_call_kills_the_process_and_its_children() {
+    let dir = tempfile::tempdir().unwrap();
+    let pids = dir.path().join("pids.txt");
+    // The script starts a child that outlives it unless the whole group is killed.
+    script(
+        dir.path(),
+        &format!(
+            "echo $$ > '{p}'; sleep 30 & echo $! >> '{p}'; wait",
+            p = pids.display()
+        ),
+    );
+    let runner = std::sync::Arc::new(ProcessRunner::with_search(
+        format!("{}:/usr/bin:/bin", dir.path().display()),
+        None,
+    ));
+    let cancel = CancelToken::new();
+    let worker = std::thread::spawn({
+        let (runner, cancel) = (runner.clone(), cancel.clone());
+        move || runner.run_cancellable(&["browse".into()], Duration::from_secs(30), &cancel)
+    });
+    let started = Instant::now();
+    while std::fs::read_to_string(&pids).map_or(true, |t| t.lines().count() < 2) {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the script did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    cancel.cancel();
+    assert_eq!(worker.join().unwrap(), Err(RunFailure::Cancelled));
+    assert!(started.elapsed() < Duration::from_secs(10));
+    let text = std::fs::read_to_string(&pids).unwrap();
+    for pid in text.lines().filter_map(|l| l.trim().parse::<i32>().ok()) {
+        // Gone (a zombie that is not reaped yet still answers; give it a moment).
+        let mut gone = false;
+        for _ in 0..50 {
+            // SAFETY: signal 0 only checks that the process exists.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(gone, "process {pid} survived the cancel");
+    }
+    // A call that starts after the cancel does not run at all.
+    assert_eq!(
+        runner.run_cancellable(&["browse".into()], Duration::from_secs(1), &cancel),
+        Err(RunFailure::Cancelled)
+    );
 }

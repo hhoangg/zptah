@@ -5,12 +5,21 @@
 // - Needs Ardia installed and running with Control on
 //   (Settings > Advanced > "Let the ardia command control Ardia").
 // - Run it after Ardia or its CLI updates.
-// - It drives the same commands zptah's `ardia` integration uses, only against
-//   https://example.com, and compares the reply SHAPES (key paths and JSON
-//   types, never values) with the fixtures in
+// - It drives the same commands zptah's `ardia` integration uses and compares the
+//   reply SHAPES (key paths and JSON types, never values) with the fixtures in
 //   crates/monocode-core/src/mono/browser/ardia/fixtures/.
-// - It closes the one tab it opens and releases its session on exit.
+// - The read commands run against https://example.com. The ACT commands (click, fill,
+//   type, press, select, check, hover, upload, `get attr`, `form`) never touch a real site:
+//   the script writes its OWN local page (a file:// page in its temp dir, with a text input,
+//   a password input, a button, a link, a select, a checkbox, a file input and a form) and a
+//   temp file to upload, opens the page with `ardia tabs open` (a file URL is fine here, the
+//   script does not go through zptah's gate) and acts only there. It never submits the form.
+// - Every `ardia browse` call uses zptah's argv form:
+//   `browse --session S --json <cmd> [flags] -- <values...>` (nothing after the values).
+// - It closes every tab it opens and releases its session on exit (also on SIGINT/SIGTERM).
 // - `back` and `forward` are skipped: example.com has no history to go back to.
+// - `check`, `hover` (success) and `get attr` of a later form are not recorded in the
+//   fixtures (unmeasured): the script only prints what they answered, for the next fixture.
 //
 // Usage: node scripts/ardia-shapes-check.mjs --profile <id> [--ardia <path>] [--keep-going]
 // Exit: 0 all ok, 1 mismatch or failure, 2 usage error.
@@ -127,6 +136,95 @@ function step(name, argv, fixtureName, unwrap = (j) => j) {
   return ok ? r.json : r.json;
 }
 
+// ---- the act commands, on the script's own local page ----
+
+const TEST_PAGE = `<!doctype html><html><head><title>zptah shapes check</title></head><body>
+<h1>Shapes check</h1>
+<form id="f" action="/session" method="post">
+<label for="n">Name</label><input id="n" name="name" type="text">
+<label for="p">Secret</label><input id="p" name="pw" type="password" autocomplete="current-password">
+<label for="c">Color</label><select id="c" name="color"><option>red</option><option>blue</option></select>
+<label for="a">Agree</label><input id="a" name="agree" type="checkbox">
+<label for="u">Attachment</label><input id="u" name="file" type="file">
+<button type="submit">Send</button>
+</form>
+<a id="ext" href="https://www.iana.org/domains/example">Docs</a>
+<button id="add" type="button" onclick="var b=document.createElement('button');b.textContent='Inserted';document.body.insertBefore(b,document.body.firstChild)">Add</button>
+</body></html>`;
+
+// Finds the ref of an element in a `snapshot -i` reply by role and name.
+const refOf = (snapshot, role, name) =>
+  Object.entries(snapshot?.data?.refs ?? {}).find(([, v]) => v.role === role && v.name === name)?.[0];
+
+async function actCommands() {
+  const page = path.join(tmp, "act.html");
+  const upload = path.join(tmp, "up.txt");
+  fs.writeFileSync(page, TEST_PAGE);
+  fs.writeFileSync(upload, "zptah shapes check\n");
+  // A tab of our own for the local page, in the same profile; `tabs open` is the only way that
+  // makes a tab in the right profile. Never a real site here.
+  const opened = step("act: tabs open (local page)", ["tabs", "open", `file://${page}`, "--profile", profile, "--json"], "tabs_open");
+  const tab = opened?.results?.[0]?.tabs?.[0] ?? null;
+  if (!tab) return report("act: tab id", [], "no tab id in tabs open reply");
+  TABS.push(tab);
+  const held = () => runJson(["call", "tabs.hold", "--params", JSON.stringify({ session: S, tabs: [tab], seconds: 120 }), "--json"]);
+  held();
+  let bound = null;
+  for (let i = 0; i < 6; i++) {
+    const r = runJson(browse(["tab", tab]));
+    if (r.error) return report("act: browse tab", [], r.error);
+    bound = r.json;
+    if (bound.code !== "tab_asleep" || i === 5) break;
+    spawnSync("sleep", ["1"]);
+    held();
+  }
+  if (!bound || bound.success !== true) return report("act: browse tab", [], "could not bind the local page tab");
+
+  const snap = step("act: snapshot -i", browse(["snapshot", "-i"]), "browse_snapshot_interactive", (j) => ({ ...j, data: { ...j.data, snapshot: "" } }));
+  const refs = {
+    name: refOf(snap, "textbox", "Name"),
+    secret: refOf(snap, "textbox", "Secret"),
+    color: refOf(snap, "combobox", "Color"),
+    agree: refOf(snap, "checkbox", "Agree"),
+    file: Object.entries(snap?.data?.refs ?? {}).find(([, v]) => /Attachment|Choose|file/i.test(v.name))?.[0],
+    docs: refOf(snap, "link", "Docs"),
+    add: refOf(snap, "button", "Add"),
+  };
+  for (const [what, ref] of Object.entries(refs)) {
+    if (!ref) return report(`act: ref of ${what}`, [], "not in the snapshot of the local page");
+  }
+
+  // Reads zptah's fresh read depends on.
+  const at = (ref) => `@${ref}`;
+  step("act: get attr type (password)", browse(["get", "attr"], [at(refs.secret), "type"]), "get_attr_type");
+  step("act: get attr autocomplete", browse(["get", "attr"], [at(refs.secret), "autocomplete"]), "get_attr_autocomplete");
+  step("act: get attr href (link)", browse(["get", "attr"], [at(refs.docs), "href"]), "get_attr_href");
+  step("act: get attr form action", browse(["get", "attr"], ["form", "action"]), "get_attr_form_action");
+  step("act: form", browse(["form"]), "browse_form_login");
+
+  // The act commands. Values are after `--`; a text that looks like an option is data there.
+  step("act: fill", browse(["fill"], [at(refs.name), "--json"]), "act_fill_password");
+  step("act: type", browse(["type"], [at(refs.name), "-5"]), "act_type");
+  step("act: press Tab", browse(["press"], ["Tab"]), "act_press_tab");
+  step("act: select", browse(["select"], [at(refs.color), "blue"]), "act_select");
+  step("act: upload", browse(["upload"], [at(refs.file), upload]), "act_upload");
+  step("act: click (adds a node)", browse(["click"], [at(refs.add)]), "act_click_add");
+  // Not in the fixtures (unmeasured): print what they answer, to record it.
+  for (const [name, cmd, values] of [
+    ["check", ["check"], [at(refs.agree)]],
+    ["uncheck", ["uncheck"], [at(refs.agree)]],
+    ["hover", ["hover"], [at(refs.add)]],
+  ]) {
+    const r = runJson(browse(cmd, values));
+    if (r.error || r.json?.success !== true) report(`act: ${name}`, [], r.error || JSON.stringify(r.json).slice(0, 200));
+    else console.log(`INFO act: ${name} answered keys: ${Object.keys(r.json.data).join(", ")} (unmeasured, no fixture)`);
+  }
+  // A ref nobody has: the gate maps this to "the element changed".
+  const unknown = runJson(browse(["click"], ["@e99999"]));
+  if (unknown.error) report("act: unknown ref", [], unknown.error);
+  else report("act: unknown ref", diffShapes(fixture("act_unknown_ref"), unknown.json));
+}
+
 // ---- main ----
 if (!profile) {
   console.error("Usage: node scripts/ardia-shapes-check.mjs --profile <ardia-profile-id> [--ardia <path>] [--keep-going]");
@@ -138,17 +236,19 @@ if (!profile) {
   process.exit(2);
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ardia-shapes-"));
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ardia-shapes-")));
 let TAB = null;
+// Every tab this script opened (the example.com tab first): only these are ever closed.
+const TABS = [];
 let cleaned = false;
 function cleanup() {
   if (cleaned) return;
   cleaned = true;
   run(["browse", "--session", S, "close", "--json"]);
   run(["call", "tabs.release", "--params", JSON.stringify({ session: S }), "--json"]);
-  if (TAB) {
-    // Only ever close the tab this script opened.
-    const r = runJson(["tabs", "close", TAB, "--json"]);
+  // Only ever close the tabs this script opened.
+  for (const tab of TABS) {
+    const r = runJson(["tabs", "close", tab, "--json"]);
     if (r.json) {
       try {
         report("tabs close", diffShapes(fixture("tabs_close"), r.json));
@@ -190,7 +290,9 @@ process.on("exit", () => events.kill());
 
 const hold = () =>
   runJson(["call", "tabs.hold", "--params", JSON.stringify({ session: S, tabs: [TAB], seconds: 120 }), "--json"]);
-const browse = (cmd) => ["browse", "--session", S, ...cmd, "--json"];
+// `browse --session S --json <cmd> [flags] -- <values...>`: options and the command first, every
+// value after `--` (taken literally there), nothing after the values.
+const browse = (cmd, values = []) => ["browse", "--session", S, "--json", ...cmd, ...(values.length ? ["--", ...values] : [])];
 
 try {
   const hello = step(
@@ -207,6 +309,7 @@ try {
 
   const opened = step("tabs open", ["tabs", "open", "https://example.com", "--profile", profile, "--json"], "tabs_open");
   TAB = opened?.results?.[0]?.tabs?.[0] ?? null;
+  if (TAB) TABS.push(TAB);
   if (!TAB) report("tab id", [], "no tab id in tabs open reply");
 
   step("tabs.hold", ["call", "tabs.hold", "--params", JSON.stringify({ session: S, tabs: [TAB], seconds: 120 }), "--json"], "hold");
@@ -230,20 +333,22 @@ try {
   if (!bind || bind.success !== true) throw new Stop();
 
   const cmds = [
-    ["get url", ["get", "url"], "browse_get_url"],
-    ["get title", ["get", "title"], "browse_get_title"],
-    ["snapshot", ["snapshot"], "browse_snapshot"],
-    ["snapshot -i", ["snapshot", "-i"], "browse_snapshot_interactive"],
-    ["read", ["read"], "browse_read"],
-    ["console", ["console"], "browse_console"],
-    ["errors", ["errors"], "browse_errors"],
-    ["scroll down 200", ["scroll", "down", "200"], "browse_scroll"],
-    ["screenshot", ["screenshot", path.join(tmp, "shot.png")], "browse_screenshot"],
-    ["open", ["open", "https://example.com"], "browse_open"],
-    ["reload", ["reload"], "browse_reload"],
-    ["tab list", ["tab", "list"], "browse_tab_list"],
+    ["get url", ["get", "url"], [], "browse_get_url"],
+    ["get title", ["get", "title"], [], "browse_get_title"],
+    ["snapshot", ["snapshot"], [], "browse_snapshot"],
+    ["snapshot -i", ["snapshot", "-i"], [], "browse_snapshot_interactive"],
+    ["read", ["read"], [], "browse_read"],
+    ["console", ["console"], [], "browse_console"],
+    ["errors", ["errors"], [], "browse_errors"],
+    ["scroll down 200", ["scroll"], ["down", "200"], "browse_scroll"],
+    ["screenshot", ["screenshot"], [path.join(tmp, "shot.png")], "browse_screenshot"],
+    ["open", ["open"], ["https://example.com"], "browse_open"],
+    ["reload", ["reload"], [], "browse_reload"],
+    ["tab list", ["tab", "list"], [], "browse_tab_list"],
   ];
-  for (const [name, cmd, fx] of cmds) step(`browse ${name}`, browse(cmd), fx);
+  for (const [name, cmd, values, fx] of cmds) step(`browse ${name}`, browse(cmd, values), fx);
+
+  await actCommands();
   if (watchSeconds > 0) {
     console.log(`INFO bring Ardia to the front and open a window within ${watchSeconds} s`);
   }

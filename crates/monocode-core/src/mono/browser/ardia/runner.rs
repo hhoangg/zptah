@@ -4,15 +4,21 @@
 //! takes a `dyn Runner` and its tests replay recorded replies (see `fixtures/`). [`Cli`] turns the
 //! three reply shapes of section 12b of the design spec into one `Result`:
 //!
-//! * `ardia browse --session S <cmd> --json` prints `{success, data, error, code?, remedy?}`;
+//! * `ardia browse --session S --json <cmd> [-- <values>]` prints `{success, data, error, code?, remedy?}`;
 //! * `ardia call <method> --params J --json` prints the bare result;
 //! * `ardia tabs open|close ... --json` prints `{ok, applied, results, tabs, ...}`.
 //!
 //! Exit codes: 0 ok, 1 refused or failed, 2 Ardia (or the browse daemon) can not be reached.
+//!
+//! The form of every `ardia browse` call (design spec section 12b, "Arguments"):
+//! `ardia browse --session S --json <cmd> [flags] -- <values...>`. Every option is before the
+//! command, every value a Mono supplied (a text, a key, an address, a ref, a path) is after a
+//! `--` and is taken literally there, and nothing follows the values (not even `--json`).
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -27,6 +33,22 @@ pub const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 /// The string Ardia prints when its Control setting is off. Section 12b: not measured, the
 /// fixture `call_control_off.stderr.txt` assumes it comes on stderr with exit 1.
 const CONTROL_OFF: &str = "Control is off";
+
+/// Stops one `ardia` call from another thread: the process runner polls it and kills the
+/// process tree of the call. Cloning shares the flag.
+#[derive(Clone, Debug, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+impl CancelToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
 
 /// What a finished process printed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,6 +68,8 @@ pub enum RunFailure {
     /// It printed more than [`MAX_OUTPUT`] bytes.
     TooLarge,
     Spawn(String),
+    /// The call's [`CancelToken`] fired and the process was killed.
+    Cancelled,
 }
 
 /// A process whose stdout is read line by line (the event stream). Dropping it stops the process.
@@ -80,6 +104,27 @@ pub fn plain_value<'a>(what: &str, value: &'a str) -> Result<&'a str, String> {
     Ok(value)
 }
 
+/// A text a Mono supplied that goes after `--` (typed text, a key, an option): it is taken
+/// literally there, so a leading `-` is fine. Only what can not travel in an argument is refused:
+/// a NUL, and a text over `max` characters.
+pub fn literal_value<'a>(
+    what: &str,
+    value: &'a str,
+    allow_empty: bool,
+    max: usize,
+) -> Result<&'a str, String> {
+    if value.is_empty() && !allow_empty {
+        return Err(format!("`{what}` is empty."));
+    }
+    if value.contains('\0') {
+        return Err(format!("`{what}` must not contain a NUL character."));
+    }
+    if value.chars().count() > max {
+        return Err(format!("`{what}` is too long (over {max} characters)."));
+    }
+    Ok(value)
+}
+
 /// An address for the command line: http or https with a host, never a leading `-`.
 pub fn web_url(value: &str) -> Result<String, String> {
     let url = plain_value("url", value.trim())?;
@@ -96,6 +141,20 @@ pub fn web_url(value: &str) -> Result<String, String> {
 pub trait Runner: Send + Sync {
     /// Runs `ardia <args>` to its end, or kills it after `timeout`.
     fn run(&self, args: &[String], timeout: Duration) -> Result<Output, RunFailure>;
+    /// [`Runner::run`] that also kills the process (and its children) when `cancel` fires, and
+    /// answers [`RunFailure::Cancelled`]. A runner that can not stop a call midway only looks at
+    /// the token before it starts.
+    fn run_cancellable(
+        &self,
+        args: &[String],
+        timeout: Duration,
+        cancel: &CancelToken,
+    ) -> Result<Output, RunFailure> {
+        if cancel.is_cancelled() {
+            return Err(RunFailure::Cancelled);
+        }
+        self.run(args, timeout)
+    }
     /// Starts `ardia <args>` and reads its stdout as it comes.
     fn watch(&self, args: &[String]) -> Result<Box<dyn LineStream>, RunFailure>;
     /// Where the `ardia` command is, if it is installed.
@@ -207,6 +266,18 @@ impl Runner for ProcessRunner {
     }
 
     fn run(&self, args: &[String], timeout: Duration) -> Result<Output, RunFailure> {
+        self.run_cancellable(args, timeout, &CancelToken::new())
+    }
+
+    fn run_cancellable(
+        &self,
+        args: &[String],
+        timeout: Duration,
+        cancel: &CancelToken,
+    ) -> Result<Output, RunFailure> {
+        if cancel.is_cancelled() {
+            return Err(RunFailure::Cancelled);
+        }
         let mut command = self.command(args)?;
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = command
@@ -218,6 +289,10 @@ impl Runner for ProcessRunner {
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
+                Ok(None) if cancel.is_cancelled() => {
+                    kill_tree(&mut child);
+                    return Err(RunFailure::Cancelled);
+                }
                 Ok(None) if Instant::now() >= deadline => {
                     kill_tree(&mut child);
                     return Err(RunFailure::TimedOut);
@@ -350,6 +425,8 @@ pub enum Failure {
         message: String,
     },
     TimedOut,
+    /// The user pressed Stop: the process was killed.
+    Cancelled,
     /// The output was not the shape section 12b records.
     Malformed(String),
 }
@@ -368,6 +445,7 @@ impl Failure {
             Self::ControlOff => "Control is off in Ardia.".into(),
             Self::Refused { message, .. } => clip(message, 400),
             Self::TimedOut => "Ardia did not answer in time.".into(),
+            Self::Cancelled => "The user stopped the browser.".into(),
             Self::Malformed(why) => format!("Ardia sent a reply zptah can not read ({why})."),
         }
     }
@@ -392,36 +470,51 @@ impl Cli {
         &self.runner
     }
 
-    fn exec(&self, args: Vec<String>, timeout: Duration) -> Result<Output, Failure> {
-        self.runner
-            .run(&args, timeout)
-            .map_err(|failure| match failure {
-                RunFailure::NotFound => Failure::NotInstalled,
-                RunFailure::TimedOut => Failure::TimedOut,
-                RunFailure::TooLarge => {
-                    Failure::Malformed("the output was over the size limit".into())
-                }
-                RunFailure::Spawn(why) => Failure::Malformed(why),
-            })
+    fn exec(
+        &self,
+        args: Vec<String>,
+        timeout: Duration,
+        cancel: Option<&CancelToken>,
+    ) -> Result<Output, Failure> {
+        let result = match cancel {
+            Some(cancel) => self.runner.run_cancellable(&args, timeout, cancel),
+            None => self.runner.run(&args, timeout),
+        };
+        result.map_err(|failure| match failure {
+            RunFailure::NotFound => Failure::NotInstalled,
+            RunFailure::TimedOut => Failure::TimedOut,
+            RunFailure::Cancelled => Failure::Cancelled,
+            RunFailure::TooLarge => Failure::Malformed("the output was over the size limit".into()),
+            RunFailure::Spawn(why) => Failure::Malformed(why),
+        })
     }
 
-    /// `ardia browse --session S <cmd...> --json`: the reply's `data`.
-    pub fn browse(&self, session: &str, cmd: &[&str]) -> Result<Value, Failure> {
-        self.browse_timeout(session, cmd, BROWSE_TIMEOUT)
+    /// `ardia browse --session S --json <cmd...> [-- <values...>]`: the reply's `data`. `cmd` is
+    /// the command and its flags (zptah's own words, a selector for `-s`); `values` are what a
+    /// Mono supplied or what is data to the command, passed after a `--`.
+    pub fn browse(&self, session: &str, cmd: &[&str], values: &[&str]) -> Result<Value, Failure> {
+        self.browse_cancellable(session, cmd, values, BROWSE_TIMEOUT, None)
     }
     pub fn browse_timeout(
         &self,
         session: &str,
         cmd: &[&str],
+        values: &[&str],
         timeout: Duration,
     ) -> Result<Value, Failure> {
-        let mut args: Vec<String> = ["browse", "--session", session]
-            .into_iter()
-            .map(String::from)
-            .collect();
-        args.extend(cmd.iter().map(|a| a.to_string()));
-        args.push("--json".into());
-        let out = self.exec(args, timeout)?;
+        self.browse_cancellable(session, cmd, values, timeout, None)
+    }
+    /// [`Cli::browse`] that the user's Stop can kill (`cancel` fires: [`Failure::Cancelled`]).
+    pub fn browse_cancellable(
+        &self,
+        session: &str,
+        cmd: &[&str],
+        values: &[&str],
+        timeout: Duration,
+        cancel: Option<&CancelToken>,
+    ) -> Result<Value, Failure> {
+        let args = browse_args(session, cmd, values);
+        let out = self.exec(args, timeout, cancel)?;
         let reply: Option<Value> = serde_json::from_str(out.stdout.trim()).ok();
         let message = |reply: &Option<Value>| {
             reply
@@ -503,7 +596,7 @@ impl Cli {
 
     /// The commands whose reply is a bare JSON value (`call`, `tabs ...`).
     fn bare(&self, args: Vec<String>, timeout: Duration) -> Result<Value, Failure> {
-        let out = self.exec(args, timeout)?;
+        let out = self.exec(args, timeout, None)?;
         match out.code {
             0 => {
                 let reply: Value = serde_json::from_str(out.stdout.trim())
@@ -541,6 +634,21 @@ fn first_line(stderr: &str, stdout: &str) -> String {
         .find(|l| !l.is_empty())
         .map(|l| clip(l, 300))
         .unwrap_or_default()
+}
+
+/// The argv of one `ardia browse` call: `browse --session S --json <cmd...> [-- <values...>]`.
+/// Nothing follows the values, and `--` is sent only when there are values.
+pub fn browse_args(session: &str, cmd: &[&str], values: &[&str]) -> Vec<String> {
+    let mut args: Vec<String> = ["browse", "--session", session, "--json"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    args.extend(cmd.iter().map(|a| a.to_string()));
+    if !values.is_empty() {
+        args.push("--".into());
+        args.extend(values.iter().map(|a| a.to_string()));
+    }
+    args
 }
 
 /// `{"session": s, ...}` helper for the hold and release calls.

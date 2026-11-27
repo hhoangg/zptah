@@ -951,7 +951,7 @@ impl Controller {
         if tabs.is_empty() {
             return;
         }
-        let _ = self.cli.browse(session, &["close"]);
+        let _ = self.cli.browse(session, &["close"], &[]);
         let _ = self
             .cli
             .call("tabs.release", &session_params(session, json!({})));
