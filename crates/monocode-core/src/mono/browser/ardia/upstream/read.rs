@@ -18,7 +18,7 @@ use super::fresh::{self, AttrRead, Attrs, FormActions, FormRead, CHANGED, MAX_FO
 use super::judge;
 use super::page::{self, PageContext};
 use super::*;
-use crate::mono::browser::gate::extension::act::looks_vietnamese;
+use crate::mono::browser::gate::origins::looks_vietnamese;
 use crate::mono::browser::risk::lexicon::{lexicon, ControlKind};
 use crate::mono::browser::trust::audit::AuditDecision;
 

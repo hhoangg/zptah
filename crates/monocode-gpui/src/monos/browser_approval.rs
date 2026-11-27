@@ -1,4 +1,4 @@
-//! The approval side of the zptah Browser extension in the Mono manager (spec 8.2, 8.3, 7.5, 7.6).
+//! The approval side of the Mono's browser in the Mono manager.
 //!
 //! The act tools of a Mono park on its approval queue until the user answers. This file keeps one
 //! subscription per Mono (a queue nobody listens to denies at once), turns the queue, the running

@@ -23,7 +23,7 @@ use super::page::PageContext;
 use super::read::{press_effect, PressEffect, Read};
 use super::uploads;
 use super::*;
-use crate::mono::browser::gate::extension::act::looks_vietnamese;
+use crate::mono::browser::gate::origins::looks_vietnamese;
 use crate::mono::browser::risk::decide::Decision;
 use crate::mono::browser::risk::lexicon::{lexicon, ControlKind};
 use crate::mono::browser::risk::signals::{extract_amounts, ActionKind, ElementSignals};

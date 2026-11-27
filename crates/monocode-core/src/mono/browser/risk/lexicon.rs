@@ -35,8 +35,7 @@ use serde::Deserialize;
 use std::collections::{BTreeSet, HashSet};
 use std::sync::OnceLock;
 
-const LEXICON_JSON: &str =
-    include_str!("data/risk-lexicon.json");
+const LEXICON_JSON: &str = include_str!("data/risk-lexicon.json");
 
 /// What an entry stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

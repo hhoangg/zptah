@@ -13,8 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
-const SITES_JSON: &str =
-    include_str!("data/risk-sites.json");
+const SITES_JSON: &str = include_str!("data/risk-sites.json");
 
 /// What a form field is for (spec 7.2). Field values are never read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

@@ -18,6 +18,20 @@ use monocode_core::mono::browser::copy;
 use monocode_core::mono::browser::{self, AuditEntry, BrowserLevel, MonoBrowser, MonoBrowserStore};
 use std::sync::Arc;
 
+/// The trust levels a user can choose. `Ask every` and `Autonomous` are gone from the page; a
+/// stored legacy level already reads as `Act for me`.
+pub(super) const CHOICES: [BrowserLevel; 2] = [BrowserLevel::ReadOnly, BrowserLevel::Act];
+
+/// The label of a trust level, in the app language like the approval cards.
+pub(super) fn trust_label(trust: BrowserLevel, lang: copy::Lang) -> &'static str {
+    match (trust, lang) {
+        (BrowserLevel::ReadOnly, copy::Lang::En) => "Read only",
+        (BrowserLevel::ReadOnly, copy::Lang::Vi) => "Chỉ đọc",
+        (BrowserLevel::Act, copy::Lang::En) => "Act for me",
+        (BrowserLevel::Act, copy::Lang::Vi) => "Làm giúp tôi",
+    }
+}
+
 /// Drops the Mono's gate (its browser was turned off or changed). It is the app's own state, so
 /// this never touches the user's Chrome.
 ///
@@ -51,10 +65,7 @@ fn trust_row(trust: BrowserLevel, selected: bool, cx: &mut Context<Monos>) -> An
         .id(selector)
         .debug_selector(move || selector.into())
         .role(Role::RadioButton)
-        .aria_label(super::browser_migration::trust_label(
-            trust,
-            copy::app_language(),
-        ))
+        .aria_label(trust_label(trust, copy::app_language()))
         .aria_selected(selected)
         .flex()
         .items_start()
@@ -92,10 +103,7 @@ fn trust_row(trust: BrowserLevel, selected: bool, cx: &mut Context<Monos>) -> An
                         .text_size(px(13.))
                         .line_height(px(20.))
                         .text_color(content(0.9))
-                        .child(super::browser_migration::trust_label(
-                            trust,
-                            copy::app_language(),
-                        )),
+                        .child(trust_label(trust, copy::app_language())),
                 )
                 .child(note(format!("{selector}-text"), trust.explanation(), 0.5)),
         )
@@ -632,7 +640,7 @@ impl Monos {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let rows: Vec<AnyElement> = super::browser_migration::CHOICES
+        let rows: Vec<AnyElement> = CHOICES
             .into_iter()
             .map(|trust| trust_row(trust, setting_.trust == trust, cx))
             .collect();

@@ -61,6 +61,18 @@ impl GrantBook {
         }
     }
 
+    /// A stored book when there is a store, else an in-memory one.
+    pub(crate) fn stored_or_memory(
+        store: &Option<MonoBrowserStore>,
+        mono_id: &str,
+        conversation: i64,
+    ) -> Self {
+        match store {
+            Some(store) => Self::stored(store.clone(), mono_id, conversation),
+            None => Self::in_memory(mono_id, conversation),
+        }
+    }
+
     /// Records a grant for `site` (a registrable domain). Never-granted categories are dropped.
     /// Returns the categories that were actually granted.
     pub fn grant(&mut self, site: &str, categories: &BTreeSet<Category>) -> BTreeSet<Category> {

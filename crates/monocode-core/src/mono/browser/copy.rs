@@ -88,9 +88,7 @@ pub enum ActionDesc {
     Press {
         key: String,
     },
-    Drag,
     Hover,
-    Scroll,
     /// Upload files from the user's computer.
     Upload {
         names: Vec<String>,
@@ -102,10 +100,6 @@ pub enum ActionDesc {
     },
     /// Open an address (navigation, a tab).
     Navigate,
-    /// Answer a JavaScript dialog.
-    Dialog {
-        accept: bool,
-    },
     /// Take over a tab another Mono owns (spec 9.3 "tab transfer").
     TabTransfer {
         title: String,
@@ -324,12 +318,8 @@ fn verb_phrase(lang: Lang, facts: &CardFacts) -> String {
         (ActionDesc::Select { label: l }, Lang::Vi) => format!("chọn ở {}", label(l)),
         (ActionDesc::Press { key }, Lang::En) => format!("press the {} key", clean(key, 32)),
         (ActionDesc::Press { key }, Lang::Vi) => format!("nhấn phím {}", clean(key, 32)),
-        (ActionDesc::Drag, Lang::En) => "drag an item".into(),
-        (ActionDesc::Drag, Lang::Vi) => "kéo một mục".into(),
         (ActionDesc::Hover, Lang::En) => "point at an item".into(),
         (ActionDesc::Hover, Lang::Vi) => "trỏ vào một mục".into(),
-        (ActionDesc::Scroll, Lang::En) => "scroll the page".into(),
-        (ActionDesc::Scroll, Lang::Vi) => "cuộn trang".into(),
         (ActionDesc::Upload { names }, Lang::En) => {
             format!("upload {} from your computer", file_list(names))
         }
@@ -338,20 +328,6 @@ fn verb_phrase(lang: Lang, facts: &CardFacts) -> String {
         }
         (ActionDesc::Navigate, Lang::En) => "open".into(),
         (ActionDesc::Navigate, Lang::Vi) => "mở".into(),
-        (ActionDesc::Dialog { accept }, Lang::En) => {
-            if *accept {
-                "accept a dialog".into()
-            } else {
-                "dismiss a dialog".into()
-            }
-        }
-        (ActionDesc::Dialog { accept }, Lang::Vi) => {
-            if *accept {
-                "bấm Đồng ý trong hộp thoại".into()
-            } else {
-                "bấm Hủy trong hộp thoại".into()
-            }
-        }
         (ActionDesc::TabTransfer { title, from }, Lang::En) => format!(
             "take over the tab {} from {}",
             quoted(title, MAX_LABEL),

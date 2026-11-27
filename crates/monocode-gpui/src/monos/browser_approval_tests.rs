@@ -1,4 +1,4 @@
-//! The approval surface of the zptah Browser extension: the card in the conversation, how answers
+//! The approval surface of the Mono's browser: the card in the conversation, how answers
 //! reach the queue, the timeout, the "Working in Ardia" row, the grants list and the rule confirmation.
 //! Nothing here touches a browser: the Mono's side is a thread that asks the queue the way the gate
 //! does.

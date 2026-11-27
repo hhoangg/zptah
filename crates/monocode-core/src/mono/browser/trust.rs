@@ -24,7 +24,7 @@ use super::risk::signals::{
 };
 use super::risk::Category;
 use super::soul_rules::{ActionFacts, FactKind, Parsed};
-use super::{ALWAYS_BLOCKED_TOOLS, KNOWN_TOOLS, READ_ONLY_TOOLS};
+use super::ALWAYS_BLOCKED_TOOLS;
 use grants::GrantBook;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -87,14 +87,6 @@ impl<'de> Deserialize<'de> for BrowserLevel {
 }
 
 impl BrowserLevel {
-    /// The level as a number, for recipes (`min_level`): 1 reads, 2 acts.
-    pub fn level(self) -> u8 {
-        match self {
-            Self::ReadOnly => 1,
-            Self::Act => 2,
-        }
-    }
-
     /// The short explanation shown under the level.
     pub fn explanation(self) -> &'static str {
         match self {
@@ -105,17 +97,6 @@ impl BrowserLevel {
 
     /// What the app guarantees, shown once under the levels.
     pub const ENFORCEMENT_NOTE: &'static str = "zptah checks every step itself, before it runs and whatever the Mono was told. A payment always asks you, every time.";
-
-    /// The tools the harness must not offer at this level.
-    pub fn disabled_tools(self) -> Vec<&'static str> {
-        match self {
-            Self::ReadOnly => KNOWN_TOOLS
-                .into_iter()
-                .filter(|tool| !READ_ONLY_TOOLS.contains(tool))
-                .collect(),
-            Self::Act => ALWAYS_BLOCKED_TOOLS.to_vec(),
-        }
-    }
 
     /// The tools a harness must not offer on an Ardia gate at this level: at read only the act
     /// tools and the two gate-only tools (approval request, declared intent), always the tools no
@@ -138,11 +119,6 @@ impl BrowserLevel {
             tools.push(super::defense::DECLARE_TOOL);
         }
         tools
-    }
-
-    /// Whether the gate lists `tool` to the agent at this level.
-    pub fn offers(self, tool: &str) -> bool {
-        KNOWN_TOOLS.contains(&tool) && !self.disabled_tools().contains(&tool)
     }
 }
 

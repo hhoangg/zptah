@@ -21,16 +21,6 @@ impl State {
     }
 }
 
-/// The labels of the Deny, session and Allow buttons. The Browser gate's "Save as recipe?" card
-/// has its own three answers: Dismiss, Never for this site and Save as recipe.
-fn answer_labels(id: &str) -> (&'static str, &'static str, &'static str) {
-    if id.starts_with(monocode_core::mono::browser::gate::SUGGEST_ID_PREFIX) {
-        ("Dismiss", "Never for this site", "Save as recipe")
-    } else {
-        ("Deny", "Allow for this session", "Allow once")
-    }
-}
-
 impl Conversation {
     pub(super) fn approval_shelf(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let width = self.composer_anchor.get().map(|bounds| bounds.size.width);
@@ -46,8 +36,8 @@ impl Conversation {
         let deny_id = approval.id.clone();
         let session_id = approval.id.clone();
         let allow_id = approval.id.clone();
-        // The "Save as recipe?" card of the Browser gate has its own three answers.
-        let (deny_label, session_label, allow_label) = answer_labels(&approval.id);
+        let (deny_label, session_label, allow_label) =
+            ("Deny", "Allow for this session", "Allow once");
         let actions = div()
             .flex_shrink_0()
             .flex()
@@ -176,19 +166,6 @@ mod tests {
             })
             .unwrap()
         })
-    }
-
-    #[test]
-    fn the_recipe_suggestion_card_has_its_own_answers() {
-        use monocode_core::mono::browser::gate::SUGGEST_ID_PREFIX;
-        assert_eq!(
-            answer_labels(&format!("{SUGGEST_ID_PREFIX}1")),
-            ("Dismiss", "Never for this site", "Save as recipe")
-        );
-        assert_eq!(
-            answer_labels("browser-gate-2"),
-            ("Deny", "Allow for this session", "Allow once")
-        );
     }
 
     fn request(id: &str, can_remember: bool) -> Approval {

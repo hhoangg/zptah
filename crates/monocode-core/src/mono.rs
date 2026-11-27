@@ -350,7 +350,6 @@ pub struct Roster {
 impl Roster {
     pub fn load(store: &Store) -> Result<Self, String> {
         let text = store.setting("mono-roster")?;
-        let text = browser::migration::run(store, text, &browser::migration::Options::current());
         let mut roster: Self = text
             .map(|text| {
                 serde_json::from_str(&text).map_err(|e| format!("Cannot read Mono roster: {e}"))
@@ -371,7 +370,6 @@ impl Roster {
         for mono in &mut roster.monos {
             mono.normalize();
         }
-        browser::roster::monos_changed(&roster.monos);
         Ok(roster)
     }
     pub fn save(&self, store: &Store) -> Result<(), String> {
@@ -379,8 +377,6 @@ impl Roster {
             "mono-roster",
             &serde_json::to_string(self).map_err(|e| e.to_string())?,
         )?;
-        // The browser extension is told about a change of name, color, emoji, level or origins.
-        browser::roster::monos_changed(&self.monos);
         Ok(())
     }
     pub fn create(&mut self, projects: Vec<String>) -> &Mono {
