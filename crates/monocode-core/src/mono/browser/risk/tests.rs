@@ -87,7 +87,7 @@ struct Cases {
 }
 
 const CASES_JSON: &str =
-    include_str!("../../../../../../extensions/zptah-browser/shared/lexicon-cases.json");
+    include_str!("data/lexicon-cases.json");
 
 fn check(c: &ControlInput, want: &Expect) -> Result<(), String> {
     let got = lexicon().classify_control(c);

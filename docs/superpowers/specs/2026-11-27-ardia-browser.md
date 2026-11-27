@@ -590,10 +590,10 @@ Ardia closed, launch and quit (section 2a):
   `NSRunningApplication.isHidden`) at idle-quit time. Events seen: `tab.opened`, `tab.navigated`,
   `tab.closed` with `{windowId, tabId, profile, url, title}`.
 
-Risk data: `crates/monocode-core` reads the risk lexicon and site table generated into
-`extensions/zptah-browser/shared/`. They move to `BD/risk/data/` with their generator
-(`gen-risk-lexicon.mjs`, its manual input and its test), and the CI check that the generated
-file is in sync moves with them, before the extension folder is deleted (M4).
+Risk data: `crates/monocode-core` reads the risk lexicon and site table from `BD/risk/data/`. In M4 they
+moved there from `extensions/zptah-browser/shared/` with their generator (`gen-risk-lexicon.mjs`, its
+manual input and its test, run by `npm run risk:lexicon`), and the CI check that the generated files
+are in sync (`risk-data` job in `native.yml`) moved with them.
 
 ## 13. Risks
 

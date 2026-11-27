@@ -1,6 +1,6 @@
 //! The risk lexicon and the name classifier (spec 7.3).
 //!
-//! The data is `extensions/zptah-browser/shared/risk-lexicon.json`, embedded with `include_str!`
+//! The data is `data/risk-lexicon.json`, embedded with `include_str!`
 //! so the extension and the gate match the same words. Matching rules, in the order they apply:
 //!
 //! 1. Text and phrases are normalized by [`normalize`](super::normalize). A segment with
@@ -36,7 +36,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::sync::OnceLock;
 
 const LEXICON_JSON: &str =
-    include_str!("../../../../../../extensions/zptah-browser/shared/risk-lexicon.json");
+    include_str!("data/risk-lexicon.json");
 
 /// What an entry stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,7 +261,7 @@ pub struct Lexicon {
 pub fn lexicon() -> &'static Lexicon {
     static CELL: OnceLock<Lexicon> = OnceLock::new();
     CELL.get_or_init(|| {
-        Lexicon::from_json(LEXICON_JSON).expect("shared/risk-lexicon.json is a valid lexicon")
+        Lexicon::from_json(LEXICON_JSON).expect("data/risk-lexicon.json is a valid lexicon")
     })
 }
 

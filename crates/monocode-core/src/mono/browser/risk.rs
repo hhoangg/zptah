@@ -1,7 +1,7 @@
 //! The risk lexicon, site data and classifier of the Browser gate (spec 7.2 to 7.4 and 7.6,
 //! Appendix A).
 //!
-//! The words and sites are JSON files in `extensions/zptah-browser/shared/`, embedded with
+//! The words and sites are JSON files in `risk/data/`, embedded with
 //! `include_str!`, so the extension and the gate share one source of truth:
 //!
 //! * [`normalize`]: diacritic-aware text normalization.
