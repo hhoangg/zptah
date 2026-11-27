@@ -275,6 +275,9 @@ fn the_prompt_and_help_describe_workflows() {
     ] {
         assert!(context.contains(needle), "context lacks {needle}");
     }
+    // The help of monos.send says the switch is on by default, as `Mono::default()` has it.
+    assert!(bridge::HELP.contains("turned on in its settings (on by default)"));
+    assert!(!bridge::HELP.contains("(off by default)"));
     // The paragraph follows the habits and keeps the native CLI's words (no React `app ` prefix).
     assert!(
         context.find("Habits are scheduled work").unwrap()

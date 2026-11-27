@@ -146,6 +146,9 @@ pub fn reply_text(target: &Mono, reply: &str, outcome: Outcome) -> String {
         Outcome::Failed => {
             "Its turn failed before it replied; the user can retry it in its chat.".to_owned()
         }
+        Outcome::Interrupted => {
+            "The app closed while it was handling your message, so it never replied. The message is not delivered again; send it again if it still matters.".to_owned()
+        }
     };
     format!(
         "{REPLY_HEADER}\nFrom: {} (another Mono of this user, not the user)\n\
@@ -159,6 +162,8 @@ pub enum Outcome {
     Replied,
     Stopped,
     Failed,
+    /// The app quit or crashed while the turn was running.
+    Interrupted,
 }
 
 /// A turn of `mono` that handled outbox message `sent` ended. Drops its peer entry and returns the
@@ -201,6 +206,53 @@ pub fn forget_discarded(mono: &mut Mono, inflight: Option<&str>) {
     mono.peer_inbox.retain(|p| {
         Some(p.message_id.as_str()) == inflight || outbox.iter().any(|m| m.id == p.message_id)
     });
+}
+
+/// After a start, no turn is running, so a peer entry whose message is not in the outbox belongs
+/// to a turn the quit or crash cut off (`dispatch` had already taken the message out). Drops those
+/// entries and, where the sender wanted the reply, queues a short notice in the sender's chat.
+pub fn settle_after_restart(roster: &mut Roster) {
+    let mut notices = Vec::new();
+    for mono in &mut roster.monos {
+        let lost: Vec<PeerMessage> = mono
+            .peer_inbox
+            .iter()
+            .filter(|p| !mono.outbox.iter().any(|m| m.id == p.message_id))
+            .cloned()
+            .collect();
+        forget_discarded(mono, None);
+        for entry in lost {
+            if entry.notify_on_reply {
+                notices.push((mono.id.clone(), entry));
+            }
+        }
+    }
+    for (target, entry) in notices {
+        let Some(text) = roster
+            .get(&target)
+            .map(|t| reply_text(t, "", Outcome::Interrupted))
+        else {
+            continue;
+        };
+        let Some(sender) = roster.get_mut(&entry.from) else {
+            continue;
+        };
+        let id = super::new_id();
+        sender.peer_inbox.push(PeerMessage {
+            message_id: id.clone(),
+            from: target,
+            depth: entry.depth.saturating_add(1),
+            notify_on_reply: false,
+        });
+        sender.outbox.push(super::Message {
+            id,
+            text,
+            sent_at: Some(crate::time::now_ms()),
+            internal: true,
+            error: None,
+            attachments: Vec::new(),
+        });
+    }
 }
 
 fn truncate(text: &str, max: usize) -> String {
@@ -374,6 +426,62 @@ mod tests {
         assert!(text.contains("The user stopped"));
         assert!(turn_finished(&mut r, "b", "quiet", None, "x", Outcome::Replied).is_none());
         assert!(r.get("b").unwrap().peer_inbox.is_empty());
+    }
+
+    #[test]
+    fn a_restart_drops_cut_off_entries_and_tells_the_sender() {
+        let mut r = roster();
+        let entry = |id: &str, from: &str, notify| PeerMessage {
+            message_id: id.into(),
+            from: from.into(),
+            depth: 1,
+            notify_on_reply: notify,
+        };
+        {
+            let b = r.get_mut("b").unwrap();
+            // "cut" was delivered and its turn never ended; "quiet" asked for no reply;
+            // "queued" still waits in the outbox.
+            b.peer_inbox = vec![
+                entry("cut", "a", true),
+                entry("quiet", "a", false),
+                entry("queued", "a", true),
+            ];
+            b.outbox.push(super::super::Message {
+                id: "queued".into(),
+                text: "t".into(),
+                sent_at: None,
+                internal: true,
+                error: None,
+                attachments: Vec::new(),
+            });
+        }
+        settle_after_restart(&mut r);
+        let ids: Vec<_> = r
+            .get("b")
+            .unwrap()
+            .peer_inbox
+            .iter()
+            .map(|p| &p.message_id)
+            .collect();
+        assert_eq!(ids, ["queued"]);
+        let a = r.get("a").unwrap();
+        assert_eq!(
+            a.outbox.len(),
+            1,
+            "one notice, for the entry that wanted a reply"
+        );
+        assert!(a.outbox[0].internal && a.outbox[0].text.starts_with(REPLY_HEADER));
+        assert!(a.outbox[0].text.contains("From: MonoXiaoyue"));
+        assert!(a.outbox[0].text.contains("app closed"));
+        assert_eq!(a.peer_inbox.len(), 1);
+        assert_eq!(a.peer_inbox[0].message_id, a.outbox[0].id);
+        assert_eq!(
+            (a.peer_inbox[0].depth, a.peer_inbox[0].notify_on_reply),
+            (2, false)
+        );
+        // A second start finds nothing more to settle.
+        settle_after_restart(&mut r);
+        assert_eq!(r.get("a").unwrap().outbox.len(), 1);
     }
 
     #[test]

@@ -1292,20 +1292,24 @@ impl Monos {
         outcome: mono::peers::Outcome,
         cx: &mut Context<Self>,
     ) {
+        // Most turns were not started by a peer message: nothing to route, nothing to compute.
+        let is_peer = self
+            .roster
+            .get(id)
+            .is_some_and(|m| m.peer_inbox.iter().any(|p| p.message_id == sent));
+        if !is_peer {
+            return;
+        }
         let reply = self
             .chats
             .get(id)
             .map(|v| monocode_core::response::final_reply(v.read(cx).mono_rows(cx)))
             .unwrap_or_default();
-        let had = self
-            .roster
-            .get(id)
-            .is_some_and(|m| !m.peer_inbox.is_empty());
         let routed =
             mono::peers::turn_finished(&mut self.roster, id, sent, requeued, &reply, outcome);
         if let Some((to, text, depth)) = routed {
             self.enqueue_peer(id, &to, text, depth, false, cx);
-        } else if had {
+        } else {
             self.save(cx);
         }
     }

@@ -423,6 +423,14 @@ impl Monos {
         if call.action == "projects.add" && (habit_run || question || heartbeat) {
             return Err("A habit run, heartbeat or workflow question cannot add projects".into());
         }
+        // Another Mono's chat starts a turn there, in projects this Mono was never given. Habit
+        // runs read untrusted source text, and a heartbeat or a question starts again at depth 0:
+        // only the Mono's own chat sends. Listing the other Monos stays allowed.
+        if call.action == "monos.send" && (habit_run || question || heartbeat) {
+            return Err(
+                "A habit run, heartbeat or workflow question cannot message other Monos".into(),
+            );
+        }
         // A workflow must not start workflows through its own question to the Mono.
         if call.action.starts_with("workflows.") && question {
             return Err("A workflow's question to its Mono cannot use workflows".into());

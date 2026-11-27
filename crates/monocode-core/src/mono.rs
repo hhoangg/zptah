@@ -382,6 +382,8 @@ impl Roster {
         for mono in &mut roster.monos {
             mono.normalize();
         }
+        // No turn is running at a start: peer entries a quit or crash cut off are settled.
+        peers::settle_after_restart(&mut roster);
         browser::roster::monos_changed(&roster.monos);
         Ok(roster)
     }
