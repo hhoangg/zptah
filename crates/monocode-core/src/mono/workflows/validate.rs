@@ -4,9 +4,9 @@ use super::condition::condition_syntax_problem;
 use super::model::{
     is_node_id, Checkout, Cwd, Handle, Node, NodeId, NodeKind, Requirement, RequirementKind,
     SessionTarget, TargetInstance, Workflow, MAX_PARALLEL_LIMIT, MAX_ROUNDS_LIMIT,
-    MAX_TIMEOUT_MINUTES, SWITCH_DEFAULT, TEMPLATABLE_TARGET_OPTIONS,
+    MAX_TIMEOUT_MINUTES, SWITCH_DEFAULT, TEMPLATABLE_TARGET_OPTIONS, TRIGGERS_MAX,
 };
-use super::parse::{is_map_key, is_name};
+use super::parse::{is_ai_decide, is_map_key, is_name};
 use super::template::{js_space, js_trim, shell_template_problems, template_vars};
 use crate::mono::habits::Schedule;
 use serde_json::json;
@@ -22,10 +22,12 @@ pub struct WorkflowIssue {
 const RUN_VARS: [&str; 3] = ["round", "id", "startedAt"];
 /// Template variables a node output must not shadow.
 const RESERVED_NODE_IDS: [&str; 3] = ["run", "inputs", "results"];
-/// Extra `run` fields only a report template gets (see `compose_report`).
+/// Extra `run` fields only the summary template gets (see `compose_report`).
 const REPORT_RUN_VARS: [&str; 4] = ["name", "status", "statusLabel", "endedAt"];
 const COMMAND_FIELDS: [&str; 3] = ["exitCode", "stdout", "stderr"];
-const ASK_FIELDS: [&str; 2] = ["answer", "reason"];
+/// The fields of `{{trigger.*}}`: the trigger node that fired, what kind of caller started the run
+/// and, for an event run, the item. A node named "trigger" keeps its own output fields too.
+const TRIGGER_VARS: [&str; 3] = ["node", "kind", "item"];
 const FOR_EACH_FIELDS: [&str; 1] = ["results"];
 const PATH_ROOTS: [&str; 14] = [
     "Users",
@@ -245,7 +247,6 @@ fn output_fields(node: &Node) -> Vec<String> {
     match &node.kind {
         NodeKind::Session { output, .. } => output.keys().cloned().collect(),
         NodeKind::Command { .. } => COMMAND_FIELDS.iter().map(|s| s.to_string()).collect(),
-        NodeKind::AskMono { .. } => ASK_FIELDS.iter().map(|s| s.to_string()).collect(),
         NodeKind::ForEach { .. } => FOR_EACH_FIELDS.iter().map(|s| s.to_string()).collect(),
         _ => Vec::new(),
     }
@@ -402,6 +403,23 @@ impl<'a> Checker<'a> {
                         node_id,
                     );
                 }
+            } else if head == "trigger"
+                && field.is_some_and(|f| TRIGGER_VARS.contains(&f))
+                && (path.len() == 2 || field == Some("item"))
+            {
+                // `trigger.item` holds whatever the event brought; its shape is not declared.
+            } else if head == "trigger" && !self.g.by_id.contains_key("trigger") {
+                self.add(
+                    format!(
+                        "{label} is not a trigger variable (use {})",
+                        TRIGGER_VARS
+                            .iter()
+                            .map(|f| format!("trigger.{f}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    node_id,
+                );
             } else if item_names.contains(head) {
                 // Any path under the loop variable is allowed; the items' shape is not declared.
             } else if let Some(node) = self.g.by_id.get(head).copied() {
@@ -450,7 +468,7 @@ impl<'a> Checker<'a> {
         self.check_vars(text, Some(&node.id), &scope, &item_names);
     }
 
-    fn check_text_in(&mut self, node: &Node, label: &str, text: &str, strict: bool) {
+    fn check_text_in(&mut self, node_id: Option<&str>, label: &str, text: &str, strict: bool) {
         let found = if strict {
             find_command_path(text)
         } else {
@@ -459,7 +477,7 @@ impl<'a> Checker<'a> {
         if let Some(path) = found {
             self.add(
                 format!("{label} contains an absolute path (\"{path}\"); use a project input or a relative path"),
-                Some(&node.id),
+                node_id,
             );
         }
     }
@@ -518,12 +536,6 @@ impl<'a> Checker<'a> {
                     fields.push(("cwd.worktreeOf".into(), id, false));
                 }
             }
-            NodeKind::AskMono { question, answers } => {
-                fields.push(("question".into(), question, false));
-                for a in answers {
-                    fields.push(("answers".into(), a, false));
-                }
-            }
             NodeKind::If {
                 condition,
                 question,
@@ -556,14 +568,9 @@ impl<'a> Checker<'a> {
                     fields.push(("as".into(), item, false));
                 }
             }
-            NodeKind::Report { template } => {
-                if let Some(t) = template {
-                    fields.push(("template".into(), t, false));
-                }
-            }
         }
         for (label, text, strict) in fields {
-            self.check_text_in(node, &label, text, strict);
+            self.check_text_in(Some(&node.id), &label, text, strict);
         }
     }
 
@@ -814,6 +821,17 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// A node that decides with AI needs a model to ask: the workflow's, or the nearest upstream
+    /// session's.
+    fn check_decision_model(&mut self, node_id: &str, who: &str) {
+        if decision_model_for(self.w, node_id).is_none() {
+            self.add(
+                format!("{who} decides with AI but no model is set: set the workflow's decisionModel, or put a session step before it"),
+                Some(node_id),
+            );
+        }
+    }
+
     fn check_timeout(&mut self, node: &Node, timeout: Option<f64>) {
         let Some(t) = timeout else { return };
         // Parsed numbers are finite, so `<=` is the negation of `>` here.
@@ -895,7 +913,7 @@ impl<'a> Checker<'a> {
                     // account of a local session). A workflow step does not offer that: its
                     // account is the one a new cloud instance runs with.
                     self.add(
-                        "account only applies to a cloud step (one with a target); a local step runs with the Mono's own account",
+                        "account only applies to a cloud step (one with a target); a local step runs with the default account",
                         Some(&node.id),
                     );
                 }
@@ -927,12 +945,6 @@ impl<'a> Checker<'a> {
                 }
                 self.check_timeout(node, *timeout_minutes);
             }
-            NodeKind::AskMono { question, answers } => {
-                self.check_text(question, node);
-                if answers.is_empty() {
-                    self.add("An Ask Mono node needs at least one answer", Some(&node.id));
-                }
-            }
             NodeKind::If {
                 condition,
                 decide,
@@ -941,9 +953,12 @@ impl<'a> Checker<'a> {
                 let has_condition = condition.as_deref().is_some_and(|c| !js_trim(c).is_empty());
                 if has_condition == decide.is_some() {
                     self.add(
-                        "An If node needs either a condition or decide \"mono\", not both or neither",
+                        "An If node needs either a condition or decide \"ai\", not both or neither",
                         Some(&node.id),
                     );
+                }
+                if decide.is_some() {
+                    self.check_decision_model(&node.id, &format!("The If node \"{}\"", node.id));
                 }
                 if has_condition {
                     if let Some(problem) = condition.as_deref().and_then(condition_syntax_problem) {
@@ -966,8 +981,14 @@ impl<'a> Checker<'a> {
                 let has_value = value.as_deref().is_some_and(|v| !js_trim(v).is_empty());
                 if has_value == decide.is_some() {
                     self.add(
-                        "A Switch node needs either a value or decide \"mono\", not both or neither",
+                        "A Switch node needs either a value or decide \"ai\", not both or neither",
                         Some(&node.id),
+                    );
+                }
+                if decide.is_some() {
+                    self.check_decision_model(
+                        &node.id,
+                        &format!("The Switch node \"{}\"", node.id),
                     );
                 }
                 if cases.is_empty() {
@@ -1029,24 +1050,13 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            NodeKind::Report { template } => {
-                if node.parent.is_some() {
-                    self.add(
-                        "The Report node cannot be inside a For each",
-                        Some(&node.id),
-                    );
-                }
-                if let Some(template) = template.as_deref().filter(|t| !t.is_empty()) {
-                    self.check_report_template(node, template);
-                }
-            }
         }
     }
 
-    /// The report is rendered with `inputs`, `run`, `results` and the outputs of top-level nodes
-    /// (see `compose_report`). Steps inside a For each, and its loop variable, are not in that
-    /// scope: their outputs reach the report through `results`.
-    fn check_report_template(&mut self, node: &Node, template: &str) {
+    /// The summary is rendered with `inputs`, `run`, `trigger`, `results` and the outputs of
+    /// top-level nodes (see `compose_report`). Steps inside a For each, and its loop variable, are
+    /// not in that scope: their outputs reach the summary through `results`.
+    fn check_summary_template(&mut self, template: &str) {
         let loop_names: HashSet<String> = self.w.nodes.iter().filter_map(item_name).collect();
         let mut readable: Vec<String> = Vec::new();
         for v in template_vars(template) {
@@ -1058,9 +1068,9 @@ impl<'a> Checker<'a> {
             if let Some(parent) = target.and_then(|t| t.parent.as_deref()) {
                 self.add(
                     format!(
-                        "The report cannot read \"{v}\": steps inside a For each are listed in {{{{results}}}} (or use {{{{{parent}.results}}}})."
+                        "The summary cannot read \"{v}\": steps inside a For each are listed in {{{{results}}}} (or use {{{{{parent}.results}}}})."
                     ),
-                    Some(&node.id),
+                    None,
                 );
             } else if target.is_none()
                 && head != "inputs"
@@ -1069,9 +1079,9 @@ impl<'a> Checker<'a> {
             {
                 self.add(
                     format!(
-                        "The report cannot read \"{v}\": the loop variable only exists inside a For each; use {{{{results}}}}."
+                        "The summary cannot read \"{v}\": the loop variable only exists inside a For each; use {{{{results}}}}."
                     ),
-                    Some(&node.id),
+                    None,
                 );
             } else {
                 readable.push(v);
@@ -1082,14 +1092,15 @@ impl<'a> Checker<'a> {
             .chain(REPORT_RUN_VARS.iter())
             .copied()
             .collect();
-        let scope = self.scope_of(&node.id);
-        self.check_var_list(
-            &readable,
-            Some(&node.id),
-            &scope,
-            &HashSet::new(),
-            &run_vars,
-        );
+        // Every top-level node has run by the time the summary is written.
+        let scope: HashSet<String> = self
+            .w
+            .nodes
+            .iter()
+            .filter(|n| n.parent.is_none())
+            .map(|n| n.id.clone())
+            .collect();
+        self.check_var_list(&readable, None, &scope, &HashSet::new(), &run_vars);
     }
 }
 
@@ -1200,35 +1211,53 @@ pub fn validate_workflow(w: &Workflow) -> Vec<WorkflowIssue> {
 
     // --- structure ---------------------------------------------------------------------------
     let triggers: Vec<&Node> = w.nodes.iter().filter(|n| n.is_trigger()).collect();
-    if triggers.len() != 1 {
+    if triggers.is_empty() {
+        c.add("A workflow needs at least one trigger (found 0)", None);
+    } else if triggers.len() > TRIGGERS_MAX {
         c.add(
             format!(
-                "A workflow needs exactly one trigger (found {})",
+                "A workflow can have at most {TRIGGERS_MAX} triggers (found {})",
                 triggers.len()
             ),
             None,
         );
     }
-    let reports: Vec<&Node> = w
-        .nodes
-        .iter()
-        .filter(|n| matches!(n.kind, NodeKind::Report { .. }))
-        .collect();
-    if reports.len() != 1 {
-        c.add(
-            format!(
-                "A workflow needs exactly one Report node (found {})",
-                reports.len()
-            ),
-            None,
-        );
-    } else if triggers.len() == 1 {
-        let reachable = reach(&triggers[0].id, &c.g.next);
-        if !reachable.contains(reports[0].id.as_str()) {
-            c.add(
-                "The Report node must be reachable from the trigger",
-                Some(&reports[0].id),
-            );
+    if triggers.len() > 1 {
+        // Any trigger can start a run, so each must lead to the same first step.
+        let all: Vec<Vec<String>> = triggers
+            .iter()
+            .map(|t| {
+                let mut next: Vec<String> =
+                    c.g.next
+                        .get(t.id.as_str())
+                        .map(|n| n.iter().map(|s| s.to_string()).collect())
+                        .unwrap_or_default();
+                next.sort_unstable();
+                next.dedup();
+                next
+            })
+            .collect();
+        for (trigger, steps) in triggers.iter().zip(&all) {
+            if steps.is_empty() {
+                c.add(
+                    format!(
+                        "Trigger \"{}\" is not connected: every trigger must lead to the same first step",
+                        trigger.id
+                    ),
+                    Some(&trigger.id),
+                );
+            } else if *steps != all[0] {
+                c.add(
+                    format!(
+                        "Trigger \"{}\" leads to {}, but \"{}\" leads to {}: every trigger must lead to the same first step",
+                        trigger.id,
+                        steps.join(", "),
+                        triggers[0].id,
+                        all[0].join(", ")
+                    ),
+                    Some(&trigger.id),
+                );
+            }
         }
     }
 
@@ -1399,27 +1428,17 @@ pub fn validate_workflow(w: &Workflow) -> Vec<WorkflowIssue> {
                 None => {}
             }
         }
-        if from.is_some_and(|n| matches!(n.kind, NodeKind::Report { .. })) && e.loop_spec.is_none()
-        {
-            c.add(
-                format!(
-                    "Edge {} -> {} leaves the Report node; the Report node must be the end",
-                    e.from, e.to
-                ),
-                Some(&e.from),
-            );
-        }
         let (Some(spec), Some(from), Some(to)) = (&e.loop_spec, from, to) else {
             continue;
         };
 
         if !matches!(
             from.kind,
-            NodeKind::Session { .. } | NodeKind::Command { .. } | NodeKind::AskMono { .. }
+            NodeKind::Session { .. } | NodeKind::Command { .. }
         ) {
             c.add(
                 format!(
-                    "Loop edge {} -> {}: a loop can only start from a session, command or Ask Mono node",
+                    "Loop edge {} -> {}: a loop can only start from a session or command node",
                     e.from, e.to
                 ),
                 Some(&e.from),
@@ -1467,11 +1486,13 @@ pub fn validate_workflow(w: &Workflow) -> Vec<WorkflowIssue> {
                 Some(&e.from),
             );
         }
-        if spec.decide != "mono" {
+        if is_ai_decide(&spec.decide) {
+            c.check_decision_model(&e.from, &format!("Loop edge {} -> {}", e.from, e.to));
+        } else {
             if js_trim(&spec.decide).is_empty() {
                 c.add(
                     format!(
-                        "Loop edge {} -> {}: decide must be \"mono\" or a condition",
+                        "Loop edge {} -> {}: decide must be \"ai\" or a condition",
                         e.from, e.to
                     ),
                     Some(&e.from),
@@ -1491,5 +1512,92 @@ pub fn validate_workflow(w: &Workflow) -> Vec<WorkflowIssue> {
         }
     }
 
+    if let Some(template) = w.summary_template.as_deref().filter(|t| !t.is_empty()) {
+        c.check_text_in(None, "summaryTemplate", template, false);
+        c.check_summary_template(template);
+    }
+
     c.issues
+}
+
+/// Where the model an AI decision runs on came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DecisionModelSource {
+    /// The workflow's `decisionModel`.
+    Workflow,
+    /// The nearest upstream session node.
+    Session(NodeId),
+}
+
+/// The harness, model and effort an AI decision is asked with. From a session node, a field the
+/// node leaves unset is `None`: the runner then uses the app's default for a new session, as that
+/// node would.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedDecisionModel {
+    pub source: DecisionModelSource,
+    pub harness: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+/// The model the AI decision of `node_id` (an If, a Switch, or the source node of a loop edge)
+/// runs on: the workflow's `decisionModel` when it is set, otherwise the harness and model of the
+/// nearest upstream session node (the node itself counts, for a loop edge on a session). `None`
+/// when neither exists, which validation reports. Pure: the runner calls it too.
+pub fn decision_model_for(w: &Workflow, node_id: &str) -> Option<ResolvedDecisionModel> {
+    if let Some(model) = &w.decision_model {
+        return Some(ResolvedDecisionModel {
+            source: DecisionModelSource::Workflow,
+            harness: Some(model.harness.clone()),
+            model: Some(model.model.clone()),
+            effort: model.effort.clone(),
+        });
+    }
+    let g = Graph::new(w);
+    g.by_id.get(node_id)?;
+    let position: HashMap<&str, usize> =
+        g.order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    let mut seen: HashSet<&str> = HashSet::from([node_id]);
+    let mut level: Vec<&str> = vec![node_id];
+    while !level.is_empty() {
+        // The nearest wins; among equals the one defined first.
+        let nearest = level
+            .iter()
+            .copied()
+            .filter(|id| {
+                g.by_id
+                    .get(id)
+                    .is_some_and(|n| matches!(n.kind, NodeKind::Session { .. }))
+            })
+            .min_by_key(|id| position.get(id).copied().unwrap_or(usize::MAX));
+        if let Some(id) = nearest {
+            if let Some(NodeKind::Session {
+                harness,
+                model,
+                effort,
+                ..
+            }) = g.by_id.get(id).map(|n| &n.kind)
+            {
+                let set = |v: &Option<String>| v.clone().filter(|v| !v.is_empty());
+                return Some(ResolvedDecisionModel {
+                    source: DecisionModelSource::Session(id.to_string()),
+                    harness: set(harness),
+                    model: set(model),
+                    effort: set(effort),
+                });
+            }
+        }
+        let mut next: Vec<&str> = Vec::new();
+        for id in &level {
+            let node = g.by_id.get(id).copied();
+            let parent = node.and_then(|n| n.parent.as_deref());
+            for before in g.prev.get(id).into_iter().flatten().copied().chain(parent) {
+                if g.by_id.contains_key(before) && seen.insert(before) {
+                    next.push(before);
+                }
+            }
+        }
+        level = next;
+    }
+    None
 }

@@ -30,10 +30,6 @@ fn trigger() -> Node {
     n(json!({"id": "trigger", "type": "manual"}))
 }
 
-fn report() -> Node {
-    n(json!({"id": "report", "type": "report"}))
-}
-
 /// A session node; `extra` overrides or adds fields.
 fn session(id: &str, extra: Value) -> Node {
     let mut v = json!({
@@ -85,12 +81,7 @@ fn fan_out(max_parallel: u32, children: Option<Vec<Node>>, edges: Vec<Edge>) -> 
         })),
     ];
     nodes.extend(children);
-    nodes.push(report());
-    let mut all = vec![
-        e("trigger", "fetch"),
-        e("fetch", "each"),
-        e("each", "report"),
-    ];
+    let mut all = vec![e("trigger", "fetch"), e("fetch", "each")];
     all.extend(edges);
     def(nodes, all)
 }
@@ -116,19 +107,17 @@ fn dev_review(decide: &str, max_rounds: u32, reuse_session: Option<bool>) -> Wor
                 "review",
                 json!({"prompt": "Review {{dev.pr_url}}", "output": {"verdict": {"type": "string"}}}),
             ),
-            report(),
         ],
         vec![
             e("trigger", "dev"),
             e("dev", "review"),
-            e("review", "report"),
             lp("review", "dev", max_rounds, decide),
         ],
     )
 }
 
 fn mono_loop() -> Workflow {
-    dev_review("mono", 3, None)
+    dev_review("ai", 3, None)
 }
 
 fn out(v: Value) -> OrderedMap<Json> {
@@ -249,7 +238,7 @@ fn node_of<'a>(run: &'a WorkflowRun, id: &str, branch: &str) -> &'a NodeRun {
 }
 
 fn begin(w: &Workflow) -> WorkflowRun {
-    start_run(w, RunTrigger::Manual, AT, "r")
+    start_run(w, RunCaller::new(CallerKind::Manual, "trigger"), AT, "r")
 }
 
 fn start_session(
@@ -307,8 +296,8 @@ fn branch_of(a: &EngineAction) -> Option<&str> {
     match a {
         EngineAction::StartSession { branch, .. }
         | EngineAction::RunCommand { branch, .. }
-        | EngineAction::AskMono { branch, .. } => Some(branch),
-        EngineAction::PostReport => None,
+        | EngineAction::Decide { branch, .. } => Some(branch),
+        EngineAction::PostSummary => None,
     }
 }
 
@@ -342,7 +331,7 @@ fn tickets_value() -> Value {
 }
 
 fn post_report() -> Vec<EngineAction> {
-    vec![EngineAction::PostReport]
+    vec![EngineAction::PostSummary]
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -356,11 +345,10 @@ fn linear_trigger_fetch_report_emits_start_session_then_post_report_then_done() 
             vec![
                 trigger(),
                 session("fetch", json!({"prompt": "Fetch for {{inputs.project}}"})),
-                report(),
             ],
-            vec![e("trigger", "fetch"), e("fetch", "report")],
+            vec![e("trigger", "fetch")],
         ),
-        RunTrigger::Manual,
+        RunCaller::new(CallerKind::Manual, "trigger"),
         AT,
         "run-1",
     );
@@ -372,12 +360,14 @@ fn linear_trigger_fetch_report_emits_start_session_then_post_report_then_done() 
     run = started_on(&run, "fetch", "", Some("s-1"));
     assert_eq!(next_actions(&run), vec![]);
     run = finished(&run, "fetch", json!({}), "", AT);
+    // The run ends as soon as nothing is left; its summary is posted after.
+    assert_eq!(run.status, RunStatus::Done);
+    assert_eq!(run.ended_at, Some(AT));
     assert_eq!(next_actions(&run), post_report());
-    assert_eq!(run.status, RunStatus::Running);
     run = reported(&run, 2_000);
     assert_eq!(run.status, RunStatus::Done);
     assert_eq!(run.report_posted_at, Some(2_000));
-    assert_eq!(run.ended_at, Some(2_000));
+    assert_eq!(run.ended_at, Some(AT));
     assert_eq!(next_actions(&run), vec![]);
 }
 
@@ -385,14 +375,11 @@ fn linear_trigger_fetch_report_emits_start_session_then_post_report_then_done() 
 fn schedule_trigger_exposes_started_at() {
     let run = start_run(
         &def(
-            vec![
-                n(json!({"id": "trigger", "type": "schedule",
-                    "schedule": {"scheduleKind": "hourly", "time": "00:00", "minute": 0, "dayOfWeek": 1}})),
-                report(),
-            ],
-            vec![e("trigger", "report")],
+            vec![n(json!({"id": "trigger", "type": "schedule",
+                    "schedule": {"scheduleKind": "hourly", "time": "00:00", "minute": 0, "dayOfWeek": 1}}))],
+            vec![],
         ),
-        RunTrigger::Schedule,
+        RunCaller::new(CallerKind::Schedule, "trigger"),
         5,
         "r",
     );
@@ -409,16 +396,12 @@ fn appends_the_output_instruction_to_the_prompt_only_when_fields_are_declared() 
         vec![
             trigger(),
             session("a", json!({"output": {"x": {"type": "string"}}})),
-            report(),
         ],
-        vec![e("trigger", "a"), e("a", "report")],
+        vec![e("trigger", "a")],
     ));
     let actions = next_actions(&run);
     assert!(prompt_of(&actions[0]).starts_with("Do a\n\nWhen you are finished"));
-    let bare = begin(&def(
-        vec![trigger(), plain("a"), report()],
-        vec![e("trigger", "a"), e("a", "report")],
-    ));
+    let bare = begin(&def(vec![trigger(), plain("a")], vec![e("trigger", "a")]));
     assert_eq!(prompt_of(&next_actions(&bare)[0]), "Do a");
 }
 
@@ -428,9 +411,8 @@ fn cmd_flow(command: &str) -> Workflow {
             trigger(),
             session("a", json!({"output": {"name": {"type": "string"}}})),
             n(json!({"id": "cmd", "type": "command", "project": PROJECT, "command": command})),
-            report(),
         ],
-        vec![e("trigger", "a"), e("a", "cmd"), e("cmd", "report")],
+        vec![e("trigger", "a"), e("a", "cmd")],
     )
 }
 
@@ -462,9 +444,8 @@ fn fails_a_command_whose_rendered_value_would_be_read_as_an_option() {
                 trigger(),
                 session("a", json!({"output": {"host": {"type": "string"}}})),
                 n(json!({"id": "cmd", "type": "command", "project": PROJECT, "command": command})),
-                report(),
             ],
-            vec![e("trigger", "a"), e("a", "cmd"), e("cmd", "report")],
+            vec![e("trigger", "a"), e("a", "cmd")],
         ))
     };
     let bad = complete(
@@ -601,7 +582,7 @@ fn loop_asks_mono_and_resets_dev_review_to_round_2_with_reuse_session_id() {
     let asks = next_actions(&run);
     assert_eq!(asks.len(), 1);
     match &asks[0] {
-        EngineAction::AskMono {
+        EngineAction::Decide {
             node_id,
             purpose,
             answers,
@@ -609,7 +590,7 @@ fn loop_asks_mono_and_resets_dev_review_to_round_2_with_reuse_session_id() {
             ..
         } => {
             assert_eq!(node_id, "review");
-            assert_eq!(*purpose, AskPurpose::Loop);
+            assert_eq!(*purpose, DecidePurpose::Loop);
             assert_eq!(answers, &vec!["loop".to_string(), "exit".to_string()]);
             assert_eq!(
                 context.get("review"),
@@ -707,7 +688,7 @@ fn exit_decision_stays_on_the_node_not_in_history() {
 
 #[test]
 fn loop_does_not_reuse_the_session_when_reuse_session_is_false() {
-    let mut run = begin(&dev_review("mono", 3, Some(false)));
+    let mut run = begin(&dev_review("ai", 3, Some(false)));
     run = complete(&run, "dev", json!({"pr_url": "p"}));
     run = complete(&run, "review", json!({"verdict": "no"}));
     run = decided(&run, "review", "loop");
@@ -728,7 +709,7 @@ fn loop_does_not_reuse_the_session_when_reuse_session_is_false() {
 
 #[test]
 fn loop_stops_at_max_rounds_with_reason_max_rounds_reached() {
-    let mut run = begin(&dev_review("mono", 2, None));
+    let mut run = begin(&dev_review("ai", 2, None));
     run = complete(&run, "dev", json!({"pr_url": "p1"}));
     run = complete(&run, "review", json!({"verdict": "no"}));
     run = decided(&run, "review", "loop");
@@ -813,7 +794,6 @@ fn a_round_record_leaves_out_what_the_node_did_in_an_earlier_round() {
             plain("fixA"),
             plain("fixB"),
             plain("review"),
-            report(),
         ],
         vec![
             e("trigger", "dev"),
@@ -822,8 +802,7 @@ fn a_round_record_leaves_out_what_the_node_did_in_an_earlier_round() {
             eh("gate", "fixB", "false"),
             e("fixA", "review"),
             e("fixB", "review"),
-            e("review", "report"),
-            lp("review", "dev", 3, "mono"),
+            lp("review", "dev", 3, "ai"),
         ],
     );
     let mut run = complete(&begin(&w), "dev", json!({"ok": true}));
@@ -923,16 +902,13 @@ fn if_inside_a_loop_body_runs_the_other_side_in_round_2() {
             n(json!({"id": "gate", "type": "if", "condition": "{{dev.ok}} == true"})),
             plain("review"),
             plain("escalate"),
-            report(),
         ],
         vec![
             e("trigger", "dev"),
             e("dev", "gate"),
             eh("gate", "review", "true"),
             eh("gate", "escalate", "false"),
-            e("review", "report"),
-            e("escalate", "report"),
-            lp("review", "dev", 3, "mono"),
+            lp("review", "dev", 3, "ai"),
         ],
     );
     let mut run = complete(&begin(&w), "dev", json!({"ok": true}));
@@ -979,7 +955,7 @@ fn snapshots_the_definition_at_start_run() {
     }
     w.nodes.pop();
     assert_ne!(run.definition, w);
-    assert_eq!(run.definition.nodes.len(), 4);
+    assert_eq!(run.definition.nodes.len(), 3);
     match &run.definition.nodes[1].kind {
         NodeKind::Session { prompt, .. } => assert!(prompt.contains("Implement round")),
         _ => unreachable!(),
@@ -999,7 +975,6 @@ mod failed_branches_do_not_loop {
                 plain("lint"),
                 plain("review"),
                 plain("merge"),
-                report(),
             ],
             vec![
                 e("trigger", "dev"),
@@ -1007,8 +982,7 @@ mod failed_branches_do_not_loop {
                 e("dev", "review"),
                 e("review", "merge"),
                 e("lint", "merge"),
-                e("merge", "report"),
-                lp("review", "dev", 3, "mono"),
+                lp("review", "dev", 3, "ai"),
             ],
         )
     }
@@ -1043,8 +1017,8 @@ mod failed_branches_do_not_loop {
         let asks = next_actions(&run);
         assert!(matches!(
             asks.as_slice(),
-            [EngineAction::AskMono {
-                purpose: AskPurpose::Loop,
+            [EngineAction::Decide {
+                purpose: DecidePurpose::Loop,
                 ..
             }]
         ));
@@ -1072,7 +1046,7 @@ mod failed_branches_do_not_loop {
                 session("dev", json!({"parent": "each"})),
                 session("review", json!({"parent": "each"})),
             ]),
-            vec![e("dev", "review"), lp("review", "dev", 3, "mono")],
+            vec![e("dev", "review"), lp("review", "dev", 3, "ai")],
         );
         let mut run = complete(&begin(&w), "fetch", json!({"tickets": [1, 2]}));
         run = started_on(&run, "dev", "each#0", None);
@@ -1082,7 +1056,7 @@ mod failed_branches_do_not_loop {
         let asks = next_actions(&run);
         assert!(matches!(
             asks.as_slice(),
-            [EngineAction::AskMono { purpose: AskPurpose::Loop, branch, .. }] if branch == "each#1"
+            [EngineAction::Decide { purpose: DecidePurpose::Loop, branch, .. }] if branch == "each#1"
         ));
         run = started_on(&run, "review", "each#1", None);
         run = decided_on(&run, "review", "loop", "each#1", None);
@@ -1114,14 +1088,12 @@ mod a_loop_around_a_for_each_keeps_the_earlier_rounds {
                         "output": {"pr_url": {"type": "string"}}}),
                 ),
                 session("review", json!({"output": {"verdict": {"type": "string"}}})),
-                report(),
             ],
             vec![
                 e("trigger", "fetch"),
                 e("fetch", "each"),
                 e("each", "review"),
-                e("review", "report"),
-                lp("review", "each", max_rounds, "mono"),
+                lp("review", "each", max_rounds, "ai"),
             ],
         )
     }
@@ -1294,7 +1266,6 @@ fn if_true_false_skips_the_other_side() {
             plain("yes"),
             plain("no"),
             plain("after"),
-            report(),
         ],
         vec![
             e("trigger", "a"),
@@ -1302,8 +1273,6 @@ fn if_true_false_skips_the_other_side() {
             eh("gate", "yes", "true"),
             eh("gate", "no", "false"),
             e("no", "after"),
-            e("yes", "report"),
-            e("after", "report"),
         ],
     );
     let mut t = complete(&begin(&w), "a", json!({"ok": true}));
@@ -1338,28 +1307,22 @@ fn if_decided_by_the_mono_asks_true_false() {
     let w = def(
         vec![
             trigger(),
-            n(json!({"id": "gate", "type": "if", "decide": "mono",
+            n(json!({"id": "gate", "type": "if", "decide": "ai",
                 "question": "Is {{inputs.project}} fine?"})),
             plain("yes"),
-            report(),
         ],
-        vec![
-            e("trigger", "gate"),
-            eh("gate", "yes", "true"),
-            e("yes", "report"),
-            eh("gate", "report", "false"),
-        ],
+        vec![e("trigger", "gate"), eh("gate", "yes", "true")],
     );
     let mut run = begin(&w);
     let asks = next_actions(&run);
     match asks.as_slice() {
-        [EngineAction::AskMono {
+        [EngineAction::Decide {
             purpose,
             question,
             answers,
             ..
         }] => {
-            assert_eq!(*purpose, AskPurpose::If);
+            assert_eq!(*purpose, DecidePurpose::If);
             assert_eq!(question, "Is /work/repo fine?");
             assert_eq!(answers, &vec!["true".to_string(), "false".to_string()]);
         }
@@ -1370,44 +1333,6 @@ fn if_decided_by_the_mono_asks_true_false() {
     run = decided(&run, "gate", "false");
     assert_eq!(status_of(&run, "yes", ""), Some(NodeStatus::Skipped));
     assert_eq!(next_actions(&run), post_report());
-}
-
-#[test]
-fn ask_mono_node_records_answer_and_reason() {
-    let w = def(
-        vec![
-            trigger(),
-            n(
-                json!({"id": "pick", "type": "askMono", "question": "Which?", "answers": ["a", "b"]}),
-            ),
-            session("s", json!({"prompt": "Got {{pick.answer}}"})),
-            report(),
-        ],
-        vec![e("trigger", "pick"), e("pick", "s"), e("s", "report")],
-    );
-    let mut run = begin(&w);
-    match next_actions(&run).as_slice() {
-        [EngineAction::AskMono {
-            purpose,
-            question,
-            answers,
-            ..
-        }] => {
-            assert_eq!(*purpose, AskPurpose::AskMono);
-            assert_eq!(question, "Which?");
-            assert_eq!(answers, &vec!["a".to_string(), "b".to_string()]);
-        }
-        other => panic!("expected one askMono, got {other:?}"),
-    }
-    run = started(&run, "pick");
-    run = decided_on(&run, "pick", "b", "", Some("because"));
-    assert_eq!(
-        node_of(&run, "pick", "").output,
-        Some(out(json!({"answer": "b", "reason": "because"})))
-    );
-    let actions = next_actions(&run);
-    assert_eq!(actions.len(), 1);
-    assert_eq!(prompt_of(&actions[0]), "Got b");
 }
 
 #[test]
@@ -1448,10 +1373,7 @@ fn failure_in_one_branch_does_not_stop_another_status_done_with_failures() {
 
 #[test]
 fn run_is_failed_when_no_session_or_command_succeeded() {
-    let mut run = begin(&def(
-        vec![trigger(), plain("a"), report()],
-        vec![e("trigger", "a"), e("a", "report")],
-    ));
+    let mut run = begin(&def(vec![trigger(), plain("a")], vec![e("trigger", "a")]));
     run = failed(&started(&run, "a"), "a", "nope", "");
     assert_eq!(next_actions(&run), post_report());
     run = reported(&run, 5);
@@ -1459,12 +1381,12 @@ fn run_is_failed_when_no_session_or_command_succeeded() {
 }
 
 #[test]
-fn a_run_without_a_report_node_ends_as_soon_as_nothing_is_left() {
+fn a_run_ends_as_soon_as_nothing_is_left_and_then_asks_for_its_summary() {
     let mut run = begin(&def(vec![trigger(), plain("a")], vec![e("trigger", "a")]));
     run = complete_at(&run, "a", json!({}), "", 7);
     assert_eq!(run.status, RunStatus::Done);
     assert_eq!(run.ended_at, Some(7));
-    assert_eq!(next_actions(&run), vec![]);
+    assert_eq!(next_actions(&run), post_report());
 }
 
 #[test]
@@ -1538,7 +1460,7 @@ mod resuming_a_node_that_was_mid_session {
 
     #[test]
     fn does_not_reuse_when_the_node_opted_out_of_reuse() {
-        let mut run = begin(&dev_review("mono", 3, Some(false)));
+        let mut run = begin(&dev_review("ai", 3, Some(false)));
         run = complete(
             &started_on(&run, "dev", "", Some("s-dev")),
             "dev",
@@ -1588,15 +1510,15 @@ fn resume_run_after_a_loop_question_was_lost_asks_again_without_rerunning_the_no
     assert_eq!(status_of(&resumed, "review", ""), Some(NodeStatus::Done));
     assert!(matches!(
         next_actions(&resumed).as_slice(),
-        [EngineAction::AskMono {
-            purpose: AskPurpose::Loop,
+        [EngineAction::Decide {
+            purpose: DecidePurpose::Loop,
             ..
         }]
     ));
 }
 
 #[test]
-fn stopped_event_ends_run_as_stopped_and_emits_nothing() {
+fn stopped_event_ends_run_as_stopped_and_only_its_summary_is_left_to_post() {
     let mut run = begin(&default_fan_out());
     run = started(&run, "fetch");
     run = apply_event(&run, &EngineEvent::Stopped { at: 50 });
@@ -1604,7 +1526,7 @@ fn stopped_event_ends_run_as_stopped_and_emits_nothing() {
     assert_eq!(run.ended_at, Some(50));
     assert_eq!(status_of(&run, "fetch", ""), Some(NodeStatus::Stopped));
     assert_eq!(status_of(&run, "each", ""), Some(NodeStatus::Skipped));
-    assert_eq!(next_actions(&run), vec![]);
+    assert_eq!(next_actions(&run), post_report());
     let event = EngineEvent::NodeFinished {
         node_id: "fetch".into(),
         branch: "".into(),
@@ -1615,10 +1537,7 @@ fn stopped_event_ends_run_as_stopped_and_emits_nothing() {
 }
 
 fn single_session() -> Workflow {
-    def(
-        vec![trigger(), plain("a"), report()],
-        vec![e("trigger", "a"), e("a", "report")],
-    )
+    def(vec![trigger(), plain("a")], vec![e("trigger", "a")])
 }
 
 #[test]
@@ -1653,7 +1572,12 @@ fn events_are_immutable_updates() {
 
 #[test]
 fn run_scope_exposes_inputs_run_the_loop_variable_and_branch_outputs() {
-    let mut run = start_run(&default_fan_out(), RunTrigger::Manual, 77, "run-x");
+    let mut run = start_run(
+        &default_fan_out(),
+        RunCaller::new(CallerKind::Manual, "trigger"),
+        77,
+        "run-x",
+    );
     run = complete(&run, "fetch", json!({"tickets": tickets_value()}));
     run = complete_on(&run, "dev", json!({"pr_url": "u0"}), "each#0");
     let scope = run_scope(&run, "each#0", Some("dev"));
@@ -1693,8 +1617,8 @@ fn run_round_is_the_current_round_of_the_node_inside_a_loop() {
 #[test]
 fn does_not_run_nodes_the_trigger_cannot_reach() {
     let run = begin(&def(
-        vec![trigger(), plain("a"), plain("orphan"), report()],
-        vec![e("trigger", "a"), e("a", "report")],
+        vec![trigger(), plain("a"), plain("orphan")],
+        vec![e("trigger", "a")],
     ));
     assert_eq!(status_of(&run, "orphan", ""), Some(NodeStatus::Skipped));
     assert_eq!(session_node_ids(&next_actions(&run)), vec!["a".to_string()]);
@@ -1702,10 +1626,7 @@ fn does_not_run_nodes_the_trigger_cannot_reach() {
 
 #[test]
 fn ignores_events_for_unknown_nodes() {
-    let run = begin(&def(
-        vec![trigger(), report()],
-        vec![e("trigger", "report")],
-    ));
+    let run = begin(&def(vec![trigger()], vec![e("trigger", "report")]));
     let bogus = EngineEvent::NodeFinished {
         node_id: "ghost".into(),
         branch: "".into(),
@@ -1735,7 +1656,6 @@ fn looped_node_ids_names_every_node_from_the_loop_s_target_to_its_source_and_no_
             plain("lint"),
             plain("review"),
             plain("ship"),
-            report(),
         ],
         vec![
             e("trigger", "prep"),
@@ -1743,8 +1663,7 @@ fn looped_node_ids_names_every_node_from_the_loop_s_target_to_its_source_and_no_
             e("dev", "lint"),
             e("lint", "review"),
             e("review", "ship"),
-            e("ship", "report"),
-            lp("review", "dev", 3, "mono"),
+            lp("review", "dev", 3, "ai"),
         ],
     );
     assert_eq!(sorted(looped_node_ids(&w)), vec!["dev", "lint", "review"]);
@@ -1752,10 +1671,7 @@ fn looped_node_ids_names_every_node_from_the_loop_s_target_to_its_source_and_no_
 
 #[test]
 fn looped_node_ids_is_empty_without_a_loop() {
-    let w = def(
-        vec![trigger(), plain("a"), report()],
-        vec![e("trigger", "a"), e("a", "report")],
-    );
+    let w = def(vec![trigger(), plain("a")], vec![e("trigger", "a")]);
     assert!(looped_node_ids(&w).is_empty());
 }
 
@@ -1771,14 +1687,12 @@ fn looped_node_ids_stays_within_one_for_each() {
             ),
             session("dev", json!({"parent": "each"})),
             session("review", json!({"parent": "each"})),
-            report(),
         ],
         vec![
             e("trigger", "fetch"),
             e("fetch", "each"),
             e("dev", "review"),
-            e("each", "report"),
-            lp("review", "dev", 3, "mono"),
+            lp("review", "dev", 3, "ai"),
         ],
     );
     assert_eq!(sorted(looped_node_ids(&w)), vec!["dev", "review"]);
@@ -1806,7 +1720,11 @@ fn an_engine_run_is_written_in_the_shape_the_react_app_reads() {
     run = finished(&run, "dev", json!({"pr_url": "p"}), "", 1_500);
     let value = serde_json::to_value(&run).unwrap();
     assert_eq!(value["status"], "running");
-    assert_eq!(value["trigger"], "manual");
+    assert_eq!(
+        value["caller"],
+        json!({"kind": "manual", "triggerNode": "trigger"})
+    );
+    assert!(value.get("trigger").is_none());
     assert_eq!(value["startedAt"], 1_000);
     assert_eq!(value["items"], json!({}));
     let dev = value["nodes"]
@@ -1830,10 +1748,9 @@ fn rejects_answers_that_are_not_allowed() {
     let gate = def(
         vec![
             trigger(),
-            n(json!({"id": "gate", "type": "if", "decide": "mono"})),
-            report(),
+            n(json!({"id": "gate", "type": "if", "decide": "ai"})),
         ],
-        vec![e("trigger", "gate"), e("gate", "report")],
+        vec![e("trigger", "gate")],
     );
     let run = decided(&started(&begin(&gate), "gate"), "gate", "maybe");
     assert_eq!(
@@ -1843,26 +1760,12 @@ fn rejects_answers_that_are_not_allowed() {
     // The default question names the node.
     let asks = next_actions(&begin(&gate));
     match asks.as_slice() {
-        [EngineAction::AskMono { question, .. }] => assert_eq!(
+        [EngineAction::Decide { question, .. }] => assert_eq!(
             question,
             "Should the \"true\" side of \"gate\" be taken? Answer true or false."
         ),
         other => panic!("expected one askMono, got {other:?}"),
     }
-    // Ask Mono node: only a listed answer.
-    let pick = def(
-        vec![
-            trigger(),
-            n(json!({"id": "pick", "type": "askMono", "question": "Which?", "answers": ["a"]})),
-            report(),
-        ],
-        vec![e("trigger", "pick"), e("pick", "report")],
-    );
-    let run = decided(&begin(&pick), "pick", "z");
-    assert_eq!(
-        node_of(&run, "pick", "").error.as_deref(),
-        Some("Mono answered \"z\", which is not an allowed answer")
-    );
     // A loop answer: loop or exit.
     let mut run = begin(&mono_loop());
     run = complete(&run, "dev", json!({}));
@@ -1881,9 +1784,8 @@ fn a_condition_error_fails_the_node() {
         vec![
             trigger(),
             n(json!({"id": "gate", "type": "if", "condition": "{{a}} >> 1"})),
-            report(),
         ],
-        vec![e("trigger", "gate"), e("gate", "report")],
+        vec![e("trigger", "gate")],
     );
     let run = begin(&w);
     assert_eq!(status_of(&run, "gate", ""), Some(NodeStatus::Failed));
@@ -1903,13 +1805,8 @@ fn a_for_each_list_expression_may_have_white_space_but_nothing_else() {
                 session("fetch", json!({"output": {"tickets": {"type": "list"}}})),
                 n(json!({"id": "each", "type": "forEach", "in": expression})),
                 session("dev", json!({"parent": "each"})),
-                report(),
             ],
-            vec![
-                e("trigger", "fetch"),
-                e("fetch", "each"),
-                e("each", "report"),
-            ],
+            vec![e("trigger", "fetch"), e("fetch", "each")],
         );
         let run = complete(&begin(&w), "fetch", json!({"tickets": [1]}));
         status_of(&run, "each", "")
@@ -1957,12 +1854,9 @@ fn events_that_do_not_fit_the_node_state_change_nothing() {
 
 #[test]
 fn start_run_without_a_trigger_starts_from_the_nodes_nothing_leads_to() {
-    let run = begin(&def(
-        vec![plain("a"), plain("b"), report()],
-        vec![e("a", "b"), e("b", "report")],
-    ));
+    let run = begin(&def(vec![plain("a"), plain("b")], vec![e("a", "b")]));
     assert_eq!(session_node_ids(&next_actions(&run)), vec!["a".to_string()]);
-    assert_eq!(status_of(&run, "report", ""), Some(NodeStatus::Pending));
+    assert_eq!(status_of(&run, "b", ""), Some(NodeStatus::Pending));
 }
 
 #[test]
@@ -1974,7 +1868,6 @@ fn an_interrupted_run_can_be_stopped_and_the_stop_marks_pending_nodes_skipped() 
     assert_eq!(stopped.status, RunStatus::Stopped);
     assert_eq!(stopped.ended_at, Some(70));
     assert_eq!(status_of(&stopped, "a", ""), Some(NodeStatus::Skipped));
-    assert_eq!(status_of(&stopped, "report", ""), Some(NodeStatus::Skipped));
 }
 
 #[test]
@@ -2017,14 +1910,12 @@ fn an_unknown_loop_edge_target_or_cross_parent_loop_is_ignored() {
             plain("a"),
             n(json!({"id": "each", "type": "forEach", "in": "{{a.list}}"})),
             session("b", json!({"parent": "each"})),
-            report(),
         ],
         vec![
             e("trigger", "a"),
             e("a", "each"),
-            e("each", "report"),
-            lp("a", "ghost", 3, "mono"),
-            lp("b", "a", 3, "mono"),
+            lp("a", "ghost", 3, "ai"),
+            lp("b", "a", 3, "ai"),
         ],
     );
     assert!(looped_node_ids(&w).is_empty());
@@ -2050,7 +1941,6 @@ fn switch_workflow(route: Value) -> Workflow {
             plain("fix"),
             plain("plan"),
             plain("other"),
-            report(),
         ],
         vec![
             e("trigger", "triage"),
@@ -2058,9 +1948,6 @@ fn switch_workflow(route: Value) -> Workflow {
             eh("route", "fix", "bug"),
             eh("route", "plan", "feature"),
             eh("route", "other", "default"),
-            e("fix", "report"),
-            e("plan", "report"),
-            e("other", "report"),
         ],
     )
 }
@@ -2107,16 +1994,16 @@ fn switch_value_with_no_matching_case_takes_default() {
 
 #[test]
 fn switch_decided_by_the_mono_asks_cases_and_default() {
-    let w = switch_workflow(json!({"decide": "mono", "question": "What is {{inputs.project}}?"}));
+    let w = switch_workflow(json!({"decide": "ai", "question": "What is {{inputs.project}}?"}));
     let mut run = complete(&begin(&w), "triage", json!({"kind": "x"}));
     match next_actions(&run).as_slice() {
-        [EngineAction::AskMono {
+        [EngineAction::Decide {
             purpose,
             question,
             answers,
             ..
         }] => {
-            assert_eq!(*purpose, AskPurpose::Switch);
+            assert_eq!(*purpose, DecidePurpose::Switch);
             assert_eq!(question, "What is /work/repo?");
             assert_eq!(
                 answers,
@@ -2155,10 +2042,10 @@ fn switch_decided_by_the_mono_asks_cases_and_default() {
 
 #[test]
 fn switch_asks_a_default_question_that_names_the_node() {
-    let w = switch_workflow(json!({"decide": "mono"}));
+    let w = switch_workflow(json!({"decide": "ai"}));
     let run = complete(&begin(&w), "triage", json!({}));
     match next_actions(&run).as_slice() {
-        [EngineAction::AskMono { question, .. }] => assert_eq!(
+        [EngineAction::Decide { question, .. }] => assert_eq!(
             question,
             "Which case of \"route\" applies? Answer with one of: bug, feature, default."
         ),
@@ -2168,7 +2055,7 @@ fn switch_asks_a_default_question_that_names_the_node() {
 
 #[test]
 fn switch_rejects_an_answer_that_is_not_a_case() {
-    let w = switch_workflow(json!({"decide": "mono"}));
+    let w = switch_workflow(json!({"decide": "ai"}));
     let run = complete(&begin(&w), "triage", json!({}));
     let run = decided(&started(&run, "route"), "route", "maybe");
     assert_eq!(status_of(&run, "route", ""), Some(NodeStatus::Failed));
@@ -2193,7 +2080,6 @@ fn switch_in_a_loop_is_decided_again_each_round() {
             plain("plan"),
             plain("other"),
             plain("review"),
-            report(),
         ],
         vec![
             e("trigger", "dev"),
@@ -2204,8 +2090,7 @@ fn switch_in_a_loop_is_decided_again_each_round() {
             e("fix", "review"),
             e("plan", "review"),
             e("other", "review"),
-            e("review", "report"),
-            lp("review", "dev", 3, "mono"),
+            lp("review", "dev", 3, "ai"),
         ],
     );
     let mut run = complete(&begin(&w), "dev", json!({"kind": "bug"}));
@@ -2249,7 +2134,6 @@ fn a_join_after_a_switch_runs_once_when_only_one_of_its_case_branches_is_live() 
             plain("fix"),
             plain("plan"),
             plain("join"),
-            report(),
         ],
         vec![
             e("trigger", "triage"),
@@ -2258,7 +2142,6 @@ fn a_join_after_a_switch_runs_once_when_only_one_of_its_case_branches_is_live() 
             eh("route", "plan", "feature"),
             e("fix", "join"),
             e("plan", "join"),
-            e("join", "report"),
         ],
     );
     let mut run = complete(&begin(&w), "triage", json!({"kind": "feature"}));
@@ -2322,4 +2205,278 @@ fn a_switch_inside_a_for_each_picks_a_branch_per_item() {
     assert_eq!(status_of(&run, "plan", "each#0"), Some(NodeStatus::Skipped));
     assert_eq!(status_of(&run, "fix", "each#1"), Some(NodeStatus::Skipped));
     assert_eq!(status_of(&run, "fix", "each#2"), Some(NodeStatus::Skipped));
+}
+
+// ---------------------------------------------------------------------------------------------
+// several triggers, the caller and the run summary
+// ---------------------------------------------------------------------------------------------
+
+fn schedule_trigger(id: &str) -> Node {
+    n(json!({"id": id, "type": "schedule",
+        "schedule": {"scheduleKind": "daily", "time": "09:00", "minute": 0, "dayOfWeek": 1}}))
+}
+
+/// Three triggers (a manual one and two schedules) that all lead to the session `a`.
+fn many_triggers() -> Workflow {
+    def(
+        vec![
+            trigger(),
+            schedule_trigger("morning"),
+            schedule_trigger("evening"),
+            plain("a"),
+        ],
+        vec![e("trigger", "a"), e("morning", "a"), e("evening", "a")],
+    )
+}
+
+fn caller(kind: CallerKind, trigger_node: &str) -> RunCaller {
+    RunCaller::new(kind, trigger_node)
+}
+
+#[test]
+fn only_the_trigger_that_fired_runs_and_the_others_are_skipped() {
+    let w = many_triggers();
+    for (fired, others) in [
+        ("trigger", ["morning", "evening"]),
+        ("morning", ["trigger", "evening"]),
+        ("evening", ["trigger", "morning"]),
+    ] {
+        let kind = if fired == "trigger" {
+            CallerKind::Manual
+        } else {
+            CallerKind::Schedule
+        };
+        let run = start_run(&w, caller(kind, fired), 5, "r");
+        assert_eq!(
+            status_of(&run, fired, ""),
+            Some(NodeStatus::Done),
+            "{fired}"
+        );
+        for other in others {
+            assert_eq!(
+                status_of(&run, other, ""),
+                Some(NodeStatus::Skipped),
+                "{fired}/{other}"
+            );
+        }
+        assert_eq!(run.caller.trigger_node, fired);
+        // The first step starts whichever trigger fired.
+        assert_eq!(
+            session_targets(&next_actions(&run)),
+            pairs(&[("a", "")]),
+            "{fired}"
+        );
+    }
+}
+
+#[test]
+fn a_schedule_trigger_that_fired_exposes_when_and_a_skipped_one_exposes_nothing() {
+    let run = start_run(
+        &many_triggers(),
+        caller(CallerKind::Schedule, "evening"),
+        77,
+        "r",
+    );
+    assert_eq!(
+        node_of(&run, "evening", "").output,
+        Some(out(json!({"startedAt": 77})))
+    );
+    assert_eq!(node_of(&run, "morning", "").output, None);
+    assert_eq!(node_of(&run, "trigger", "").output, None);
+}
+
+#[test]
+fn a_caller_that_names_no_trigger_fires_the_first_one_of_its_kind_else_the_first() {
+    let w = many_triggers();
+    let run = start_run(&w, caller(CallerKind::Schedule, "gone"), 1, "r");
+    assert_eq!(run.caller.trigger_node, "morning");
+    let run = start_run(&w, caller(CallerKind::Manual, ""), 1, "r");
+    assert_eq!(run.caller.trigger_node, "trigger");
+    let run = start_run(&w, caller(CallerKind::Mono, ""), 1, "r");
+    assert_eq!(run.caller.trigger_node, "trigger");
+    let schedules_only = def(
+        vec![schedule_trigger("morning"), plain("a")],
+        vec![e("morning", "a")],
+    );
+    // A manual run of a workflow that has only a schedule trigger starts that trigger.
+    let run = start_run(&schedules_only, caller(CallerKind::Manual, ""), 1, "r");
+    assert_eq!(run.caller.trigger_node, "morning");
+    assert_eq!(status_of(&run, "morning", ""), Some(NodeStatus::Done));
+}
+
+#[test]
+fn the_run_records_who_called_it_for_every_kind() {
+    let item = Json::from(&json!({"source": "clickup", "ref": "CU-1", "title": "Fix it"}));
+    let callers = [
+        caller(CallerKind::Manual, "trigger"),
+        caller(CallerKind::Schedule, "morning"),
+        RunCaller {
+            item: Some(item.clone()),
+            ..caller(CallerKind::Event, "trigger")
+        },
+        RunCaller::mono("mono-7", "trigger"),
+    ];
+    for caller in callers {
+        let run = start_run(&many_triggers(), caller.clone(), 1, "r");
+        assert_eq!(run.caller, caller);
+        // It survives the run file.
+        let back: WorkflowRun =
+            serde_json::from_str(&serde_json::to_string(&run).unwrap()).unwrap();
+        assert_eq!(back.caller, caller);
+    }
+}
+
+#[test]
+fn the_scope_has_the_trigger_node_kind_and_item() {
+    let item =
+        Json::from(&json!({"source": "github", "kind": "issue", "ref": "#12", "title": "Bug"}));
+    let run = start_run(
+        &many_triggers(),
+        RunCaller {
+            item: Some(item.clone()),
+            ..caller(CallerKind::Event, "trigger")
+        },
+        1,
+        "r",
+    );
+    let scope = run_scope(&run, "", None);
+    let fired = scope.get("trigger").unwrap();
+    assert_eq!(fired.get("node"), Some(&Json::String("trigger".into())));
+    assert_eq!(fired.get("kind"), Some(&Json::String("event".into())));
+    assert_eq!(fired.get("item"), Some(&item));
+    // Without an item there is no `item` key: it only exists for event runs.
+    let manual = start_run(
+        &many_triggers(),
+        caller(CallerKind::Manual, "trigger"),
+        1,
+        "r",
+    );
+    let scope = run_scope(&manual, "", None);
+    let fired = scope.get("trigger").unwrap();
+    assert_eq!(fired.get("kind"), Some(&Json::String("manual".into())));
+    assert_eq!(fired.get("item"), None);
+    // A prompt reads it.
+    let w = def(
+        vec![
+            trigger(),
+            session(
+                "a",
+                json!({"prompt": "Fix {{trigger.item.title}} ({{trigger.kind}} via {{trigger.node}})"}),
+            ),
+        ],
+        vec![e("trigger", "a")],
+    );
+    let run = start_run(
+        &w,
+        RunCaller {
+            item: Some(item),
+            ..caller(CallerKind::Event, "trigger")
+        },
+        1,
+        "r",
+    );
+    assert_eq!(
+        prompt_of(&next_actions(&run)[0]),
+        "Fix Bug (event via trigger)"
+    );
+}
+
+#[test]
+fn a_node_named_trigger_keeps_its_own_output_next_to_the_trigger_variables() {
+    let w = def(
+        vec![
+            schedule_trigger("trigger"),
+            session(
+                "a",
+                json!({"prompt": "At {{trigger.startedAt}} by {{trigger.kind}}"}),
+            ),
+        ],
+        vec![e("trigger", "a")],
+    );
+    let run = start_run(&w, caller(CallerKind::Schedule, "trigger"), 99, "r");
+    assert_eq!(prompt_of(&next_actions(&run)[0]), "At 99 by schedule");
+}
+
+#[test]
+fn a_settled_run_asks_for_its_summary_once_whatever_ended_it() {
+    // Done with nothing to run at all.
+    let run = start_run(
+        &def(vec![trigger()], vec![]),
+        caller(CallerKind::Manual, "trigger"),
+        1,
+        "r",
+    );
+    assert_eq!(run.status, RunStatus::Done);
+    assert_eq!(next_actions(&run), post_report());
+    let posted = reported(&run, 9);
+    assert_eq!(posted.report_posted_at, Some(9));
+    assert_eq!(next_actions(&posted), vec![]);
+    // Posting twice changes nothing.
+    assert_eq!(reported(&posted, 10), posted);
+
+    // A failed run too.
+    let w = single_session();
+    let mut failing = started(&begin(&w), "a");
+    failing = failed(&failing, "a", "boom", "");
+    assert_eq!(failing.status, RunStatus::Failed);
+    assert_eq!(next_actions(&failing), post_report());
+
+    // And one that was stopped, but not one that was only interrupted.
+    let stopped = apply_event(&begin(&w), &EngineEvent::Stopped { at: 4 });
+    assert_eq!(next_actions(&stopped), post_report());
+    let interrupted = mark_interrupted(&started(&begin(&w), "a"));
+    assert_eq!(interrupted.status, RunStatus::Interrupted);
+    assert_eq!(next_actions(&interrupted), vec![]);
+    assert_eq!(reported(&interrupted, 1), interrupted);
+}
+
+#[test]
+fn a_run_that_is_still_going_has_no_summary_action() {
+    let run = begin(&single_session());
+    assert_eq!(run.status, RunStatus::Running);
+    assert!(!next_actions(&run).contains(&EngineAction::PostSummary));
+    assert_eq!(reported(&run, 3), run);
+}
+
+#[test]
+fn a_decision_action_names_no_mono_and_carries_the_question_and_the_context() {
+    let w = def(
+        vec![
+            trigger(),
+            session("a", json!({"output": {"risky": {"type": "boolean"}}})),
+            n(
+                json!({"id": "gate", "type": "if", "decide": "ai", "question": "Is {{inputs.project}} risky?"}),
+            ),
+            plain("deep"),
+        ],
+        vec![
+            e("trigger", "a"),
+            e("a", "gate"),
+            eh("gate", "deep", "true"),
+        ],
+    );
+    let mut run = complete(&begin(&w), "a", json!({"risky": true}));
+    let asks = next_actions(&run);
+    let [EngineAction::Decide {
+        node_id,
+        branch,
+        purpose,
+        question,
+        answers,
+        context,
+    }] = asks.as_slice()
+    else {
+        panic!("expected one decision, got {asks:?}")
+    };
+    assert_eq!((node_id.as_str(), branch.as_str()), ("gate", ""));
+    assert_eq!(*purpose, DecidePurpose::If);
+    assert_eq!(question, "Is /work/repo risky?");
+    assert_eq!(answers, &vec!["true".to_string(), "false".to_string()]);
+    assert_eq!(context.get("a"), Some(&jv(json!({"risky": true}))));
+    run = started(&run, "gate");
+    run = decided(&run, "gate", "true");
+    assert_eq!(
+        session_node_ids(&next_actions(&run)),
+        vec!["deep".to_string()]
+    );
 }

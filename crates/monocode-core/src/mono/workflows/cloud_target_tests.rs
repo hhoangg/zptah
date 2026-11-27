@@ -34,18 +34,16 @@ fn session_json(id: &str, extra: Value) -> Value {
     v
 }
 
-/// trigger -> each node in `middle` -> report, as a stored workflow.
+/// trigger -> each node in `middle`, as a stored workflow.
 fn chain(middle: Vec<Value>) -> Workflow {
     let mut ids = vec!["trigger".to_string()];
     ids.extend(middle.iter().map(|n| n["id"].as_str().unwrap().to_string()));
-    ids.push("report".into());
     let edges: Vec<Value> = ids
         .windows(2)
         .map(|pair| value!({"from": pair[0], "to": pair[1]}))
         .collect();
     let mut nodes = vec![value!({"id": "trigger", "type": "manual"})];
     nodes.extend(middle);
-    nodes.push(value!({"id": "report", "type": "report"}));
     workflow_from(
         &value!({
             "id": "wf-abcd1234", "name": "Cloud",
@@ -700,13 +698,11 @@ fn a_same_as_step_must_use_the_project_input_of_its_source() {
             "inputs": {"project": {"type": "project"}, "other": {"type": "project"}},
             "inputValues": {"project": "/work/api", "other": "/work/web"},
             "nodes": [
-                {"id": "trigger", "type": "manual"}, build, check,
-                {"id": "report", "type": "report"}
+                {"id": "trigger", "type": "manual"}, build, check
             ],
             "edges": [
                 {"from": "trigger", "to": "build"},
-                {"from": "build", "to": "check"},
-                {"from": "check", "to": "report"}
+                {"from": "build", "to": "check"}
             ],
             "enabled": false, "createdAt": 0
         })

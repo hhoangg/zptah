@@ -30,7 +30,7 @@ fn source(extra: Value) -> Workflow {
             {"id": "fix", "type": "session", "title": "Fix failures", "project": "{{inputs.project}}",
              "checkout": "root", "prompt": "Fix what broke in {{inputs.area}}.",
              "output": {"summary": {"type": "string", "description": "One line on what changed"}}},
-            {"id": "report", "type": "report", "title": "Tell the Mono"},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "title": "Tell the Mono"},
         ]),
         json!([
             {"from": "trigger", "to": "build"},
@@ -44,7 +44,7 @@ fn source(extra: Value) -> Workflow {
 fn plain_source() -> Workflow {
     build(
         json!({"id": "wf-sourceaaa", "name": "Tiny"}),
-        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}]),
+        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
         json!([{"from": "trigger", "to": "report"}]),
     )
 }
@@ -179,7 +179,7 @@ fn validation_issues_are_shown_without_blocking_the_import(cx: &mut TestAppConte
         json!([
             {"id": "trigger", "type": "manual"},
             {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": "make"},
-            {"id": "report", "type": "report"},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
         json!([{"from": "trigger", "to": "build"}]),
     );
@@ -338,7 +338,7 @@ fn an_interval_schedule_is_anchored_like_the_cli_import(cx: &mut TestAppContext)
         json!({"id": "wf-sourceaaa", "name": "Timed"}),
         json!([
             {"id": "trigger", "type": "schedule", "schedule": {"scheduleKind": "interval", "time": "09:00", "minute": 0, "dayOfWeek": 1, "intervalHours": 4}},
-            {"id": "report", "type": "report"},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
         json!([{"from": "trigger", "to": "report"}]),
     );
@@ -365,7 +365,7 @@ fn an_input_value_is_not_carried_to_a_file_that_declares_it_differently(cx: &mut
     let file = |ty: &str| {
         export_workflow(&build(
             json!({"id": "wf-sourceaaa", "name": "One input", "inputs": {"area": {"type": ty}}}),
-            json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}]),
+            json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
             json!([{"from": "trigger", "to": "report"}]),
         ))
     };
@@ -426,7 +426,7 @@ fn a_workflow_the_mono_adds_shows_up_in_the_open_tab(cx: &mut TestAppContext) {
         "workflows.add",
         json!({"workflow": {
             "name": "From the Mono",
-            "nodes": [{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}],
+            "nodes": [{"id": "trigger", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}],
             "edges": [{"from": "trigger", "to": "report"}],
         }}),
         visual,

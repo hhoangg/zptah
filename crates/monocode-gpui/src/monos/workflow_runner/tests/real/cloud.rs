@@ -334,19 +334,19 @@ fn cloud_workflow(s: &Setup) -> Workflow {
                 json!({}),
                 json!({"target": {"kind": "codespace", "instance": {"sameAs": "build"}}}),
             ),
-            report(),
         ],
-        vec![
-            edge("trigger", "build"),
-            edge("build", "check"),
-            edge("check", "report"),
-        ],
+        vec![edge("trigger", "build"), edge("build", "check")],
         json!({"repo": s.project, "lib": s.project}),
     )
 }
 
 fn start_cloud_run(s: &Setup, cx: &mut TestAppContext) {
-    let run = start_run(&cloud_workflow(s), RunTrigger::Manual, 1_000, "run-1");
+    let run = start_run(
+        &cloud_workflow(s),
+        RunCaller::new(CallerKind::Manual, "trigger"),
+        1_000,
+        "run-1",
+    );
     let started = cx.update(|cx| {
         s.manager
             .update(cx, |m, cx| m.start_workflow_run(&s.id, run, cx))

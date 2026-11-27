@@ -1,6 +1,6 @@
-//! What a finished run tells the Mono: the report the app composes itself, plus the prompt and
-//! reply parsing for the questions the engine puts to the Mono (Ask Mono nodes, Mono-decided Ifs
-//! and loops). Texts are copied from the React app; the Mono reads them.
+//! What a finished run tells the user: the summary the app composes itself, plus the prompt and
+//! reply parsing for the questions the engine puts to the AI (If, Switch and loop edges that
+//! `decide: "ai"`). Texts are copied from the React app; the model reads them.
 use super::engine::{run_scope, EngineAction, BRANCH_FAILED_REASON, MAX_ROUNDS_REASON};
 use super::model::{
     archived_branch, archived_items_key, parse_branch, NodeKind, NodeRun, NodeStatus, OutputField,
@@ -35,7 +35,7 @@ fn status_label(status: RunStatus) -> &'static str {
 
 /// A string longer than this (in UTF-16 units, like JS) is shown as a quoted block, not inline.
 const INLINE_STRING_MAX: usize = 200;
-const ACTION_TYPES: [&str; 5] = ["session", "command", "askMono", "if", "switch"];
+const ACTION_TYPES: [&str; 4] = ["session", "command", "if", "switch"];
 
 struct BranchResult {
     branch: String,
@@ -479,21 +479,15 @@ fn results_json(results: &[BranchResult]) -> Json {
     )
 }
 
-/// The report template of a definition, when it has one that is not blank.
-fn report_template(definition: &Workflow) -> Option<&str> {
-    let node = definition
-        .nodes
-        .iter()
-        .find(|n| matches!(n.kind, NodeKind::Report { .. }))?;
-    match &node.kind {
-        NodeKind::Report {
-            template: Some(template),
-        } if !js_trim(template).is_empty() => Some(template),
-        _ => None,
-    }
+/// The summary template of a definition, when it has one that is not blank.
+fn summary_template(definition: &Workflow) -> Option<&str> {
+    definition
+        .summary_template
+        .as_deref()
+        .filter(|template| !js_trim(template).is_empty())
 }
 
-/// The report the app posts to the Mono when a run ends, as Markdown.
+/// The summary the app posts when a run ends, as Markdown. `summaryTemplate` shapes it when set.
 pub fn compose_report(run: &WorkflowRun) -> Report {
     let workflow_name = &run.definition.name;
     let label = status_label(run.status);
@@ -504,7 +498,7 @@ pub fn compose_report(run: &WorkflowRun) -> Report {
         groups,
     } = collect(run);
 
-    let body = if let Some(template) = report_template(&run.definition) {
+    let body = if let Some(template) = summary_template(&run.definition) {
         // The top-level scope (node outputs, inputs) first, so `{{<nodeId>.<field>}}` works as the
         // validator promises; the report's own `run` and `results` then take precedence.
         let Json::Object(mut scope) = run_scope(run, "", None) else {
@@ -545,10 +539,10 @@ pub fn compose_report(run: &WorkflowRun) -> Report {
     }
 }
 
-/// The request the Mono receives for an Ask Mono node, or a Mono-decided If or loop. None for an
-/// action that is not a question.
-pub fn ask_mono_prompt(action: &EngineAction, workflow_name: &str) -> Option<String> {
-    let EngineAction::AskMono {
+/// The request the model receives for an If, a Switch or a loop edge that decides with AI. None
+/// for an action that is not a question.
+pub fn decision_prompt(action: &EngineAction, workflow_name: &str) -> Option<String> {
+    let EngineAction::Decide {
         node_id,
         question,
         answers,
@@ -595,16 +589,16 @@ pub fn ask_mono_prompt(action: &EngineAction, workflow_name: &str) -> Option<Str
     )
 }
 
-/// What the Mono decided: one of the offered answers, and why when it said.
+/// What the model decided: one of the offered answers, and why when it said.
 #[derive(Clone, Debug, PartialEq)]
-pub struct MonoDecision {
+pub struct AiDecision {
     pub value: String,
     pub reason: Option<String>,
 }
 
-/// The Mono's decision from its reply: `answer` must be one of `answers`; `reason` is optional.
-/// Err is the message to put back to the Mono.
-pub fn parse_mono_decision(reply: &str, answers: &[String]) -> Result<MonoDecision, String> {
+/// The decision from the model's reply: `answer` must be one of `answers`; `reason` is optional.
+/// Err is the message to put back to the model.
+pub fn parse_decision(reply: &str, answers: &[String]) -> Result<AiDecision, String> {
     let mut fields = OrderedMap::new();
     fields.insert("answer", OutputField::new(OutputFieldType::String));
     let parsed = parse_workflow_output(reply, &fields)?;
@@ -626,7 +620,7 @@ pub fn parse_mono_decision(reply: &str, answers: &[String]) -> Result<MonoDecisi
         Some(Json::String(reason)) if !reason.is_empty() => Some(reason.clone()),
         _ => None,
     };
-    Ok(MonoDecision {
+    Ok(AiDecision {
         value: answer.clone(),
         reason,
     })

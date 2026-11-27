@@ -5,7 +5,7 @@ use super::actions::{self, ReviewIntent};
 use super::requirements::missing_requirements_badge;
 use super::view::{needs_review_badge, notice_line};
 use monocode_core::mono::workflows::model::{
-    NodeKind, NodeStatus, WORKFLOWS_MAX, Workflow, WorkflowRun, trigger_of,
+    NodeKind, NodeStatus, WORKFLOWS_MAX, Workflow, WorkflowRun,
 };
 use monocode_core::time::now_ms;
 
@@ -30,11 +30,23 @@ pub(in crate::monos) fn active_branches(run: &WorkflowRun) -> usize {
     branches.len().max(1)
 }
 
-/// "Weekdays 09:00" for a schedule trigger, "Manual" otherwise.
+/// "Weekdays 09:00" for a schedule trigger, "Manual" for a manual one; several triggers are
+/// joined with a comma, and a workflow with none says "Manual".
 pub(in crate::monos) fn workflow_trigger_label(workflow: &Workflow) -> String {
-    match trigger_of(workflow).map(|n| &n.kind) {
-        Some(NodeKind::Schedule { schedule }) => schedule.label(),
-        _ => "Manual".into(),
+    let mut labels: Vec<String> = Vec::new();
+    for node in workflow.triggers() {
+        let label = match &node.kind {
+            NodeKind::Schedule { schedule } => schedule.label(),
+            _ => "Manual".into(),
+        };
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    if labels.is_empty() {
+        "Manual".into()
+    } else {
+        labels.join(", ")
     }
 }
 

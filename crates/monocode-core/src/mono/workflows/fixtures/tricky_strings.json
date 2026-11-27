@@ -9,6 +9,7 @@
   "inputValues": {
     "project": "/work/api"
   },
+  "summaryTemplate": "  Leading spaces\nSecond line   \n\n\nafter blank\n\n",
   "nodes": [
     {
       "id": "start",
@@ -17,9 +18,10 @@
     },
     {
       "id": "a",
-      "type": "askMono",
+      "type": "switch",
+      "decide": "ai",
       "question": "true",
-      "answers": [
+      "cases": [
         "null",
         "~",
         "",
@@ -97,11 +99,6 @@
       "type": "command",
       "project": "{{inputs.project}}",
       "command": "echo 'it''s' \"x\" && grep -E 'a|b' file # comment: x\n\tindented\n"
-    },
-    {
-      "id": "d",
-      "type": "report",
-      "template": "  Leading spaces\nSecond line   \n\n\nafter blank\n\n"
     }
   ],
   "edges": [],

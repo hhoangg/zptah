@@ -412,7 +412,15 @@ impl Rig {
 
     /// A manual run of `def` with the id `run-1`.
     pub(super) fn start(&self, cx: &TestAppContext, def: &Workflow) -> bool {
-        self.start_run(cx, start_run(def, RunTrigger::Manual, 1_000, "run-1"))
+        self.start_run(
+            cx,
+            start_run(
+                def,
+                RunCaller::new(CallerKind::Manual, "trigger"),
+                1_000,
+                "run-1",
+            ),
+        )
     }
 
     pub(super) fn start_run(&self, cx: &TestAppContext, run: WorkflowRun) -> bool {

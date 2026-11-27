@@ -6,7 +6,7 @@ use crate::monos::tests::{Setup, call, chat_rows, setup};
 use gpui::TestAppContext;
 use monocode_core::mono::workflows::{
     engine::{mark_interrupted, start_run},
-    model::{RunStatus, RunTrigger, Workflow, WorkflowRun},
+    model::{CallerKind, RunCaller, RunStatus, Workflow, WorkflowRun},
     ordered::Json,
     parse::parse_workflow,
     store::{load_runs, load_workflows, update_runs, update_workflows},
@@ -109,7 +109,10 @@ fn a_requested_run_starts_on_the_look_and_its_report_reaches_the_chat(cx: &mut T
     let history = runs(&s, A);
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].status, RunStatus::Done);
-    assert_eq!(history[0].trigger, RunTrigger::Manual);
+    assert_eq!(
+        history[0].caller,
+        RunCaller::new(CallerKind::Manual, "trigger")
+    );
     let after = &saved(&s)[0];
     assert!(!after.run_requested);
     assert_eq!(after.last_run_id.as_deref(), Some(history[0].id.as_str()));
@@ -138,7 +141,10 @@ fn a_due_schedule_is_claimed_and_run_once(cx: &mut TestAppContext) {
     look(&s, cx);
     let history = runs(&s, A);
     assert_eq!(history.len(), 1, "the second look finds it already claimed");
-    assert_eq!(history[0].trigger, RunTrigger::Schedule);
+    assert_eq!(
+        history[0].caller,
+        RunCaller::new(CallerKind::Schedule, "trigger")
+    );
     assert_eq!(history[0].status, RunStatus::Done);
     assert!(saved(&s)[0].next_run_at.unwrap() > monocode_core::time::now_ms());
 }
@@ -254,7 +260,12 @@ fn a_stop_written_in_the_file_stops_the_run_that_is_going(cx: &mut TestAppContex
 fn a_resume_written_in_the_file_continues_an_interrupted_run(cx: &mut TestAppContext) {
     let s = setup(cx);
     let def = quick(A, json!({}));
-    let interrupted = mark_interrupted(&start_run(&def, RunTrigger::Manual, 1_000, "run-old"));
+    let interrupted = mark_interrupted(&start_run(
+        &def,
+        RunCaller::new(CallerKind::Manual, "trigger"),
+        1_000,
+        "run-old",
+    ));
     assert_eq!(interrupted.status, RunStatus::Interrupted);
     put(&s, vec![quick(A, json!({"resumeRunId": "run-old"}))]);
     put_runs(&s, A, vec![interrupted]);
@@ -282,7 +293,12 @@ fn the_first_look_interrupts_runs_a_previous_session_left_but_not_the_ones_it_dr
     look(&s, cx);
     assert!(running(&s, A, cx));
     let live_id = runs(&s, A)[0].id.clone();
-    let stale = start_run(&quick(B, json!({})), RunTrigger::Manual, 1_000, "run-stale");
+    let stale = start_run(
+        &quick(B, json!({})),
+        RunCaller::new(CallerKind::Manual, "trigger"),
+        1_000,
+        "run-stale",
+    );
     assert_eq!(stale.status, RunStatus::Running);
     put_runs(&s, B, vec![stale]);
     forget_startup(&s, cx);
@@ -301,7 +317,7 @@ fn the_first_look_interrupts_runs_a_previous_session_left_but_not_the_ones_it_dr
         B,
         vec![start_run(
             &quick(B, json!({})),
-            RunTrigger::Manual,
+            RunCaller::new(CallerKind::Manual, "trigger"),
             2_000,
             "run-new",
         )],

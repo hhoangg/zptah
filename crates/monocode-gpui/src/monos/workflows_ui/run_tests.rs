@@ -492,8 +492,8 @@ impl Waiting for Workflow {
             json!({"runRequested": true}),
             json!([
                 {"id": "trigger", "type": "manual"},
-                {"id": "ask", "type": "askMono", "question": "Ship it?", "answers": ["yes", "no"]},
-                {"id": "report", "type": "report"},
+                {"id": "ask", "type": "switch", "decide": "ai", "question": "Ship it?", "cases": ["yes", "no"]},
+                {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
             ]),
             json!([{"from": "trigger", "to": "ask"}, {"from": "ask", "to": "report"}]),
         )
@@ -800,7 +800,7 @@ fn the_loop_edge_has_its_label_in_the_single_view_and_none_in_lanes(cx: &mut Tes
         json!([
             {"from": "trigger", "to": "each"},
             {"from": "dev", "to": "review"},
-            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "mono"}},
+            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
         ]),
     );
     let run = run_of(
@@ -835,7 +835,7 @@ fn the_loop_edge_has_its_label_in_the_single_view_and_none_in_lanes(cx: &mut Tes
     visual.refresh().unwrap();
     let found = labels(&s, visual);
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].1, "Mono decides \u{b7} max 3");
+    assert_eq!(found[0].1, "AI decides \u{b7} max 3");
     let selector: &'static str =
         Box::leak(format!("wf-loop-label-{}", found[0].0).into_boxed_str());
     assert!(visual.debug_bounds(selector).is_some());

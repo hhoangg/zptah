@@ -1,5 +1,5 @@
 //! Port of `workflowReport.test.ts`, plus exact-text checks of the report layout and prompt.
-use super::engine::{AskPurpose, EngineAction};
+use super::engine::{DecidePurpose, EngineAction};
 use super::fixtures::{edge, node};
 use super::model::*;
 use super::ordered::{Json, OrderedMap};
@@ -45,8 +45,10 @@ fn trigger() -> Node {
     n(json!({"id": "trigger", "type": "manual"}))
 }
 
-fn report() -> Node {
-    n(json!({"id": "report", "type": "report"}))
+/// `w` with a summary template.
+fn with_summary(mut w: Workflow, template: &str) -> Workflow {
+    w.summary_template = Some(template.to_string());
+    w
 }
 
 fn session(id: &str, extra: Value) -> Node {
@@ -95,7 +97,7 @@ fn run_of(definition: Workflow, nodes: Vec<NodeRun>) -> WorkflowRun {
         status: RunStatus::Done,
         started_at: 1_000,
         ended_at: Some(2_000),
-        trigger: RunTrigger::Manual,
+        caller: RunCaller::new(CallerKind::Manual, "trigger"),
         folder_id: None,
         items: BTreeMap::new(),
         nodes,
@@ -122,9 +124,8 @@ fn fan_out() -> Workflow {
                 "dev",
                 json!({"parent": "each", "output": {"pr_url": {"type": "string"}, "files": {"type": "list"}}}),
             ),
-            report(),
         ],
-        vec![e("trigger", "each"), e("each", "report")],
+        vec![e("trigger", "each")],
     )
 }
 
@@ -322,13 +323,8 @@ mod compose_report_tests {
                     "summary",
                     json!({"output": {"digest": {"type": "string"}, "raw": {"type": "list"}}}),
                 ),
-                report(),
             ],
-            vec![
-                e("trigger", "each"),
-                e("each", "summary"),
-                e("summary", "report"),
-            ],
+            vec![e("trigger", "each"), e("each", "summary")],
         );
         let nodes = vec![
             NodeRun {
@@ -361,13 +357,11 @@ mod compose_report_tests {
                 trigger(),
                 session("dev", json!({"output": {"pr_url": {"type": "string"}}})),
                 session("review", json!({"output": {"verdict": {"type": "string"}}})),
-                report(),
             ],
             vec![
                 e("trigger", "dev"),
                 e("dev", "review"),
-                e("review", "report"),
-                lp("review", "dev", 3, "mono"),
+                lp("review", "dev", 3, "ai"),
             ],
         )
     }
@@ -406,13 +400,11 @@ mod compose_report_tests {
                 trigger(),
                 session("dev", json!({})),
                 session("review", json!({})),
-                report(),
             ],
             vec![
                 e("trigger", "dev"),
                 e("dev", "review"),
-                e("review", "report"),
-                lp("review", "dev", 3, "mono"),
+                lp("review", "dev", 3, "ai"),
             ],
         );
         let mut run = run_of(
@@ -460,19 +452,17 @@ mod compose_report_tests {
                 ),
                 session("session_2", json!({})),
                 session("session_3", json!({})),
-                n(json!({
-                    "id": "report", "type": "report",
-                    "template": "Đà Nẵng hôm nay: {{session.weather}}. {{session.summary}} ({{inputs.project}}, {{run.id}}, {{run.status}})",
-                })),
             ],
             vec![
                 e("trigger", "session"),
                 e("session", "gate"),
                 eh("gate", "session_2", "true"),
                 eh("gate", "session_3", "false"),
-                e("session_2", "report"),
-                e("session_3", "report"),
             ],
+        );
+        let d = with_summary(
+            d,
+            "Đà Nẵng hôm nay: {{session.weather}}. {{session.summary}} ({{inputs.project}}, {{run.id}}, {{run.status}})",
         );
         let run = run_of(
             d,
@@ -507,12 +497,10 @@ mod compose_report_tests {
                     "dev",
                     json!({"parent": "each", "output": {"pr_url": {"type": "string"}}}),
                 ),
-                n(
-                    json!({"id": "report", "type": "report", "template": "RUN {{run.id}} is {{run.status}}\n{{results}}"}),
-                ),
             ],
-            vec![e("trigger", "each"), e("each", "report")],
+            vec![e("trigger", "each")],
         );
+        let d = with_summary(d, "RUN {{run.id}} is {{run.status}}\n{{results}}");
         let mut run = run_of(
             d,
             vec![NodeRun {
@@ -546,9 +534,8 @@ mod compose_report_tests {
                         "ok": {"type": "boolean", "inReport": true},
                     }}),
                 ),
-                report(),
             ],
-            vec![e("trigger", "dev"), e("dev", "report")],
+            vec![e("trigger", "dev")],
         );
         let run = run_of(
             d,
@@ -574,9 +561,8 @@ mod compose_report_tests {
             vec![
                 trigger(),
                 session("dev", json!({"output": {"note": {"type": "string"}}})),
-                report(),
             ],
-            vec![e("trigger", "dev"), e("dev", "report")],
+            vec![e("trigger", "dev")],
         );
         let run = run_of(
             d,
@@ -600,10 +586,7 @@ mod compose_report_tests {
             (RunStatus::Stopped, "stopped"),
             (RunStatus::Interrupted, "interrupted"),
         ] {
-            let mut run = run_of(
-                def(vec![trigger(), report()], vec![e("trigger", "report")]),
-                vec![],
-            );
+            let mut run = run_of(def(vec![trigger()], vec![]), vec![]);
             run.status = status;
             assert_eq!(
                 compose_report(&run).title,
@@ -614,10 +597,7 @@ mod compose_report_tests {
 
     #[test]
     fn labels_a_running_run() {
-        let mut run = run_of(
-            def(vec![trigger(), report()], vec![e("trigger", "report")]),
-            vec![],
-        );
+        let mut run = run_of(def(vec![trigger()], vec![]), vec![]);
         run.status = RunStatus::Running;
         assert_eq!(compose_report(&run).title, "Ship tickets · running");
     }
@@ -628,12 +608,8 @@ mod layout {
 
     fn one_session(output: Value) -> Workflow {
         def(
-            vec![
-                trigger(),
-                session("dev", json!({ "output": output })),
-                report(),
-            ],
-            vec![e("trigger", "dev"), e("dev", "report")],
+            vec![trigger(), session("dev", json!({ "output": output }))],
+            vec![e("trigger", "dev")],
         )
     }
 
@@ -749,9 +725,8 @@ mod layout {
                 trigger(),
                 n(json!({"id": "a", "type": "forEach", "title": "Alpha", "in": "{{x}}"})),
                 n(json!({"id": "b", "type": "forEach", "in": "{{y}}"})),
-                report(),
             ],
-            vec![e("trigger", "a"), e("a", "b"), e("b", "report")],
+            vec![e("trigger", "a"), e("a", "b")],
         );
         let mut run = run_of(d, vec![]);
         run.items = items(json!({"a": [], "b": []}));
@@ -776,28 +751,16 @@ mod layout {
 
     #[test]
     fn a_blank_template_falls_back_to_the_default_layout() {
-        let d = def(
-            vec![
-                trigger(),
-                n(json!({"id": "report", "type": "report", "template": " \n "})),
-            ],
-            vec![e("trigger", "report")],
-        );
+        let d = with_summary(def(vec![trigger()], vec![]), " \n ");
         let run = run_of(d, vec![]);
         assert!(compose_report(&run).text.contains("### Run"));
     }
 
     #[test]
     fn the_report_title_and_run_fields_reach_a_template() {
-        let d = def(
-            vec![
-                trigger(),
-                n(json!({
-                    "id": "report", "type": "report",
-                    "template": "{{run.name}}|{{run.statusLabel}}|{{run.endedAt}}|{{run.startedAt}}|{{run.round}}",
-                })),
-            ],
-            vec![e("trigger", "report")],
+        let d = with_summary(
+            def(vec![trigger()], vec![]),
+            "{{run.name}}|{{run.statusLabel}}|{{run.endedAt}}|{{run.startedAt}}|{{run.round}}",
         );
         let mut run = run_of(d, vec![]);
         run.status = RunStatus::DoneWithFailures;
@@ -821,10 +784,10 @@ mod layout {
                     "dev",
                     json!({"parent": "each", "output": {"pr": {"type": "string"}}}),
                 ),
-                n(json!({"id": "report", "type": "report", "template": "{{results}}"})),
             ],
-            vec![e("trigger", "each"), e("each", "report")],
+            vec![e("trigger", "each")],
         );
+        let d = with_summary(d, "{{results}}");
         let mut run = run_of(
             d,
             vec![NodeRun {
@@ -854,13 +817,8 @@ mod layout {
     #[test]
     fn branch_status_follows_the_most_urgent_node() {
         let d = def(
-            vec![
-                trigger(),
-                session("a", json!({})),
-                session("b", json!({})),
-                report(),
-            ],
-            vec![e("trigger", "a"), e("a", "b"), e("b", "report")],
+            vec![trigger(), session("a", json!({})), session("b", json!({}))],
+            vec![e("trigger", "a"), e("a", "b")],
         );
         let status = |nodes: Vec<NodeRun>| {
             let text = compose_report(&run_of(d.clone(), nodes)).text;
@@ -907,17 +865,17 @@ mod layout {
     }
 }
 
-mod ask_mono_prompt_tests {
+mod decision_prompt_tests {
     use super::*;
 
     fn action() -> EngineAction {
         let Some(context) = out(json!({"dev": {"pr_url": "https://x/1"}, "round": 2})) else {
             unreachable!()
         };
-        EngineAction::AskMono {
+        EngineAction::Decide {
             node_id: "gate".into(),
             branch: "each#0".into(),
-            purpose: AskPurpose::AskMono,
+            purpose: DecidePurpose::If,
             question: "Is the PR safe to merge?".into(),
             answers: vec!["yes".into(), "no".into()],
             context,
@@ -925,13 +883,13 @@ mod ask_mono_prompt_tests {
     }
 
     #[test]
-    fn tells_the_mono_it_is_consulted_by_a_workflow_and_asks_for_a_workflow_output_block() {
+    fn tells_the_model_it_is_consulted_by_a_workflow_and_asks_for_a_workflow_output_block() {
         let action = action();
-        let text = ask_mono_prompt(&action, "Ship tickets").unwrap();
+        let text = decision_prompt(&action, "Ship tickets").unwrap();
         assert!(text.contains("Ship tickets"));
         assert!(text.contains("running workflow"));
         assert!(text.contains("Is the PR safe to merge?"));
-        let EngineAction::AskMono { context, .. } = &action else {
+        let EngineAction::Decide { context, .. } = &action else {
             unreachable!()
         };
         assert!(text.contains(&Json::Object(context.clone()).stringify(true)));
@@ -944,7 +902,7 @@ mod ask_mono_prompt_tests {
 
     #[test]
     fn the_whole_prompt_is_the_react_text() {
-        let text = ask_mono_prompt(&action(), "Ship\n  tickets").unwrap();
+        let text = decision_prompt(&action(), "Ship\n  tickets").unwrap();
         let expected = [
             "You are being consulted by a running workflow, \"Ship tickets\", at step \"gate\".",
             "This is a single decision request. Do not start any work or use any tools; just decide.",
@@ -971,22 +929,22 @@ mod ask_mono_prompt_tests {
     #[test]
     fn the_context_fence_outgrows_backticks_inside_it() {
         let mut action = action();
-        let EngineAction::AskMono { context, .. } = &mut action else {
+        let EngineAction::Decide { context, .. } = &mut action else {
             unreachable!()
         };
         context.insert("note", Json::String("x ````` y".into()));
-        let text = ask_mono_prompt(&action, "W").unwrap();
+        let text = decision_prompt(&action, "W").unwrap();
         assert!(text.contains("``````json\n"));
         assert!(text.contains("\n``````\n\nAllowed answers"));
     }
 
     #[test]
-    fn only_an_ask_mono_action_has_a_prompt() {
-        assert_eq!(ask_mono_prompt(&EngineAction::PostReport, "W"), None);
+    fn only_a_decide_action_has_a_prompt() {
+        assert_eq!(decision_prompt(&EngineAction::PostSummary, "W"), None);
     }
 }
 
-mod parse_mono_decision_tests {
+mod parse_decision_tests {
     use super::*;
 
     fn reply(body: &str) -> String {
@@ -1000,11 +958,11 @@ mod parse_mono_decision_tests {
     #[test]
     fn accepts_an_allowed_answer_with_a_reason() {
         assert_eq!(
-            parse_mono_decision(
+            parse_decision(
                 &reply(r#"{"answer":"yes","reason":"all green"}"#),
                 &answers()
             ),
-            Ok(MonoDecision {
+            Ok(AiDecision {
                 value: "yes".into(),
                 reason: Some("all green".into())
             })
@@ -1014,21 +972,21 @@ mod parse_mono_decision_tests {
     #[test]
     fn treats_the_reason_as_optional() {
         assert_eq!(
-            parse_mono_decision(&reply(r#"{"answer":"no"}"#), &answers()),
-            Ok(MonoDecision {
+            parse_decision(&reply(r#"{"answer":"no"}"#), &answers()),
+            Ok(AiDecision {
                 value: "no".into(),
                 reason: None
             })
         );
         // An empty or non-text reason is dropped.
         assert_eq!(
-            parse_mono_decision(&reply(r#"{"answer":"no","reason":""}"#), &answers())
+            parse_decision(&reply(r#"{"answer":"no","reason":""}"#), &answers())
                 .unwrap()
                 .reason,
             None
         );
         assert_eq!(
-            parse_mono_decision(&reply(r#"{"answer":"no","reason":3}"#), &answers())
+            parse_decision(&reply(r#"{"answer":"no","reason":3}"#), &answers())
                 .unwrap()
                 .reason,
             None
@@ -1036,8 +994,8 @@ mod parse_mono_decision_tests {
     }
 
     #[test]
-    fn parse_mono_decision_rejects_answers_outside_the_list() {
-        let error = parse_mono_decision(&reply(r#"{"answer":"maybe"}"#), &answers()).unwrap_err();
+    fn parse_decision_rejects_answers_outside_the_list() {
+        let error = parse_decision(&reply(r#"{"answer":"maybe"}"#), &answers()).unwrap_err();
         assert!(error.contains("maybe"));
         assert!(error.contains("yes"));
         assert_eq!(
@@ -1048,15 +1006,15 @@ mod parse_mono_decision_tests {
 
     #[test]
     fn rejects_a_reply_without_the_block_and_a_non_string_answer() {
-        assert!(parse_mono_decision("yes", &["yes".to_string()]).is_err());
-        assert!(parse_mono_decision(&reply(r#"{"answer":1}"#), &["1".to_string()]).is_err());
-        assert!(parse_mono_decision(&reply(r#"{"reason":"x"}"#), &["yes".to_string()]).is_err());
+        assert!(parse_decision("yes", &["yes".to_string()]).is_err());
+        assert!(parse_decision(&reply(r#"{"answer":1}"#), &["1".to_string()]).is_err());
+        assert!(parse_decision(&reply(r#"{"reason":"x"}"#), &["yes".to_string()]).is_err());
     }
 
     #[test]
     fn uses_the_output_contract_error_text() {
         assert_eq!(
-            parse_mono_decision("yes", &["yes".to_string()]).unwrap_err(),
+            parse_decision("yes", &["yes".to_string()]).unwrap_err(),
             "No workflow-output block found in the reply."
         );
     }

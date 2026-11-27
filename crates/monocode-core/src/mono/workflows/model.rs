@@ -1,4 +1,4 @@
-//! The workflow definition and run state: a graph of nodes a Mono runs for the user.
+//! The workflow definition and run state: a graph of nodes the app runs for the user.
 //!
 //! Field names and shapes match the React app's `workflow.ts`, so `workflows.json` and the run
 //! files are shared between both apps. Definitions never hold absolute paths or session ids.
@@ -15,7 +15,8 @@ pub type NodeId = String;
 /// "" for top level, `<forEachId>#<index>` inside a group, archived `<forEachId>#<index>@r<round>`.
 pub type BranchKey = String;
 
-pub const WORKFLOWS_MAX: usize = 20;
+/// The most workflows the global store holds.
+pub const WORKFLOWS_MAX: usize = 100;
 /// The longest time limit a session or command node may have: 24 hours.
 pub const MAX_TIMEOUT_MINUTES: u32 = 1440;
 pub const WORKFLOW_RUNS_KEPT: usize = 20;
@@ -32,9 +33,12 @@ pub const WORKFLOW_NAME_MAX: usize = 80;
 pub const WORKFLOW_DESCRIPTION_MAX: usize = 1_000;
 pub const WORKFLOW_DEFINITION_MAX_BYTES: usize = 512 * 1024;
 
-pub const NODE_TYPES: [&str; 9] = [
-    "schedule", "manual", "session", "command", "askMono", "if", "switch", "forEach", "report",
+pub const NODE_TYPES: [&str; 7] = [
+    "schedule", "manual", "session", "command", "if", "switch", "forEach",
 ];
+
+/// The most trigger nodes a workflow may have. Any of them can start a run.
+pub const TRIGGERS_MAX: usize = 5;
 
 /// The handle a switch sends the run down when no case matches. Not allowed as a case.
 pub const SWITCH_DEFAULT: &str = "default";
@@ -224,8 +228,85 @@ pub struct Ui {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Decide {
-    #[serde(rename = "mono")]
+    /// A one-shot AI call with no tools. Files written before this name read `"mono"` as `"ai"`.
+    #[serde(rename = "ai")]
+    Ai,
+}
+
+/// The `decide` value of a loop edge that asks the AI (the same word as `Decide::Ai`).
+pub const DECIDE_AI: &str = "ai";
+
+/// A model to run a one-shot call with: the harness, its model id and an optional effort.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionModel {
+    pub harness: String,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+/// Who gets the run summary besides the run page.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportTo {
+    /// The Mono whose chat gets the summary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mono: Option<String>,
+}
+
+/// What started a run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CallerKind {
+    Manual,
+    Schedule,
+    Event,
     Mono,
+}
+
+impl CallerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Schedule => "schedule",
+            Self::Event => "event",
+            Self::Mono => "mono",
+        }
+    }
+}
+
+/// Who or what started a run, and through which trigger node. It replaces the old `RunTrigger`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunCaller {
+    pub kind: CallerKind,
+    /// The Mono that started the run, when `kind` is `mono`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mono_id: Option<String>,
+    /// The trigger node that fired.
+    pub trigger_node: NodeId,
+    /// The item an event run is about (`source`, `kind`, `ref`, `title`, `url`, `repo`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<Json>,
+}
+
+impl RunCaller {
+    pub fn new(kind: CallerKind, trigger_node: impl Into<NodeId>) -> Self {
+        Self {
+            kind,
+            mono_id: None,
+            trigger_node: trigger_node.into(),
+            item: None,
+        }
+    }
+
+    pub fn mono(mono_id: impl Into<String>, trigger_node: impl Into<NodeId>) -> Self {
+        Self {
+            mono_id: Some(mono_id.into()),
+            ..Self::new(CallerKind::Mono, trigger_node)
+        }
+    }
 }
 
 /// Where a session node runs when it is not on this computer.
@@ -348,11 +429,7 @@ pub enum NodeKind {
         )]
         timeout_minutes: Option<f64>,
     },
-    AskMono {
-        question: String,
-        answers: Vec<String>,
-    },
-    /// Either `condition` or `decide: "mono"` (with an optional `question`).
+    /// Either `condition` or `decide: "ai"` (with an optional `question`).
     If {
         #[serde(skip_serializing_if = "Option::is_none")]
         condition: Option<String>,
@@ -362,7 +439,7 @@ pub enum NodeKind {
         question: Option<String>,
     },
     /// Routes to the out edge whose handle equals `value` after rendering, or to `default`.
-    /// Either `value` or `decide: "mono"` (with an optional `question`).
+    /// Either `value` or `decide: "ai"` (with an optional `question`).
     Switch {
         #[serde(skip_serializing_if = "Option::is_none")]
         value: Option<String>,
@@ -387,10 +464,6 @@ pub enum NodeKind {
         )]
         max_parallel: Option<f64>,
     },
-    Report {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        template: Option<String>,
-    },
 }
 
 impl NodeKind {
@@ -401,11 +474,9 @@ impl NodeKind {
             Self::Manual => "manual",
             Self::Session { .. } => "session",
             Self::Command { .. } => "command",
-            Self::AskMono { .. } => "askMono",
             Self::If { .. } => "if",
             Self::Switch { .. } => "switch",
             Self::ForEach { .. } => "forEach",
-            Self::Report { .. } => "report",
         }
     }
 }
@@ -480,7 +551,7 @@ pub struct LoopSpec {
     /// 1 to 10.
     #[serde(serialize_with = "serialize_number")]
     pub max_rounds: f64,
-    /// "mono", or a condition such as `{{review.verdict}} != "approve"`.
+    /// "ai", or a condition such as `{{review.verdict}} != "approve"`.
     pub decide: String,
 }
 
@@ -532,6 +603,10 @@ pub struct Workflow {
     pub created_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_run_at: Option<u64>,
+    /// The next time of each schedule trigger, by node id. Only used when a workflow has several
+    /// schedule triggers; `next_run_at` then holds the earliest of them.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub next_run_at_by_node: BTreeMap<NodeId, u64>,
     #[serde(skip_serializing_if = "is_false")]
     pub run_requested: bool,
     /// Requests made from another window, kept in the file because only the main window drives
@@ -549,6 +624,19 @@ pub struct Workflow {
     /// version clears the mark. Never exported.
     #[serde(skip_serializing_if = "is_false")]
     pub needs_review: bool,
+    /// The model an If, Switch or loop edge that decides with AI asks. Without it the harness and
+    /// model of the nearest upstream session node are used (see `decision_model_for`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_model: Option<DecisionModel>,
+    /// Who else gets the run summary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_to: Option<ReportTo>,
+    /// Shapes the run summary. Without it the app writes the default one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary_template: Option<String>,
+    /// Who asked for the pending `run_requested` run. App-managed, never exported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_caller: Option<RunCaller>,
 }
 
 impl Workflow {
@@ -567,19 +655,28 @@ impl Workflow {
             enabled: false,
             created_at: 0,
             next_run_at: None,
+            next_run_at_by_node: BTreeMap::new(),
             run_requested: false,
             stop_requested: false,
             resume_run_id: None,
             last_run_id: None,
             imported_from: None,
             needs_review: false,
+            decision_model: None,
+            report_to: None,
+            summary_template: None,
+            run_caller: None,
         }
     }
     pub fn node(&self, id: &str) -> Option<&Node> {
         self.nodes.iter().find(|n| n.id == id)
     }
-    /// The workflow's trigger node, when it has one.
-    pub fn trigger(&self) -> Option<&Node> {
+    /// The workflow's trigger nodes, in definition order. Any of them can start a run.
+    pub fn triggers(&self) -> Vec<&Node> {
+        self.nodes.iter().filter(|n| n.is_trigger()).collect()
+    }
+    /// The first trigger node, when there is one.
+    pub fn first_trigger(&self) -> Option<&Node> {
         self.nodes.iter().find(|n| n.is_trigger())
     }
 }
@@ -594,11 +691,6 @@ pub fn with_run_values(w: &Workflow) -> Workflow {
         }
     }
     out
-}
-
-/// The workflow's trigger node, when it has one.
-pub fn trigger_of(w: &Workflow) -> Option<&Node> {
-    w.trigger()
 }
 
 // A workflow (or part of one) read from a run file is parsed as leniently as workflows.json is.
@@ -681,6 +773,26 @@ pub fn definition_fingerprint(w: &Workflow) -> String {
         "edges".into(),
         serde_json::to_value(&w.edges).unwrap_or(Value::Null),
     );
+    // What the AI decisions run on, who is told and what the summary says all reach a model or
+    // a person, so a change to one needs a new review.
+    if let Some(model) = &w.decision_model {
+        root.insert(
+            "decisionModel".into(),
+            serde_json::to_value(model).unwrap_or(Value::Null),
+        );
+    }
+    if let Some(report_to) = w.report_to.as_ref().filter(|r| r.mono.is_some()) {
+        root.insert(
+            "reportTo".into(),
+            serde_json::to_value(report_to).unwrap_or(Value::Null),
+        );
+    }
+    if let Some(template) = w.summary_template.as_deref().filter(|t| !t.is_empty()) {
+        root.insert(
+            "summaryTemplate".into(),
+            Value::String(template.to_string()),
+        );
+    }
     stable_json(&Value::Object(root))
 }
 
@@ -837,14 +949,6 @@ pub enum RunStatus {
     Interrupted,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum RunTrigger {
-    Schedule,
-    Manual,
-    Cli,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowRun {
@@ -856,7 +960,8 @@ pub struct WorkflowRun {
     pub started_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<u64>,
-    pub trigger: RunTrigger,
+    /// Who started the run and through which trigger node.
+    pub caller: RunCaller,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder_id: Option<String>,
     /// The lists For each nodes expanded, by node id (`<id>@r<round>` for an archived round).
@@ -864,6 +969,7 @@ pub struct WorkflowRun {
     pub items: BTreeMap<NodeId, Vec<Json>>,
     #[serde(default)]
     pub nodes: Vec<NodeRun>,
+    /// When the run summary was delivered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_posted_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

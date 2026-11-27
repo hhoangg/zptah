@@ -32,10 +32,8 @@ pub(in crate::monos) fn type_icon(kind: &NodeKind) -> &'static str {
         NodeKind::Manual => "play",
         NodeKind::Session { .. } => "message-multiple",
         NodeKind::Command { .. } => "terminal",
-        NodeKind::AskMono { .. } => "circle-help",
         NodeKind::If { .. } | NodeKind::Switch { .. } => "git-branch",
         NodeKind::ForEach { .. } => "refresh-cw",
-        NodeKind::Report { .. } => "paper-plane",
     }
 }
 
@@ -63,12 +61,11 @@ pub(in crate::monos) fn node_summary(node: &Node) -> String {
             }
         }
         NodeKind::Command { command, .. } => or(command, "No command yet"),
-        NodeKind::AskMono { question, .. } => or(question, "No question yet"),
         NodeKind::If {
             decide, condition, ..
         } => {
-            if *decide == Some(Decide::Mono) {
-                "Mono decides".into()
+            if *decide == Some(Decide::Ai) {
+                "AI decides".into()
             } else {
                 or(condition.as_deref().unwrap_or(""), "No condition yet")
             }
@@ -79,8 +76,8 @@ pub(in crate::monos) fn node_summary(node: &Node) -> String {
             cases,
             ..
         } => {
-            if *decide == Some(Decide::Mono) {
-                "Mono decides".into()
+            if *decide == Some(Decide::Ai) {
+                "AI decides".into()
             } else if cases.is_empty() {
                 "No cases yet".into()
             } else {
@@ -94,12 +91,6 @@ pub(in crate::monos) fn node_summary(node: &Node) -> String {
                 list.clone()
             }
         }
-        NodeKind::Report { template } => if template.as_deref().is_some_and(|t| !t.is_empty()) {
-            "Custom report"
-        } else {
-            "Summary of every branch"
-        }
-        .into(),
     }
 }
 

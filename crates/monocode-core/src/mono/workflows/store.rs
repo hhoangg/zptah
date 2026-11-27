@@ -1,7 +1,9 @@
-//! A Mono's `workflows.json` and `workflow-runs/<workflow id>.json`, in the format the Tauri app
-//! writes (`workflowStore.ts`): both apps read and replace each other's files. Writes go through
-//! the Mono files API, so they are atomic and checked against the hash that was read; a save
-//! that loses the race reads again and re-applies the edit, three tries in all.
+//! The workflows list (`workflows.json`) and one runs file per workflow
+//! (`workflow-runs/<workflow id>.json`), in the format the Tauri app wrote (`workflowStore.ts`).
+//! The files live behind `MonoFiles`: the app's global store (`global::WorkflowsDir`, under
+//! `<app data>/workflows/`) or, in tests, a Mono's folder (`MonoDir`). Writes are atomic and
+//! checked against the hash that was read; a save that loses the race reads again and re-applies
+//! the edit, three tries in all.
 //!
 //! Entries this app cannot read (made by a newer version, or edited by hand) are kept as they
 //! were and written after the others, and a file that is not a JSON list is never overwritten.
@@ -17,8 +19,9 @@ use super::parse::read_workflow_file;
 use super::template::js_trim;
 use crate::mono::files::{self, AgentFile, CONFLICT, WORKFLOWS_FILE};
 
-/// Stay under the 2 MiB cap `files.rs` puts on workflows.json.
-pub const WORKFLOWS_FILE_BUDGET: usize = 2 * 1024 * 1024;
+/// Stay under the cap the global store puts on workflows.json (`global.rs`): room for the 100
+/// workflows the app allows, each up to 512 KiB when sent through the CLI.
+pub const WORKFLOWS_FILE_BUDGET: usize = 8 * 1024 * 1024;
 /// Stay under the 4 MiB cap `files.rs` puts on a runs file.
 pub const RUNS_FILE_BUDGET: usize = 3 * 1024 * 1024 + 512 * 1024;
 /// What a save that lost every race says (`MonoFileConflict` in the Tauri app).
@@ -180,7 +183,10 @@ fn serialize_workflows(workflows: &[Workflow], unreadable: &[&Json]) -> Result<S
     let text = pretty_list(&entries);
     // Say so here rather than let the host fail with a raw "is too large".
     if text.len() > WORKFLOWS_FILE_BUDGET {
-        return Err("The workflows are too large to save (over 2 MiB in total). Remove a workflow or shorten its steps.".into());
+        return Err(format!(
+            "The workflows are too large to save (over {} MiB in total). Remove a workflow or shorten its steps.",
+            WORKFLOWS_FILE_BUDGET / (1024 * 1024)
+        ));
     }
     Ok(text)
 }

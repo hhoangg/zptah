@@ -27,8 +27,8 @@ fn dir(root: &std::path::Path) -> MonoDir {
 fn workflow_with(id: &str, extra: serde_json::Value) -> Workflow {
     let mut v = json!({
         "id": id, "name": "Daily", "inputs": {}, "inputValues": {},
-        "nodes": [{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}],
-        "edges": [{"from": "trigger", "to": "report"}],
+        "nodes": [{"id": "trigger", "type": "manual"}],
+        "edges": [],
         "enabled": true, "createdAt": 1
     });
     for (k, x) in extra.as_object().unwrap() {
@@ -42,7 +42,12 @@ fn workflow() -> Workflow {
 }
 
 fn run(id: &str) -> WorkflowRun {
-    let mut run = start_run(&workflow(), RunTrigger::Manual, 1, id);
+    let mut run = start_run(
+        &workflow(),
+        RunCaller::new(CallerKind::Manual, "trigger"),
+        1,
+        id,
+    );
     run.status = RunStatus::Done;
     run.nodes.clear();
     run
@@ -474,7 +479,7 @@ fn update_workflows_refuses_a_list_that_would_pass_the_file_cap_with_a_clear_mes
     let error = update_workflows(&disk, |_| Ok((vec![big.clone()], ()))).unwrap_err();
     assert_eq!(
         error,
-        "The workflows are too large to save (over 2 MiB in total). Remove a workflow or shorten its steps."
+        "The workflows are too large to save (over 8 MiB in total). Remove a workflow or shorten its steps."
     );
     assert_eq!(files::content_hash(&text(&disk, "workflows.json")), before);
     std::fs::remove_dir_all(root).unwrap();
@@ -809,8 +814,7 @@ fn a_schedule_is_written_in_the_ts_key_order() {
         json!({"nodes": [
             {"id": "trigger", "type": "schedule", "schedule": {
                 "scheduleKind": "interval", "time": "09:30", "minute": 5, "dayOfWeek": 2,
-                "intervalHours": 4, "intervalFrom": "2026-01-01"}},
-            {"id": "report", "type": "report"}
+                "intervalHours": 4, "intervalFrom": "2026-01-01"}}
         ]}),
     );
     let order = "\"scheduleKind\": \"interval\",\n";

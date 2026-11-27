@@ -9,7 +9,6 @@ use gpui::{Div, FontWeight, Stateful};
 use monocode_core::mono::workflows::{
     board_edit::{REVIEW_FIRST, picker_groups, picker_unavailable, type_label},
     board_model::NodeType,
-    model::NodeKind,
 };
 
 /// The icon of a node type in the picker.
@@ -19,10 +18,8 @@ pub(super) fn type_glyph(ty: NodeType) -> &'static str {
         NodeType::Manual => "play",
         NodeType::Session => "message-multiple",
         NodeType::Command => "terminal",
-        NodeType::AskMono => "circle-help",
         NodeType::If | NodeType::Switch => "git-branch",
         NodeType::ForEach => "refresh-cw",
-        NodeType::Report => "paper-plane",
     }
 }
 
@@ -548,17 +545,13 @@ impl Monos {
             return;
         };
         let w = b.current();
-        let has_trigger = w.nodes.iter().any(|n| n.is_trigger());
-        let has_report = w
-            .nodes
-            .iter()
-            .any(|n| matches!(n.kind, NodeKind::Report { .. }));
+        let trigger_count = w.nodes.iter().filter(|n| n.is_trigger()).count();
         let anchor = b.add_anchor.clone();
         let mut items = Vec::new();
         for group in picker_groups() {
             items.push(MenuItem::Header(group.title.into()));
             for (ty, hint) in group.items {
-                let why = picker_unavailable(*ty, has_trigger, has_report);
+                let why = picker_unavailable(*ty, trigger_count);
                 items.push(
                     MenuAction::new(ty.name(), type_label(*ty))
                         .icon(type_glyph(*ty))

@@ -9,6 +9,12 @@
   "inputValues": {
     "project": "/work/api"
   },
+  "summaryTemplate": "Done: {{work.a}}",
+  "decisionModel": {
+    "harness": "claude",
+    "model": "claude:opus-5",
+    "effort": "high"
+  },
   "nodes": [
     {
       "id": "start",
@@ -17,9 +23,10 @@
     },
     {
       "id": "ask",
-      "type": "askMono",
+      "type": "switch",
+      "decide": "ai",
       "question": "Ship it?",
-      "answers": [
+      "cases": [
         "yes",
         "no"
       ],
@@ -31,13 +38,13 @@
     {
       "id": "gate",
       "type": "if",
-      "decide": "mono",
+      "decide": "ai",
       "question": "Is it safe?"
     },
     {
       "id": "gate2",
       "type": "if",
-      "condition": "{{ask.answer}} == \"yes\""
+      "condition": "{{work.a}} == 1"
     },
     {
       "id": "build",
@@ -91,11 +98,6 @@
         "x": -16.5,
         "y": 1e+21
       }
-    },
-    {
-      "id": "report",
-      "type": "report",
-      "template": "Done: {{work.a}}"
     }
   ],
   "edges": [
@@ -103,11 +105,6 @@
       "from": "gate",
       "to": "build",
       "handle": "true"
-    },
-    {
-      "from": "gate",
-      "to": "report",
-      "handle": "false"
     },
     {
       "from": "work",

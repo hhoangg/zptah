@@ -91,10 +91,6 @@
           "type": "list"
         }
       }
-    },
-    {
-      "id": "report",
-      "type": "report"
     }
   ],
   "edges": [
@@ -111,15 +107,11 @@
       "to": "review"
     },
     {
-      "from": "each",
-      "to": "report"
-    },
-    {
       "from": "review",
       "to": "dev",
       "loop": {
         "maxRounds": 3,
-        "decide": "mono"
+        "decide": "ai"
       }
     }
   ],

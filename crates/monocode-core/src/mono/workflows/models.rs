@@ -152,6 +152,13 @@ fn catalog_model(m: crate::catalog::Model) -> CatalogModel {
 /// its model id is prefixed with. Unknown ids are judged without a catalog.
 pub fn harnesses_used(w: &Workflow) -> Vec<Kind> {
     let mut kinds = Vec::new();
+    if let Some(kind) = w
+        .decision_model
+        .as_ref()
+        .and_then(|m| Kind::parse(&m.harness))
+    {
+        kinds.push(kind);
+    }
     for node in &w.nodes {
         let NodeKind::Session {
             harness,
@@ -320,9 +327,19 @@ pub fn session_node_problem(node: &Node, catalog: &ModelCatalog) -> Option<Strin
     else {
         return None;
     };
+    named_model_problem(harness, model, effort, target.is_some(), catalog)
+}
+
+/// `session_node_problem` for a harness, model and effort named outside a session node.
+fn named_model_problem(
+    harness: &Option<String>,
+    model: &Option<String>,
+    effort: &Option<String>,
+    cloud: bool,
+    catalog: &ModelCatalog,
+) -> Option<String> {
     let nonempty = |v: &Option<String>| v.clone().filter(|v| !v.is_empty());
     let harness = nonempty(harness);
-    let cloud = target.is_some();
     // A cloud step runs Claude only (validation reports any other harness or model owner), so
     // there is nothing else to judge for it here; with no harness named it is judged as Claude,
     // not as whatever the Mono itself runs.
@@ -374,7 +391,8 @@ pub fn session_node_problem(node: &Node, catalog: &ModelCatalog) -> Option<Strin
 /// `validate_workflow` stays catalog-agnostic; use `workflow_issues` wherever a workflow is
 /// gated on being runnable.
 pub fn session_model_issues(w: &Workflow, catalog: &ModelCatalog) -> Vec<WorkflowIssue> {
-    w.nodes
+    let mut issues: Vec<WorkflowIssue> = w
+        .nodes
         .iter()
         .filter_map(|node| {
             session_node_problem(node, catalog).map(|message| WorkflowIssue {
@@ -382,7 +400,28 @@ pub fn session_model_issues(w: &Workflow, catalog: &ModelCatalog) -> Vec<Workflo
                 message,
             })
         })
-        .collect()
+        .collect();
+    issues.extend(
+        decision_model_problem(w, catalog).map(|message| WorkflowIssue {
+            node_id: None,
+            message,
+        }),
+    );
+    issues
+}
+
+/// What is wrong with the workflow's `decisionModel`, if anything: it must name a harness the app
+/// knows and a model that harness offers (the same rules as a session node).
+pub fn decision_model_problem(w: &Workflow, catalog: &ModelCatalog) -> Option<String> {
+    let model = w.decision_model.as_ref()?;
+    let message = named_model_problem(
+        &Some(model.harness.clone()),
+        &Some(model.model.clone()),
+        &model.effort,
+        false,
+        catalog,
+    )?;
+    Some(format!("decisionModel: {message}"))
 }
 
 /// Everything wrong with a workflow's graph and with the models its sessions name.
@@ -398,8 +437,6 @@ mod tests {
     use crate::mono::workflows::fixtures::workflow_from;
     use crate::provider::Kind;
 
-    const NODES_TAIL: &str = r#"{"id":"report","type":"report"}"#;
-
     fn session(extra: &str) -> Workflow {
         let extra = if extra.is_empty() {
             String::new()
@@ -410,9 +447,8 @@ mod tests {
             r#"{{"id":"wf-abcd1234","name":"Models","inputs":{{"project":{{"type":"project"}}}},
                 "inputValues":{{"project":"/work/api"}},
                 "nodes":[{{"id":"trigger","type":"manual"}},
-                  {{"id":"hi","type":"session","project":"{{{{inputs.project}}}}","prompt":"hi","checkout":"root","output":{{}}{extra}}},
-                  {NODES_TAIL}],
-                "edges":[{{"from":"trigger","to":"hi"}},{{"from":"hi","to":"report"}}],
+                  {{"id":"hi","type":"session","project":"{{{{inputs.project}}}}","prompt":"hi","checkout":"root","output":{{}}{extra}}}],
+                "edges":[{{"from":"trigger","to":"hi"}}],
                 "enabled":false,"createdAt":0}}"#
         ))
     }
@@ -420,8 +456,8 @@ mod tests {
     fn plain() -> Workflow {
         workflow_from(&format!(
             r#"{{"id":"wf-abcd1234","name":"Plain","inputs":{{}},"inputValues":{{}},
-                "nodes":[{{"id":"trigger","type":"manual"}},{NODES_TAIL}],
-                "edges":[{{"from":"trigger","to":"report"}}],"enabled":false,"createdAt":0}}"#
+                "nodes":[{{"id":"trigger","type":"manual"}}],
+                "edges":[],"enabled":false,"createdAt":0}}"#
         ))
     }
 
@@ -926,5 +962,51 @@ mod tests {
             let w = session(r#""model":"claude:sonnet-5[1m]""#);
             assert_eq!(issues(&w), [issue(unavailable("claude:sonnet-5[1m]"))]);
         }
+    }
+
+    #[test]
+    fn a_decision_model_is_judged_like_a_session_model() {
+        let catalog = ModelCatalog {
+            probed: true,
+            harnesses: vec![CatalogHarness {
+                id: "claude".into(),
+                installed: true,
+                models: Some(vec![model("claude-sonnet-5", &["low"])]),
+            }],
+        };
+        let mut w = plain();
+        assert_eq!(decision_model_problem(&w, &catalog), None);
+        w.decision_model = Some(super::super::model::DecisionModel {
+            harness: "claude".into(),
+            model: "claude:sonnet-5".into(),
+            effort: Some("low".into()),
+        });
+        assert_eq!(decision_model_problem(&w, &catalog), None);
+        assert!(workflow_issues(&w, &catalog).is_empty());
+        w.decision_model.as_mut().unwrap().model = "claude:nope".into();
+        let problem = decision_model_problem(&w, &catalog).unwrap();
+        assert_eq!(
+            problem,
+            format!("decisionModel: {}", unavailable("claude:nope"))
+        );
+        assert_eq!(workflow_issues(&w, &catalog)[0].node_id, None);
+        w.decision_model.as_mut().unwrap().model = "claude:sonnet-5".into();
+        w.decision_model.as_mut().unwrap().effort = Some("max".into());
+        assert!(decision_model_problem(&w, &catalog)
+            .unwrap()
+            .contains("Effort \"max\""));
+        w.decision_model.as_mut().unwrap().harness = "nope".into();
+        assert!(decision_model_problem(&w, &catalog)
+            .unwrap()
+            .contains("Provider \"nope\" is not available"));
+        // Its harness is looked up with the session ones.
+        assert_eq!(harnesses_used(&plain()), vec![]);
+        let mut pinned = plain();
+        pinned.decision_model = Some(super::super::model::DecisionModel {
+            harness: "codex".into(),
+            model: "codex:gpt-5".into(),
+            effort: None,
+        });
+        assert_eq!(harnesses_used(&pinned), vec![Kind::Codex]);
     }
 }

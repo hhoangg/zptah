@@ -41,12 +41,12 @@ pub(super) fn ticket(extra: Value) -> Workflow {
             {"id": "review", "type": "session", "title": "Review", "parent": "each", "project": "{{inputs.project}}",
              "checkout": {"worktreeOf": "dev"}, "nestUnder": "dev", "ui": {"x": 16, "y": 130},
              "prompt": "Review {{dev.pr_url}}.", "output": {"verdict": {"type": "string"}}},
-            {"id": "report", "type": "report", "title": "Report to Mono", "ui": {"x": 0, "y": 480}},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "title": "Report to Mono", "ui": {"x": 0, "y": 480}},
         ]),
         json!([
             {"from": "trigger", "to": "fetch"}, {"from": "fetch", "to": "each"},
             {"from": "dev", "to": "review"}, {"from": "each", "to": "report"},
-            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "mono"}},
+            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
         ]),
     )
 }

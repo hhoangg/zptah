@@ -10,12 +10,14 @@ use super::board_model::{
 };
 use super::engine::looped_node_ids;
 use super::model::{
-    trigger_of, Checkout, Cwd, Decide, Handle, InputValue, LoopSpec, Node, NodeId, NodeKind,
-    OutputField, Requirement, Workflow, WorkflowInput, WORKFLOWS_MAX,
+    Checkout, Cwd, Decide, DecisionModel, Handle, InputValue, LoopSpec, Node, NodeId, NodeKind,
+    OutputField, ReportTo, Requirement, Workflow, WorkflowInput, DECIDE_AI, TRIGGERS_MAX,
+    WORKFLOWS_MAX,
 };
 use super::models::{workflow_issues, ModelCatalog};
 use super::ordered::OrderedMap;
 use super::report::field_in_report;
+use super::schedule::{schedule_triggers, scheduled};
 use super::template::js_trim;
 use super::validate::WorkflowIssue;
 use super::yaml::{anchor_node, input_value_problems};
@@ -25,11 +27,11 @@ pub const REVIEW_FIRST: &str = "Review this workflow before enabling it.";
 /// What the board says when the stored copy is not the one it loaded.
 pub const CHANGED_ELSEWHERE: &str = "This workflow changed elsewhere";
 
-/// A loop made by dragging a connection back: three rounds, the Mono decides.
+/// A loop made by dragging a connection back: three rounds, the AI decides.
 pub fn default_loop() -> LoopSpec {
     LoopSpec {
         max_rounds: 3.0,
-        decide: "mono".into(),
+        decide: DECIDE_AI.into(),
     }
 }
 
@@ -42,6 +44,9 @@ pub struct Meta {
     pub inputs: OrderedMap<WorkflowInput>,
     pub input_values: OrderedMap<InputValue>,
     pub requires: Vec<Requirement>,
+    pub decision_model: Option<DecisionModel>,
+    pub report_to: Option<ReportTo>,
+    pub summary_template: Option<String>,
 }
 
 impl Meta {
@@ -53,6 +58,9 @@ impl Meta {
             inputs: w.inputs.clone(),
             input_values: w.input_values.clone(),
             requires: w.requires.clone(),
+            decision_model: w.decision_model.clone(),
+            report_to: w.report_to.clone(),
+            summary_template: w.summary_template.clone(),
         }
     }
 }
@@ -66,6 +74,9 @@ pub fn current(base: &Workflow, flow: &Flow, meta: &Meta) -> Workflow {
     w.inputs = meta.inputs.clone();
     w.input_values = meta.input_values.clone();
     w.requires = meta.requires.clone();
+    w.decision_model = meta.decision_model.clone();
+    w.report_to = meta.report_to.clone();
+    w.summary_template = meta.summary_template.clone();
     w
 }
 
@@ -146,6 +157,9 @@ pub fn merged(stored: Option<&Workflow>, next: &Workflow, now: u64) -> Workflow 
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
     base.requires = next.requires.clone();
+    base.decision_model = next.decision_model.clone();
+    base.report_to = next.report_to.clone();
+    base.summary_template = next.summary_template.clone();
     base.nodes = next
         .nodes
         .iter()
@@ -153,21 +167,30 @@ pub fn merged(stored: Option<&Workflow>, next: &Workflow, now: u64) -> Workflow 
         .collect();
     base.edges = next.edges.clone();
     base.enabled = next.enabled;
-    let Some(NodeKind::Schedule { schedule }) = trigger_of(&base).map(|n| &n.kind) else {
-        return base;
-    };
-    if !base.enabled {
+    base.next_run_at_by_node.clear();
+    if schedule_triggers(&base).is_empty() || !base.enabled {
         return base;
     }
-    let before = stored.and_then(trigger_of).map(|n| &n.kind);
-    let same = stored.is_some_and(|s| s.enabled)
-        && matches!(before, Some(NodeKind::Schedule { schedule: old }) if old == schedule)
-        && stored.is_some_and(|s| s.next_run_at.is_some());
-    base.next_run_at = if same {
-        stored.and_then(|s| s.next_run_at)
-    } else {
-        schedule.next(now).ok()
+    let schedules = |w: &Workflow| -> Vec<(String, crate::mono::habits::Schedule)> {
+        schedule_triggers(w)
+            .into_iter()
+            .map(|(node, schedule)| (node.id.clone(), schedule.clone()))
+            .collect()
     };
+    let same = stored
+        .is_some_and(|s| s.enabled && s.next_run_at.is_some() && schedules(s) == schedules(&base));
+    match stored.filter(|_| same) {
+        Some(stored) => {
+            base.next_run_at = stored.next_run_at;
+            base.next_run_at_by_node = stored.next_run_at_by_node.clone();
+        }
+        None => {
+            if let Ok(timed) = scheduled(&base, now) {
+                base.next_run_at = timed.next_run_at;
+                base.next_run_at_by_node = timed.next_run_at_by_node;
+            }
+        }
+    }
     base
 }
 
@@ -227,7 +250,6 @@ pub fn picker_groups() -> &'static [PickerGroup] {
             items: &[
                 (NodeType::Session, "A session works on a project"),
                 (NodeType::Command, "A shell command"),
-                (NodeType::AskMono, "A question for the Mono"),
             ],
         },
         PickerGroup {
@@ -238,22 +260,15 @@ pub fn picker_groups() -> &'static [PickerGroup] {
                 (NodeType::ForEach, "Repeat for each item of a list"),
             ],
         },
-        PickerGroup {
-            title: "End",
-            items: &[(NodeType::Report, "Tells the Mono how it went")],
-        },
     ]
 }
 
 /// Why a type cannot be added now, if it cannot.
-pub fn picker_unavailable(
-    ty: NodeType,
-    has_trigger: bool,
-    has_report: bool,
-) -> Option<&'static str> {
+pub fn picker_unavailable(ty: NodeType, trigger_count: usize) -> Option<&'static str> {
     match ty {
-        NodeType::Schedule | NodeType::Manual if has_trigger => Some("A workflow has one trigger"),
-        NodeType::Report if has_report => Some("A workflow has one Report node"),
+        NodeType::Schedule | NodeType::Manual if trigger_count >= TRIGGERS_MAX => {
+            Some("A workflow has at most 5 triggers")
+        }
         _ => None,
     }
 }
@@ -265,11 +280,9 @@ pub fn type_label(ty: NodeType) -> &'static str {
         NodeType::Manual => "Manual",
         NodeType::Session => "Session",
         NodeType::Command => "Command",
-        NodeType::AskMono => "Ask Mono",
         NodeType::If => "If",
         NodeType::Switch => "Switch",
         NodeType::ForEach => "For each",
-        NodeType::Report => "Report to Mono",
     }
 }
 
@@ -314,8 +327,9 @@ fn sort_parents_first(nodes: Vec<FlowNode>) -> Vec<FlowNode> {
 }
 
 /// `w` (the workflow the flow draws) with a new node of type `ty` added to the flow: where
-/// the board puts it (above the trigger, before the Report, in the selected For each, or under
-/// the lowest node of its scope) and wired after the node that led nowhere. Returns the new
+/// the board puts it (above the triggers, in the selected For each, or under the lowest node of
+/// its scope) and wired after the node that led nowhere. A new trigger is wired to the same
+/// first step as the triggers already there. Returns the new
 /// flow, the new node selected, and its id.
 pub fn add_node(flow: &Flow, w: &Workflow, ty: NodeType) -> (Flow, NodeId) {
     let node = new_node(ty, w);
@@ -355,14 +369,6 @@ pub fn add_node(flow: &Flow, w: &Workflow, ty: NodeType) -> (Flow, NodeId) {
     for n in &mut deselected {
         n.selected = false;
     }
-    let report = deselected
-        .iter()
-        .find(|n| matches!(n.data.node.kind, NodeKind::Report { .. }) && n.parent_id.is_none())
-        .cloned();
-    let flowing = matches!(
-        ty,
-        NodeType::Session | NodeType::Command | NodeType::AskMono | NodeType::ForEach
-    );
     let mut edges = flow.edges.clone();
     let nodes: Vec<FlowNode>;
     if is_trigger_type(ty) {
@@ -380,66 +386,23 @@ pub fn add_node(flow: &Flow, w: &Workflow, ty: NodeType) -> (Flow, NodeId) {
             None,
         ));
         nodes = all;
-    } else if let (None, Some(report), true) = (&parent, &report, flowing) {
-        // Before the Report node, which stays last: it moves down and the edges into it follow.
-        let grow = if ty == NodeType::ForEach {
-            EMPTY_GROUP_H + GAP_Y
-        } else {
-            step
-        };
-        // At the Report's place, or below whatever hangs lowest above it, with a gap.
-        let bottom = deselected
+        // Any trigger can start a run, so each leads to the same first step.
+        let existing = w
+            .nodes
             .iter()
-            .filter(|n| n.parent_id.is_none() && n.id != report.id)
-            .map(|n| {
-                n.position.y
-                    + if n.kind == FlowKind::Group {
-                        n.height
-                    } else {
-                        NODE_H
-                    }
-            })
-            .fold(f32::NEG_INFINITY, f32::max);
-        let y = report.position.y.max(bottom + GAP_Y);
-        let at = Point {
-            x: if ty == NodeType::ForEach {
-                report.position.x - GROUP_PAD
-            } else {
-                report.position.x
-            },
-            y,
-        };
-        let mut all: Vec<FlowNode> = deselected
-            .into_iter()
-            .map(|mut n| {
-                if n.id == report.id {
-                    n.position = Point {
-                        x: n.position.x,
-                        y: y + grow,
-                    };
-                }
-                n
-            })
-            .collect();
-        all.push(to_node(at, None));
-        nodes = all;
-        let into: Vec<_> = flow
-            .edges
-            .iter()
-            .filter(|e| e.loop_spec.is_none() && e.target == report.id)
-            .cloned()
-            .collect();
-        edges.retain(|e| !(e.loop_spec.is_none() && e.target == report.id));
-        edges.extend(into.iter().map(|e| {
-            make_edge(
-                &e.source,
-                &node.id,
-                handle_of(e.source_handle.as_deref()),
-                None,
-            )
-        }));
-        if !into.is_empty() {
-            edges.push(make_edge(&node.id, &report.id, None, None));
+            .find(|n| n.is_trigger() && n.parent.is_none());
+        if let Some(existing) = existing {
+            let from_existing: Vec<FlowEdge> = flow
+                .edges
+                .iter()
+                .filter(|e| e.loop_spec.is_none() && e.source == existing.id)
+                .cloned()
+                .collect();
+            edges.extend(
+                from_existing
+                    .iter()
+                    .map(|e| make_edge(&node.id, &e.target, None, None)),
+            );
         }
     } else {
         let place = auto_place(w, parent.as_deref());
@@ -463,20 +426,35 @@ pub fn add_node(flow: &Flow, w: &Workflow, ty: NodeType) -> (Flow, NodeId) {
             }
         }
         if let Some(lowest) = lowest {
-            let free = !matches!(
-                lowest.kind,
-                NodeKind::Report { .. } | NodeKind::If { .. } | NodeKind::Switch { .. }
-            ) && !w
-                .edges
-                .iter()
-                .any(|e| e.loop_spec.is_none() && e.from == lowest.id);
+            let free = !matches!(lowest.kind, NodeKind::If { .. } | NodeKind::Switch { .. })
+                && !w
+                    .edges
+                    .iter()
+                    .any(|e| e.loop_spec.is_none() && e.from == lowest.id);
             if free {
                 let mut wider = w.clone();
                 let mut added = node.clone();
                 added.parent = parent.clone();
                 wider.nodes.push(added);
                 if connection_kind(&wider, &lowest.id, &node.id, None) == ConnectionKind::Edge {
-                    edges.push(make_edge(&lowest.id, &node.id, None, None));
+                    // Every trigger leads to the same first step, so all the loose ones go
+                    // to a first step together.
+                    let sources: Vec<&Node> = if lowest.is_trigger() {
+                        w.nodes
+                            .iter()
+                            .filter(|n| n.is_trigger() && n.parent == parent)
+                            .filter(|n| {
+                                !w.edges
+                                    .iter()
+                                    .any(|e| e.loop_spec.is_none() && e.from == n.id)
+                            })
+                            .collect()
+                    } else {
+                        vec![lowest]
+                    };
+                    for source in sources {
+                        edges.push(make_edge(&source.id, &node.id, None, None));
+                    }
                 }
             }
         }
@@ -815,16 +793,16 @@ pub fn in_loop(w: &Workflow, id: &str) -> bool {
     looped_node_ids(w).contains(id)
 }
 
-/// An If node decided by the Mono or by a condition (which starts empty).
-pub fn if_decided_by(node: &Node, mono: bool) -> Node {
+/// An If node decided by the AI or by a condition (which starts empty).
+pub fn if_decided_by(node: &Node, ai: bool) -> Node {
     let mut out = node.clone();
     if let NodeKind::If {
         condition, decide, ..
     } = &mut out.kind
     {
-        if mono {
+        if ai {
             *condition = None;
-            *decide = Some(Decide::Mono);
+            *decide = Some(Decide::Ai);
         } else {
             *decide = None;
             *condition = Some(String::new());
@@ -833,13 +811,13 @@ pub fn if_decided_by(node: &Node, mono: bool) -> Node {
     out
 }
 
-/// A Switch decided by the Mono or by a value (which starts empty).
-pub fn switch_decided_by(node: &Node, mono: bool) -> Node {
+/// A Switch decided by the AI or by a value (which starts empty).
+pub fn switch_decided_by(node: &Node, ai: bool) -> Node {
     let mut out = node.clone();
     if let NodeKind::Switch { value, decide, .. } = &mut out.kind {
-        if mono {
+        if ai {
             *value = None;
-            *decide = Some(Decide::Mono);
+            *decide = Some(Decide::Ai);
         } else {
             *decide = None;
             *value = Some(String::new());
@@ -941,11 +919,11 @@ pub fn remove_switch_case(flow: &Flow, id: &str, case: &str) -> Flow {
     )
 }
 
-/// A loop decided by the Mono or by a condition (which starts empty).
-pub fn loop_decided_by(spec: &LoopSpec, mono: bool) -> LoopSpec {
-    let decide = if mono {
-        "mono".to_string()
-    } else if spec.decide == "mono" {
+/// A loop decided by the AI or by a condition (which starts empty).
+pub fn loop_decided_by(spec: &LoopSpec, ai: bool) -> LoopSpec {
+    let decide = if ai {
+        DECIDE_AI.to_string()
+    } else if super::parse::is_ai_decide(&spec.decide) {
         String::new()
     } else {
         spec.decide.clone()

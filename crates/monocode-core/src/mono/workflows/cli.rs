@@ -14,13 +14,15 @@
 //! machine's time zone, where React printed `toLocaleString()`.
 use super::guide::workflow_guide;
 use super::model::{
-    interrupted_instances, left_instances_text, new_workflow_id, trigger_of, with_run_values, Edge,
-    InputValue, Node, NodeKind, RequirementKind, RunInstance, RunStatus, Workflow, WorkflowRun,
-    WORKFLOWS_MAX, WORKFLOW_DEFINITION_MAX_BYTES, WORKFLOW_DESCRIPTION_MAX, WORKFLOW_NAME_MAX,
+    interrupted_instances, left_instances_text, new_workflow_id, with_run_values, Edge, InputValue,
+    Node, NodeKind, RequirementKind, RunInstance, RunStatus, Workflow, WorkflowRun, WORKFLOWS_MAX,
+    WORKFLOW_DEFINITION_MAX_BYTES, WORKFLOW_DESCRIPTION_MAX, WORKFLOW_NAME_MAX,
 };
 use super::models::{harnesses_used, native_probe, workflow_issues, ModelCatalog, Probe};
 use super::ordered::{js_number_text, Json, OrderedMap};
-use super::parse::{drop_stray_handles, parse_edge, parse_inputs, parse_node, read_requires};
+use super::parse::{
+    drop_stray_handles, parse_decision_model, parse_edge, parse_inputs, parse_node, read_requires,
+};
 use super::preflight::{likely_clis, native_preflight, union_requires, Preflight};
 use super::store::{
     clear_runs, load_runs, load_workflows, to_json, update_workflows, workflow_json, MonoDir,
@@ -29,7 +31,8 @@ use super::template::js_trim;
 use super::validate::WorkflowIssue;
 use super::yaml::{
     anchor_node, export_path_problem, export_workflow, finish_import, input_value_problems,
-    preview_import, review_texts, ReviewCommand, ReviewPrompt, WorkflowDraft,
+    preview_import, review_texts, summary_review_prompt, ReviewCommand, ReviewPrompt,
+    WorkflowDraft,
 };
 use crate::mono::habits::Schedule;
 use crate::provider::Kind;
@@ -242,11 +245,13 @@ impl WorkflowHost for StoreHost {
 }
 
 /// The fields of a workflow definition the CLI accepts; the app owns everything else.
-const DEFINITION_FIELDS: [&str; 7] = [
+const DEFINITION_FIELDS: [&str; 9] = [
     "name",
     "description",
     "inputs",
     "requires",
+    "decisionModel",
+    "summaryTemplate",
     "inputValues",
     "nodes",
     "edges",
@@ -430,40 +435,32 @@ fn declared_values(
         .collect()
 }
 
-fn schedule_of(w: &Workflow) -> Option<&Schedule> {
-    match trigger_of(w).map(|n| &n.kind) {
-        Some(NodeKind::Schedule { schedule }) => Some(schedule),
-        _ => None,
-    }
-}
-
-/// The workflow with `nextRunAt` right for its enabled state and schedule.
+/// The workflow with `nextRunAt` right for its enabled state and schedules.
 fn scheduled(w: &Workflow, now: u64) -> Result<Workflow, String> {
-    let mut next = w.clone();
-    next.next_run_at = None;
-    if w.enabled {
-        if let Some(schedule) = schedule_of(w) {
-            next.next_run_at = Some(schedule.next(now)?);
-        }
-    }
-    Ok(next)
+    super::schedule::scheduled(w, now)
 }
 
-fn trigger_view(w: &Workflow) -> Json {
-    match trigger_of(w).map(|n| &n.kind) {
-        None => obj([("type", st("none"))]),
-        Some(NodeKind::Schedule { schedule }) => {
-            obj([("type", st("schedule")), ("schedule", st(schedule.label()))])
-        }
-        Some(_) => obj([("type", st("manual"))]),
+fn trigger_json(node: &super::model::Node) -> Json {
+    match &node.kind {
+        NodeKind::Schedule { schedule } => obj([
+            ("node", st(&node.id)),
+            ("type", st("schedule")),
+            ("schedule", st(schedule.label())),
+        ]),
+        _ => obj([("node", st(&node.id)), ("type", st("manual"))]),
     }
+}
+
+/// The triggers of a workflow: a list, because any of them can start a run.
+fn trigger_view(w: &Workflow) -> Json {
+    Json::Array(w.triggers().into_iter().map(trigger_json).collect())
 }
 
 fn run_summary_fields(run: &WorkflowRun) -> Vec<(&'static str, Json)> {
     let mut fields = vec![
         ("id", st(&run.id)),
         ("status", ser(&run.status)),
-        ("trigger", ser(&run.trigger)),
+        ("caller", ser(&run.caller)),
         ("startedAt", st(stamp(run.started_at))),
     ];
     if let Some(ended) = run.ended_at.filter(|at| *at != 0) {
@@ -573,7 +570,14 @@ struct Parsed {
     /// Whether the definition said anything about `requires`; an update that does not keeps the
     /// stored list.
     requires_given: bool,
+    /// Whether the definition said anything about `decisionModel` or `summaryTemplate`; an
+    /// update that does not keeps the stored ones.
+    decision_model_given: bool,
+    summary_template_given: bool,
 }
+
+/// The longest `summaryTemplate` the CLI takes.
+const SUMMARY_TEMPLATE_MAX: usize = 20_000;
 
 fn definition_from(raw: Option<&Json>, now: u64, allowed: &[&str]) -> Result<Parsed, String> {
     let Some(raw @ Json::Object(map)) = raw else {
@@ -665,17 +669,36 @@ fn definition_from(raw: Option<&Json>, now: u64, allowed: &[&str]) -> Result<Par
         None => None,
         some => Some(input_values(some, "workflow.inputValues")?),
     };
+    let decision_model = match map.get("decisionModel") {
+        None | Some(Json::Null) => None,
+        some => match parse_decision_model(some) {
+            Some(model) => model,
+            None => return Err("workflow.decisionModel must be {\"harness\": ..., \"model\": ..., \"effort\"?: ...}".into()),
+        },
+    };
+    let summary_template = match map.get("summaryTemplate") {
+        None | Some(Json::Null) => None,
+        some => Some(text(
+            some,
+            "workflow.summaryTemplate",
+            SUMMARY_TEMPLATE_MAX,
+        )?),
+    };
     Ok(Parsed {
         definition: WorkflowDraft {
             name,
             description,
             inputs,
             requires,
+            decision_model,
+            summary_template,
             nodes,
             edges,
         },
         values,
         requires_given: map.contains_key("requires"),
+        decision_model_given: map.contains_key("decisionModel"),
+        summary_template_given: map.contains_key("summaryTemplate"),
     })
 }
 
@@ -727,6 +750,8 @@ fn new_workflow_from(input: &Json, now: u64) -> Result<(Workflow, Option<Review>
     draft.description = definition.description;
     draft.inputs = definition.inputs;
     draft.requires = definition.requires;
+    draft.decision_model = definition.decision_model;
+    draft.summary_template = definition.summary_template;
     draft.input_values = values;
     draft.nodes = definition.nodes;
     draft.edges = definition.edges;
@@ -793,7 +818,7 @@ fn list<H: WorkflowHost>(host: &mut H) -> Result<Json, String> {
             ("id", st(&w.id)),
             ("name", st(&w.name)),
             ("enabled", Json::Bool(w.enabled)),
-            ("trigger", trigger_view(w)),
+            ("triggers", trigger_view(w)),
             (
                 "nextRunAt",
                 match w.next_run_at {
@@ -851,7 +876,7 @@ fn get<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         out.push(("description", st(description)));
     }
     out.push(("enabled", Json::Bool(w.enabled)));
-    out.push(("trigger", trigger_view(w)));
+    out.push(("triggers", trigger_view(w)));
     out.push(("running", Json::Bool(host.is_running(&w.id))));
     out.push(("inputs", part("inputs")));
     out.push(("inputValues", part("inputValues")));
@@ -980,7 +1005,8 @@ fn validate<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Jso
             ),
         });
     }
-    let (commands, prompts) = review_texts(&draft.nodes);
+    let (commands, mut prompts) = review_texts(&draft.nodes);
+    prompts.extend(summary_review_prompt(draft.summary_template.as_deref()));
     Ok(obj([
         ("issues", issues_json(&issues)),
         ("warnings", undeclared_cli_warnings(&draft)),
@@ -1011,6 +1037,12 @@ fn update<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
         if parsed.requires_given {
             draft.requires = parsed.definition.requires.clone();
         }
+        if parsed.decision_model_given {
+            draft.decision_model = parsed.definition.decision_model.clone();
+        }
+        if parsed.summary_template_given {
+            draft.summary_template = parsed.definition.summary_template.clone();
+        }
         draft.nodes = parsed.definition.nodes.clone();
         draft.edges = parsed.definition.edges.clone();
         // Values of inputs the new definition dropped go with them; given ones are checked as given.
@@ -1023,7 +1055,13 @@ fn update<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
         // A workflow that cannot run is paused rather than left to fail on its schedule.
         let enabled = draft.enabled && issues.is_empty();
         draft.enabled = enabled;
-        let same_schedule = schedule_of(&current) == schedule_of(&draft);
+        let schedules = |w: &Workflow| -> Vec<(String, Schedule)> {
+            super::schedule::schedule_triggers(w)
+                .into_iter()
+                .map(|(node, schedule)| (node.id.clone(), schedule.clone()))
+                .collect()
+        };
+        let same_schedule = schedules(&current) == schedules(&draft);
         // A new schedule, or turning it back on, counts from now; otherwise the time stands.
         let next =
             if enabled && (!current.enabled || !same_schedule || current.next_run_at.is_none()) {

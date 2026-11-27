@@ -109,7 +109,7 @@ mod to_flow_from_flow {
         assert_eq!(looped.target_handle, Some("loop-in"));
         let spec = looped.loop_spec.as_ref().unwrap();
         assert_eq!(spec.max_rounds, 3.0);
-        assert_eq!(spec.decide, "mono");
+        assert_eq!(spec.decide, "ai");
         let plain: Vec<&FlowEdge> = flow
             .edges
             .iter()
@@ -127,7 +127,9 @@ mod to_flow_from_flow {
             n(
                 json!({"id": "check", "type": "if", "condition": "{{inputs.x}} == 1", "ui": {"x": 0, "y": 80}}),
             ),
-            n(json!({"id": "report", "type": "report", "ui": {"x": 0, "y": 160}})),
+            n(
+                json!({"id": "report", "type": "command", "project": "x", "command": "ls", "ui": {"x": 0, "y": 160}}),
+            ),
         ];
         w.edges = vec![
             edge(r#"{"from": "trigger", "to": "check"}"#),
@@ -226,10 +228,10 @@ mod connection_kind_rules {
     }
 
     #[test]
-    fn is_invalid_out_of_a_report_node_and_into_itself() {
+    fn is_invalid_into_a_trigger_and_into_itself() {
         let w = ticket_workflow();
         assert_eq!(
-            connection_kind(&w, "report", "fetch", None),
+            connection_kind(&w, "report", "trigger", None),
             ConnectionKind::Invalid
         );
         assert_eq!(
@@ -323,7 +325,7 @@ mod new_node_defaults {
             NodeType::Session,
             NodeType::Session,
             NodeType::Command,
-            NodeType::AskMono,
+            NodeType::Switch,
             NodeType::If,
             NodeType::ForEach,
             NodeType::Session,
@@ -364,14 +366,18 @@ mod new_node_defaults {
             }
             other => panic!("not a command: {other:?}"),
         }
-        match new_node(NodeType::AskMono, &w).kind {
-            NodeKind::AskMono { answers, .. } => assert_eq!(answers, ["yes", "no"]),
-            other => panic!("not an askMono: {other:?}"),
+        match new_node(NodeType::Switch, &w).kind {
+            NodeKind::Switch {
+                cases,
+                decide: Some(Decide::Ai),
+                ..
+            } => assert_eq!(cases, ["a", "b"]),
+            other => panic!("not an AI switch: {other:?}"),
         }
         assert!(matches!(
             new_node(NodeType::If, &w).kind,
             NodeKind::If {
-                decide: Some(Decide::Mono),
+                decide: Some(Decide::Ai),
                 condition: None,
                 ..
             }
@@ -506,15 +512,18 @@ mod groups {
     }
 
     #[test]
-    fn settle_drop_never_nests_a_group_and_never_puts_the_report_in_one() {
+    fn settle_drop_never_nests_a_group_and_never_puts_a_trigger_in_one() {
         let flow = to_flow(&ticket_workflow());
         let group = find(&flow.nodes, "each").position;
         let inside = Point {
             x: group.x + 20.0,
             y: group.y + 60.0,
         };
-        let report = settle_drop(&moved(&flow.nodes, "report", inside.x, inside.y), "report");
-        assert_eq!(find(&report, "report").parent_id, None);
+        let trigger = settle_drop(
+            &moved(&flow.nodes, "trigger", inside.x, inside.y),
+            "trigger",
+        );
+        assert_eq!(find(&trigger, "trigger").parent_id, None);
         let mut second = find(&flow.nodes, "each").clone();
         second.id = "each2".into();
         second.position = inside;
@@ -897,17 +906,16 @@ mod whole_workflows {
     use super::*;
 
     #[test]
-    fn a_blank_workflow_is_a_paused_manual_trigger_into_a_report() {
+    fn a_blank_workflow_is_a_paused_manual_trigger() {
         let w = blank_workflow(1234);
         assert!(w.id.starts_with("wf-"));
         assert_eq!(w.name, "New workflow");
         assert!(!w.enabled);
         assert_eq!(w.created_at, 1234);
-        assert_eq!(ids(&w.nodes, |n| &n.id), ["trigger", "report"]);
+        assert_eq!(ids(&w.nodes, |n| &n.id), ["trigger"]);
         assert_eq!(w.nodes[0].title.as_deref(), Some("Manual trigger"));
-        assert_eq!(w.nodes[1].title.as_deref(), Some("Report to Mono"));
-        assert_eq!(w.nodes[1].ui, Some(Ui { x: 0.0, y: 84.0 }));
-        assert_eq!(w.edges, vec![Edge::new("trigger", "report")]);
+        assert_eq!(w.nodes[0].ui, Some(Ui { x: 0.0, y: 0.0 }));
+        assert_eq!(w.edges, vec![]);
         assert_eq!(validate_workflow(&w), vec![]);
     }
 
@@ -1004,7 +1012,9 @@ mod switch {
                 json!({"id": "route", "type": "switch", "value": "{{inputs.x}}",
                 "cases": ["bug", "new feature"], "ui": {"x": 0, "y": 80}}),
             ),
-            n(json!({"id": "report", "type": "report", "ui": {"x": 0, "y": 160}})),
+            n(
+                json!({"id": "report", "type": "command", "project": "x", "command": "ls", "ui": {"x": 0, "y": 160}}),
+            ),
         ];
         w.edges = vec![
             edge(r#"{"from": "trigger", "to": "route"}"#),
@@ -1090,21 +1100,25 @@ mod switch {
     }
 
     #[test]
-    fn a_new_switch_starts_decided_by_the_mono_with_two_cases() {
+    fn a_new_switch_starts_decided_by_the_ai_with_two_cases() {
         let w = routed();
         let node = new_node(NodeType::Switch, &w);
         assert_eq!(node.id, "route_2");
         assert!(matches!(
             &node.kind,
-            NodeKind::Switch { value: None, cases, decide: Some(Decide::Mono), question: None }
+            NodeKind::Switch { value: None, cases, decide: Some(Decide::Ai), question: None }
                 if cases.len() == 2
         ));
+        // It still needs a model to ask (the workflow sets none and no session leads to it) and
+        // its edges; nothing else is wrong with it.
         assert!(validate_workflow(&{
             let mut v = w.clone();
             v.nodes.push(node);
             v
         })
         .iter()
-        .all(|i| i.node_id.as_deref() != Some("route_2") || i.message.contains("handle")));
+        .all(|i| i.node_id.as_deref() != Some("route_2")
+            || i.message.contains("handle")
+            || i.message.contains("decides with AI")));
     }
 }

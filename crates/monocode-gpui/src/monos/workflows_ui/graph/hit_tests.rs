@@ -29,9 +29,9 @@ fn scene() -> Scene {
         json!([
             {"id": "trigger", "type": "manual", "ui": {"x": 0, "y": 0}},
             session("a", 100.),
-            {"id": "check", "type": "if", "decide": "mono", "ui": {"x": 0, "y": 200}},
+            {"id": "check", "type": "if", "decide": "ai", "ui": {"x": 0, "y": 200}},
             {"id": "each", "type": "forEach", "in": "{{a.list}}", "ui": {"x": 400, "y": 0}},
-            {"id": "report", "type": "report", "ui": {"x": 0, "y": 300}},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "ui": {"x": 0, "y": 300}},
             {"id": "route", "type": "switch", "value": "{{a.kind}}",
              "cases": ["bug", "feature", "chore"], "ui": {"x": 800, "y": 0}},
         ]),

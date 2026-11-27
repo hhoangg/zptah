@@ -377,7 +377,7 @@ impl Monos {
     ) -> Div {
         let rounds: Vec<(String, String)> =
             (1..=10).map(|n| (n.to_string(), n.to_string())).collect();
-        let by_mono = spec.decide == "mono";
+        let by_mono = monocode_core::mono::workflows::parse::is_ai_decide(&spec.decide);
         let mut form = div()
             .flex()
             .flex_col()
@@ -392,7 +392,7 @@ impl Monos {
             .child(self.choice_row(
                 "Decided by",
                 BoardPick::Decider(node.clone()),
-                choices(&[("mono", "Mono decides"), ("condition", "A condition")]),
+                choices(&[("mono", "AI decides"), ("condition", "A condition")]),
                 if by_mono { "mono" } else { "condition" },
                 cx,
             ));
@@ -447,7 +447,7 @@ impl Monos {
             .unwrap_or_default();
         let results = matches!(
             node.kind,
-            NodeKind::Session { .. } | NodeKind::Command { .. } | NodeKind::AskMono { .. }
+            NodeKind::Session { .. } | NodeKind::Command { .. }
         );
         let fields = self.board_node_fields(mono, w, node, window, cx);
         let loop_out = w
@@ -744,85 +744,6 @@ impl Monos {
                 }
                 out.into_any_element()
             }
-            NodeKind::AskMono { question, answers } => {
-                let q = self.long_text(
-                    "Question",
-                    BoardField::Question(id.clone()),
-                    question,
-                    "What the Mono should decide. Use {{node.field}} to include results.",
-                    window,
-                    cx,
-                );
-                let rows: Vec<AnyElement> = answers
-                    .iter()
-                    .enumerate()
-                    .map(|(at, answer)| {
-                        let spec = BoardField::Answer(id.clone(), at);
-                        let selector = spec.key();
-                        let field =
-                            self.board_field(spec, "Answer", "", answer, false, None, window, cx);
-                        let (node_id, remove_id) = (id.clone(), format!("wf-answer-remove-{at}"));
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1p5()
-                            .child(
-                                div().flex_1().min_w_0().child(
-                                    habit_field(field)
-                                        .id(SharedString::from(selector.clone()))
-                                        .debug_selector(move || selector.clone())
-                                        .h(px(28.))
-                                        .bg(content(0.1)),
-                                ),
-                            )
-                            .child(
-                                habit_icon_button(
-                                    SharedString::from(remove_id.clone()),
-                                    "Remove answer",
-                                    "close",
-                                )
-                                .debug_selector(move || remove_id.clone())
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.board_node_edit(
-                                        &node_id,
-                                        |n| {
-                                            if let NodeKind::AskMono { answers, .. } = &mut n.kind
-                                                && at < answers.len()
-                                            {
-                                                answers.remove(at);
-                                            }
-                                        },
-                                        cx,
-                                    )
-                                })),
-                            )
-                            .into_any_element()
-                    })
-                    .collect();
-                let add_id = id.clone();
-                let add = Self::section_button("wf-answer-add", "Add answer", "plus").on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        this.board_node_edit(
-                            &add_id,
-                            |n| {
-                                if let NodeKind::AskMono { answers, .. } = &mut n.kind {
-                                    answers.push(String::new());
-                                }
-                            },
-                            cx,
-                        )
-                    }),
-                );
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(q)
-                    .child(
-                        section("Answers", Some(add.into_any_element()))
-                            .child(div().px_1().flex().flex_col().gap_1().children(rows)),
-                    )
-                    .into_any_element()
-            }
             NodeKind::Switch {
                 value,
                 cases,
@@ -833,7 +754,7 @@ impl Monos {
                 let decider = self.choice_row(
                     "Decided by",
                     BoardPick::SwitchDecider(id.clone()),
-                    choices(&[("value", "A value"), ("mono", "Mono decides")]),
+                    choices(&[("value", "A value"), ("mono", "AI decides")]),
                     if by_mono { "mono" } else { "value" },
                     cx,
                 );
@@ -853,7 +774,7 @@ impl Monos {
                         "Question",
                         BoardField::SwitchQuestion(id.clone()),
                         question.as_deref().unwrap_or(""),
-                        "What the Mono should check before choosing a case.",
+                        "What the AI should check before choosing a case.",
                         window,
                         cx,
                     )
@@ -880,7 +801,7 @@ impl Monos {
                 let decider = self.choice_row(
                     "Decided by",
                     BoardPick::IfDecider(id.clone()),
-                    choices(&[("condition", "A condition"), ("mono", "Mono decides")]),
+                    choices(&[("condition", "A condition"), ("mono", "AI decides")]),
                     if by_mono { "mono" } else { "condition" },
                     cx,
                 );
@@ -900,7 +821,7 @@ impl Monos {
                         "Question",
                         BoardField::IfQuestion(id.clone()),
                         question.as_deref().unwrap_or(""),
-                        "What the Mono should check before choosing true or false.",
+                        "What the AI should check before choosing true or false.",
                         window,
                         cx,
                     )
@@ -948,16 +869,6 @@ impl Monos {
                     .child(hint("Drag nodes into the frame on the board to run them once per item."))
                     .into_any_element()
             }
-            NodeKind::Report { template } => self
-                .long_text(
-                    "Report",
-                    BoardField::Template(id.clone()),
-                    template.as_deref().unwrap_or(""),
-                    "Leave empty for a summary of every branch, or write your own with {{node.field}}.",
-                    window,
-                    cx,
-                )
-                .into_any_element(),
         }
     }
 

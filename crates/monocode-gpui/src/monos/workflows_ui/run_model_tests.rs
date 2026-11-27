@@ -57,7 +57,7 @@ pub(super) fn nr(node_id: &str, branch: &str, status: &str, extra: Value) -> Val
 
 pub(super) fn linear() -> Workflow {
     workflow(
-        json!([{"id": "trigger", "type": "manual"}, session("dev", json!({})), {"id": "report", "type": "report"}]),
+        json!([{"id": "trigger", "type": "manual"}, session("dev", json!({})), {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
         json!([{"from": "trigger", "to": "dev"}, {"from": "dev", "to": "report"}]),
     )
 }
@@ -70,7 +70,7 @@ pub(super) fn each_workflow() -> Workflow {
             {"id": "each", "type": "forEach", "in": "{{trigger.tickets}}", "title": "Tickets"},
             session("dev", json!({"parent": "each"})),
             session("review", json!({"parent": "each"})),
-            {"id": "report", "type": "report"},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
         json!([
             {"from": "trigger", "to": "each"},
@@ -346,7 +346,7 @@ pub(super) fn lane_run() -> WorkflowRun {
             {"id": "trigger", "type": "manual"},
             {"id": "each", "type": "forEach", "in": "{{trigger.tickets}}", "title": "Tickets"},
             session("dev", json!({"parent": "each"})),
-            {"id": "report", "type": "report"},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
         json!([{"from": "each", "to": "report"}]),
     );
@@ -613,7 +613,7 @@ fn a_node_waiting_for_approval_or_asking_says_so() {
     ]));
     assert_eq!(details(&run, "dev|").status_label, "Waiting for approval");
     // A node that ended its work and is still running is asking the Mono.
-    assert_eq!(details(&run, "report|").status_label, "Asking the Mono");
+    assert_eq!(details(&run, "report|").status_label, "Asking the AI");
 }
 
 #[test]

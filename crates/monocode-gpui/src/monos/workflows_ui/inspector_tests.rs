@@ -354,12 +354,12 @@ fn the_switch_decider_value_and_question_write_their_values(cx: &mut TestAppCont
         panic!()
     };
     assert_eq!(value.as_deref(), Some("{{review.verdict}}"));
-    // Mono decides drops the value and shows the question.
+    // AI decides drops the value and shows the question.
     pick(&s, visual, BoardPick::SwitchDecider(route.clone()), "mono");
     let NodeKind::Switch { value, decide, .. } = node_of(&s, visual, &route).kind else {
         panic!()
     };
-    assert_eq!((value, decide), (None, Some(Decide::Mono)));
+    assert_eq!((value, decide), (None, Some(Decide::Ai)));
     type_in(
         &s,
         visual,

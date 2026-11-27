@@ -118,7 +118,7 @@ fn a_port_label_is_cut_to_fit_under_its_out() {
 #[test]
 fn an_edge_runs_from_the_bottom_of_a_card_to_the_top_of_the_next() {
     let w = workflow(
-        json!([{"id": "trigger", "type": "manual"}, session("dev"), {"id": "report", "type": "report"}]),
+        json!([{"id": "trigger", "type": "manual"}, session("dev"), {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
         json!([{"from": "trigger", "to": "dev"}, {"from": "dev", "to": "report"}]),
     );
     let scene = scene_of(&w);
@@ -184,7 +184,7 @@ fn a_loop_edge_leaves_the_right_of_the_later_card_and_comes_back_into_the_earlie
         json!([
             {"from": "trigger", "to": "dev"},
             {"from": "dev", "to": "review"},
-            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "mono"}},
+            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
         ]),
     );
     let scene = scene_of(&w);
@@ -210,7 +210,7 @@ fn a_loop_edge_leaves_the_right_of_the_later_card_and_comes_back_into_the_earlie
         }
     );
     let label = edge.label.as_ref().expect("a label");
-    assert_eq!(label.text, "Mono decides \u{b7} max 3");
+    assert_eq!(label.text, "AI decides \u{b7} max 3");
     // Right of the run beside the cards (never over a card it passes), half way between the
     // two ends.
     assert!(label.at.x > review.right() + 26., "{:?}", label.at);
@@ -225,7 +225,7 @@ fn a_compact_loop_edge_hugs_the_cards_and_has_no_label() {
         json!([
             {"from": "trigger", "to": "dev"},
             {"from": "dev", "to": "review"},
-            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "mono"}},
+            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
         ]),
     );
     let flow = to_flow(&w);
@@ -252,9 +252,9 @@ fn a_compact_loop_edge_hugs_the_cards_and_has_no_label() {
 fn the_loop_label_names_the_decider_and_cuts_a_long_condition() {
     let mono = LoopSpec {
         max_rounds: 3.,
-        decide: "mono".into(),
+        decide: "ai".into(),
     };
-    assert_eq!(loop_label(&mono, false), "Mono decides \u{b7} max 3");
+    assert_eq!(loop_label(&mono, false), "AI decides \u{b7} max 3");
     let short = LoopSpec {
         max_rounds: 2.,
         decide: "  {{r.v}} != \"ok\" ".into(),
@@ -280,7 +280,7 @@ fn a_for_each_takes_and_gives_its_lines_over_the_column_of_the_cards_inside() {
             {"id": "each", "type": "forEach", "in": "{{trigger.items}}"},
             {"id": "dev", "type": "session", "parent": "each", "project": "{{inputs.project}}",
              "prompt": "x", "checkout": "root", "output": {}},
-            {"id": "report", "type": "report"},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
         json!([{"from": "trigger", "to": "each"}, {"from": "each", "to": "report"}]),
     );
@@ -319,7 +319,7 @@ fn the_bounds_cover_the_cards_the_bars_and_the_loop_label() {
         json!([
             {"from": "trigger", "to": "dev"},
             {"from": "dev", "to": "review"},
-            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "mono"}},
+            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
         ]),
     );
     let flow = to_flow(&w);
@@ -346,7 +346,7 @@ fn the_bounds_cover_the_cards_the_bars_and_the_loop_label() {
 #[test]
 fn run_states_travel_with_the_edges() {
     let w = workflow(
-        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}]),
+        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
         json!([{"from": "trigger", "to": "report"}]),
     );
     let flow = to_flow(&w);
@@ -359,7 +359,7 @@ fn run_states_travel_with_the_edges() {
 #[test]
 fn an_edge_to_a_node_that_is_not_drawn_is_left_out() {
     let w = workflow(
-        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}]),
+        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
         json!([{"from": "trigger", "to": "report"}]),
     );
     let flow = to_flow(&w);

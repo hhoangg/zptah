@@ -1,7 +1,7 @@
 //! `@workflow/<slug>` in a Mono composer: names a workflow so the message carries its facts.
 //! A mention attaches context and never runs anything.
 use super::model::WorkflowId;
-use super::model::{trigger_of, InputType, InputValue, NodeKind, Requirement, RunStatus, Workflow};
+use super::model::{InputType, InputValue, NodeKind, Requirement, RunStatus, Workflow};
 use super::ordered::Json;
 use super::preflight::Preflight;
 use std::collections::HashMap;
@@ -185,14 +185,17 @@ fn requires_json(view: &RequiresView) -> Json {
 }
 
 fn workflow_json(w: &Workflow, facts: &MentionFacts) -> Json {
-    let trigger = match trigger_of(w).map(|n| &n.kind) {
-        None => obj(vec![("type", st("none"))]),
-        Some(NodeKind::Schedule { schedule }) => obj(vec![
-            ("type", st("schedule")),
-            ("schedule", st(schedule.label())),
-        ]),
-        Some(_) => obj(vec![("type", st("manual"))]),
-    };
+    let triggers: Vec<Json> = w
+        .triggers()
+        .into_iter()
+        .map(|node| match &node.kind {
+            NodeKind::Schedule { schedule } => obj(vec![
+                ("type", st("schedule")),
+                ("schedule", st(schedule.label())),
+            ]),
+            _ => obj(vec![("type", st("manual"))]),
+        })
+        .collect();
     let inputs = w
         .inputs
         .iter()
@@ -233,7 +236,7 @@ fn workflow_json(w: &Workflow, facts: &MentionFacts) -> Json {
         ("id", st(&w.id)),
         ("name", st(&w.name)),
         ("description", w.description.as_ref().map_or(Json::Null, st)),
-        ("trigger", trigger),
+        ("triggers", Json::Array(triggers)),
         ("enabled", Json::Bool(w.enabled)),
         ("needsReview", Json::Bool(w.needs_review)),
         ("inputs", Json::Array(inputs)),

@@ -40,12 +40,14 @@ fn dir(root: &std::path::Path) -> MonoDir {
 
 const DAILY: &str = r#"{"id":"trigger","type":"schedule","schedule":{"scheduleKind":"daily","time":"09:00","minute":0,"dayOfWeek":1}}"#;
 
-/// A valid scheduled workflow that is due (its time was a second ago).
+/// A valid scheduled workflow that is due (its time was a second ago). Its one step is a session
+/// the runner has to start, so a started run is still going.
 fn workflow_with(id: &str, extra: Value) -> Workflow {
     let mut v: Value = serde_json::from_str(&format!(
-        r#"{{"id":"{id}","name":"Ship it","inputs":{{}},"inputValues":{{}},
-            "nodes":[{DAILY},{{"id":"report","type":"report"}}],
-            "edges":[{{"from":"trigger","to":"report"}}],
+        r#"{{"id":"{id}","name":"Ship it","inputs":{{"repo":{{"type":"project"}}}},
+            "inputValues":{{"repo":"/code/app"}},
+            "nodes":[{DAILY},{{"id":"step","type":"session","project":"{{{{inputs.repo}}}}","prompt":"go","checkout":"root","output":{{}}}}],
+            "edges":[{{"from":"trigger","to":"step"}}],
             "enabled":true,"createdAt":1,"nextRunAt":{}}}"#,
         now() - 1_000
     ))
@@ -75,10 +77,7 @@ fn with_session(extra: &str) -> Workflow {
             r#"{{"id":"dev","type":"session","project":"{{{{inputs.repo}}}}","prompt":"go","checkout":"root",{extra}}}"#
         )),
     );
-    w.edges = vec![
-        super::fixtures::edge(r#"{"from":"trigger","to":"dev"}"#),
-        super::fixtures::edge(r#"{"from":"dev","to":"report"}"#),
-    ];
+    w.edges = vec![super::fixtures::edge(r#"{"from":"trigger","to":"dev"}"#)];
     assert_eq!(validate_workflow(&w), vec![]);
     w
 }
@@ -129,13 +128,12 @@ fn idle(_: &str) -> bool {
     false
 }
 
-fn look(files: &impl MonoFiles, has_chat: bool, running: &dyn Fn(&str) -> bool) -> Found {
-    look_with(files, has_chat, running, probe_nothing)
+fn look(files: &impl MonoFiles, running: &dyn Fn(&str) -> bool) -> Found {
+    look_with(files, running, probe_nothing)
 }
 
 fn look_with(
     files: &impl MonoFiles,
-    has_chat: bool,
     running: &dyn Fn(&str) -> bool,
     probe: fn(Kind) -> Probe,
 ) -> Found {
@@ -144,7 +142,6 @@ fn look_with(
         &Tick {
             now: now(),
             is_running: running,
-            has_chat,
             probe,
             on_claim: &|_| {},
             preflight: &|_| Preflight::default(),
@@ -163,7 +160,6 @@ fn look_pf(
         &Tick {
             now: now(),
             is_running: running,
-            has_chat: true,
             probe: probe_nothing,
             on_claim: &|_| {},
             preflight,
@@ -255,19 +251,104 @@ fn a_due_scheduled_workflow_is_claimed_and_started() {
     let root = temp_root();
     let disk = dir(&root);
     save(&disk, &[workflow(json!({}))]);
-    let found = look(&disk, true, &idle);
+    let found = look(&disk, &idle);
     let runs = runs_of(&found);
     assert_eq!(runs.len(), 1);
     let (run, failure) = runs[0];
     assert!(failure.is_none());
     assert_eq!(run.workflow_id, ID);
-    assert_eq!(run.trigger, RunTrigger::Schedule);
+    assert_eq!(run.caller, RunCaller::new(CallerKind::Schedule, "trigger"));
     assert_eq!(run.status, RunStatus::Running);
     assert_eq!(run.started_at, now());
     let after = stored_one(&disk);
     assert!(after.next_run_at.unwrap() > now());
     assert!(!after.run_requested);
     assert_eq!(after.last_run_id.as_deref(), Some(run.id.as_str()));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Two schedule triggers and a manual one, all leading to one session.
+fn three_triggers(extra: Value) -> Workflow {
+    let mut spec = json!({
+        "inputs": {"repo": {"type": "project"}}, "inputValues": {"repo": "/code/app"},
+        "nodes": [
+            {"id": "trigger", "type": "schedule",
+             "schedule": {"scheduleKind": "daily", "time": "09:00", "minute": 0, "dayOfWeek": 1}},
+            {"id": "evening", "type": "schedule",
+             "schedule": {"scheduleKind": "daily", "time": "18:00", "minute": 0, "dayOfWeek": 1}},
+            {"id": "hand", "type": "manual"},
+            {"id": "dev", "type": "session", "project": "{{inputs.repo}}", "prompt": "go",
+             "checkout": "root", "output": {}}
+        ],
+        "edges": [
+            {"from": "trigger", "to": "dev"},
+            {"from": "evening", "to": "dev"},
+            {"from": "hand", "to": "dev"}
+        ]
+    });
+    for (k, x) in extra.as_object().unwrap() {
+        spec[k] = x.clone();
+    }
+    workflow(spec)
+}
+
+#[test]
+fn a_run_records_the_schedule_trigger_that_came_due() {
+    let root = temp_root();
+    let disk = dir(&root);
+    let later = now() + 3_600_000;
+    save(
+        &disk,
+        &[three_triggers(json!({
+            "nextRunAt": now() - 1_000,
+            "nextRunAtByNode": {"trigger": later, "evening": now() - 1_000}
+        }))],
+    );
+    let found = look(&disk, &idle);
+    let runs = runs_of(&found);
+    assert_eq!(runs.len(), 1);
+    let (run, failure) = runs[0];
+    assert!(failure.is_none(), "{failure:?}");
+    assert_eq!(run.caller, RunCaller::new(CallerKind::Schedule, "evening"));
+    // Only the one that came due ran; the other schedule and the manual trigger were skipped.
+    let status = |id: &str| run.nodes.iter().find(|n| n.node_id == id).unwrap().status;
+    assert_eq!(status("evening"), NodeStatus::Done);
+    assert_eq!(status("trigger"), NodeStatus::Skipped);
+    assert_eq!(status("hand"), NodeStatus::Skipped);
+    // Claiming moved the one that ran on and left the other's time alone.
+    let after = stored_one(&disk);
+    assert!(after.next_run_at_by_node["evening"] > now());
+    assert_eq!(after.next_run_at_by_node["trigger"], later);
+    assert_eq!(
+        after.next_run_at,
+        after.next_run_at_by_node.values().min().copied()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_requested_run_is_manual_through_the_manual_trigger_unless_a_caller_was_recorded() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(&disk, &[three_triggers(json!({"runRequested": true}))]);
+    let found = look(&disk, &idle);
+    assert_eq!(
+        runs_of(&found)[0].0.caller,
+        RunCaller::new(CallerKind::Manual, "hand")
+    );
+
+    // A Mono that asked for the run is recorded, and the record is cleared once claimed.
+    let mut asked = three_triggers(json!({"runRequested": true}));
+    asked.run_caller = Some(RunCaller::mono("mono-7", "hand"));
+    save(&disk, &[asked]);
+    let found = look(&disk, &idle);
+    assert_eq!(
+        runs_of(&found)[0].0.caller,
+        RunCaller::mono("mono-7", "hand")
+    );
+    let after = stored_one(&disk);
+    assert!(!after.run_requested);
+    assert_eq!(after.run_caller, None);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -280,9 +361,12 @@ fn a_requested_run_starts_even_when_the_schedule_is_not_due() {
         &disk,
         &[workflow(json!({"runRequested": true, "nextRunAt": later}))],
     );
-    let found = look(&disk, true, &idle);
+    let found = look(&disk, &idle);
     let runs = runs_of(&found);
-    assert_eq!(runs[0].0.trigger, RunTrigger::Manual);
+    assert_eq!(
+        runs[0].0.caller,
+        RunCaller::new(CallerKind::Manual, "trigger")
+    );
     let after = stored_one(&disk);
     assert!(!after.run_requested);
     // A requested run leaves the schedule where it was.
@@ -298,8 +382,11 @@ fn a_manual_workflow_runs_on_request_and_stays_paused() {
     let mut manual = manual;
     manual.nodes[0] = super::fixtures::node(r#"{"id":"trigger","type":"manual"}"#);
     save(&disk, &[manual]);
-    let found = look(&disk, true, &idle);
-    assert_eq!(runs_of(&found)[0].0.trigger, RunTrigger::Manual);
+    let found = look(&disk, &idle);
+    assert_eq!(
+        runs_of(&found)[0].0.caller,
+        RunCaller::new(CallerKind::Manual, "trigger")
+    );
     let after = stored_one(&disk);
     assert!(!after.enabled && !after.run_requested);
     std::fs::remove_dir_all(root).unwrap();
@@ -313,7 +400,7 @@ fn a_workflow_waiting_for_review_does_not_start() {
         &disk,
         &[workflow(json!({"runRequested": true, "needsReview": true}))],
     );
-    let found = look(&disk, true, &idle);
+    let found = look(&disk, &idle);
     assert!(found.starts.is_empty());
     assert!(stored_one(&disk).run_requested);
     std::fs::remove_dir_all(root).unwrap();
@@ -324,7 +411,7 @@ fn a_tick_while_the_previous_run_is_going_moves_the_schedule_and_starts_nothing(
     let root = temp_root();
     let disk = dir(&root);
     save(&disk, &[workflow(json!({}))]);
-    let found = look(&disk, true, &|id| id == ID);
+    let found = look(&disk, &|id| id == ID);
     assert!(found.starts.is_empty());
     let after = stored_one(&disk);
     assert!(after.next_run_at.unwrap() > now());
@@ -337,32 +424,12 @@ fn a_requested_run_waits_for_the_current_one_instead_of_being_dropped() {
     let root = temp_root();
     let disk = dir(&root);
     save(&disk, &[workflow(json!({"runRequested": true}))]);
-    let found = look(&disk, true, &|id| id == ID);
+    let found = look(&disk, &|id| id == ID);
     assert!(found.starts.is_empty());
     assert!(stored_one(&disk).run_requested);
     // Once it ends the request runs.
-    let found = look(&disk, true, &idle);
+    let found = look(&disk, &idle);
     assert_eq!(runs_of(&found).len(), 1);
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn a_mono_without_a_chat_moves_schedules_on_but_claims_nothing() {
-    let root = temp_root();
-    let disk = dir(&root);
-    save(
-        &disk,
-        &[
-            workflow(json!({"runRequested": true})),
-            // Came due so long ago that it is not run, only moved on.
-            workflow_with(OTHER, json!({"nextRunAt": now() - 5 * 3_600_000})),
-        ],
-    );
-    let found = look(&disk, false, &idle);
-    assert!(found.starts.is_empty());
-    let after = stored(&disk);
-    assert!(after[0].run_requested);
-    assert!(after[1].next_run_at.unwrap() > now());
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -374,7 +441,7 @@ fn only_one_run_is_started_per_workflow_and_other_workflows_go_side_by_side() {
         &disk,
         &[workflow(json!({})), workflow_with(OTHER, json!({}))],
     );
-    let found = look(&disk, true, &idle);
+    let found = look(&disk, &idle);
     let mut ids: Vec<_> = runs_of(&found)
         .iter()
         .map(|(run, _)| run.workflow_id.clone())
@@ -382,7 +449,7 @@ fn only_one_run_is_started_per_workflow_and_other_workflows_go_side_by_side() {
     ids.sort();
     assert_eq!(ids, vec![ID.to_string(), OTHER.to_string()]);
     // The next look, with both running, claims neither again.
-    let found = look(&disk, true, &|_| true);
+    let found = look(&disk, &|_| true);
     assert!(found.starts.is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -418,7 +485,7 @@ fn a_claim_is_checked_again_against_the_latest_file() {
         disk: disk.clone(),
         reads: Cell::new(0),
     };
-    let found = look(&pausing, true, &idle);
+    let found = look(&pausing, &idle);
     assert!(found.starts.is_empty(), "{:?}", runs_of(&found).len());
     assert_eq!(stored_one(&disk).last_run_id, None);
     std::fs::remove_dir_all(root).unwrap();
@@ -454,7 +521,6 @@ fn a_workflow_is_reported_claimed_before_its_models_are_probed() {
         &Tick {
             now: now(),
             is_running: &idle,
-            has_chat: true,
             probe: probing,
             on_claim: &on_claim,
             preflight: &|_| Preflight::default(),
@@ -475,11 +541,10 @@ fn an_invalid_workflow_gets_a_failed_run_and_a_message_for_the_chat() {
     let root = temp_root();
     let disk = dir(&root);
     let mut broken = workflow(json!({}));
-    broken.nodes.retain(|n| n.id != "report");
-    broken.edges.clear();
+    broken.edges = vec![super::fixtures::edge(r#"{"from":"trigger","to":"ghost"}"#)];
     assert!(!validate_workflow(&broken).is_empty());
     save(&disk, &[broken]);
-    let found = look(&disk, true, &idle);
+    let found = look(&disk, &idle);
     let (run, failure) = runs_of(&found)[0];
     assert_eq!(run.status, RunStatus::Failed);
     assert_eq!(run.ended_at, Some(now()));
@@ -491,7 +556,7 @@ fn an_invalid_workflow_gets_a_failed_run_and_a_message_for_the_chat() {
         "{:?}",
         run.error
     );
-    assert!(run.error.as_deref().unwrap().contains("Report"));
+    assert!(run.error.as_deref().unwrap().contains("ghost"));
     let failure = failure.unwrap();
     assert_eq!(failure.title, "Ship it · failed");
     assert!(failure
@@ -509,7 +574,7 @@ fn a_session_naming_a_model_the_catalog_lacks_fails_the_run_naming_it() {
     let disk = dir(&root);
     let w = with_session(r#""model":"claude:sonnet-6""#);
     save(&disk, &[w]);
-    let found = look_with(&disk, true, &idle, probe_claude);
+    let found = look_with(&disk, &idle, probe_claude);
     let (run, failure) = runs_of(&found)[0];
     assert_eq!(run.status, RunStatus::Failed);
     assert!(
@@ -535,11 +600,11 @@ fn the_catalog_is_only_probed_for_the_harnesses_the_workflow_uses() {
     let disk = dir(&root);
     // No session node: nothing to probe.
     save(&disk, &[workflow(json!({}))]);
-    look_with(&disk, true, &idle, counting);
+    look_with(&disk, &idle, counting);
     assert_eq!(ASKED.load(Ordering::SeqCst), 0);
     let w = with_session(r#""harness":"claude""#);
     save(&disk, &[w]);
-    look_with(&disk, true, &idle, counting);
+    look_with(&disk, &idle, counting);
     assert_eq!(ASKED.load(Ordering::SeqCst), 1);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -549,7 +614,7 @@ fn the_catalog_is_only_probed_for_the_harnesses_the_workflow_uses() {
 fn interrupted(id: &str) -> WorkflowRun {
     mark_interrupted(&start_run(
         &workflow(json!({})),
-        RunTrigger::Manual,
+        RunCaller::new(CallerKind::Manual, "trigger"),
         1_000,
         id,
     ))
@@ -570,14 +635,14 @@ fn a_resume_asked_for_in_the_file_resumes_an_interrupted_run() {
         )],
     );
     put_runs(&disk, ID, vec![interrupted("run-old")]);
-    let found = look(&disk, true, &idle);
+    let found = look(&disk, &idle);
     let resumes = resumes_of(&found);
     assert_eq!(resumes.len(), 1);
     assert_eq!(resumes[0].id, "run-old");
     assert_eq!(resumes[0].status, RunStatus::Interrupted);
     // The request is answered, so it is not repeated.
     assert_eq!(stored_one(&disk).resume_run_id, None);
-    assert!(look(&disk, true, &idle).starts.is_empty());
+    assert!(look(&disk, &idle).starts.is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -594,7 +659,7 @@ fn a_resume_for_a_run_that_is_not_interrupted_is_answered_and_ignored() {
     let mut done = interrupted("run-old");
     done.status = RunStatus::Done;
     put_runs(&disk, ID, vec![done]);
-    assert!(look(&disk, true, &idle).starts.is_empty());
+    assert!(look(&disk, &idle).starts.is_empty());
     assert_eq!(stored_one(&disk).resume_run_id, None);
     // And one for a run that is not there.
     save(
@@ -603,12 +668,12 @@ fn a_resume_for_a_run_that_is_not_interrupted_is_answered_and_ignored() {
             json!({"enabled": false, "resumeRunId": "run-none"}),
         )],
     );
-    assert!(look(&disk, true, &idle).starts.is_empty());
+    assert!(look(&disk, &idle).starts.is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn a_resume_is_refused_while_the_workflow_is_running_or_the_mono_has_no_chat() {
+fn a_resume_is_refused_while_the_workflow_is_running() {
     let root = temp_root();
     let disk = dir(&root);
     put_runs(&disk, ID, vec![interrupted("run-old")]);
@@ -618,14 +683,13 @@ fn a_resume_is_refused_while_the_workflow_is_running_or_the_mono_has_no_chat() {
             json!({"enabled": false, "resumeRunId": "run-old"}),
         )],
     );
-    assert!(look(&disk, true, &|id| id == ID).starts.is_empty());
+    assert!(look(&disk, &|id| id == ID).starts.is_empty());
     save(
         &disk,
         &[workflow(
             json!({"enabled": false, "resumeRunId": "run-old"}),
         )],
     );
-    assert!(look(&disk, false, &idle).starts.is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -636,7 +700,7 @@ fn a_resume_keeps_the_workflow_from_also_starting_a_scheduled_run() {
     put_runs(&disk, ID, vec![interrupted("run-old")]);
     // Due, and a resume is asked for: only the resume goes.
     save(&disk, &[workflow(json!({"resumeRunId": "run-old"}))]);
-    let found = look(&disk, true, &idle);
+    let found = look(&disk, &idle);
     assert_eq!(resumes_of(&found).len(), 1);
     assert!(runs_of(&found).is_empty());
     std::fs::remove_dir_all(root).unwrap();
@@ -653,7 +717,7 @@ fn a_stop_nobody_runs_is_cleared_and_one_for_a_run_that_is_going_is_handed_over(
             workflow_with(OTHER, json!({"enabled": false, "stopRequested": true})),
         ],
     );
-    let found = look(&disk, true, &|id| id == OTHER);
+    let found = look(&disk, &|id| id == OTHER);
     assert_eq!(found.stops, vec![OTHER.to_string()]);
     assert!(stored(&disk).iter().all(|w| !w.stop_requested));
     // Asked for again, nothing is going: nothing to stop.
@@ -661,7 +725,7 @@ fn a_stop_nobody_runs_is_cleared_and_one_for_a_run_that_is_going_is_handed_over(
         &disk,
         &[workflow(json!({"enabled": false, "stopRequested": true}))],
     );
-    assert!(look(&disk, true, &idle).stops.is_empty());
+    assert!(look(&disk, &idle).stops.is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -675,7 +739,7 @@ fn a_stop_asked_for_before_a_run_starts_is_dropped_at_the_claim() {
             json!({"runRequested": true, "stopRequested": true}),
         )],
     );
-    let found = look(&disk, true, &idle);
+    let found = look(&disk, &idle);
     assert_eq!(runs_of(&found).len(), 1);
     assert!(found.stops.is_empty());
     assert!(!stored_one(&disk).stop_requested);
@@ -721,7 +785,7 @@ fn a_resume_already_taken_from_the_file_is_still_acted_on_when_a_later_save_fail
         disk: disk.clone(),
         ok: Cell::new(1),
     };
-    let found = look(&failing, true, &idle);
+    let found = look(&failing, &idle);
     assert_eq!(resumes_of(&found).len(), 1);
     assert_eq!(stored(&disk)[0].resume_run_id, None);
     std::fs::remove_dir_all(root).unwrap();
@@ -737,7 +801,7 @@ fn a_look_with_nothing_to_do_does_not_write() {
         &counting.disk,
         &[workflow(json!({"nextRunAt": now() + 3_600_000}))],
     );
-    assert!(look(&counting, true, &idle).starts.is_empty());
+    assert!(look(&counting, &idle).starts.is_empty());
     assert_eq!(counting.saves.get(), 0);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -754,7 +818,7 @@ fn a_schedule_that_cannot_move_on_is_not_rewritten_every_look() {
     );
     save(&counting.disk, &[broken]);
     for _ in 0..3 {
-        assert!(look(&counting, true, &idle).starts.is_empty());
+        assert!(look(&counting, &idle).starts.is_empty());
     }
     assert_eq!(counting.saves.get(), 0);
     std::fs::remove_dir_all(root).unwrap();
@@ -763,7 +827,12 @@ fn a_schedule_that_cannot_move_on_is_not_rewritten_every_look() {
 // --- the sweep ------------------------------------------------------------------------------
 
 fn running(id: &str) -> WorkflowRun {
-    start_run(&workflow(json!({})), RunTrigger::Manual, 1_000, id)
+    start_run(
+        &workflow(json!({})),
+        RunCaller::new(CallerKind::Manual, "trigger"),
+        1_000,
+        id,
+    )
 }
 
 fn statuses(dir: &MonoDir, workflow_id: &str) -> Vec<(String, RunStatus)> {
@@ -868,8 +937,8 @@ fn a_run_history_that_cannot_be_read_does_not_stop_the_sweep_of_the_others() {
 
 fn counted(extra: Value) -> Workflow {
     let mut base = json!({
-        "inputs": {"count": {"type": "number"}},
-        "inputValues": {"count": 2}
+        "inputs": {"repo": {"type": "project"}, "count": {"type": "number"}},
+        "inputValues": {"repo": "/code/app", "count": 2}
     });
     for (k, v) in extra.as_object().unwrap() {
         base[k] = v.clone();
@@ -891,7 +960,7 @@ fn a_requested_run_uses_its_run_values_and_keeps_the_stored_ones() {
             json!({"runRequested": true, "runValues": {"count": 9}}),
         )],
     );
-    let found = look(&disk, true, &idle);
+    let found = look(&disk, &idle);
     let (run, failure) = runs_of(&found)[0];
     assert!(failure.is_none());
     assert_eq!(run.status, RunStatus::Running);
@@ -913,7 +982,7 @@ fn run_values_that_no_longer_fit_the_definition_fail_the_run() {
             json!({"runRequested": true, "runValues": {"count": "many"}}),
         )],
     );
-    let found = look(&disk, true, &idle);
+    let found = look(&disk, &idle);
     let (run, failure) = runs_of(&found)[0];
     assert_eq!(run.status, RunStatus::Failed);
     assert!(run
@@ -940,7 +1009,7 @@ fn a_scheduled_run_with_a_missing_requirement_fails_with_a_chat_message_and_the_
     let found = look_pf(&disk, &idle, &all_missing);
     let (run, failure) = runs_of(&found)[0];
     assert_eq!(run.status, RunStatus::Failed);
-    assert_eq!(run.trigger, RunTrigger::Schedule);
+    assert_eq!(run.caller, RunCaller::new(CallerKind::Schedule, "trigger"));
     assert_eq!(run.ended_at, Some(now()));
     let error = run.error.as_deref().unwrap();
     assert_eq!(
@@ -971,7 +1040,7 @@ fn a_requested_run_with_a_missing_requirement_fails_the_same_way_and_is_consumed
     );
     let found = look_pf(&disk, &idle, &all_missing);
     let (run, failure) = runs_of(&found)[0];
-    assert_eq!(run.trigger, RunTrigger::Manual);
+    assert_eq!(run.caller, RunCaller::new(CallerKind::Manual, "trigger"));
     assert_eq!(run.status, RunStatus::Failed);
     assert!(run
         .error
@@ -982,7 +1051,7 @@ fn a_requested_run_with_a_missing_requirement_fails_the_same_way_and_is_consumed
     let after = stored_one(&disk);
     assert!(!after.run_requested);
     assert_eq!(after.next_run_at, Some(later));
-    assert!(look(&disk, true, &idle).starts.is_empty());
+    assert!(look(&disk, &idle).starts.is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1016,7 +1085,12 @@ fn a_resume_is_refused_while_a_requirement_is_missing_and_the_run_stays_interrup
         name: "gh".into(),
         hint: None,
     }];
-    let run = mark_interrupted(&start_run(&old, RunTrigger::Manual, 1_000, "run-old"));
+    let run = mark_interrupted(&start_run(
+        &old,
+        RunCaller::new(CallerKind::Manual, "trigger"),
+        1_000,
+        "run-old",
+    ));
     save(
         &disk,
         &[workflow(
@@ -1041,7 +1115,6 @@ fn a_resume_is_refused_while_a_requirement_is_missing_and_the_run_stays_interrup
         &Tick {
             now: now(),
             is_running: &idle,
-            has_chat: true,
             probe: probe_nothing,
             on_claim: &on_claim,
             preflight: &refusing,
@@ -1079,7 +1152,7 @@ fn a_resume_is_refused_while_a_requirement_is_missing_and_the_run_stays_interrup
         RunStatus::Interrupted
     );
     assert_eq!(stored_one(&disk).resume_run_id, None);
-    assert!(look(&disk, true, &idle).starts.is_empty());
+    assert!(look(&disk, &idle).starts.is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1091,7 +1164,7 @@ fn a_resume_goes_ahead_when_the_requirements_are_met_with_the_values_it_started_
     let started = counted(json!({"requires": [{"cli": "gh"}], "runValues": {"count": 9}}));
     let run = mark_interrupted(&start_run(
         &super::model::with_run_values(&started),
-        RunTrigger::Manual,
+        RunCaller::new(CallerKind::Manual, "trigger"),
         1_000,
         "run-old",
     ));

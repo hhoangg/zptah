@@ -358,7 +358,7 @@ fn asking_a_loop_question_shows_waiting() {
     };
     let RunGraph { nodes, .. } = graph(&r, RunView::Lanes);
     assert_eq!(state_of_node(&nodes, "dev").status, RunNodeStatus::Waiting);
-    assert_eq!(state_of_node(&nodes, "dev").label, "Asking the Mono");
+    assert_eq!(state_of_node(&nodes, "dev").label, "Asking the AI");
 }
 
 #[test]

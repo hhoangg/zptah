@@ -1,7 +1,7 @@
 //! Builders shared by the board and run graph tests, ported from `workflowUiFixtures.ts`.
 //! `ticket_workflow` lives in `fixtures.rs`.
 use super::fixtures::node;
-use super::model::{Edge, Node, RunStatus, RunTrigger, Workflow, WorkflowRun};
+use super::model::{CallerKind, Edge, Node, RunCaller, RunStatus, Workflow, WorkflowRun};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -13,8 +13,12 @@ pub fn manual() -> Node {
     n(json!({"id": "trigger", "type": "manual"}))
 }
 
+/// The last step of the fixtures: a command named `report` (there is no Report node any more,
+/// but the board and run graph tests keep a terminal node of that id).
 pub fn report() -> Node {
-    n(json!({"id": "report", "type": "report"}))
+    n(
+        json!({"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}),
+    )
 }
 
 /// trigger -> report, enabled.
@@ -36,7 +40,7 @@ pub fn run() -> WorkflowRun {
         status: RunStatus::Done,
         started_at: 1_000_000,
         ended_at: Some(1_060_000),
-        trigger: RunTrigger::Manual,
+        caller: RunCaller::new(CallerKind::Manual, "trigger"),
         folder_id: None,
         items: BTreeMap::new(),
         nodes: Vec::new(),

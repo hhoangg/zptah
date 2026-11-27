@@ -26,12 +26,10 @@ fn flagged(extra: Value) -> Workflow {
             {"id": "trigger", "type": "manual"},
             {"id": "build", "type": "command", "title": "Build it", "project": "{{inputs.project}}", "command": COMMAND},
             {"id": "fix", "type": "session", "project": "{{inputs.project}}", "checkout": "root", "prompt": "Fix what broke.", "output": {}},
-            {"id": "report", "type": "report"},
         ]),
         json!([
             {"from": "trigger", "to": "build"},
             {"from": "build", "to": "fix"},
-            {"from": "fix", "to": "report"},
         ]),
     )
 }
@@ -477,7 +475,10 @@ fn cancel_and_back_drop_the_review_and_read_the_files_again(cx: &mut TestAppCont
         settle(&s, visual);
         let mut run = monocode_core::mono::workflows::engine::start_run(
             &w,
-            monocode_core::mono::workflows::model::RunTrigger::Manual,
+            monocode_core::mono::workflows::model::RunCaller::new(
+                monocode_core::mono::workflows::model::CallerKind::Manual,
+                "trigger",
+            ),
             1_000,
             selector,
         );

@@ -40,13 +40,8 @@ fn build_then_check() -> Workflow {
                 json!({}),
                 json!({"target": {"kind": "codespace", "instance": {"sameAs": "build"}}}),
             ),
-            report(),
         ],
-        vec![
-            edge("trigger", "build"),
-            edge("build", "check"),
-            edge("check", "report"),
-        ],
+        vec![edge("trigger", "build"), edge("build", "check")],
     )
 }
 
@@ -73,13 +68,11 @@ fn cloud_loop(target: Value, reuse: Option<bool>) -> Workflow {
             trigger(),
             session("dev", json!({"summary": {"type": "string"}}), extra),
             session("review", json!({"verdict": {"type": "string"}}), json!({})),
-            report(),
         ],
         vec![
             edge("trigger", "dev"),
             edge("dev", "review"),
             json!({"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "{{review.verdict}} != \"approve\""}}),
-            edge("review", "report"),
         ],
     )
 }
@@ -197,13 +190,8 @@ fn each_item_of_a_for_each_gets_an_instance_of_its_own(cx: &mut TestAppContext) 
                 json!({}),
                 json!({"parent": "each", "target": {"kind": "codespace", "instance": "new"}}),
             ),
-            report(),
         ],
-        vec![
-            edge("trigger", "fetch"),
-            edge("fetch", "each"),
-            edge("each", "report"),
-        ],
+        vec![edge("trigger", "fetch"), edge("fetch", "each")],
     );
     let rig = Rig::new(&[
         &fenced(
@@ -230,7 +218,12 @@ fn each_item_of_a_for_each_gets_an_instance_of_its_own(cx: &mut TestAppContext) 
 fn a_same_as_step_fails_when_its_source_has_no_session(cx: &mut TestAppContext) {
     let def = build_then_check();
     // `build` finished without ever having had a session.
-    let mut run = start_run(&def, RunTrigger::Manual, 1_000, "run-1");
+    let mut run = start_run(
+        &def,
+        RunCaller::new(CallerKind::Manual, "trigger"),
+        1_000,
+        "run-1",
+    );
     for event in [
         EngineEvent::NodeStarted {
             node_id: "build".into(),
@@ -289,9 +282,8 @@ fn a_cloud_step_that_slipped_past_validation_fails_and_creates_nothing(cx: &mut 
                     json!({}),
                     json!({"target": target, "checkout": checkout}),
                 ),
-                report(),
             ],
-            vec![edge("trigger", "dev"), edge("dev", "report")],
+            vec![edge("trigger", "dev")],
         );
         let rig = Rig::new(&[]);
         assert!(rig.start(cx, &def));
@@ -466,7 +458,12 @@ fn a_resumed_run_goes_on_in_the_instance_of_the_session_it_was_interrupted_in(
     use monocode_core::mono::workflows::engine::mark_interrupted;
     let def = build_then_check();
     // Round 1 of `build` was running in cloud session s9 when the app closed.
-    let mut run = start_run(&def, RunTrigger::Manual, 1_000, "run-old");
+    let mut run = start_run(
+        &def,
+        RunCaller::new(CallerKind::Manual, "trigger"),
+        1_000,
+        "run-old",
+    );
     run = apply_event(
         &run,
         &EngineEvent::NodeStarted {
@@ -531,13 +528,8 @@ fn branch_then_build(target: Value, extra: Value) -> Workflow {
             trigger(),
             session("fetch", json!({"branch": {"type": "string"}}), json!({})),
             session("build", json!({}), build),
-            report(),
         ],
-        vec![
-            edge("trigger", "fetch"),
-            edge("fetch", "build"),
-            edge("build", "report"),
-        ],
+        vec![edge("trigger", "fetch"), edge("fetch", "build")],
     )
 }
 
@@ -642,9 +634,8 @@ fn a_template_in_an_option_that_cannot_hold_one_fails_the_step_and_creates_nothi
             vec![
                 trigger(),
                 session("dev", json!({}), json!({"target": target})),
-                report(),
             ],
-            vec![edge("trigger", "dev"), edge("dev", "report")],
+            vec![edge("trigger", "dev")],
         );
         let rig = Rig::new(&[]);
         assert!(rig.start(cx, &def));
@@ -770,9 +761,8 @@ fn an_account_that_slipped_past_validation_fails_the_step_and_creates_nothing(
                     json!({}),
                     json!({"target": target, "account": account}),
                 ),
-                report(),
             ],
-            vec![edge("trigger", "dev"), edge("dev", "report")],
+            vec![edge("trigger", "dev")],
         );
         let rig = Rig::new(&[]);
         assert!(rig.start(cx, &def));
@@ -855,7 +845,12 @@ fn a_resumed_run_that_is_stopped_names_the_instances_of_the_interrupted_one_and_
 ) {
     use monocode_core::mono::workflows::engine::mark_interrupted;
     let def = build_then_check();
-    let mut run = start_run(&def, RunTrigger::Manual, 1_000, "run-old");
+    let mut run = start_run(
+        &def,
+        RunCaller::new(CallerKind::Manual, "trigger"),
+        1_000,
+        "run-old",
+    );
     run = apply_event(
         &run,
         &EngineEvent::NodeStarted {
@@ -906,7 +901,12 @@ fn a_resumed_run_that_is_stopped_names_the_instances_of_the_interrupted_one_and_
 fn the_report_names_an_instance_its_session_no_longer_tells_about() {
     use monocode_core::mono::workflows::engine::mark_interrupted;
     let def = build_then_check();
-    let mut run = start_run(&def, RunTrigger::Manual, 1_000, "run-1");
+    let mut run = start_run(
+        &def,
+        RunCaller::new(CallerKind::Manual, "trigger"),
+        1_000,
+        "run-1",
+    );
     run = apply_event(
         &run,
         &EngineEvent::NodeStarted {

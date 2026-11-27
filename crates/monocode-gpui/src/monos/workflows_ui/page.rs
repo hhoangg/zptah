@@ -10,10 +10,11 @@ use super::{
 };
 use monocode_core::mono::workflows::{
     model::{
-        InputType, InputValue, NodeKind, RunStatus, Workflow, WorkflowInput, WorkflowRun,
-        interrupted_instances, left_instances_text, trigger_of,
+        InputType, InputValue, RunStatus, Workflow, WorkflowInput, WorkflowRun,
+        interrupted_instances, left_instances_text,
     },
     ordered::js_number_text,
+    schedule::schedule_triggers,
     yaml::{export_path_problem, export_workflow},
 };
 use monocode_core::time::now_ms;
@@ -163,10 +164,7 @@ impl Monos {
         if starting {
             info = info.child(property("Next", "Starting\u{2026}"));
         } else if w.enabled
-            && matches!(
-                trigger_of(&w).map(|n| &n.kind),
-                Some(NodeKind::Schedule { .. })
-            )
+            && !schedule_triggers(&w).is_empty()
             && let Some(next) = w.next_run_at
         {
             info = info.child(property("Next", when(next, now_ms())));

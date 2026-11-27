@@ -71,7 +71,6 @@ pub(super) enum BoardField {
     Title(String),
     Prompt(String),
     Command(String),
-    Question(String),
     Condition(String),
     IfQuestion(String),
     SwitchValue(String),
@@ -79,9 +78,7 @@ pub(super) enum BoardField {
     List(String),
     EachAs(String),
     AtOnce(String),
-    Template(String),
     Limit(String),
-    Answer(String, usize),
     /// The condition of the loop leaving a node (None: the loop being asked for).
     LoopCondition(Option<String>),
     Time(String),
@@ -752,17 +749,6 @@ impl Monos {
                 },
                 cx,
             ),
-            BoardField::Answer(id, at) => self.board_node_edit(
-                id,
-                |n| {
-                    if let NodeKind::AskMono { answers, .. } = &mut n.kind
-                        && let Some(slot) = answers.get_mut(*at)
-                    {
-                        *slot = text;
-                    }
-                },
-                cx,
-            ),
             BoardField::Limit(id) | BoardField::AtOnce(id) => {
                 let number = if text.trim().is_empty() {
                     None
@@ -790,21 +776,16 @@ impl Monos {
             }
             BoardField::Prompt(id)
             | BoardField::Command(id)
-            | BoardField::Question(id)
             | BoardField::Condition(id)
             | BoardField::IfQuestion(id)
             | BoardField::SwitchValue(id)
             | BoardField::SwitchQuestion(id)
             | BoardField::List(id)
-            | BoardField::EachAs(id)
-            | BoardField::Template(id) => self.board_node_edit(
+            | BoardField::EachAs(id) => self.board_node_edit(
                 id,
                 |n| match (&spec, &mut n.kind) {
                     (BoardField::Prompt(_), NodeKind::Session { prompt, .. }) => *prompt = text,
                     (BoardField::Command(_), NodeKind::Command { command, .. }) => *command = text,
-                    (BoardField::Question(_), NodeKind::AskMono { question, .. }) => {
-                        *question = text
-                    }
                     (BoardField::Condition(_), NodeKind::If { condition, .. }) => {
                         *condition = Some(text)
                     }
@@ -819,9 +800,6 @@ impl Monos {
                     }
                     (BoardField::List(_), NodeKind::ForEach { list, .. }) => *list = text,
                     (BoardField::EachAs(_), NodeKind::ForEach { item, .. }) => *item = some(&text),
-                    (BoardField::Template(_), NodeKind::Report { template }) => {
-                        *template = some(&text)
-                    }
                     _ => {}
                 },
                 cx,

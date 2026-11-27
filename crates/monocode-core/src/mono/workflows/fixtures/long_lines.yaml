@@ -3,6 +3,67 @@ name: Long lines
 inputs:
   project:
     type: project
+summaryTemplate: "x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  x
+
+  ctrl\x01 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
 nodes:
   - id: start
     type: manual
@@ -13,76 +74,14 @@ nodes:
     prompt: "Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. "
     output: {}
   - id: q
-    type: askMono
-    question: "A question that is long enough that a folding emitter would wrap it onto several lines: words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words "
-    answers:
+    type: switch
+    cases:
       - short
       - an answer that is also very long and would need folding an answer that is also very long and would need folding an answer that is also very long and would need folding an answer that is also very long and would need folding an answer that is also very long and would need folding end
+    decide: ai
+    question: "A question that is long enough that a folding emitter would wrap it onto several lines: words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words "
   - id: cmd
     type: command
     project: "{{inputs.project}}"
     command: npm run build -- --flag-one --flag-two --flag-three --flag-four --flag-five --flag-six --flag-seven --flag-eight --flag-nine
-  - id: dq
-    type: report
-    template: "x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      x
-
-      ctrl\x01 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
 edges: []

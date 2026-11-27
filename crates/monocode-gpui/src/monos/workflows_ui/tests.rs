@@ -46,7 +46,7 @@ pub(super) fn build(extra: Value, nodes: Value, edges: Value) -> Workflow {
 pub(super) fn workflow(extra: Value) -> Workflow {
     build(
         extra,
-        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}]),
+        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
         json!([{"from": "trigger", "to": "report"}]),
     )
 }
@@ -61,7 +61,7 @@ fn scheduled(extra: Value) -> Workflow {
         all,
         json!([
             {"id": "trigger", "type": "schedule", "schedule": serde_json::from_str::<Value>(SCHEDULE).unwrap()},
-            {"id": "report", "type": "report"},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
         json!([{"from": "trigger", "to": "report"}]),
     )
@@ -91,7 +91,7 @@ fn typed_model(extra: Value) -> Workflow {
             {"id": "trigger", "type": "manual"},
             {"id": "hi", "type": "session", "project": "{{inputs.project}}", "prompt": "hi",
              "checkout": "root", "output": {}, "model": MODEL},
-            {"id": "report", "type": "report"},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
         json!([{"from": "trigger", "to": "hi"}, {"from": "hi", "to": "report"}]),
     )
@@ -236,7 +236,10 @@ fn remove_takes_the_workflow_out_and_empties_its_history() {
     let mut d = disk(vec![workflow(json!({}))]);
     let run = monocode_core::mono::workflows::engine::start_run(
         &workflow(json!({})),
-        monocode_core::mono::workflows::model::RunTrigger::Manual,
+        monocode_core::mono::workflows::model::RunCaller::new(
+            monocode_core::mono::workflows::model::CallerKind::Manual,
+            "trigger",
+        ),
         1,
         "run-1",
     );
@@ -249,7 +252,7 @@ fn remove_takes_the_workflow_out_and_empties_its_history() {
 
 #[test]
 fn removing_a_workflow_first_names_the_instances_its_interrupted_runs_left() {
-    use monocode_core::mono::workflows::model::{RunInstance, RunStatus, RunTrigger};
+    use monocode_core::mono::workflows::model::{CallerKind, RunCaller, RunInstance, RunStatus};
     let mut d = disk(vec![workflow(json!({}))]);
     let used = |name: &str| RunInstance {
         kind: "codespace".into(),
@@ -261,7 +264,7 @@ fn removing_a_workflow_first_names_the_instances_its_interrupted_runs_left() {
     let new_run = |id: &str, status: RunStatus, instance: &str| {
         let mut run = monocode_core::mono::workflows::engine::start_run(
             &workflow(json!({})),
-            RunTrigger::Manual,
+            RunCaller::new(CallerKind::Manual, "trigger"),
             1,
             id,
         );
@@ -292,12 +295,12 @@ fn removing_a_workflow_first_names_the_instances_its_interrupted_runs_left() {
 fn removing_a_workflow_from_its_own_page_still_shows_the_instances_it_left(
     cx: &mut TestAppContext,
 ) {
-    use monocode_core::mono::workflows::model::{RunInstance, RunStatus, RunTrigger};
+    use monocode_core::mono::workflows::model::{CallerKind, RunCaller, RunInstance, RunStatus};
     let s = setup(cx);
     put(&s, vec![workflow(json!({}))]);
     let mut run = monocode_core::mono::workflows::engine::start_run(
         &workflow(json!({})),
-        RunTrigger::Manual,
+        RunCaller::new(CallerKind::Manual, "trigger"),
         1,
         "run-1",
     );
@@ -400,7 +403,7 @@ fn approve_changes_nothing_when_the_stored_definition_is_not_the_one_reviewed() 
             json!([
                 {"id": "trigger", "type": "manual"},
                 {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": text},
-                {"id": "report", "type": "report"},
+                {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
             ]),
             json!([{"from": "trigger", "to": "build"}, {"from": "build", "to": "report"}]),
         )
@@ -570,7 +573,10 @@ fn a_row_says_what_the_workflow_is_doing() {
 fn branches_count_nodes_at_work_not_the_group_itself() {
     let mut run = monocode_core::mono::workflows::engine::start_run(
         &workflow(json!({})),
-        monocode_core::mono::workflows::model::RunTrigger::Manual,
+        monocode_core::mono::workflows::model::RunCaller::new(
+            monocode_core::mono::workflows::model::CallerKind::Manual,
+            "trigger",
+        ),
         1,
         "run-live",
     );
@@ -889,8 +895,8 @@ fn waiting(extra: Value) -> Workflow {
         extra,
         json!([
             {"id": "trigger", "type": "manual"},
-            {"id": "ask", "type": "askMono", "question": "Ship it?", "answers": ["yes", "no"]},
-            {"id": "report", "type": "report"},
+            {"id": "ask", "type": "switch", "decide": "ai", "question": "Ship it?", "cases": ["yes", "no"]},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
         json!([{"from": "trigger", "to": "ask"}, {"from": "ask", "to": "report"}]),
     )
@@ -1037,7 +1043,10 @@ fn the_page_lists_recent_runs_newest_first_and_opens_one(cx: &mut TestAppContext
     put(&s, vec![w.clone()]);
     let mut done = monocode_core::mono::workflows::engine::start_run(
         &w,
-        monocode_core::mono::workflows::model::RunTrigger::Manual,
+        monocode_core::mono::workflows::model::RunCaller::new(
+            monocode_core::mono::workflows::model::CallerKind::Manual,
+            "trigger",
+        ),
         1_000,
         "run-1",
     );

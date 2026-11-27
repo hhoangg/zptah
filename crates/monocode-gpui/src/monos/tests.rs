@@ -5011,8 +5011,8 @@ mod reset_flow {
 fn workflow_input(name: &str) -> Value {
     json!({"workflow": {
         "name": name,
-        "nodes": [{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}],
-        "edges": [{"from": "trigger", "to": "report"}]
+        "nodes": [{"id": "trigger", "type": "manual"}],
+        "edges": []
     }})
 }
 
@@ -5065,8 +5065,11 @@ fn workflow_actions_work_from_the_mono_chat_and_signal_the_runner(cx: &mut TestA
     .unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(
-        runs[0].trigger,
-        monocode_core::mono::workflows::model::RunTrigger::Manual
+        runs[0].caller,
+        monocode_core::mono::workflows::model::RunCaller::new(
+            monocode_core::mono::workflows::model::CallerKind::Manual,
+            "trigger"
+        )
     );
     assert!(!signals.take_check_now(), "the look answered the request");
     // stop and the running flag come from what the runner reports.

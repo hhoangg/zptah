@@ -195,13 +195,13 @@ fn loop_row(preview: &ImportPreview, from: &str, to: &str, rounds: f64, decide: 
             step_name(preview, to),
             monocode_core::mono::workflows::ordered::js_number_text(rounds),
         ),
-        if decide == "mono" {
+        if monocode_core::mono::workflows::parse::is_ai_decide(decide) {
             div()
                 .px_0p5()
                 .text_size(px(12.))
                 .line_height(px(20.))
                 .text_color(content(0.75))
-                .child("The Mono decides each time whether it repeats.")
+                .child("The AI decides each time whether it repeats.")
         } else {
             verbatim(decide)
         },

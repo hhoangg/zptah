@@ -1,4 +1,4 @@
-//! One look at a Mono's workflow files (the tick of `useMonoWorkflows.ts`): which runs to start,
+//! One look at the workflow files (the tick of `useMonoWorkflows.ts`): which runs to start,
 //! which interrupted runs to resume, which runs to stop. It does the file work and the model
 //! catalog probing, so it blocks and belongs off the UI thread; starting what it found is the
 //! runner's job (`monocode-gpui`).
@@ -6,14 +6,14 @@
 //! Order within a look, as in TS: requests left in the file (`resumeRunId`, `stopRequested`), then
 //! the workflows whose schedule only has to move on, then each due workflow is claimed (re-checked
 //! against the newest file inside the save) and turned into a run. A workflow whose definition or
-//! models are unusable gets a run that is already failed, with the message for the Mono's chat.
+//! models are unusable gets a run that is already failed, with the message to show the user.
 use std::collections::HashSet;
 
 use super::engine::{mark_interrupted, start_run};
-use super::model::{with_run_values, RunStatus, RunTrigger, Workflow, WorkflowRun};
+use super::model::{with_run_values, CallerKind, RunCaller, RunStatus, Workflow, WorkflowRun};
 use super::models::{harnesses_used, workflow_issues, ModelCatalog, Probe};
 use super::preflight::{union_requires, Preflight};
-use super::schedule::{after_claim, due_workflows};
+use super::schedule::{after_claim, due_schedule_trigger, due_workflows};
 use super::store::{
     load_runs, load_workflows, take_requests, update_runs, update_workflows, MonoFiles,
 };
@@ -25,8 +25,6 @@ pub struct Tick<'a> {
     pub now: u64,
     /// Whether a run of the workflow is going (the runner's answer).
     pub is_running: &'a dyn Fn(&str) -> bool,
-    /// Workflows are reported in the Mono's chat, so a Mono that has none starts nothing.
-    pub has_chat: bool,
     /// How a harness is probed for the model catalog (tests must not reach real CLIs).
     pub probe: fn(Kind) -> Probe,
     /// Called as soon as a workflow is claimed (or a resume of it is taken) from the file, before its catalog is probed (which
@@ -39,7 +37,7 @@ pub struct Tick<'a> {
     pub preflight: &'a dyn Fn(&Workflow) -> Preflight,
 }
 
-/// The message for the Mono's chat when a run could not even start.
+/// The message to show when a run could not even start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
     pub title: String,
@@ -57,7 +55,7 @@ pub enum Start {
     /// An interrupted run asked to continue, as stored.
     Resume { run: WorkflowRun },
     /// An interrupted run asked to continue that may not resume yet (a requirement is missing).
-    /// The run stays interrupted; `failure` is for the Mono's chat.
+    /// The run stays interrupted; `failure` says why.
     Refused {
         workflow_id: String,
         workflow_name: String,
@@ -114,15 +112,29 @@ fn claim(
 }
 
 /// The run for a claimed workflow: running, or already failed with the message to post.
+/// Who started a claimed run: the caller recorded with the request, else the user (manual) when
+/// a run was requested, else the schedule trigger that came due.
+fn caller_of(claimed: &Workflow, now: u64) -> RunCaller {
+    if claimed.run_requested {
+        if let Some(caller) = &claimed.run_caller {
+            return caller.clone();
+        }
+        let node = claimed
+            .nodes
+            .iter()
+            .find(|n| n.parent.is_none() && matches!(n.kind, super::model::NodeKind::Manual))
+            .or_else(|| claimed.first_trigger());
+        return RunCaller::new(CallerKind::Manual, node.map_or("", |n| n.id.as_str()));
+    }
+    let node = due_schedule_trigger(claimed, now).or_else(|| claimed.first_trigger());
+    RunCaller::new(CallerKind::Schedule, node.map_or("", |n| n.id.as_str()))
+}
+
 fn begin(claimed: &Workflow, tick: &Tick, run_id: &str) -> Start {
-    let trigger = if claimed.run_requested {
-        RunTrigger::Manual
-    } else {
-        RunTrigger::Schedule
-    };
+    let caller = caller_of(claimed, tick.now);
     // The run sees the values asked for this run laid over the stored ones, and keeps only that.
     let effective = with_run_values(claimed);
-    let mut run = start_run(&effective, trigger, tick.now, run_id);
+    let mut run = start_run(&effective, caller, tick.now, run_id);
     let catalog = ModelCatalog::for_harnesses(&harnesses_used(&effective), tick.probe);
     let mut messages: Vec<String> = workflow_issues(&effective, &catalog)
         .into_iter()
@@ -197,7 +209,7 @@ fn resume_or_refuse(run: WorkflowRun, live: Option<&Workflow>, tick: &Tick) -> S
     }
 }
 
-/// Looks at the Mono's workflows once. A request or workflow that cannot be handled is reported
+/// Looks at the workflows once. A request or workflow that cannot be handled is reported
 /// on stderr and skipped, so one bad entry does not hold up the others; an error is returned
 /// only when the workflow file itself cannot be read.
 pub fn check(files: &impl MonoFiles, tick: &Tick) -> Result<Found, String> {
@@ -211,9 +223,8 @@ pub fn check(files: &impl MonoFiles, tick: &Tick) -> Result<Found, String> {
             Ok(taken) => {
                 found.stops = taken.stops;
                 for request in taken.resumes {
-                    // A Mono without a chat has nowhere to report, and a workflow that is going
-                    // is not resumed over itself.
-                    if !tick.has_chat || (tick.is_running)(&request.workflow_id) {
+                    // A workflow that is going is not resumed over itself.
+                    if (tick.is_running)(&request.workflow_id) {
                         continue;
                     }
                     match load_runs(files, &request.workflow_id) {
@@ -280,9 +291,6 @@ pub fn check(files: &impl MonoFiles, tick: &Tick) -> Result<Found, String> {
         }) {
             warn("Could not move workflow schedules on", &error);
         }
-    }
-    if !tick.has_chat {
-        return Ok(found);
     }
     let to_run: Vec<String> = due.run.iter().map(|w| w.id.clone()).collect();
     for id in to_run {

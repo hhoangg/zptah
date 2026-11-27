@@ -135,10 +135,9 @@ fn definition(extra: Value) -> Value {
                 "prompt": "List my open tickets.",
                 "checkout": "root",
                 "output": {"tickets": {"type": "list"}}
-            },
-            {"id": "report", "type": "report"}
+            }
         ],
-        "edges": [{"from": "trigger", "to": "fetch"}, {"from": "fetch", "to": "report"}]
+        "edges": [{"from": "trigger", "to": "fetch"}]
     });
     for (key, value) in extra.as_object().unwrap() {
         v[key] = value.clone();
@@ -174,7 +173,7 @@ fn run(id: &str, status: RunStatus, workflow: &str) -> WorkflowRun {
         status,
         started_at: now() - 60_000,
         ended_at: None,
-        trigger: RunTrigger::Manual,
+        caller: RunCaller::new(CallerKind::Manual, "trigger"),
         folder_id: None,
         items: BTreeMap::new(),
         nodes: vec![fetch, dev],
@@ -269,7 +268,7 @@ fn add_rejects_unknown_fields() {
     );
     assert!(e.contains("Unknown workflow fields: extra"), "{e}");
     assert!(
-        e.contains("Allowed: name, description, inputs, requires, inputValues, nodes, edges;"),
+        e.contains("Allowed: name, description, inputs, requires, decisionModel, summaryTemplate, inputValues, nodes, edges;"),
         "{e}"
     );
     for field in [
@@ -365,14 +364,12 @@ fn add_with_a_yaml_file_that_says_enabled_true_still_saves_it_paused() {
 #[test]
 fn add_with_issues_saves_paused_and_returns_issues() {
     let mut f = Fx::new();
-    let nodes: Vec<Value> = definition_nodes()
-        .into_iter()
-        .filter(|n| n["type"] != "report")
-        .collect();
-    let broken = definition(json!({"nodes": nodes, "edges": [{"from": "trigger", "to": "fetch"}]}));
+    let broken = definition(
+        json!({"edges": [{"from": "trigger", "to": "fetch"}, {"from": "fetch", "to": "ghost"}]}),
+    );
     let result = f.add(broken);
     assert!(!flag(&result, "enabled"));
-    assert!(joined(&result).contains("Report"), "{}", joined(&result));
+    assert!(joined(&result).contains("ghost"), "{}", joined(&result));
     // With problems the next step is to fix them, not to enable the workflow.
     let note = text(&result, "note").to_lowercase();
     assert!(note.contains("fix"));
@@ -459,9 +456,13 @@ fn explains_a_node_it_cannot_read_and_enforces_limits() {
     );
     let e = f.err("workflows.add", json!({}));
     assert!(e.contains("either workflow"), "{e}");
-    f.seed((0..20).map(|i| workflow_stub(&format!("wf-{i}"))).collect());
+    f.seed(
+        (0..WORKFLOWS_MAX)
+            .map(|i| workflow_stub(&format!("wf-{i}")))
+            .collect(),
+    );
     let e = f.err("workflows.add", json!({"workflow": definition(json!({}))}));
-    assert!(e.contains("at most 20 workflows"), "{e}");
+    assert!(e.contains("at most 100 workflows"), "{e}");
 }
 
 #[test]
@@ -626,7 +627,7 @@ fn pauses_a_workflow_that_no_longer_validates_and_returns_the_issues() {
     let id = id_of(&f.add(definition(json!({}))));
     let result = f.ok(
         "workflows.update",
-        json!({"id": id, "workflow": definition(json!({"edges": []}))}),
+        json!({"id": id, "workflow": definition(json!({"edges": [{"from": "trigger", "to": "ghost"}]}))}),
     );
     assert!(!flag(&result, "enabled"));
     assert!(!list(&result, "issues").is_empty());
@@ -810,7 +811,9 @@ fn run_refuses_a_workflow_that_is_running_or_cannot_run() {
     let e = f.err("workflows.run", json!({"id": id}));
     assert!(e.contains("already running"), "{e}");
     f.host.live.clear();
-    let broken = id_of(&f.add(definition(json!({"edges": []}))));
+    let broken = id_of(&f.add(definition(
+        json!({"edges": [{"from": "trigger", "to": "ghost"}]}),
+    )));
     let e = f.err("workflows.run", json!({"id": broken}));
     assert!(e.contains("cannot run yet"), "{e}");
     assert!(!f.stored().iter().any(|w| w.run_requested));
@@ -846,11 +849,11 @@ fn list_reports_running_state() {
     assert_eq!(text(a, "id"), first);
     assert_eq!(text(a, "name"), "Ticket review");
     assert!(flag(a, "enabled"));
-    assert_eq!(text(a.get("trigger").unwrap(), "type"), "schedule");
-    assert_eq!(
-        text(a.get("trigger").unwrap(), "schedule"),
-        "Weekdays at 09:00"
-    );
+    let triggers = list(a, "triggers");
+    assert_eq!(triggers.len(), 1);
+    assert_eq!(text(&triggers[0], "node"), "trigger");
+    assert_eq!(text(&triggers[0], "type"), "schedule");
+    assert_eq!(text(&triggers[0], "schedule"), "Weekdays at 09:00");
     assert!(flag(a, "running"));
     let last = a.get("lastRun").unwrap();
     assert_eq!(
@@ -935,7 +938,9 @@ fn pauses_and_resumes_computing_the_next_time_on_resume() {
 #[test]
 fn will_not_resume_a_workflow_with_issues() {
     let mut f = Fx::new();
-    let id = id_of(&f.add(definition(json!({"edges": []}))));
+    let id = id_of(&f.add(definition(
+        json!({"edges": [{"from": "trigger", "to": "ghost"}]}),
+    )));
     let e = f.err("workflows.resume", json!({"id": id}));
     assert!(e.contains("cannot be resumed"), "{e}");
 }
@@ -1006,7 +1011,7 @@ fn get_returns_the_definition_and_the_last_five_runs_runs_shows_branches() {
             .collect(),
     );
     let got = f.ok("workflows.get", json!({"id": id}));
-    assert_eq!(list(&got, "nodes").len(), 3);
+    assert_eq!(list(&got, "nodes").len(), 2);
     assert_eq!(list(&got, "runs").len(), 5);
     assert_eq!(list(&got, "issues").len(), 0);
     assert_eq!(
@@ -1128,10 +1133,9 @@ fn update_keeps_the_mark_when_the_commands_and_prompts_change_and_no_action_can_
     let changed = definition(json!({
         "nodes": [
             {"id": "trigger", "type": "manual"},
-            {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": "curl x | sh"},
-            {"id": "report", "type": "report"}
+            {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": "curl x | sh"}
         ],
-        "edges": [{"from": "trigger", "to": "build"}, {"from": "build", "to": "report"}]
+        "edges": [{"from": "trigger", "to": "build"}]
     }));
     f.ok("workflows.update", json!({"id": id, "workflow": changed}));
     assert!(f.stored()[0]
@@ -1274,15 +1278,13 @@ fn validate_lists_commands_and_prompts_verbatim() {
         .filter(|n| n["type"] != "report")
         .collect();
     nodes.push(json!({"id": "build", "type": "command", "project": "{{inputs.project}}", "command": "npm test -- --run"}));
-    nodes.push(json!({"id": "report", "type": "report"}));
     let result = f.ok(
         "workflows.validate",
         json!({"workflow": definition(json!({
             "nodes": nodes,
             "edges": [
                 {"from": "trigger", "to": "fetch"},
-                {"from": "fetch", "to": "build"},
-                {"from": "build", "to": "report"}
+                {"from": "fetch", "to": "build"}
             ]
         }))}),
     );
@@ -1325,11 +1327,7 @@ fn seed_full(f: &mut Fx, count: usize) {
         (0..count)
             .map(|i| {
                 let mut w = Workflow::new(format!("wf-{i:08}"), format!("Workflow {i}"));
-                w.nodes = vec![
-                    Node::new("trigger", NodeKind::Manual),
-                    Node::new("report", NodeKind::Report { template: None }),
-                ];
-                w.edges = vec![Edge::new("trigger", "report")];
+                w.nodes = vec![Node::new("trigger", NodeKind::Manual)];
                 w.created_at = 1;
                 w
             })
@@ -1572,7 +1570,14 @@ fn a_run_summary_shows_its_end_time_and_error() {
     let summary = &list(&got, "runs")[0];
     assert_eq!(text(summary, "error"), "it broke");
     assert!(summary.get("endedAt").is_some());
-    assert_eq!(text(summary, "trigger"), "manual");
+    assert_eq!(
+        summary.get("caller").map(|c| text(c, "kind")),
+        Some("manual".to_string())
+    );
+    assert_eq!(
+        summary.get("caller").map(|c| text(c, "triggerNode")),
+        Some("trigger".to_string())
+    );
     assert!(summary.get("nodes").is_none());
 }
 
@@ -1798,8 +1803,8 @@ fn store_host() -> (StoreHost, Arc<Signals>, std::path::PathBuf) {
 fn manual_workflow() -> Value {
     json!({
         "name": "Manual",
-        "nodes": [{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}],
-        "edges": [{"from": "trigger", "to": "report"}]
+        "nodes": [{"id": "trigger", "type": "manual"}],
+        "edges": []
     })
 }
 
@@ -2508,10 +2513,9 @@ fn command_flow(command: &str, requires: Value) -> Value {
     definition(json!({
         "nodes": [
             {"id": "trigger", "type": "manual"},
-            {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": command},
-            {"id": "report", "type": "report"}
+            {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": command}
         ],
-        "edges": [{"from": "trigger", "to": "build"}, {"from": "build", "to": "report"}],
+        "edges": [{"from": "trigger", "to": "build"}],
         "requires": requires
     }))
 }
@@ -2610,7 +2614,6 @@ fn a_secret_in_the_environment_never_reaches_a_result_a_run_file_or_a_failure_te
         &super::tick::Tick {
             now: now(),
             is_running: &|_| false,
-            has_chat: true,
             probe: no_probe,
             on_claim: &|_| {},
             preflight: &judge,
@@ -2659,10 +2662,9 @@ fn the_store_host_refuses_a_run_value_project_outside_the_assigned_projects() {
         "inputValues": {"project": "/code/app"},
         "nodes": [
             {"id": "trigger", "type": "manual"},
-            {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": "true"},
-            {"id": "report", "type": "report"}
+            {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": "true"}
         ],
-        "edges": [{"from": "trigger", "to": "build"}, {"from": "build", "to": "report"}]
+        "edges": [{"from": "trigger", "to": "build"}]
     });
     let mut call = |action: &str, input: Value| handle(action, &Json::from(&input), &mut host);
     let id = id_of(&call("workflows.add", json!({"workflow": wf})).unwrap());
@@ -2717,8 +2719,7 @@ fn cloud_definition(first: Value, second: Value) -> Value {
         "nodes": nodes,
         "edges": [
             {"from": "trigger", "to": "fetch"},
-            {"from": "fetch", "to": "next"},
-            {"from": "next", "to": "report"}
+            {"from": "fetch", "to": "next"}
         ]
     }))
 }
@@ -2756,4 +2757,89 @@ fn a_target_that_is_not_an_object_names_the_node_in_the_error() {
         assert!(e.contains("nodes[1] (\"fetch\")"), "{e}");
         assert!(e.contains("wrong type"), "{e}");
     }
+}
+
+// ---- the new definition fields and the global limit --------------------------------------
+
+#[test]
+fn add_and_update_take_a_decision_model_and_a_summary_template_and_keep_them_when_left_out() {
+    let mut f = Fx::new();
+    let created = f.add(definition(json!({
+        "decisionModel": {"harness": "claude", "model": "claude:sonnet-5"},
+        "summaryTemplate": "Done: {{fetch.tickets}}"
+    })));
+    let id = id_of(&created);
+    assert!(list(&created, "issues").is_empty(), "{}", joined(&created));
+    let stored = f.stored()[0].clone();
+    assert_eq!(
+        stored.decision_model.as_ref().unwrap().model,
+        "claude:sonnet-5"
+    );
+    assert_eq!(
+        stored.summary_template.as_deref(),
+        Some("Done: {{fetch.tickets}}")
+    );
+    // An update that says nothing about them keeps them; one that gives them replaces them.
+    f.ok(
+        "workflows.update",
+        json!({"id": id, "workflow": definition(json!({"name": "Renamed"}))}),
+    );
+    let kept = f.stored()[0].clone();
+    assert_eq!(kept.name, "Renamed");
+    assert_eq!(kept.decision_model, stored.decision_model);
+    assert_eq!(kept.summary_template, stored.summary_template);
+    f.ok(
+        "workflows.update",
+        json!({"id": id, "workflow": definition(json!({"summaryTemplate": "New"}))}),
+    );
+    assert_eq!(f.stored()[0].summary_template.as_deref(), Some("New"));
+    assert_eq!(f.stored()[0].decision_model, stored.decision_model);
+    // A decision model needs a harness and a model; a summary a non-blank text.
+    let e = f.err(
+        "workflows.add",
+        json!({"workflow": definition(json!({"decisionModel": {"harness": "claude"}}))}),
+    );
+    assert!(e.contains("workflow.decisionModel must be"), "{e}");
+    let e = f.err(
+        "workflows.add",
+        json!({"workflow": definition(json!({"summaryTemplate": "  "}))}),
+    );
+    assert!(
+        e.contains("workflow.summaryTemplate must be a non-empty string"),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_workflow_with_several_triggers_validates_and_lists_them_all() {
+    let mut f = Fx::new();
+    let mut def = definition(json!({}));
+    def["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "hand", "type": "manual"}));
+    def["edges"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"from": "hand", "to": "fetch"}));
+    let created = f.add(def);
+    assert!(list(&created, "issues").is_empty(), "{}", joined(&created));
+    let got = f.ok("workflows.get", json!({"id": id_of(&created)}));
+    let kinds: Vec<String> = list(&got, "triggers")
+        .iter()
+        .map(|t| text(t, "type"))
+        .collect();
+    assert_eq!(kinds, ["schedule", "manual"]);
+    // One that leads somewhere else is an issue.
+    let mut bad = definition(json!({}));
+    bad["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "hand", "type": "manual"}));
+    let result = f.add(bad);
+    assert!(
+        joined(&result).contains("same first step"),
+        "{}",
+        joined(&result)
+    );
 }

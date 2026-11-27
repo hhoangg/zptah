@@ -166,24 +166,20 @@ pub enum NodeType {
     Manual,
     Session,
     Command,
-    AskMono,
     If,
     Switch,
     ForEach,
-    Report,
 }
 
 impl NodeType {
-    pub const ALL: [NodeType; 9] = [
+    pub const ALL: [NodeType; 7] = [
         Self::Schedule,
         Self::Manual,
         Self::Session,
         Self::Command,
-        Self::AskMono,
         Self::If,
         Self::Switch,
         Self::ForEach,
-        Self::Report,
     ];
 
     /// The `type` tag as written in the file.
@@ -193,11 +189,9 @@ impl NodeType {
             Self::Manual => "manual",
             Self::Session => "session",
             Self::Command => "command",
-            Self::AskMono => "askMono",
             Self::If => "if",
             Self::Switch => "switch",
             Self::ForEach => "forEach",
-            Self::Report => "report",
         }
     }
 
@@ -207,11 +201,9 @@ impl NodeType {
             NodeKind::Manual => Self::Manual,
             NodeKind::Session { .. } => Self::Session,
             NodeKind::Command { .. } => Self::Command,
-            NodeKind::AskMono { .. } => Self::AskMono,
             NodeKind::If { .. } => Self::If,
             NodeKind::Switch { .. } => Self::Switch,
             NodeKind::ForEach { .. } => Self::ForEach,
-            NodeKind::Report { .. } => Self::Report,
         }
     }
 
@@ -221,11 +213,9 @@ impl NodeType {
             Self::Schedule | Self::Manual => "trigger",
             Self::Session => "session",
             Self::Command => "command",
-            Self::AskMono => "ask",
             Self::If => "check",
             Self::Switch => "route",
             Self::ForEach => "each",
-            Self::Report => "report",
         }
     }
 }
@@ -250,7 +240,7 @@ pub fn is_group(node: &Node) -> bool {
 
 /// Whether a node may sit inside a For each.
 pub fn groupable(node: &Node) -> bool {
-    !is_group(node) && !matches!(node.kind, NodeKind::Report { .. }) && !node.is_trigger()
+    !is_group(node) && !node.is_trigger()
 }
 
 fn point_of(ui: Ui) -> Point {
@@ -616,7 +606,7 @@ pub enum ConnectionKind {
 }
 
 /// What dragging a connection from `from` to `to` makes. A loop is a connection back to an
-/// ancestor in the same branch, allowed from a session, command or Ask Mono node that has no
+/// ancestor in the same branch, allowed from a session or command node that has no
 /// loop yet; anything else that would break the graph's rules is invalid. `handle` is the If
 /// or Switch handle the connection leaves from; either may send two handles to one node.
 pub fn connection_kind(
@@ -634,7 +624,7 @@ pub fn connection_kind(
             return ConnectionKind::Invalid;
         }
     }
-    if from == to || b.is_trigger() || matches!(a.kind, NodeKind::Report { .. }) {
+    if from == to || b.is_trigger() {
         return ConnectionKind::Invalid;
     }
     if a.parent != b.parent {
@@ -647,10 +637,7 @@ pub fn connection_kind(
         return ConnectionKind::Invalid;
     }
     if reaches(w, to, from) {
-        let can_loop = matches!(
-            a.kind,
-            NodeKind::Session { .. } | NodeKind::Command { .. } | NodeKind::AskMono { .. }
-        );
+        let can_loop = matches!(a.kind, NodeKind::Session { .. } | NodeKind::Command { .. });
         if !can_loop
             || w.edges
                 .iter()
@@ -719,19 +706,15 @@ pub fn new_node(ty: NodeType, w: &Workflow) -> Node {
             cwd: None,
             timeout_minutes: None,
         },
-        NodeType::AskMono => NodeKind::AskMono {
-            question: String::new(),
-            answers: vec!["yes".into(), "no".into()],
-        },
         NodeType::If => NodeKind::If {
             condition: None,
-            decide: Some(Decide::Mono),
+            decide: Some(Decide::Ai),
             question: None,
         },
         NodeType::Switch => NodeKind::Switch {
             value: None,
             cases: vec!["a".into(), "b".into()],
-            decide: Some(Decide::Mono),
+            decide: Some(Decide::Ai),
             question: None,
         },
         NodeType::ForEach => NodeKind::ForEach {
@@ -739,7 +722,6 @@ pub fn new_node(ty: NodeType, w: &Workflow) -> Node {
             item: Some("item".into()),
             max_parallel: Some(3.0),
         },
-        NodeType::Report => NodeKind::Report { template: None },
     };
     Node::new(id, kind)
 }
@@ -1105,21 +1087,13 @@ pub fn issues_by_node(issues: &[WorkflowIssue]) -> HashMap<NodeId, Vec<String>> 
 
 // --- whole workflows ---------------------------------------------------------------------------------
 
-/// A workflow to start from: a manual trigger into a Report node, paused. `now` is the creation
-/// time in ms.
+/// A workflow to start from: a manual trigger, paused. `now` is the creation time in ms.
 pub fn blank_workflow(now: u64) -> Workflow {
     let mut trigger = Node::new("trigger", NodeKind::Manual);
     trigger.title = Some("Manual trigger".into());
     trigger.ui = Some(Ui { x: 0.0, y: 0.0 });
-    let mut report = Node::new("report", NodeKind::Report { template: None });
-    report.title = Some("Report to Mono".into());
-    report.ui = Some(Ui {
-        x: 0.0,
-        y: f64::from(NODE_H + GAP_Y),
-    });
     let mut w = Workflow::new(new_workflow_id(), "New workflow");
-    w.nodes = vec![trigger, report];
-    w.edges = vec![Edge::new("trigger", "report")];
+    w.nodes = vec![trigger];
     w.created_at = now;
     w
 }
@@ -1152,6 +1126,21 @@ pub fn definition_key(w: &Workflow) -> String {
     });
     if let (Some(map), false) = (value.as_object_mut(), w.requires.is_empty()) {
         map.insert("requires".into(), to_value(&w.requires));
+    }
+    if let Some(map) = value.as_object_mut() {
+        if let Some(model) = &w.decision_model {
+            map.insert("decisionModel".into(), to_value(model));
+        }
+        if let Some(report_to) = &w.report_to {
+            map.insert("reportTo".into(), to_value(report_to));
+        }
+        if let Some(template) = w
+            .summary_template
+            .as_deref()
+            .filter(|t| !js_trim(t).is_empty())
+        {
+            map.insert("summaryTemplate".into(), json!(template));
+        }
     }
     stable_json(&value)
 }

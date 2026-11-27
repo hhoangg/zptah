@@ -7,14 +7,20 @@ description: |
 inputs:
   project:
     type: project
+summaryTemplate: |2+
+    Leading spaces
+  Second line   
+
+
+  after blank
+
 nodes:
   - id: start
     type: manual
     title: "- dash start"
   - id: a
-    type: askMono
-    question: "true"
-    answers:
+    type: switch
+    cases:
       - "null"
       - "~"
       - ""
@@ -81,6 +87,8 @@ nodes:
       - back\slash
       - "a\rb"
       - "a\r\nb"
+    decide: ai
+    question: "true"
   - id: b
     type: if
     condition: '{{a.answer}} == "yes"'
@@ -91,13 +99,4 @@ nodes:
     command: |
       echo 'it''s' "x" && grep -E 'a|b' file # comment: x
       	indented
-  - id: d
-    type: report
-    template: |2+
-        Leading spaces
-      Second line   
-
-
-      after blank
-
 edges: []

@@ -23,7 +23,7 @@ use monocode_core::mono::workflows::{
     },
     ordered::{Json, OrderedMap, js_number_text},
     output::{output_reask, parse_workflow_output},
-    report::{ask_mono_prompt, compose_report, parse_mono_decision},
+    report::compose_report,
     template::render_template,
 };
 use std::{
@@ -47,7 +47,7 @@ mod text;
 
 pub(crate) use api::*;
 pub(super) use host::Live;
-use text::{cap_map, cap_string, clip, run_folder_name, utf16_tail};
+use text::{cap_map, clip, run_folder_name, utf16_tail};
 
 pub(crate) type Fut<T> = Pin<Box<dyn Future<Output = T>>>;
 
@@ -963,39 +963,24 @@ impl Exec {
         });
     }
 
+    /// An AI decision (If, Switch or loop). Not wired yet: the runner that moves out of the
+    /// Mono code runs these with `decision_model_for` and a one-shot call, so for now the node
+    /// fails with a clear reason instead of asking a Mono.
     async fn run_ask(self: &Rc<Self>, action: &EngineAction) {
-        let EngineAction::AskMono {
-            node_id,
-            branch,
-            answers,
-            ..
+        let EngineAction::Decide {
+            node_id, branch, ..
         } = action
         else {
             return;
         };
-        let name = self.state.borrow().run.definition.name.clone();
-        let prompt = ask_mono_prompt(action, &name).unwrap_or_default();
-        let asking = self.host.ask_mono(&self.mono_id, prompt);
-        let deadline = self.sleep(self.limits.ask_timeout_ms);
-        // Stop abandons the question (its hidden session ends on its own).
-        let reply = match race(race(asking, deadline), self.stop.wait()).await {
-            Either::Right(()) => return,
-            Either::Left(Either::Right(())) => Err("The Mono did not answer in time".to_string()),
-            Either::Left(Either::Left(reply)) => reply,
-        };
         if !self.live() {
             return;
         }
-        match reply.and_then(|reply| parse_mono_decision(&reply, answers)) {
-            Err(error) => self.fail(node_id, branch, error),
-            Ok(decision) => self.apply(EngineEvent::Decided {
-                node_id: node_id.clone(),
-                branch: branch.clone(),
-                value: decision.value,
-                reason: decision.reason.map(|reason| cap_string(&reason)),
-                at: now(),
-            }),
-        }
+        self.fail(
+            node_id,
+            branch,
+            "AI decisions are not wired yet".to_string(),
+        );
     }
 
     /// Kills every command this run still has going. Never fails.
@@ -1048,8 +1033,8 @@ impl Exec {
                         branch,
                         command,
                     } => this.run_command(node_id, branch, command).await,
-                    ref ask @ EngineAction::AskMono { .. } => this.run_ask(ask).await,
-                    EngineAction::PostReport => {}
+                    ref ask @ EngineAction::Decide { .. } => this.run_ask(ask).await,
+                    EngineAction::PostSummary => {}
                 }
                 this.active.set(this.active.get() - 1);
                 this.nudge.nudge();
@@ -1120,7 +1105,7 @@ impl Exec {
             };
             let Some(action) = action else { return };
             let (node_id, branch, session_id) = match &action {
-                EngineAction::PostReport => {
+                EngineAction::PostSummary => {
                     if !self.post_report() {
                         return;
                     }
@@ -1135,7 +1120,7 @@ impl Exec {
                 EngineAction::RunCommand {
                     node_id, branch, ..
                 }
-                | EngineAction::AskMono {
+                | EngineAction::Decide {
                     node_id, branch, ..
                 } => (node_id, branch, None),
             };
@@ -1250,6 +1235,10 @@ impl Exec {
                 break;
             }
             self.nudge.wait().await;
+        }
+        // The run has ended on its own: deliver its summary once (a stop posts its own).
+        if !self.stopping.get() && !self.quitting.get() {
+            self.post_report();
         }
         // Stop ends commands and sessions at once, a session notices within a poll and a command
         // has its node timeout. A question to the Mono and a start that has not returned are

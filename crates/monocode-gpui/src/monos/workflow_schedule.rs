@@ -69,7 +69,7 @@ pub(super) fn look_at(
         swept: sweep,
         ..Default::default()
     };
-    for (id, has_chat) in monos {
+    for (id, _has_chat) in monos {
         let dir = MonoDir::new(root, id.clone());
         if sweep && let Err(error) = tick::sweep_interrupted(&dir, driven) {
             looked.swept = false;
@@ -81,7 +81,6 @@ pub(super) fn look_at(
         let tick = Tick {
             now,
             is_running: &running,
-            has_chat: *has_chat,
             probe: probes.models,
             preflight: &probes.requirements,
             on_claim: &|workflow: &str| signals.set_running(workflow, true),

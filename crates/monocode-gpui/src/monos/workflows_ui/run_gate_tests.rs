@@ -52,11 +52,7 @@ fn needing(extra: Value) -> Workflow {
     for (key, value) in extra.as_object().unwrap() {
         all[key] = value.clone();
     }
-    build(
-        all,
-        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}]),
-        json!([{"from": "trigger", "to": "report"}]),
-    )
+    build(all, json!([{"id": "trigger", "type": "manual"}]), json!([]))
 }
 
 fn use_preflight(s: &Setup, visual: &mut VisualTestContext, preflight: fn(&Workflow) -> Preflight) {
@@ -131,8 +127,8 @@ fn run_opens_the_dialog_for_requirements_or_inputs_and_starts_directly_otherwise
     }
     let plain = build(
         json!({}),
-        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}]),
-        json!([{"from": "trigger", "to": "report"}]),
+        json!([{"id": "trigger", "type": "manual"}]),
+        json!([]),
     );
     let visual = &mut opened(&s, cx, vec![plain], all_found);
     click(visual, "mono-workflow-run-wf-aaaaaaaa");
