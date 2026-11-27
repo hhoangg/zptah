@@ -549,6 +549,15 @@ Flows (section 7):
   is an `ardia browse` command (`open`, `find ... click|fill`). The hash covers the `data.flow`
   JSON with `createdAt` kept. Every `startUrl`, `hosts` entry and step `url` is checked against the
   origins. `flow run` returns per-step `ok` but not the final URL; the gate reads `get url` after.
+- Measured 2026-11-28: `flow list` and `flow show -- <name>` work with no bound tab.
+  `flow run --yes [--param k=v] [--limit n] -- <name>` takes its options before `--`; a `--param`
+  the flow lacks fails (`"<name> has no param q; its params are: none"`, `command_failed`).
+  `flow steps` returns `{steps[] {seq, command[], url, ok, requests, notKept}, savedThrough,
+  dropped}`; `flow save` saves the steps since the last save (a second save right after fails
+  `no_steps`), replaces a flow of the same name on the same site without a word, and refuses a
+  range that does not start on an http(s) page (`not_a_web_page`). The gate therefore tells the
+  user on the card when a save replaces an existing flow. Not measured: a data flow's run output
+  and how an action flow names its params.
 - `flow list --json`: `data.flows[] {site, name, description, params, verified, kind, writes}`.
   Typed passwords are kept as params with no value (`<redacted>` in `flow steps`).
 
