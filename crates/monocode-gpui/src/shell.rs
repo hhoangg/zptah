@@ -115,8 +115,8 @@ use crate::{
     pane_motion::PaneSlide,
     pickers::{ProjectPicked, ProjectPicker},
     popover::{
-        Align, Anchor, AnchorSlot, Flyout, Menu, MenuAction, MenuEvent, MenuItem, MenuStyle, Side,
-        menu_popover, popover,
+        Align, Anchor, AnchorSlot, Flyout, Menu, MenuAction, MenuEvent, MenuItem, MenuSearch,
+        MenuStyle, Side, menu_popover, popover,
     },
     resource_pressure::{ResourceMonitor, StopSession},
     response_actions::Transfer,
@@ -452,6 +452,8 @@ pub(crate) struct ShellMenu {
     pub(crate) target: MenuTarget,
     anchor: Anchor,
     menu: Entity<Menu>,
+    /// Set while a session's menu shows its folder picker in place of the main page.
+    folder_search: Option<(Entity<MenuSearch>, Subscription)>,
     _events: Vec<Subscription>,
 }
 /// The gap the traffic lights take in the title bar (`w-[78px]`, or `w-2.5`
@@ -6031,6 +6033,16 @@ impl Shell {
                     menu.update(cx, |menu, cx| menu.replace_items(items, cx));
                     return;
                 }
+                if let MenuEvent::Picked(id, _) = event
+                    && matches!(
+                        this.menu.as_ref().map(|open| &open.target),
+                        Some(MenuTarget::Session(_))
+                    )
+                    && matches!(id.as_ref(), "folder-change" | "folder-back")
+                {
+                    this.show_folder_page(id.as_ref() == "folder-change", window, cx);
+                    return;
+                }
                 let Some(open) = this.menu.take() else {
                     return;
                 };
@@ -6047,6 +6059,7 @@ impl Shell {
             target,
             anchor,
             menu,
+            folder_search: None,
             _events: events,
         });
         self.invalidate_chrome(cx);
@@ -10166,6 +10179,7 @@ impl Render for Shell {
                         |p| p.align(Align::End).gap(2.),
                     )
                     .when(point, |p| p.gap(0.))
+                    .when(open.folder_search.is_some(), |p| p.max_height(380.))
                     .when(beside, |p| p.side(Side::Right))
                     .when(open.target == MenuTarget::SidebarOptions, |p| {
                         p.align(Align::Start)
