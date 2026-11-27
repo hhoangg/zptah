@@ -23,6 +23,7 @@ mod mono_divider;
 mod outline;
 pub(crate) mod patch_perf;
 mod perf_scroll;
+mod perf_switch;
 pub(crate) mod phases;
 mod provider_switch;
 mod remote_plans;
@@ -6413,6 +6414,7 @@ impl Render for TranscriptView {
                         let _ = after.update(cx, |this, cx| {
                             this.update_jump(cx);
                             this.update_outline(cx);
+                            this.perf_switch_frame(cx);
                         });
                     },
                     |bounds, _, window, _| paint_edge_fade(bounds, false, window),

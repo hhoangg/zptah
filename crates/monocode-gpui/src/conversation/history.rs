@@ -126,6 +126,7 @@ impl Conversation {
         let store = self.store.clone();
         let mono = self.settings.mono.is_some();
         let work = cx.background_executor().spawn(async move {
+            let probe = crate::perf_switch::clock();
             let (history, turns, before) = {
                 let store = locked(&store)?;
                 (
@@ -134,11 +135,13 @@ impl Conversation {
                     store.history_before(id)?,
                 )
             };
-            Ok::<_, String>((
+            let loaded = (
                 crate::transcript::PreparedHistory::new(history.rows, mono),
                 turns,
                 before,
-            ))
+            );
+            crate::perf_switch::job(id, probe);
+            Ok::<_, String>(loaded)
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -148,14 +151,21 @@ impl Conversation {
                     Ok((history, turns, before)) => {
                         this.settings.turns = turns.clone();
                         let pager = this.history_pager();
+                        let probe = crate::perf_switch::clock();
                         this.transcript.update(cx, |view, cx| {
                             view.set_turns(turns);
                             view.restore_prepared_history(history, cx);
                             view.set_history_pager(before, Some(pager));
                         });
+                        crate::perf_switch::installed(
+                            this.summary.id,
+                            this.transcript.entity_id(),
+                            probe,
+                        );
                         this.history_unloaded = false;
                         this.sync_review(cx);
                         this.status = "Ready".into();
+                        crate::perf_switch::ready(this.summary.id);
                         if let Some((row, query)) = this.pending_search.take() {
                             this.reveal_search(row, query, cx);
                         }

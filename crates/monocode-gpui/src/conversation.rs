@@ -927,8 +927,9 @@ impl Conversation {
         let id = self.summary.id;
         let mono = self.settings.mono.is_some();
         let work = cx.background_executor().spawn(async move {
+            let probe = crate::perf_switch::clock();
             let settings = locked(&store).and_then(|s| s.agent_settings(id));
-            (
+            let loaded = (
                 locked(&store)
                     .and_then(|s| {
                         let history = s.load(id)?;
@@ -949,7 +950,9 @@ impl Conversation {
                 locked(&store).and_then(|s| s.context_usage(id)),
                 locked(&store).and_then(|s| s.follow_ups(id)),
                 locked(&store).and_then(|s| s.history_before(id)),
-            )
+            );
+            crate::perf_switch::job(id, probe);
+            loaded
         });
         cx.spawn(async move |this, cx| {
             let (result, settings, context, follow_ups, before) = work.await;
@@ -1010,11 +1013,18 @@ impl Conversation {
                     Ok((history, edits)) => {
                         this.remember_session_edits(edits);
                         let pager = this.history_pager();
+                        let probe = crate::perf_switch::clock();
                         this.transcript.update(cx, |v, cx| {
                             v.install_prepared_history(history, cx);
                             v.set_history_pager(before.ok().flatten(), Some(pager));
                         });
+                        crate::perf_switch::installed(
+                            this.summary.id,
+                            this.transcript.entity_id(),
+                            probe,
+                        );
                         this.status = "Ready".into();
+                        crate::perf_switch::ready(this.summary.id);
                         this.loaded = true;
                         if let Some((row, query)) = this.pending_search.take() {
                             this.reveal_search(row, query, cx);

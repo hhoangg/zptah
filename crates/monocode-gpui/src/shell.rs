@@ -71,6 +71,7 @@ pub(crate) use project_removal::FilesOutcome;
 mod cloud_workspaces;
 mod mono_projects;
 mod mono_terminals;
+mod perf_switch;
 mod project_cloud;
 mod project_settings;
 mod provider_prompt;

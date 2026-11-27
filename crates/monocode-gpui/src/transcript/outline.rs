@@ -123,6 +123,11 @@ impl TranscriptView {
         }
         above.or(prompts.first().copied())
     }
+    /// The source index of the prompt `turns` before the last one.
+    pub(super) fn prompt_from_end(&self, turns: usize) -> Option<usize> {
+        let prompts = &self.outline.prompts;
+        prompts.len().checked_sub(turns + 1).map(|ix| prompts[ix])
+    }
     fn hover_prompt(&mut self, prompt: usize, cx: &mut Context<Self>) {
         self.outline.hovered = Some(prompt);
         cx.notify();
@@ -145,7 +150,7 @@ impl TranscriptView {
         self.outline.open = false;
         cx.notify();
     }
-    fn jump_to_prompt(&mut self, prompt: usize, cx: &mut Context<Self>) {
+    pub(super) fn jump_to_prompt(&mut self, prompt: usize, cx: &mut Context<Self>) {
         let Some((first, _)) = self.prompt_rows(prompt) else {
             return;
         };
