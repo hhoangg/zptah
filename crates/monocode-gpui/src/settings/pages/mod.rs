@@ -12,6 +12,7 @@ mod import;
 mod inbox;
 mod keybindings;
 pub(super) mod mcp;
+pub(super) mod mcp_row;
 pub(super) mod mobile;
 mod monos;
 mod providers;

@@ -59,6 +59,7 @@ mod git_gate;
 mod git_graph;
 mod git_picker;
 mod git_status;
+mod global_hotkey;
 mod gpu_trim;
 #[cfg(target_os = "macos")]
 mod hang_watchdog;
@@ -85,6 +86,7 @@ mod pane_layout;
 mod pane_motion;
 mod panel_root;
 mod particle_text;
+mod perf_switch;
 mod phase_tile;
 mod pickers;
 mod popover;
@@ -618,6 +620,9 @@ fn main() {
                         )
                     });
                     shell.update(cx, |shell, cx| shell.focus_active(window, cx));
+                    if perf_switch::enabled() {
+                        shell.update(cx, |shell, cx| shell.start_perf_switch(window, cx));
+                    }
                     #[cfg(target_os = "macos")]
                     {
                         traffic_lights::pin(window, theme::TITLE_BAR_HEIGHT);

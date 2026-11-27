@@ -4,7 +4,7 @@ use objc2::{
     AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained, sel,
 };
-use objc2_app_kit::{NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem};
+use objc2_app_kit::{NSEventModifierFlags, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem};
 use objc2_foundation::{NSData, NSSize, NSString};
 use std::rc::Rc;
 struct Action {
@@ -27,12 +27,17 @@ impl Item {
         mtm: MainThreadMarker,
         title: &str,
         key: String,
+        shortcut: Option<(u8, usize)>,
         run: Rc<dyn Fn(&str)>,
     ) -> Retained<Self> {
         let this = mtm.alloc().set_ivars(Action { key, run });
         let item: Retained<Self> = unsafe {
             msg_send![super(this),initWithTitle:&*NSString::from_str(title),action:Some(sel!(runMonoAction:)),keyEquivalent:&*NSString::from_str("")]
         };
+        if let Some((digit, mask)) = shortcut {
+            item.setKeyEquivalent(&NSString::from_str(&digit.to_string()));
+            item.setKeyEquivalentModifierMask(NSEventModifierFlags::from_bits_retain(mask));
+        }
         // The status menu retains each item for as long as it can be invoked.
         unsafe {
             item.setTarget(Some(&item));
@@ -66,8 +71,14 @@ impl Status {
             signature: String::new(),
         })
     }
-    pub(super) fn update(&mut self, monos: &[(String, String)], run: Rc<dyn Fn(&str)>) {
-        let signature = format!("{monos:?}");
+    /// `hotkey` is the modifier string of the Mono shortcuts, `None` while off.
+    pub(super) fn update(
+        &mut self,
+        monos: &[(String, String)],
+        hotkey: Option<&str>,
+        run: Rc<dyn Fn(&str)>,
+    ) {
+        let signature = format!("{monos:?}:{hotkey:?}");
         if self.signature == signature {
             return;
         }
@@ -83,8 +94,12 @@ impl Status {
             title.setEnabled(false);
             menu.addItem(&title);
         }
-        for (id, name) in monos {
-            let item = Item::new(mtm, name, id.clone(), run.clone());
+        let mask = hotkey.map(super::hotkeys::menu_mask);
+        for (i, (id, name)) in monos.iter().enumerate() {
+            let shortcut = mask
+                .filter(|_| i < super::hotkeys::MAX)
+                .map(|mask| (i as u8 + 1, mask));
+            let item = Item::new(mtm, name, id.clone(), shortcut, run.clone());
             menu.addItem(&item);
         }
         menu.addItem(&NSMenuItem::separatorItem(mtm));
@@ -92,10 +107,11 @@ impl Status {
             mtm,
             "Quick Composer",
             "composer".into(),
+            None,
             run.clone(),
         ));
         menu.addItem(&NSMenuItem::separatorItem(mtm));
-        menu.addItem(&Item::new(mtm, "Quit zptah", "quit".into(), run));
+        menu.addItem(&Item::new(mtm, "Quit zptah", "quit".into(), None, run));
         self.item.setMenu(Some(&menu));
     }
 }

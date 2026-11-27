@@ -21,6 +21,22 @@ pub struct Folder {
     pub custom_color: Option<String>,
 }
 
+/// `text` lowercased with accents removed ("Đồ án" becomes "do an"), for matching what a
+/// user types against names regardless of case and diacritics.
+pub fn fold_for_search(text: &str) -> String {
+    use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
+    text.nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .flat_map(char::to_lowercase)
+        .map(|c| if c == 'đ' { 'd' } else { c })
+        .collect()
+}
+
+/// Whether `name` contains `query`, ignoring case, accents and surrounding spaces.
+pub fn name_matches(name: &str, query: &str) -> bool {
+    fold_for_search(name).contains(fold_for_search(query.trim()).as_str())
+}
+
 /// A project's folders, and whether its Pinned and Reminders groups are folded.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Groups {
@@ -696,5 +712,15 @@ mod tests {
         assert!(references_current_pr("review the current PR"));
         assert!(references_current_pr("land this pull request"));
         assert!(!references_current_pr("open a PR for this"));
+    }
+
+    #[test]
+    fn names_match_regardless_of_case_and_accents() {
+        assert!(name_matches("Đồ án Cơ sở", "do an"));
+        assert!(name_matches("Đồ án Cơ sở", "  CO SO "));
+        assert!(name_matches("Café", "cafe"));
+        assert!(name_matches("cafe", "CAFÉ"));
+        assert!(name_matches("Anything", ""));
+        assert!(!name_matches("Work", "home"));
     }
 }

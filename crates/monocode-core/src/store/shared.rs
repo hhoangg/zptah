@@ -162,50 +162,146 @@ pub(super) fn project_turns(
     let mut root_turn = None;
     for block in blocks {
         let rows = blocks::project(std::slice::from_ref(block))?;
-        if let Some(prompt) = rows.iter().rposition(Row::is_prompt) {
-            let model = &block["turnModel"];
-            let duration = block["durationMs"].as_u64();
-            let started_at = turn_start(block);
-            let turn = offset + prompt + 1;
-            if started_at.is_some() {
-                root_turn = Some(turn);
-            }
-            let joined_turn =
-                (block["role"] == "user" && block["sentAt"].is_number() && started_at.is_none())
-                    .then_some(root_turn)
-                    .flatten();
-            let metrics = block
-                .get("turnMetrics")
-                .filter(|value| value.is_object())
-                .and_then(|value| serde_json::from_value(value.clone()).ok());
-            if model.is_object()
-                || duration.is_some()
-                || started_at.is_some()
-                || metrics.is_some()
-                || block["providerTurnId"].is_string()
-                || joined_turn.is_some()
-            {
-                turns.insert(
-                    offset + prompt + 1,
-                    crate::agent::TurnInfo {
-                        joined_turn,
-                        provider_turn_id: block["providerTurnId"].as_str().map(str::to_owned),
-                        provider: model["harness"].as_str().unwrap_or("").into(),
-                        model: model["name"].as_str().unwrap_or("").into(),
-                        model_id: model["id"].as_str().map(str::to_owned),
-                        duration_ms: duration.unwrap_or(0),
-                        duration_known: duration.is_some(),
-                        started_at,
-                        completed_at: started_at
-                            .and_then(|at| at.checked_add(duration.unwrap_or(0))),
-                        metrics,
-                    },
-                );
-            }
-        }
+        record_turn(block, &rows, offset, &mut root_turn, &mut turns);
         offset += rows.len();
     }
     Ok(turns)
+}
+/// Records the turn receipt a block's own fields give, if it holds a prompt.
+/// `rows` are the block's projected rows and `offset` the row count before it.
+fn record_turn(
+    block: &Value,
+    rows: &[Row],
+    offset: usize,
+    root_turn: &mut Option<usize>,
+    turns: &mut HashMap<usize, crate::agent::TurnInfo>,
+) {
+    let Some(prompt) = rows.iter().rposition(Row::is_prompt) else {
+        return;
+    };
+    let model = &block["turnModel"];
+    let duration = block["durationMs"].as_u64();
+    let started_at = turn_start(block);
+    let turn = offset + prompt + 1;
+    if started_at.is_some() {
+        *root_turn = Some(turn);
+    }
+    let joined_turn =
+        (block["role"] == "user" && block["sentAt"].is_number() && started_at.is_none())
+            .then_some(*root_turn)
+            .flatten();
+    let metrics = block
+        .get("turnMetrics")
+        .filter(|value| value.is_object())
+        .and_then(|value| serde_json::from_value(value.clone()).ok());
+    if model.is_object()
+        || duration.is_some()
+        || started_at.is_some()
+        || metrics.is_some()
+        || block["providerTurnId"].is_string()
+        || joined_turn.is_some()
+    {
+        turns.insert(
+            turn,
+            crate::agent::TurnInfo {
+                joined_turn,
+                provider_turn_id: block["providerTurnId"].as_str().map(str::to_owned),
+                provider: model["harness"].as_str().unwrap_or("").into(),
+                model: model["name"].as_str().unwrap_or("").into(),
+                model_id: model["id"].as_str().map(str::to_owned),
+                duration_ms: duration.unwrap_or(0),
+                duration_known: duration.is_some(),
+                started_at,
+                completed_at: started_at.and_then(|at| at.checked_add(duration.unwrap_or(0))),
+                metrics,
+            },
+        );
+    }
+}
+/// Whether a submitted user block asks for the operator.
+fn operator_prompt(block: &Value) -> bool {
+    block["role"] == "user"
+        && block["draft"] != true
+        && block["internal"] != true
+        && (block["monocode"] == true
+            || ["mono", "monocode"].into_iter().any(|command| {
+                crate::composer::consume_command(
+                    block["text"].as_str().unwrap_or_default(),
+                    command,
+                )
+                .is_some()
+            }))
+}
+/// The newest turns of a history that is split but not parsed: their rows,
+/// a suffix of what projecting all of it gives, and the parsed blocks they
+/// came from (so the full open does not parse them again), starting at block
+/// index `at`. They run back to the block holding the `PAGE_TURNS`th prompt
+/// before the row that has `rows_after` rows after it (the last row without
+/// it). None when that is the first block or a block cannot be read, so a
+/// short history is not previewed.
+///
+/// The newest `PAGE_TURNS` turns are never capped: the full open builds
+/// exactly those rows on the main thread anyway, however heavy their tool
+/// output. A window around a saved reading position is capped at
+/// `PREVIEW_MAX_PROMPTS` prompts instead, so a reader who left a chat far
+/// from its end does not get most of it projected and then built again. No
+/// byte cap: each row's text is bounded, and a tail can still hold several
+/// MiB in total, which is fine because the full open builds the same rows.
+struct Newest {
+    rows: Vec<Row>,
+    at: usize,
+    blocks: Vec<Value>,
+}
+const PREVIEW_MAX_PROMPTS: usize = 4 * super::PAGE_TURNS;
+fn newest_rows(
+    split: &[&serde_json::value::RawValue],
+    rows_after: Option<usize>,
+) -> Option<Newest> {
+    let threshold = rows_after.unwrap_or(0);
+    let mut chunks = Vec::new();
+    let mut seen = 0;
+    let mut prompts = 0;
+    let mut all_prompts = 0;
+    for (at, block) in split.iter().enumerate().rev() {
+        let block: Value = serde_json::from_str(block.get()).ok()?;
+        let rows = blocks::project(std::slice::from_ref(&block)).ok()?;
+        prompts += rows
+            .iter()
+            .enumerate()
+            .filter(|(ix, row)| {
+                seen + (rows.len() - 1 - ix) >= threshold && row.first && row.is_prompt()
+            })
+            .count();
+        all_prompts += rows
+            .iter()
+            .filter(|row| row.first && row.is_prompt())
+            .count();
+        if rows_after.is_some() && all_prompts > PREVIEW_MAX_PROMPTS {
+            return None;
+        }
+        seen += rows.len();
+        chunks.push((block, rows));
+        if prompts >= super::PAGE_TURNS {
+            if at == 0 {
+                return None;
+            }
+            chunks.reverse();
+            let (blocks, rows): (Vec<_>, Vec<_>) = chunks.into_iter().unzip();
+            return Some(Newest {
+                rows: rows.into_iter().flatten().collect(),
+                at,
+                blocks,
+            });
+        }
+    }
+    None
+}
+/// Where a history's first draft is: its block index and the rows before it.
+type FirstDraft = Option<(usize, usize)>;
+/// What a session's settings take from its blocks, read once with them.
+struct HistoryMetadata {
+    operator_enabled: bool,
+    turns: HashMap<usize, crate::agent::TurnInfo>,
 }
 
 impl Store {
@@ -714,6 +810,15 @@ impl Store {
         ))
     }
     pub(super) fn shared_agent(&self, id: i64) -> Result<Option<Settings>, String> {
+        self.shared_agent_with(id, None)
+    }
+    /// `history` is what the session's blocks give, when the caller already
+    /// read them; without it they are read here.
+    fn shared_agent_with(
+        &self,
+        id: i64,
+        history: Option<HistoryMetadata>,
+    ) -> Result<Option<Settings>, String> {
         let fields = ["harness", "model", "model_settings", "runtime_mode"]
             .into_iter()
             .map(str::to_owned)
@@ -813,21 +918,18 @@ impl Store {
         settings.account.id = account.unwrap_or_else(|| crate::accounts::DEFAULT.into());
         // Desktop blocks are authoritative. Native-only legacy metadata remains
         // available, but cannot override a saved desktop turn's identity/time.
-        let blocks = self.shared_blocks(id)?;
-        settings.operator_enabled |= blocks.iter().any(|block| {
-            block["role"] == "user"
-                && block["draft"] != true
-                && block["internal"] != true
-                && (block["monocode"] == true
-                    || ["mono", "monocode"].into_iter().any(|command| {
-                        crate::composer::consume_command(
-                            block["text"].as_str().unwrap_or_default(),
-                            command,
-                        )
-                        .is_some()
-                    }))
-        });
-        for (turn, source) in project_turns(&blocks)? {
+        let history = match history {
+            Some(history) => history,
+            None => {
+                let blocks = self.shared_blocks(id)?;
+                HistoryMetadata {
+                    operator_enabled: blocks.iter().any(operator_prompt),
+                    turns: project_turns(&blocks)?,
+                }
+            }
+        };
+        settings.operator_enabled |= history.operator_enabled;
+        for (turn, source) in history.turns {
             let info = settings.turns.entry(turn).or_default();
             if !source.provider.is_empty() {
                 info.provider = source.provider;
@@ -1111,6 +1213,114 @@ impl Store {
             .borrow_mut()
             .insert(id, HistoryRevision::of(&blocks));
         Ok(Transcript { rows })
+    }
+    /// What a local chat needs when it opens, from one read of its blocks:
+    /// the rows, the settings and (with `follow_ups`) the queue. The answer is
+    /// the one the separate readers give, but they would parse and project the
+    /// whole history three times. `None` means this session is not an
+    /// ordinary blob history, or something failed; the caller then uses the
+    /// separate readers, which report that failure themselves.
+    pub(super) fn shared_load_for_open(
+        &self,
+        id: i64,
+        follow_ups: bool,
+        mut preview: Option<super::PreviewRequest<'_>>,
+    ) -> Option<super::OpenedHistory> {
+        let original = self.persisted_session_id(id).ok()?;
+        if self.shared_window(id, &original).ok()?.is_some() {
+            return None;
+        }
+        let tx = if self.conn.is_autocommit() {
+            Some(self.conn.unchecked_transaction().ok()?)
+        } else {
+            None
+        };
+        let blocks = match preview.as_mut() {
+            Some(request) => self.shared_blocks_previewing(id, request).ok()?,
+            None => self.shared_blocks(id).ok()?,
+        };
+        let mut rows = Vec::new();
+        let mut operator_enabled = false;
+        let mut root_turn = None;
+        let mut turns = HashMap::new();
+        let mut draft = None;
+        for (at, block) in blocks.iter().enumerate() {
+            operator_enabled |= operator_prompt(block);
+            if draft.is_none() && block["draft"] == true {
+                draft = Some((at, rows.len()));
+            }
+            let projected = blocks::project(std::slice::from_ref(block)).ok()?;
+            record_turn(block, &projected, rows.len(), &mut root_turn, &mut turns);
+            rows.extend(projected);
+        }
+        self.shared
+            .as_ref()?
+            .snapshots
+            .borrow_mut()
+            .insert(id, HistoryRevision::of(&blocks));
+        let settings = self.shared_agent_with(
+            id,
+            Some(HistoryMetadata {
+                operator_enabled,
+                turns,
+            }),
+        );
+        let follow_ups = follow_ups.then(|| {
+            let state = self.shared_follow_ups_with(id, Some((&blocks, draft)))?;
+            // `Store::setting("mono-delivered:..")` for a history already in memory.
+            crate::follow_up::without_delivered(state, |message| {
+                Ok(blocks
+                    .iter()
+                    .any(|block| block["appRequestId"].as_str() == Some(message))
+                    || self.shared.as_ref().is_some_and(|shared| {
+                        shared
+                            .extras
+                            .borrow()
+                            .contains_key(&format!("mono-delivered:{id}:{message}"))
+                    }))
+            })
+        });
+        if let Some(tx) = tx {
+            let _ = tx.commit();
+        }
+        Some(super::OpenedHistory {
+            transcript: Ok(Transcript { rows }),
+            settings,
+            follow_ups,
+        })
+    }
+    /// `shared_blocks` for a blob history, which first hands the newest turns
+    /// to `request` once the blob is read and split, before the rest of it is
+    /// parsed. Blocks are parsed one by one from the split, which gives the
+    /// values the whole-array parse gives.
+    fn shared_blocks_previewing(
+        &self,
+        id: i64,
+        request: &mut super::PreviewRequest<'_>,
+    ) -> Result<Vec<Value>, String> {
+        let original = self.persisted_session_id(id)?;
+        let raw: String = sql(self.conn.query_row(
+            "SELECT blocks_json FROM sessions WHERE id=?1",
+            [original],
+            |r| r.get(0),
+        ))?;
+        if raw.len() < request.min_bytes {
+            return parse(&raw);
+        }
+        let Ok(split) = serde_json::from_str::<Vec<&serde_json::value::RawValue>>(&raw) else {
+            return parse(&raw);
+        };
+        let Some(Newest { rows, at, blocks }) = newest_rows(&split, request.rows_after) else {
+            return split.iter().map(|block| parse(block.get())).collect();
+        };
+        (request.send)(rows);
+        // The blocks behind the preview are already parsed.
+        let mut older = split[..at]
+            .iter()
+            .map(|block| parse(block.get()))
+            .collect::<Result<Vec<Value>, String>>()?;
+        older.extend(blocks);
+        Ok(older)
     }
     pub(super) fn shared_store_blocks(&self, id: i64, blocks: &[Value]) -> Result<(), String> {
         // A terminal session never stores blocks: writing them would clear
@@ -1756,6 +1966,15 @@ impl Store {
         }
     }
     pub(crate) fn shared_follow_ups(&self, id: i64) -> Result<crate::follow_up::State, String> {
+        self.shared_follow_ups_with(id, None)
+    }
+    /// `history` is the session's parsed blocks with the position of its first
+    /// draft (block index, rows before it), when the caller already read them.
+    fn shared_follow_ups_with(
+        &self,
+        id: i64,
+        history: Option<(&[Value], FirstDraft)>,
+    ) -> Result<crate::follow_up::State, String> {
         let fields = format!(
             "{},{}",
             self.shared_field("queued_messages_json", "'[]'"),
@@ -1778,12 +1997,25 @@ impl Store {
             .borrow_mut()
             .insert(id, raw.clone());
         state.messages = parse::<Vec<Value>>(&raw)?.iter().map(follow_up).collect();
-        let blocks = self.shared_blocks(id)?;
         state.draft = None;
-        if let Some((at, block)) = blocks.iter().enumerate().find(|(_, b)| b["draft"] == true) {
-            let mut draft = follow_up(block);
-            draft.at = blocks::project(&blocks[..at])?.len();
-            state.draft = Some(draft);
+        match history {
+            Some((blocks, draft)) => {
+                if let Some((at, rows_before)) = draft {
+                    let mut draft = follow_up(&blocks[at]);
+                    draft.at = rows_before;
+                    state.draft = Some(draft);
+                }
+            }
+            None => {
+                let blocks = self.shared_blocks(id)?;
+                if let Some((at, block)) =
+                    blocks.iter().enumerate().find(|(_, b)| b["draft"] == true)
+                {
+                    let mut draft = follow_up(block);
+                    draft.at = blocks::project(&blocks[..at])?.len();
+                    state.draft = Some(draft);
+                }
+            }
         }
         state.paused = status.as_deref() == Some("paused") || !state.messages.is_empty();
         Ok(state)

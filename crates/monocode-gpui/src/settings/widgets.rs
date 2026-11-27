@@ -1045,6 +1045,7 @@ impl SettingsView {
             |this, value, cx| {
                 this.cancel_sign_in();
                 this.mcp_result = None;
+                this.mcp_account = None;
                 this.selected_project = value;
                 this.selected_trees.clear();
                 this.refresh(cx);

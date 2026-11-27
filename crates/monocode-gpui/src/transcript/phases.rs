@@ -1,4 +1,5 @@
 //! Reasoning and calls share a phase until assistant prose starts the next one.
+use super::patch_perf::{self, Site};
 use monocode_core::{
     tool::{ToolCall, ToolState, tasks::Panel},
     transcript::Row,
@@ -67,9 +68,9 @@ pub(crate) fn collect(rows: &[Row], from: usize, streaming: bool) -> Phases {
         } else if role == "reasoning" {
             members.push(at);
         } else if role == "tool"
-            && let Ok(mut call) = serde_json::from_str::<ToolCall>(&rows[at].text)
+            && let Ok(mut call) = patch_perf::parse(Site::Phase, &rows[at].text)
         {
-            let standalone = match call.panel() {
+            let standalone = match patch_perf::panel(Site::Phase, &call) {
                 Some(Panel::Agent(_))
                     if live_turn.is_some_and(|turn| at >= turn)
                         || matches!(call.state, ToolState::Failed | ToolState::Cancelled) =>

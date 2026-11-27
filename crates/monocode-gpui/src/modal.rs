@@ -424,6 +424,36 @@ pub(crate) fn overlay(
     )
 }
 
+thread_local! {
+    /// Set around one `window.prompt` call by [`cancel_default`], read by the builder it calls.
+    static CANCEL_DEFAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The dialog the builder made for the last [`cancel_default`] prompt.
+    static LAST_CANCEL_DEFAULT: std::cell::RefCell<Option<gpui::WeakEntity<Prompt>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The dialog made by the last [`cancel_default`] call, if the app's builder drew it. Take it
+/// right after the call, to close the dialog later with [`Prompt::dismiss`].
+pub(crate) fn take_cancel_default_prompt() -> Option<gpui::WeakEntity<Prompt>> {
+    LAST_CANCEL_DEFAULT.with(|slot| slot.borrow_mut().take())
+}
+
+/// Runs `prompt` (a `window.prompt` call) so that its dialog makes Cancel the default answer:
+/// Enter chooses Cancel and the other answer is drawn as a danger button. For confirmations
+/// where a stray Enter must not do the risky thing. Other dialogs are unaffected.
+pub(crate) fn cancel_default<R>(prompt: impl FnOnce() -> R) -> R {
+    /// Clears the flag even when `prompt` panics.
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            CANCEL_DEFAULT.with(|flag| flag.set(false));
+        }
+    }
+    CANCEL_DEFAULT.with(|flag| flag.set(true));
+    let _reset = Reset;
+    prompt()
+}
+
 /// `cx.set_prompt_builder` target: renders `window.prompt` as a standard
 /// modal rather than a native sheet.
 pub(crate) fn prompt_builder(
@@ -435,13 +465,18 @@ pub(crate) fn prompt_builder(
     window: &mut Window,
     cx: &mut App,
 ) -> RenderablePromptHandle {
+    let cancel_default = CANCEL_DEFAULT.with(|flag| flag.replace(false));
     let view = cx.new(|cx| Prompt {
         level,
         message: message.to_owned().into(),
         detail: detail.map(|d| d.to_owned().into()),
         actions: actions.to_vec(),
+        cancel_default,
         focus: cx.focus_handle(),
     });
+    if cancel_default {
+        LAST_CANCEL_DEFAULT.with(|slot| *slot.borrow_mut() = Some(view.downgrade()));
+    }
     handle.with_view(view, window, cx)
 }
 
@@ -450,6 +485,8 @@ pub(crate) struct Prompt {
     message: SharedString,
     detail: Option<SharedString>,
     actions: Vec<PromptButton>,
+    /// Cancel is the default answer (see [`cancel_default`]).
+    cancel_default: bool,
     focus: FocusHandle,
 }
 impl EventEmitter<PromptResponse> for Prompt {}
@@ -459,6 +496,11 @@ impl Focusable for Prompt {
     }
 }
 impl Prompt {
+    /// Closes the dialog as if the user chose Cancel (the answer a caller cannot tell apart,
+    /// so a caller that dismisses it must know it did).
+    pub(crate) fn dismiss(&mut self, cx: &mut Context<Self>) {
+        cx.emit(PromptResponse(self.cancel()));
+    }
     /// Escape and the scrim choose Cancel, or the last answer like a sheet.
     fn cancel(&self) -> usize {
         self.actions
@@ -468,6 +510,9 @@ impl Prompt {
     }
     /// Return chooses the first non-cancel answer, as AppKit's default button.
     fn default(&self) -> Option<usize> {
+        if self.cancel_default {
+            return Some(self.cancel());
+        }
         self.actions.iter().position(|a| !a.is_cancel())
     }
     fn destructive(&self, label: &str) -> bool {
@@ -500,7 +545,13 @@ impl Render for Prompt {
             let action = &self.actions[ix];
             let label = action.label().clone();
             let id = ("prompt-action", ix);
-            let button = if action.is_cancel() || Some(ix) != default {
+            let button = if self.cancel_default {
+                if action.is_cancel() {
+                    primary_button(id, label)
+                } else {
+                    danger_button(id, label)
+                }
+            } else if action.is_cancel() || Some(ix) != default {
                 ghost_button(id, label)
             } else if self.destructive(&label) {
                 danger_button(id, label)
@@ -966,5 +1017,42 @@ mod tests {
             hover_wheel(v, at, dy);
             assert_eq!(list_top(window, v), start, "dy {dy}");
         }
+    }
+
+    #[gpui::test]
+    fn cancel_default_makes_enter_choose_cancel_only_for_that_prompt(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_prompt_builder(prompt_builder));
+        let window = cx.add_window(|_, _| gpui::Empty);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        let ask = |visual: &mut gpui::VisualTestContext, safe: bool| {
+            visual.update(|window, cx| {
+                let show = |window: &mut Window, cx: &mut App| {
+                    window.prompt(
+                        PromptLevel::Warning,
+                        "Sure?",
+                        None,
+                        &["Go on", "Cancel"],
+                        cx,
+                    )
+                };
+                if safe {
+                    cancel_default(|| show(window, cx))
+                } else {
+                    show(window, cx)
+                }
+            })
+        };
+        let mut plain = ask(visual, false);
+        visual.run_until_parked();
+        visual.simulate_keystrokes("enter");
+        assert_eq!(
+            plain.try_recv(),
+            Ok(Some(0)),
+            "other dialogs keep Enter = first answer"
+        );
+        let mut safe = ask(visual, true);
+        visual.run_until_parked();
+        visual.simulate_keystrokes("enter");
+        assert_eq!(safe.try_recv(), Ok(Some(1)), "Enter chooses Cancel");
     }
 }

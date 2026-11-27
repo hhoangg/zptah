@@ -63,6 +63,14 @@ fn publish(
     cancel: &AtomicBool,
     mut update: Update,
 ) -> Result<(), String> {
+    if crate::transcript::patch_perf::enabled() && !update.rows.is_empty() {
+        eprintln!(
+            "transcript-send start={} rows={} bytes={}",
+            update.start,
+            update.rows.len(),
+            update.rows.iter().map(|row| row.text.len()).sum::<usize>()
+        );
+    }
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err("Stopped".into());

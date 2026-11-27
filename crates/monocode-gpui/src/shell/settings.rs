@@ -87,6 +87,10 @@ impl Shell {
             web_terminals: self.web_open_terminals(cx),
             web_policy: monocode_core::mobile::policy::flags(),
             quick_error: self.quick.error.clone(),
+            mono_hotkey_error: self
+                .monos
+                .as_ref()
+                .and_then(|m| m.read(cx).hotkey_error.clone()),
             inbox_connections: self
                 .inbox
                 .as_ref()

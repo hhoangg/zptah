@@ -4,13 +4,14 @@ use super::project_removal::{
     DeleteOptions, FilesOutcome, provider_cleanup_request, remove_unused_worktree,
 };
 use super::*;
+use crate::popover::MenuSearch;
 use chrono::{Local, NaiveDateTime, TimeZone};
 use gpui::EventEmitter;
 use monocode_core::cloud_sessions::{CloudBackendKind, CloudState};
 use monocode_core::{
     session_groups::{
-        Entry, Groups, build_list, format_reminder, navigation_ids, parse_github_work_item,
-        reminder_at, reminder_presets,
+        Entry, Groups, build_list, format_reminder, name_matches, navigation_ids,
+        parse_github_work_item, reminder_at, reminder_presets,
     },
     store::Reminder,
 };
@@ -67,6 +68,23 @@ pub(super) fn folder_accent(folder: &monocode_core::session_groups::Folder) -> O
         .and_then(|color| u32::from_str_radix(color, 16).ok())
         .map(|color| rgb(color).into())
         .or_else(|| folder.color_index.and_then(folder_color))
+}
+
+/// The row the keyboard starts on in the folder picker: the first folder the sessions are not
+/// already in, else the first folder. Never "No folder", "Back" or "New folder", so Enter by
+/// habit moves the session and cannot remove it from its folder or create one. With no folder
+/// listed (nothing matches) there is nothing to start on.
+fn first_pick(items: &[MenuItem]) -> Option<String> {
+    let folders = || {
+        items.iter().filter_map(|item| match item {
+            MenuItem::Action(a) if a.id.starts_with("folder-add:") && !a.disabled => Some(a),
+            _ => None,
+        })
+    };
+    folders()
+        .find(|a| !a.checked)
+        .or_else(|| folders().next())
+        .map(|a| a.id.to_string())
 }
 
 /// Where a folder's color shows beyond its row fill. `None` keeps the
@@ -338,6 +356,8 @@ impl Shell {
             store.save_groups(&project, &groups)
         });
         self.invalidate_chrome(cx);
+        // A folder picker left open follows the change (a folder created or renamed under it).
+        self.refresh_folder_picker(cx);
         cx.notify();
     }
     pub(super) fn store_write(
@@ -635,19 +655,17 @@ impl Shell {
                 )
                 .into(),
             MenuItem::Separator,
-            MenuAction::new("folder-new", "New folder").into(),
         ]);
+        // The folders themselves are listed in a searchable page, not here: a long list would
+        // push the rest of this menu off the screen.
         if !groups.folders.is_empty() {
-            items.push(MenuItem::Separator);
-            items.extend(groups.folders.iter().map(|folder| {
-                MenuAction::new(
-                    format!("folder-add:{}", folder.id),
-                    format!("Add to {}", folder.name),
-                )
-                .checked(ids.iter().all(|id| folder.session_ids.contains(id)))
-                .into()
-            }));
+            items.push(
+                MenuAction::new("folder-change", "Change folder")
+                    .keep_open()
+                    .into(),
+            );
         }
+        items.push(MenuAction::new("folder-new", "New folder").into());
         if ids.iter().any(|id| groups.folder_of(*id).is_some()) {
             items.push(
                 MenuAction::new(
@@ -674,6 +692,121 @@ impl Shell {
                 .into(),
         ]);
         items
+    }
+    /// The folder picker that replaces a session menu's rows: the search field, a way back, the
+    /// folders whose name matches it, and the folder actions that do not depend on a name.
+    fn folder_picker_items(&self, id: i64, search: &Entity<MenuSearch>, cx: &App) -> Vec<MenuItem> {
+        let ids = self.session_menu_ids(id, cx);
+        let groups = self.project_groups();
+        let query = search.read(cx).query(cx);
+        let mut items = vec![
+            MenuSearch::item(search, cx),
+            MenuAction::new("folder-back", "Back")
+                .icon("chevron-left")
+                .keep_open()
+                .into(),
+            MenuItem::Separator,
+        ];
+        let listed = items.len();
+        items.extend(
+            groups
+                .folders
+                .iter()
+                .filter(|folder| name_matches(&folder.name, &query))
+                .map(|folder| {
+                    let action =
+                        MenuAction::new(format!("folder-add:{}", folder.id), folder.name.clone())
+                            .icon("folder")
+                            .checked(ids.iter().all(|id| folder.session_ids.contains(id)));
+                    match folder_accent(folder) {
+                        Some(color) => action.icon_color(color),
+                        None => action,
+                    }
+                    .into()
+                }),
+        );
+        if items.len() == listed {
+            items.push(MenuItem::Note("No folders match".into()));
+        }
+        // After the folders and only unfiltered: it is not a folder a search can find, and it
+        // must not be what a keystroke lands on.
+        if query.trim().is_empty() && ids.iter().any(|id| groups.folder_of(*id).is_some()) {
+            items.push(MenuAction::new("folder-remove", "No folder").into());
+        }
+        items.extend([
+            MenuItem::Separator,
+            MenuAction::new("folder-new", "New folder").into(),
+        ]);
+        items
+    }
+    /// Switches the open session menu, in place, between its main page and the folder picker.
+    pub(super) fn show_folder_page(
+        &mut self,
+        picker: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((MenuTarget::Session(id), menu)) = self
+            .menu
+            .as_ref()
+            .map(|open| (open.target.clone(), open.menu.clone()))
+        else {
+            return;
+        };
+        if !picker {
+            let items = self.session_menu_items(id, cx);
+            let items_have_folder_change = items.iter().any(
+                |item| matches!(item, MenuItem::Action(action) if action.id.as_ref() == "folder-change"),
+            );
+            menu.update(cx, |menu, cx| {
+                menu.set_search_page(None);
+                menu.set_items(items, cx);
+                // Keep the first-row default when the folders vanished meanwhile.
+                if items_have_folder_change {
+                    menu.highlight_value("folder-change");
+                }
+                window.focus(&menu.focus_handle(cx), cx);
+            });
+            if let Some(open) = self.menu.as_mut() {
+                open.folder_search = None;
+            }
+            cx.notify();
+            return;
+        }
+        let search = MenuSearch::new("Search folders", cx);
+        let input = search.read(cx).input.clone();
+        let changed = cx.subscribe(&input, |this, _, _: &input::Changed, cx| {
+            this.refresh_folder_picker(cx)
+        });
+        let items = self.folder_picker_items(id, &search, cx);
+        let first = first_pick(&items);
+        menu.update(cx, |menu, cx| {
+            menu.set_search_page(Some("folder-back".into()));
+            menu.set_items(items, cx);
+            menu.highlight_value(first.as_deref().unwrap_or(""));
+            window.focus(&menu.content_focus(), cx);
+        });
+        if let Some(open) = self.menu.as_mut() {
+            open.folder_search = Some((search, changed));
+        }
+        cx.notify();
+    }
+    fn refresh_folder_picker(&mut self, cx: &mut Context<Self>) {
+        let Some(open) = self.menu.as_ref() else {
+            return;
+        };
+        let (MenuTarget::Session(id), Some((search, _))) = (&open.target, &open.folder_search)
+        else {
+            return;
+        };
+        let items = self.folder_picker_items(*id, search, cx);
+        let first = first_pick(&items);
+        open.menu.clone().update(cx, |menu, cx| {
+            menu.replace_items(items, cx);
+            // No match: nothing highlighted, so Enter does nothing.
+            menu.highlight_value(first.as_deref().unwrap_or(""));
+            cx.notify();
+        });
     }
     pub(super) fn run_session_menu(
         &mut self,
@@ -2620,6 +2753,418 @@ mod tests {
                 assert!(stored.iter().all(|s| s.pinned));
             })
             .unwrap();
+    }
+
+    fn add_folders(shell: &mut Shell, names: &[(&str, &str)], cx: &mut Context<Shell>) {
+        shell.update_groups(cx, |groups| {
+            for (n, (id, name)) in names.iter().enumerate() {
+                groups.folders.push(monocode_core::session_groups::Folder {
+                    id: (*id).into(),
+                    name: (*name).into(),
+                    // Sessions that do not exist: only membership matters here.
+                    session_ids: vec![9000 + n as i64],
+                    ..Default::default()
+                });
+            }
+        });
+    }
+    fn menu_rows(shell: &Shell, cx: &App) -> Vec<(String, bool)> {
+        shell.menu.as_ref().unwrap().menu.read(cx).rows_for_test()
+    }
+    fn open_folder_picker(window: WindowHandle<Shell>, session: i64, cx: &mut TestAppContext) {
+        window
+            .update(cx, |shell, w, cx| {
+                shell.open_menu(
+                    MenuTarget::Session(session),
+                    Anchor::Point(gpui::point(px(40.), px(120.))),
+                    w,
+                    cx,
+                );
+                let menu = shell.menu.as_ref().unwrap().menu.clone();
+                menu.update(cx, |menu, _| menu.highlight_value("folder-change"));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn session_menu_offers_change_folder_instead_of_listing_every_folder(cx: &mut TestAppContext) {
+        let (window, a, _) = setup(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                let ids = |shell: &Shell, cx: &App| -> Vec<String> {
+                    shell
+                        .session_menu_items(a, cx)
+                        .into_iter()
+                        .filter_map(|item| match item {
+                            MenuItem::Action(action) => Some(action.id.to_string()),
+                            _ => None,
+                        })
+                        .collect()
+                };
+                let none = ids(shell, cx);
+                assert!(
+                    !none.contains(&"folder-change".to_string()),
+                    "no folders yet"
+                );
+                assert!(none.contains(&"folder-new".to_string()));
+                let names: Vec<_> = (0..40)
+                    .map(|n| (format!("f{n}"), format!("Folder {n}")))
+                    .collect();
+                let names: Vec<_> = names
+                    .iter()
+                    .map(|(a, b)| (a.as_str(), b.as_str()))
+                    .collect();
+                add_folders(shell, &names, cx);
+                let many = ids(shell, cx);
+                assert!(many.contains(&"folder-change".to_string()));
+                assert!(many.contains(&"folder-new".to_string()));
+                assert!(
+                    !many.iter().any(|id| id.starts_with("folder-add:")),
+                    "the main menu no longer lists folders: {many:?}"
+                );
+                assert!(many.len() < 20, "the main menu stays short: {many:?}");
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn change_folder_swaps_the_menu_for_a_searchable_picker_that_moves_the_session(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, a, _) = setup(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                add_folders(
+                    shell,
+                    &[
+                        ("f-work", "Work"),
+                        ("f-docs", "Đồ án Cơ sở"),
+                        ("f-home", "Home"),
+                    ],
+                    cx,
+                );
+            })
+            .unwrap();
+        open_folder_picker(window, a, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                let open = shell.menu.as_ref().expect("same menu stays open");
+                assert!(open.folder_search.is_some());
+                assert!(open.target == MenuTarget::Session(a));
+                let rows = menu_rows(shell, cx);
+                for id in ["folder-back", "folder-add:f-work", "folder-add:f-docs", "folder-add:f-home", "folder-new"] {
+                    assert!(rows.iter().any(|(row, _)| row == id), "{id} in {rows:?}");
+                }
+                assert!(
+                    !rows.iter().any(|(row, _)| row == "pin" || row == "folder-remove"),
+                    "the picker replaces the main rows, and a session in no folder has none to leave: {rows:?}"
+                );
+            })
+            .unwrap();
+        // Case and accents do not matter.
+        cx.simulate_input(window.into(), "DO AN");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                let folders: Vec<_> = menu_rows(shell, cx)
+                    .into_iter()
+                    .filter(|(id, _)| id.starts_with("folder-add:"))
+                    .collect();
+                assert_eq!(folders, [("folder-add:f-docs".to_string(), false)]);
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.menu.is_none(), "picking a folder closes the menu");
+                assert_eq!(shell.project_groups().folder_of(a).unwrap().id, "f-docs");
+            })
+            .unwrap();
+        // Reopened, the current folder is checked and offers a way out.
+        open_folder_picker(window, a, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                let rows = menu_rows(shell, cx);
+                assert!(rows.contains(&("folder-add:f-docs".to_string(), true)));
+                assert!(rows.contains(&("folder-add:f-work".to_string(), false)));
+                assert!(rows.iter().any(|(id, _)| id == "folder-remove"));
+            })
+            .unwrap();
+        // "No folder" comes after the folders, and the keyboard starts on the first folder the
+        // session is not in: Enter moves it, it never removes it by habit.
+        window
+            .update(cx, |shell, _, cx| {
+                let ids: Vec<_> = menu_rows(shell, cx).into_iter().map(|(id, _)| id).collect();
+                let at = |id: &str| ids.iter().position(|row| row == id).unwrap();
+                assert!(at("folder-add:f-home") < at("folder-remove"));
+                assert!(at("folder-remove") < at("folder-new"));
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.menu.is_none());
+                assert_eq!(shell.project_groups().folder_of(a).unwrap().id, "f-work");
+            })
+            .unwrap();
+        // It is still one click or key away.
+        open_folder_picker(window, a, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                let menu = shell.menu.as_ref().unwrap().menu.clone();
+                menu.update(cx, |menu, _| menu.highlight_value("folder-remove"));
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.menu.is_none());
+                assert!(shell.project_groups().folder_of(a).is_none());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn folder_picker_with_no_match_says_so_and_escape_goes_back_then_closes(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, a, _) = setup(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                add_folders(shell, &[("f-work", "Work")], cx);
+            })
+            .unwrap();
+        open_folder_picker(window, a, cx);
+        cx.simulate_input(window.into(), "zzz");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                let rows = menu_rows(shell, cx);
+                assert!(
+                    rows.iter().any(|(id, _)| id == "note:No folders match"),
+                    "{rows:?}"
+                );
+                assert!(!rows.iter().any(|(id, _)| id.starts_with("folder-add:")));
+            })
+            .unwrap();
+        // Enter with nothing listed does nothing: no folder is created behind a "New folder".
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.menu.is_some());
+                assert_eq!(shell.project_groups().folders.len(), 1);
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "escape");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                let open = shell
+                    .menu
+                    .as_ref()
+                    .expect("escape returns to the main menu");
+                assert!(open.folder_search.is_none());
+                let rows = menu_rows(shell, cx);
+                assert!(rows.iter().any(|(id, _)| id == "pin"));
+                assert!(rows.iter().any(|(id, _)| id == "folder-change"));
+                let active = shell.menu.as_ref().unwrap().menu.read(cx).active_for_test();
+                assert_eq!(
+                    active.as_deref(),
+                    Some("folder-change"),
+                    "back lands on Change folder"
+                );
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "escape");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| assert!(shell.menu.is_none()))
+            .unwrap();
+        // The visible Back row does the same as the first Escape.
+        open_folder_picker(window, a, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                let menu = shell.menu.as_ref().unwrap().menu.clone();
+                menu.update(cx, |menu, _| menu.highlight_value("folder-back"));
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(shell.menu.as_ref().unwrap().folder_search.is_none());
+                assert!(menu_rows(shell, cx).iter().any(|(id, _)| id == "pin"));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn typing_after_an_arrow_key_still_filters_and_enter_never_removes(cx: &mut TestAppContext) {
+        let (window, a, _) = setup(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                add_folders(
+                    shell,
+                    &[
+                        ("f-work", "Work"),
+                        ("f-shop", "Workshop"),
+                        ("f-wond", "Wonder"),
+                    ],
+                    cx,
+                );
+                shell.update_groups(cx, |g| g.add_to_folder("f-work", a));
+            })
+            .unwrap();
+        let listed = |window: WindowHandle<Shell>, cx: &mut TestAppContext| -> Vec<String> {
+            window
+                .update(cx, |shell, _, cx| {
+                    menu_rows(shell, cx)
+                        .into_iter()
+                        .map(|(id, _)| id)
+                        .filter(|id| id.starts_with("folder-add:"))
+                        .collect()
+                })
+                .unwrap()
+        };
+        open_folder_picker(window, a, cx);
+        cx.simulate_input(window.into(), "wo");
+        cx.run_until_parked();
+        assert_eq!(listed(window, cx).len(), 3);
+        // The arrow key must leave the keyboard in the search field.
+        cx.simulate_keystrokes(window.into(), "down");
+        cx.simulate_input(window.into(), "n");
+        cx.run_until_parked();
+        assert_eq!(
+            listed(window, cx),
+            ["folder-add:f-wond"],
+            "typed text after Down filters"
+        );
+        cx.simulate_keystrokes(window.into(), "backspace");
+        cx.run_until_parked();
+        assert_eq!(
+            listed(window, cx).len(),
+            3,
+            "Backspace after Down still edits the query"
+        );
+        // Several folders match and the session is in one of them: Enter moves, never removes.
+        cx.simulate_input(window.into(), "r");
+        cx.run_until_parked();
+        assert_eq!(
+            listed(window, cx),
+            ["folder-add:f-work", "folder-add:f-shop"]
+        );
+        window
+            .update(cx, |shell, _, cx| {
+                let rows = menu_rows(shell, cx);
+                assert!(
+                    !rows.iter().any(|(id, _)| id == "folder-remove"),
+                    "{rows:?}"
+                );
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.menu.is_none());
+                assert_eq!(shell.project_groups().folder_of(a).unwrap().id, "f-shop");
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn an_open_folder_picker_follows_changes_to_the_folders(cx: &mut TestAppContext) {
+        let (window, a, _) = setup(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                add_folders(shell, &[("f-work", "Work")], cx)
+            })
+            .unwrap();
+        open_folder_picker(window, a, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                add_folders(shell, &[("f-new", "Fresh")], cx);
+                assert!(
+                    menu_rows(shell, cx)
+                        .iter()
+                        .any(|(id, _)| id == "folder-add:f-new")
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn folder_picker_stays_inside_a_short_window_near_the_bottom_edge(cx: &mut TestAppContext) {
+        let (window, a, _) = setup(cx);
+        let names: Vec<_> = (0..120)
+            .map(|n| (format!("f{n}"), format!("Folder {n}")))
+            .collect();
+        window
+            .update(cx, |shell, _, cx| {
+                let names: Vec<_> = names
+                    .iter()
+                    .map(|(a, b)| (a.as_str(), b.as_str()))
+                    .collect();
+                add_folders(shell, &names, cx);
+            })
+            .unwrap();
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        // Short enough that the room beside the anchor, not the picker's own 380 cap, decides:
+        // the old layout hung off the window here.
+        visual.simulate_resize(gpui::size(px(700.), px(300.)));
+        visual.run_until_parked();
+        let viewport = window.update(visual, |_, w, _| w.viewport_size()).unwrap();
+        assert_eq!(viewport.height, px(300.));
+        for y in [20., 150., 275.] {
+            window
+                .update(visual, |shell, w, cx| {
+                    shell.open_menu(
+                        MenuTarget::Session(a),
+                        Anchor::Point(gpui::point(px(40.), px(y))),
+                        w,
+                        cx,
+                    );
+                    shell.show_folder_page(true, w, cx);
+                })
+                .unwrap();
+            visual.run_until_parked();
+            visual.refresh().unwrap();
+            let surface = window
+                .update(visual, |shell, _, cx| {
+                    shell
+                        .menu
+                        .as_ref()
+                        .unwrap()
+                        .menu
+                        .read(cx)
+                        .surface_region()
+                        .get()
+                })
+                .unwrap()
+                .expect("the picker is drawn");
+            assert!(
+                surface.top() >= px(0.) && surface.bottom() <= viewport.height,
+                "picker opened at y={y} spans {surface:?} in a window {viewport:?} tall"
+            );
+            assert!(surface.size.height > px(100.), "{surface:?}");
+            let row = visual
+                .debug_bounds("menu-action-folder-add:f0")
+                .expect("the first folder row is drawn");
+            assert!(
+                row.top() >= surface.top() && row.bottom() <= surface.bottom(),
+                "first folder row {row:?} is visible in {surface:?}"
+            );
+            window
+                .update(visual, |shell, _, cx| shell.close_menu(cx))
+                .unwrap();
+        }
     }
 
     #[gpui::test]

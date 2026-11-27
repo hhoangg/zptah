@@ -857,12 +857,12 @@ pub fn parse_health(reply: &Value, scrub: &Scrub) -> (Vec<ServerHealth>, Vec<Str
         if let Some(text) = reply.get("stdout").and_then(Value::as_str) {
             servers = crate::mcp::parse_claude_health(&scrub.host_text(text))
                 .into_iter()
-                .map(|(name, status)| {
-                    let status = match status.as_str() {
+                .map(|(name, word)| {
+                    let status = match word.as_str() {
                         "Connected" => HealthStatus::Connected,
-                        "Needs authentication" => HealthStatus::SignInNeeded,
+                        "Needs authentication" | "Needs approval" => HealthStatus::SignInNeeded,
                         "Failed" => HealthStatus::Failed,
-                        "Disabled" => HealthStatus::Disabled,
+                        "Disabled" | "Rejected" => HealthStatus::Disabled,
                         _ => HealthStatus::Configured,
                     };
                     ServerHealth {
@@ -871,7 +871,7 @@ pub fn parse_health(reply: &Value, scrub: &Scrub) -> (Vec<ServerHealth>, Vec<Str
                         sign_in_needed: status == HealthStatus::SignInNeeded,
                         transport: "unknown".into(),
                         reason: String::new(),
-                        needs_approval: false,
+                        needs_approval: word == "Needs approval",
                         oauth_style: false,
                     }
                 })

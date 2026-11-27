@@ -61,6 +61,12 @@ pub(crate) const BINDINGS: &[Binding] = &[
         fixed: false,
     },
     Binding {
+        command: crate::monos::hotkeys::COMMAND,
+        keys: "⌃⌥1-9",
+        when: "Anywhere",
+        fixed: false,
+    },
+    Binding {
         command: "App: Toggle Sidebar",
         keys: "⌘B",
         when: "Always",
@@ -359,6 +365,11 @@ pub(super) fn quick_composer_label(p: &Preferences) -> String {
 /// A command's shortcut as shown, honoring the user's rebinding; `None`
 /// once they have disabled it.
 pub(crate) fn command_shortcut(p: &Preferences, command: &str) -> Option<String> {
+    if command == crate::monos::hotkeys::COMMAND {
+        // Only the modifiers are stored; the digit is the Mono's position.
+        return crate::monos::hotkeys::modifiers(&p.keybindings)
+            .map(|m| format!("{}1-9", shortcut_label(&m)));
+    }
     match p.keybindings.get(command) {
         Some(Some(s)) => Some(shortcut_label(s)),
         Some(None) => None,
@@ -415,7 +426,7 @@ impl SettingsView {
         let query = self.keybinding_query.trim().to_lowercase();
         let rows: Vec<_> = BINDINGS
             .iter()
-            .filter(|r| cfg!(target_os = "macos") || r.command != "App: Quick Composer")
+            .filter(|r| shown_here(r))
             .filter(|r| {
                 format!("{} {} {}", r.command, self.binding_label(r), r.when)
                     .to_lowercase()
@@ -593,6 +604,17 @@ impl SettingsView {
                     .into_any_element(),
             );
         }
+        if let Some(error) = self.ctx.mono_hotkey_error.as_ref() {
+            children.push(
+                div()
+                    .px_4()
+                    .py_2()
+                    .text_size(px(11.))
+                    .text_color(gpui::rgb(0xf87171))
+                    .child(format!("{}: {error}", crate::monos::hotkeys::COMMAND))
+                    .into_any_element(),
+            );
+        }
         if let Some(error) = &self.recording_error {
             children.push(
                 div()
@@ -605,6 +627,29 @@ impl SettingsView {
             );
         }
         vec![self.group(None,true,"Shortcuts",Some("Click a shortcut to record new keys. Press Delete while recording to disable it.".into()),Some(action),children)]
+    }
+    /// The Mono shortcut row keeps only the modifiers of what was pressed; the
+    /// digit is always 1 to 9.
+    fn record_mono_modifiers(
+        &mut self,
+        command: &str,
+        key: &gpui::Keystroke,
+        cx: &mut Context<Self>,
+    ) {
+        match mono_modifiers_choice(&self.prefs, command, &key.modifiers) {
+            Ok(modifiers) => {
+                self.recording = None;
+                self.recording_error = None;
+                let command = command.to_string();
+                self.update(cx, |p| {
+                    p.keybindings.insert(command, Some(modifiers));
+                });
+            }
+            Err(error) => {
+                self.recording_error = Some(error);
+                cx.notify();
+            }
+        }
     }
     fn binding_label(&self, row: &Binding) -> String {
         command_shortcut(&self.prefs, row.command).unwrap_or_else(|| "Disabled".into())
@@ -640,6 +685,13 @@ impl SettingsView {
             });
             return;
         }
+        if command == crate::monos::hotkeys::COMMAND {
+            if let Some(m) = crate::monos::hotkeys::from_modifiers(&key.modifiers) {
+                self.recording_preview = format!("{}1-9", shortcut_label(&m));
+            }
+            self.record_mono_modifiers(&command, key, cx);
+            return;
+        }
         let shortcut = key.unparse();
         self.recording_preview = shortcut_label(&shortcut);
         if bare || (!key.modifiers.platform && !key.modifiers.control && !key.modifiers.alt) {
@@ -657,17 +709,8 @@ impl SettingsView {
             cx.notify();
             return;
         }
-        if let Some(other) = BINDINGS.iter().find(|r| {
-            r.command != command
-                && (default_shortcuts(r).contains(&shortcut)
-                    || self
-                        .prefs
-                        .keybindings
-                        .get(r.command)
-                        .and_then(|s| s.as_ref())
-                        == Some(&shortcut))
-        }) {
-            self.recording_error = Some(format!("Already used by {}", other.command));
+        if let Some(other) = shortcut_owner(&self.prefs, &command, &shortcut) {
+            self.recording_error = Some(format!("Already used by {}", other));
             cx.notify();
             return;
         }
@@ -679,7 +722,84 @@ impl SettingsView {
     }
 }
 
+/// Rows that only exist on macOS are hidden elsewhere.
+fn shown_here(row: &Binding) -> bool {
+    cfg!(target_os = "macos")
+        || !matches!(
+            row.command,
+            "App: Quick Composer" | crate::monos::hotkeys::COMMAND
+        )
+}
+/// Every shortcut a row holds: the Mono row expands its modifiers to the nine
+/// digits (none while disabled); the others count their default and their
+/// rebinding.
+fn claimed_shortcuts(prefs: &Preferences, row: &Binding) -> Vec<String> {
+    if row.command == crate::monos::hotkeys::COMMAND {
+        return crate::monos::hotkeys::modifiers(&prefs.keybindings)
+            .map(|m| {
+                (1..=9)
+                    .filter_map(|digit| {
+                        gpui::Keystroke::parse(&crate::monos::hotkeys::shortcut(&m, digit))
+                            .ok()
+                            .map(|s| s.unparse())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+    let mut all = default_shortcuts(row);
+    if let Some(Some(custom)) = prefs.keybindings.get(row.command) {
+        all.push(custom.clone());
+    }
+    all
+}
+/// The other command that already holds this shortcut.
+fn shortcut_owner(prefs: &Preferences, command: &str, shortcut: &str) -> Option<&'static str> {
+    BINDINGS
+        .iter()
+        .find(|r| {
+            r.command != command
+                && shown_here(r)
+                && claimed_shortcuts(prefs, r).iter().any(|s| s == shortcut)
+        })
+        .map(|r| r.command)
+}
+/// What recording the Mono row stores: the held modifiers, unless they are too
+/// few or one of their digit combinations belongs to another command.
+fn mono_modifiers_choice(
+    prefs: &Preferences,
+    command: &str,
+    held: &gpui::Modifiers,
+) -> Result<String, String> {
+    let Some(modifiers) = crate::monos::hotkeys::from_modifiers(held) else {
+        return Err("Use Command, Control, or Option with a key.".into());
+    };
+    for digit in 1..=9 {
+        let Ok(parsed) =
+            gpui::Keystroke::parse(&crate::monos::hotkeys::shortcut(&modifiers, digit))
+        else {
+            continue;
+        };
+        if let Some(other) = shortcut_owner(prefs, command, &parsed.unparse()) {
+            return Err(format!("Already used by {other}"));
+        }
+    }
+    Ok(modifiers)
+}
+
 fn default_shortcuts(row: &Binding) -> Vec<String> {
+    if row.command == crate::monos::hotkeys::COMMAND {
+        return (1..=9)
+            .filter_map(|digit| {
+                gpui::Keystroke::parse(&crate::monos::hotkeys::shortcut(
+                    crate::monos::hotkeys::DEFAULT_MODIFIERS,
+                    digit,
+                ))
+                .ok()
+                .map(|s| s.unparse())
+            })
+            .collect();
+    }
     let shortcut = row
         .keys
         .replace(
@@ -737,5 +857,114 @@ mod tests {
             };
             assert_eq!(default_shortcuts(row), [format!("{modifier}-{key}")]);
         }
+    }
+
+    #[test]
+    fn mono_shortcut_row_shows_its_modifiers_and_default() {
+        let mut p = Preferences::default();
+        let label = |p: &Preferences| command_shortcut(p, crate::monos::hotkeys::COMMAND);
+        let default = if cfg!(target_os = "macos") {
+            "⌃⌥1-9"
+        } else {
+            "Ctrl+Alt+1-9"
+        };
+        assert_eq!(label(&p).as_deref(), Some(default));
+        p.keybindings.insert(
+            crate::monos::hotkeys::COMMAND.into(),
+            Some("cmd-shift".into()),
+        );
+        let expected = if cfg!(target_os = "macos") {
+            "⇧⌘1-9"
+        } else {
+            "Shift+⌘1-9"
+        };
+        assert_eq!(label(&p).as_deref(), Some(expected));
+        p.keybindings
+            .insert(crate::monos::hotkeys::COMMAND.into(), None);
+        assert_eq!(label(&p), None);
+    }
+
+    #[test]
+    fn mono_shortcut_row_is_anywhere_and_conflicts_with_its_digits() {
+        let row = BINDINGS
+            .iter()
+            .find(|b| b.command == crate::monos::hotkeys::COMMAND)
+            .unwrap();
+        assert_eq!(
+            (row.keys, row.when, row.fixed),
+            ("⌃⌥1-9", "Anywhere", false)
+        );
+        assert_eq!(default_shortcuts(row).len(), 9);
+        assert!(default_shortcuts(row).contains(&"ctrl-alt-9".to_string()));
+    }
+
+    fn held(control: bool, alt: bool, shift: bool, platform: bool) -> gpui::Modifiers {
+        gpui::Modifiers {
+            control,
+            alt,
+            shift,
+            platform,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn recording_the_mono_row_keeps_only_modifiers() {
+        let p = Preferences::default();
+        let command = crate::monos::hotkeys::COMMAND;
+        assert_eq!(
+            mono_modifiers_choice(&p, command, &held(true, true, true, false)).as_deref(),
+            Ok("ctrl-alt-shift")
+        );
+        assert!(mono_modifiers_choice(&p, command, &held(false, false, false, false)).is_err());
+        assert!(mono_modifiers_choice(&p, command, &held(false, false, true, false)).is_err());
+    }
+
+    #[test]
+    fn recording_the_mono_row_detects_conflicts() {
+        let command = crate::monos::hotkeys::COMMAND;
+        let p = Preferences::default();
+        // The tab shortcuts: Command+1..8 on macOS, Ctrl+1..8 elsewhere.
+        let tab = if cfg!(target_os = "macos") {
+            held(false, false, false, true)
+        } else {
+            held(true, false, false, false)
+        };
+        assert_eq!(
+            mono_modifiers_choice(&p, command, &tab),
+            Err("Already used by Tab: Activate 1–8".into())
+        );
+        let mut p = Preferences::default();
+        p.keybindings
+            .insert("App: Quick Composer".into(), Some("ctrl-alt-4".into()));
+        assert_eq!(
+            mono_modifiers_choice(&p, command, &held(true, true, false, false)),
+            // Quick Composer is macOS-only, so elsewhere it holds nothing.
+            if cfg!(target_os = "macos") {
+                Err("Already used by App: Quick Composer".into())
+            } else {
+                Ok("ctrl-alt".into())
+            }
+        );
+    }
+
+    #[test]
+    fn other_rows_cannot_take_a_digit_the_mono_row_holds() {
+        let mut p = Preferences::default();
+        // The Mono row is macOS-only: elsewhere it is hidden and holds nothing.
+        let holder = cfg!(target_os = "macos").then_some(crate::monos::hotkeys::COMMAND);
+        let owner =
+            |p: &Preferences, shortcut: &str| shortcut_owner(p, "App: Toggle Sidebar", shortcut);
+        let shifted = gpui::Keystroke::parse("shift-cmd-3").unwrap().unparse();
+        assert_eq!(owner(&p, "ctrl-alt-3"), holder);
+        p.keybindings.insert(
+            crate::monos::hotkeys::COMMAND.into(),
+            Some("cmd-shift".into()),
+        );
+        assert_eq!(owner(&p, "ctrl-alt-3"), None);
+        assert_eq!(owner(&p, &shifted), holder);
+        p.keybindings
+            .insert(crate::monos::hotkeys::COMMAND.into(), None);
+        assert_eq!(owner(&p, &shifted), None);
     }
 }
