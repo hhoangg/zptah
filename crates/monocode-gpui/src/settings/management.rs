@@ -338,6 +338,7 @@ impl SettingsView {
         cx.notify();
     }
     pub(super) fn submit_management(&mut self, cx: &mut Context<Self>) {
+        let account = self.mcp_profile(cx);
         let Some(editor) = &mut self.management else {
             return;
         };
@@ -394,7 +395,14 @@ impl SettingsView {
         let generation = self.management_generation;
         let work = cx.background_executor().spawn(async move {
             match target {
-                Target::Mcp => monocode_core::mcp::mcp_add(cwd, provider, scope, name, body),
+                Target::Mcp => monocode_core::mcp::mcp_add_for(
+                    cwd,
+                    provider,
+                    scope,
+                    name,
+                    body,
+                    account.as_ref(),
+                ),
                 Target::Skill => {
                     monocode_core::skills::create_blank(&cwd, &name, scope == "user").map(|_| ())
                 }
