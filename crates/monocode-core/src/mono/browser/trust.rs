@@ -389,7 +389,11 @@ impl TrustState {
     pub fn begin_run(&mut self, user_message: &str) {
         self.read_tokens.clear();
         self.injection = false;
-        self.note_user_message(user_message);
+        // A run that was not started by a message the user typed (an automation, another Mono)
+        // brings no words of the user's own.
+        if !user_message.trim().is_empty() {
+            self.note_user_message(user_message);
+        }
     }
 
     /// A message the user typed: its domains become task domains.

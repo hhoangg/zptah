@@ -3,8 +3,8 @@
 //! Allowed: a file inside the Mono's project folder or its output folder, or a path the user gave
 //! in the conversation (verbatim). Always refused, even inside an allowed folder: dotfiles and
 //! dot folders (`.env`, `.git/`, ...), the places that hold credentials (`~/.ssh`, `~/.aws`,
-//! `~/.gnupg`, `~/.config/gcloud`, `~/.kube`, keychains), the browsers' and chat apps' stores and
-//! the app's own data folders. Every check is on the path after symlinks are resolved, so a link
+//! `~/.gnupg`, `~/.config/gcloud`, `~/.kube`, keychains), the browsers' and chat apps' stores,
+//! Ardia's own data folders and the app's own data folders. Every check is on the path after symlinks are resolved, so a link
 //! into `~/.ssh` is the file it points to. The file must exist and be a regular file.
 use crate::credential_guard::{
     all_app_data_dirs, INDEXED_HOME_PATHS, MORE_HOME_CREDENTIALS, SECRET_STORE_DIRS,
@@ -33,9 +33,75 @@ pub struct UploadFile {
     /// The absolute path after symlinks: what is sent to `ardia` and shown on the card.
     pub path: PathBuf,
     pub size: u64,
+    /// What the file was when it was checked (see [`UploadFile::recheck`]).
+    stamp: Stamp,
+}
+
+/// The identity of a file at the time it was checked: size and modification time everywhere, and
+/// the device and inode where there are such things.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Stamp {
+    size: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
+}
+
+impl Stamp {
+    fn of(meta: &std::fs::Metadata) -> Self {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        Self {
+            size: meta.len(),
+            modified: meta.modified().ok(),
+            #[cfg(unix)]
+            dev: meta.dev(),
+            #[cfg(unix)]
+            ino: meta.ino(),
+        }
+    }
+}
+
+/// A file with more than one hard link can be the same data as a file somewhere else (a link to
+/// `~/.ssh/id_rsa` made inside the project folder): it is never uploaded.
+fn has_hard_links(meta: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        meta.nlink() > 1
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        false
+    }
 }
 
 impl UploadFile {
+    /// Right before the command: the path still resolves to itself (it is not a link now), and
+    /// the file is the one that was checked (same device and inode, size and modification time).
+    /// A file swapped while the user was asked is refused.
+    pub fn recheck(&self) -> Result<(), String> {
+        let shown = self.path.display();
+        let again =
+            std::fs::canonicalize(&self.path).map_err(|_| format!("the file `{shown}` is gone"))?;
+        if again != self.path {
+            return Err(format!(
+                "the file `{shown}` now resolves to {}, so it is not the file that was checked",
+                again.display()
+            ));
+        }
+        let meta = std::fs::metadata(&again).map_err(|_| format!("the file `{shown}` is gone"))?;
+        if !meta.is_file() || has_hard_links(&meta) || Stamp::of(&meta) != self.stamp {
+            return Err(format!(
+                "the file `{shown}` changed while the user was asked"
+            ));
+        }
+        Ok(())
+    }
+
     /// `"/abs/path (12.3 KB)"` for the card.
     pub fn describe(&self) -> String {
         format!("{} ({})", self.path.display(), human_size(self.size))
@@ -113,6 +179,31 @@ fn is_keychain(path: &Path) -> bool {
     })
 }
 
+/// The data folders of the Ardia browser (cookies, logins, history): never uploaded. The macOS,
+/// Linux and Windows places, under `home` and under the environment's `APPDATA` and
+/// `LOCALAPPDATA` when they are set.
+pub fn ardia_data_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = [
+        "Library/Application Support/Ardia",
+        "Library/Application Support/com.ardia.browser",
+        ".config/Ardia",
+        ".config/ardia",
+        ".local/share/Ardia",
+        ".local/share/ardia",
+        "AppData/Roaming/Ardia",
+        "AppData/Local/Ardia",
+    ]
+    .iter()
+    .map(|tail| home.join(tail))
+    .collect();
+    for var in ["APPDATA", "LOCALAPPDATA"] {
+        if let Some(base) = std::env::var_os(var) {
+            dirs.push(PathBuf::from(base).join("Ardia"));
+        }
+    }
+    dirs
+}
+
 /// Credential files and the stores of other programs, and the app's own data (the same lists the
 /// remote file read refuses), plus keychains. `canonical` is a resolved path.
 pub fn credential_place(canonical: &Path, home: &Path, output_dir: Option<&Path>) -> bool {
@@ -129,6 +220,7 @@ pub fn credential_place(canonical: &Path, home: &Path, output_dir: Option<&Path>
         .map(|tail| home.join(tail))
         .chain(std::iter::once(home.join("Library/Keychains")))
         .chain(std::iter::once(home.join(".local/share/keyrings")))
+        .chain(ardia_data_dirs(&home))
         .any(|dir| canonical.starts_with(&dir) || canonical.starts_with(canonical_dir(&dir)));
     if listed {
         return true;
@@ -173,6 +265,11 @@ pub fn check(paths: &[String], rules: &Rules) -> Result<Vec<UploadFile>, String>
                 "`{raw}` is not a regular file (a folder is never uploaded)."
             ));
         }
+        if has_hard_links(&meta) {
+            return Err(format!(
+                "`{raw}` has more than one hard link, so it could be the same file as one that is never uploaded."
+            ));
+        }
         if credential_place(&resolved, home, rules.output_dir.as_deref()) {
             return Err(format!(
                 "`{raw}` holds credentials or the app's own data, so it is never uploaded."
@@ -209,6 +306,7 @@ pub fn check(paths: &[String], rules: &Rules) -> Result<Vec<UploadFile>, String>
         files.push(UploadFile {
             path: resolved,
             size: meta.len(),
+            stamp: Stamp::of(&meta),
         });
     }
     Ok(files)

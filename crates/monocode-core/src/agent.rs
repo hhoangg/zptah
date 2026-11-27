@@ -125,6 +125,15 @@ pub struct Settings {
     pub mono_sent_at: Option<u64>,
     #[serde(skip)]
     pub internal_message: bool,
+    /// The run was started by an automation, not by a message the user typed.
+    #[serde(skip)]
+    pub automated: bool,
+    /// The text the user typed for this turn: `Some` only for a real user message (not an
+    /// automation, a message from another Mono or the app), and never the assembled prompt
+    /// (attachments, notes, Mono context, earlier assistant text). The browser gate starts its
+    /// task and taint tracking from it, so only what the user wrote counts as the user's word.
+    #[serde(skip)]
+    pub user_prompt: Option<String>,
     #[serde(skip)]
     pub attachments: Vec<std::path::PathBuf>,
     pub revision: u64,

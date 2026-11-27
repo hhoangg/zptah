@@ -602,6 +602,9 @@ pub trait Upstream: Send + Sync {
     fn run_ended(&self, _session: i64) {}
     /// A page read in app session `session` carried an injection pattern.
     fn injection_found(&self, _session: i64) {}
+    /// The Mono declared an intent (`browser_declare_intent`) in app session `session`; `approved`
+    /// is false for one declared after a read that the user did not approve.
+    fn intent_declared(&self, _session: i64, _intent: &defense::Intent, _approved: bool) {}
 }
 
 thread_local! {

@@ -54,6 +54,7 @@ pub fn never_granted(c: Category) -> bool {
             | Category::CredentialEntry
             | Category::Injection
             | Category::Tainted
+            | Category::Unclear
             | Category::SoulRule
     )
 }

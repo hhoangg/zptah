@@ -46,6 +46,8 @@ pub(super) fn json_of(text: &str) -> Value {
 // ---- the fakes ----
 
 pub(super) type CloseHook = Box<dyn FnOnce(&mut State) + Send>;
+/// Runs once when the fake gets the next command of this name.
+pub(super) type CmdHook = (String, CloseHook);
 
 #[derive(Default)]
 pub(super) struct State {
@@ -112,6 +114,30 @@ pub(super) struct State {
     pub listed_url: Option<String>,
     /// Runs once, inside the first `tabs close` (a tab is opened while tabs are being closed).
     pub on_close: Option<CloseHook>,
+    /// `get attr` of these attributes is refused (not "absent": the command fails).
+    pub attr_fail: Vec<String>,
+    /// What `eval` answers as its `result` string (`None`: built from the page's focus).
+    pub focus_raw: Option<String>,
+    /// `eval` is refused.
+    pub focus_fails: bool,
+    /// Every script `eval` was sent.
+    pub evals: Vec<String>,
+    /// Runs once, when the next command of this name reaches the fake (before its answer).
+    pub on_cmd: Option<CmdHook>,
+    /// The Ardia profile of the user's own tab (`None`: the Mono's).
+    pub user_tab_profile: Option<String>,
+    /// The next bind of the user's tab says it bound this tab id instead.
+    pub bind_wrong: Option<String>,
+    /// How many times `check` or `uncheck` clicked something that is not a checkbox.
+    pub misclicks: usize,
+    /// `ardia call windows` is refused.
+    pub windows_fail: bool,
+    /// The session is bound to the user's own tab (it then shows in `tab list`).
+    pub bound_user: bool,
+    /// The next act command is refused with this message (a page-controlled text).
+    pub act_error: Option<String>,
+    /// The POSTs `press Enter` reports (URLs), when it navigates.
+    pub posts: Vec<String>,
 }
 
 pub(super) struct FakeRunner {
@@ -220,6 +246,30 @@ impl Runner for FakeRunner {
                         .collect();
                     ok(Value::Array(list).to_string())
                 }
+                "windows" => {
+                    if st.windows_fail {
+                        return Ok(Output {
+                            code: 1,
+                            stdout: String::new(),
+                            stderr: "windows unavailable".into(),
+                        });
+                    }
+                    let profile = st
+                        .user_tab_profile
+                        .clone()
+                        .unwrap_or_else(|| PROFILE.to_owned());
+                    let (id, url, title) = st
+                        .user_tab
+                        .clone()
+                        .unwrap_or_else(|| ("tab-user-blank".into(), String::new(), String::new()));
+                    let mut tabs = vec![
+                        json!({"id": id, "url": url, "title": title, "profile": profile, "active": true, "pinned": false, "group": null, "targetId": null, "pageGeneration": 0}),
+                    ];
+                    for own in &st.tabs {
+                        tabs.push(json!({"id": own, "url": st.url, "title": "Mono tab", "profile": PROFILE, "active": false, "pinned": false, "group": null, "targetId": null, "pageGeneration": 1}));
+                    }
+                    ok(json!([{"id": "w-1", "kind": "normal", "focused": true, "profile": "default", "profileName": "Main", "tabs": tabs}]).to_string())
+                }
                 "settings.get" if st.settings_fail => Ok(Output {
                     code: 1,
                     stdout: String::new(),
@@ -298,6 +348,10 @@ impl Runner for FakeRunner {
                         if let Some(url) = &st.listed_url {
                             reply["data"]["tabs"][0]["url"] = json!(url);
                         }
+                        if let (true, Some((id, url, title))) = (st.bound_user, st.user_tab.clone())
+                        {
+                            reply["data"]["tabs"] = json!([{"tabId": "t9", "appTabId": id, "title": title, "url": url, "type": "page", "active": true, "openedBySession": false}]);
+                        }
                         ok(reply.to_string())
                     }
                     ["tab", id] => {
@@ -308,6 +362,19 @@ impl Runner for FakeRunner {
                                 stdout: ASLEEP.into(),
                                 stderr: String::new(),
                             });
+                        }
+                        st.bound_user = false;
+                        if let Some((user, url, title)) = st.user_tab.clone() {
+                            if user == *id {
+                                st.bound_user = true;
+                                st.url = url;
+                                let mut reply = json_of(BIND);
+                                let bound = st.bind_wrong.take().unwrap_or_else(|| id.to_string());
+                                reply["data"]["appTabId"] = json!(bound);
+                                reply["data"]["url"] = json!(st.url);
+                                reply["data"]["title"] = json!(title);
+                                return ok(reply.to_string());
+                            }
                         }
                         let mut reply = json_of(BIND);
                         reply["data"]["appTabId"] = json!(id);

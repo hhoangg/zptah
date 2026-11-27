@@ -940,7 +940,7 @@ impl Controller {
                 .collect()
         };
         for session in sessions {
-            self.end_session_in(&session, profile);
+            self.end_session_in(&session, profile, false);
         }
     }
     /// [`Controller::end_mono`] on a thread, so a caller on the UI thread never waits for `ardia`.
@@ -964,7 +964,14 @@ impl Controller {
 
     /// Ends one browse session: releases its holds and closes the tabs zptah opened for it.
     pub fn end_session(&self, session: &str) {
-        self.end_session_in(session, None);
+        self.end_session_in(session, None, false);
+    }
+
+    /// [`Controller::end_session`] that also unbinds the browse session and releases its holds
+    /// when `release` is set, even if zptah opened no tab for it (it only worked in the user's
+    /// own tab, which is never closed).
+    pub fn end_session_releasing(&self, session: &str, release: bool) {
+        self.end_session_in(session, None, release);
     }
 
     /// The tabs of `session` in `profile` (`None`: any profile).
@@ -978,9 +985,9 @@ impl Controller {
     /// [`Controller::end_session`], limited to one profile's tabs when `profile` is given. A tab
     /// opened while this runs is closed too: the tabs are read again after each round, a few
     /// rounds at most.
-    fn end_session_in(&self, session: &str, profile: Option<&str>) {
+    fn end_session_in(&self, session: &str, profile: Option<&str>, release: bool) {
         let mut tabs = self.tabs_to_end(session, profile);
-        if tabs.is_empty() {
+        if tabs.is_empty() && !(release && profile.is_none()) {
             return;
         }
         // The browse session and its holds go only when the whole session ends: a profile change

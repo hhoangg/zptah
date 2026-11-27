@@ -1594,7 +1594,9 @@ fn run_operation(
     // A run is one agent turn: the gate starts its taint and intent tracking from the user's own
     // request text, never from anything a page returns.
     if let Some(runtime) = &browser {
-        runtime.begin_turn(&request.prompt);
+        // Never `request.prompt`: that is the assembled prompt (Mono context, attachments, note
+        // bodies, earlier assistant text, handoff briefs) and can carry words the user never wrote.
+        runtime.begin_turn(request.settings.user_prompt.as_deref().unwrap_or(""));
         // The extension backend asks through its own cards (`mono::browser::trust::approval`):
         // nobody can answer one in a plan run, at read-only access or without controls.
         runtime.set_can_answer(

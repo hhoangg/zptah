@@ -1,6 +1,6 @@
 //! The act tools of the Ardia upstream (design spec sections 4, 6 and 9), through the fake
 //! `ardia` of `tests.rs` and the page of `fake_page.rs` (recorded replies in `fixtures/`).
-use super::fake_page::{El, FailKind, Page};
+use super::fake_page::{focus_input, El, FailKind, Page};
 use super::tests::*;
 use super::upstream::*;
 use crate::mono::browser::copy::ActionDesc;
@@ -18,29 +18,34 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const FORM_LOGIN: &str = include_str!("fixtures/browse_form_login.json");
-const LOGIN_URL: &str = "https://shop.example/login";
+pub(super) const LOGIN_URL: &str = "https://shop.example/login";
+
+/// What runs once when a card is shown.
+pub(super) type CardHook = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
 
 /// A Mono at some level with its upstream, an audit database, a card queue that answers as told,
 /// and folders for the uploads.
-struct Act {
-    r: Rig,
-    up: Arc<ArdiaUpstream>,
-    mono: String,
-    db: PathBuf,
-    queue: Arc<ApprovalQueue>,
-    cfg: ActConfig,
-    origins: Origins,
+pub(super) struct Act {
+    pub(super) r: Rig,
+    pub(super) up: Arc<ArdiaUpstream>,
+    pub(super) mono: String,
+    pub(super) db: PathBuf,
+    pub(super) queue: Arc<ApprovalQueue>,
+    pub(super) cfg: ActConfig,
+    pub(super) origins: Origins,
     /// The cards the user was shown (in order).
-    cards: Arc<Mutex<Vec<PendingApproval>>>,
+    pub(super) cards: Arc<Mutex<Vec<PendingApproval>>>,
     /// What the user answers; `None`: the card stays open.
-    answer: Arc<Mutex<Option<UserAnswer>>>,
+    pub(super) answer: Arc<Mutex<Option<UserAnswer>>>,
+    /// Runs (once) when a card is shown, before the user's answer is given.
+    pub(super) on_card: CardHook,
     _sub: Subscription,
-    dir: tempfile::TempDir,
+    pub(super) dir: tempfile::TempDir,
 }
 
 static NEXT: AtomicUsize = AtomicUsize::new(1);
 
-fn act_with(level: BrowserLevel, origins: Origins) -> Act {
+pub(super) fn act_with(level: BrowserLevel, origins: Origins) -> Act {
     let r = rig(true);
     let dir = tempfile::Builder::new()
         .prefix("zp-act-")
@@ -55,14 +60,18 @@ fn act_with(level: BrowserLevel, origins: Origins) -> Act {
     let queue = ApprovalQueue::new(&mono);
     let cards = Arc::new(Mutex::new(Vec::new()));
     let answer = Arc::new(Mutex::new(Some(UserAnswer::AllowOnce)));
+    let on_card: CardHook = Arc::new(Mutex::new(None));
     let weak = Arc::downgrade(&queue);
-    let (seen, choice) = (cards.clone(), answer.clone());
+    let (seen, choice, hook) = (cards.clone(), answer.clone(), on_card.clone());
     let sub = queue.subscribe(move || {
         let Some(queue) = weak.upgrade() else { return };
         for card in queue.pending() {
             let choice = *choice.lock().unwrap();
             if let Some(choice) = choice {
                 seen.lock().unwrap().push(card.clone());
+                if let Some(hook) = hook.lock().unwrap().take() {
+                    hook();
+                }
                 queue.answer(&card.id, choice);
             }
         }
@@ -87,18 +96,21 @@ fn act_with(level: BrowserLevel, origins: Origins) -> Act {
         origins,
         cards,
         answer,
+        on_card,
         _sub: sub,
         dir,
     };
     a.configure(vec![a.path("home/proj")]);
+    // These tests are about the tools; the untrusted-content rule has its own tests.
+    a.up.set_taint_exempt(true);
     a
 }
-fn act() -> Act {
+pub(super) fn act() -> Act {
     act_with(BrowserLevel::Act, no_limits())
 }
 
 impl Act {
-    fn configure(&self, project_dirs: Vec<PathBuf>) {
+    pub(super) fn configure(&self, project_dirs: Vec<PathBuf>) {
         self.up.configure(Config {
             profile: PROFILE.into(),
             origins: self.origins.clone(),
@@ -109,39 +121,39 @@ impl Act {
             home: Some(self.path("home")),
         });
     }
-    fn call(&self, tool: &str, args: Value) -> (bool, String) {
+    pub(super) fn call(&self, tool: &str, args: Value) -> (bool, String) {
         call(&self.up, tool, args)
     }
-    fn set_page(&self, page: Page) {
+    pub(super) fn set_page(&self, page: Page) {
         self.r.runner.lock().page = page;
     }
     /// Opens the login page and takes a snapshot of it: the state a Mono acts from.
-    fn on_login(&self) {
+    pub(super) fn on_login(&self) {
         self.on(login_page());
     }
-    fn on(&self, page: Page) {
+    pub(super) fn on(&self, page: Page) {
         self.on_at(page, LOGIN_URL);
     }
-    fn on_at(&self, page: Page, url: &str) {
+    pub(super) fn on_at(&self, page: Page, url: &str) {
         self.set_page(page);
         let (error, text) = self.call("browser_open", json!({"url": url}));
         assert!(!error, "{text}");
         self.snapshot();
     }
-    fn snapshot(&self) {
+    pub(super) fn snapshot(&self) {
         let (error, text) = self.call("browser_snapshot", json!({"interactive": true}));
         assert!(!error, "{text}");
     }
-    fn sent(&self) -> Vec<Vec<String>> {
+    pub(super) fn sent(&self) -> Vec<Vec<String>> {
         self.r.runner.lock().act_sent.clone()
     }
-    fn answer(&self, answer: Option<UserAnswer>) {
+    pub(super) fn answer(&self, answer: Option<UserAnswer>) {
         *self.answer.lock().unwrap() = answer;
     }
-    fn cards(&self) -> Vec<PendingApproval> {
+    pub(super) fn cards(&self) -> Vec<PendingApproval> {
         self.cards.lock().unwrap().clone()
     }
-    fn rows(&self) -> Vec<Row> {
+    pub(super) fn rows(&self) -> Vec<Row> {
         let Ok(conn) = rusqlite::Connection::open(&self.db) else {
             return Vec::new();
         };
@@ -163,24 +175,24 @@ impl Act {
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
     }
-    fn rows_of(&self, tool: &str) -> Vec<Row> {
+    pub(super) fn rows_of(&self, tool: &str) -> Vec<Row> {
         self.rows().into_iter().filter(|r| r.tool == tool).collect()
     }
-    fn path(&self, tail: &str) -> PathBuf {
+    pub(super) fn path(&self, tail: &str) -> PathBuf {
         self.dir.path().join(tail)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Row {
-    tool: String,
-    decision: String,
-    reason: String,
-    summary: String,
-    owner: String,
+pub(super) struct Row {
+    pub(super) tool: String,
+    pub(super) decision: String,
+    pub(super) reason: String,
+    pub(super) summary: String,
+    pub(super) owner: String,
 }
 
-fn login_page() -> Page {
+pub(super) fn login_page() -> Page {
     let mut form = json_of(FORM_LOGIN)["data"].clone();
     form["url"] = json!(LOGIN_URL);
     Page {
@@ -208,13 +220,12 @@ fn login_page() -> Page {
         ],
         forms: vec![Some("/session".into())],
         form: Some(form),
-        focus: None,
-        epoch: 0,
+        ..Page::default()
     }
 }
 
 /// A page without a sign-in form.
-fn plain_page() -> Page {
+pub(super) fn plain_page() -> Page {
     Page {
         title: "Shipping notes".into(),
         elements: vec![
@@ -226,12 +237,11 @@ fn plain_page() -> Page {
             json!({"url": LOGIN_URL, "count": 1, "more": false, "stopped": null,
             "fields": [{"ref": "e1", "role": "textbox", "label": "Note", "type": "", "name": "note", "value": ""}], "submits": []}),
         ),
-        focus: None,
-        epoch: 0,
+        ..Page::default()
     }
 }
 
-fn blocked(origin: &str) -> Origins {
+pub(super) fn blocked(origin: &str) -> Origins {
     Origins::new(&[], &[origin.to_owned()])
 }
 
@@ -403,7 +413,7 @@ fn values_reach_the_command_only_after_a_double_dash_and_last() {
         );
     }
     // Every other value goes the same way.
-    a.r.runner.lock().page.focus = Some("e6".into());
+    a.r.runner.lock().page.focus = Some(focus_input("text", Some("nolabel"), Some("Field X")));
     a.call("browser_press", json!({"key": "-"}));
     a.call("browser_select", json!({"ref": "e14", "value": "--json"}));
     a.call("browser_type", json!({"ref": "e6", "text": "-5"}));
@@ -761,23 +771,27 @@ fn a_character_key_is_refused_in_a_password_field_and_when_the_focus_is_unknown(
     let a = act();
     a.on_login();
     // Focus in the password field.
-    a.r.runner.lock().page.focus = Some("e4".into());
+    a.r.runner.lock().page.focus = Some(focus_input("password", Some("pw"), Some("Secret")));
     let (error, text) = a.call("browser_press", json!({"key": "a"}));
     assert!(error && text.contains("never allowed"), "{text}");
     // A paste chord is a character key too.
     let (error, _) = a.call("browser_press", json!({"key": "Control+v"}));
     assert!(error);
-    // Focus unknown: lean to refusing.
-    a.r.runner.lock().page.focus = None;
+    // Focus the page could not name (an eval that fails, or an iframe): lean to refusing.
+    a.r.runner.lock().focus_fails = true;
+    let (error, text) = a.call("browser_press", json!({"key": "a"}));
+    assert!(error && text.contains("could not tell"), "{text}");
+    a.r.runner.lock().focus_fails = false;
+    a.r.runner.lock().page.focus = Some(json!({"tag": "IFRAME"}));
     let (error, text) = a.call("browser_press", json!({"key": "a"}));
     assert!(error && text.contains("could not tell"), "{text}");
     assert!(a.sent().is_empty());
     // Focus in an ordinary field: allowed.
-    a.r.runner.lock().page.focus = Some("e6".into());
+    a.r.runner.lock().page.focus = Some(focus_input("text", Some("nolabel"), Some("Field X")));
     let (error, text) = a.call("browser_press", json!({"key": "a"}));
     assert!(!error, "{text}");
     // Keys that type nothing stay under the normal rules, whatever has the focus.
-    a.r.runner.lock().page.focus = Some("e4".into());
+    a.r.runner.lock().page.focus = Some(focus_input("password", Some("pw"), Some("Secret")));
     for key in ["Tab", "Escape", "ArrowDown", "Backspace"] {
         let (error, text) = a.call("browser_press", json!({"key": key}));
         assert!(!error, "{key}: {text}");
@@ -968,7 +982,7 @@ fn a_submit_whose_form_posts_to_a_blocked_origin_is_not_clicked() {
 }
 
 #[test]
-fn enter_in_a_form_checks_every_form_action_of_the_page() {
+fn enter_in_a_ref_checks_every_form_action_of_the_page() {
     let a = act_with(BrowserLevel::Act, blocked("https://pay.example"));
     let mut page = login_page();
     // The first form is fine; a second one posts to a blocked origin: lean to refusing.
@@ -977,13 +991,13 @@ fn enter_in_a_form_checks_every_form_action_of_the_page() {
         Some("https://pay.example/charge".into()),
     ];
     a.on(page);
-    let (error, text) = a.call("browser_press", json!({"key": "Enter"}));
+    let (error, text) = a.call("browser_press", json!({"key": "Enter", "ref": "e3"}));
     assert!(error && text.contains("form leads to"), "{text}");
     assert!(a.sent().is_empty());
     // With only the safe form it goes.
     let b = act_with(BrowserLevel::Act, blocked("https://pay.example"));
     b.on_login();
-    let (error, text) = b.call("browser_press", json!({"key": "Enter"}));
+    let (error, text) = b.call("browser_press", json!({"key": "Enter", "ref": "e3"}));
     assert!(!error, "{text}");
     assert_eq!(b.sent().len(), 1);
 }
@@ -1029,6 +1043,9 @@ fn one_row_per_act_with_the_url_after_the_posts_and_no_typed_value() {
     let a = act();
     a.r.runner.lock().enter_to = Some("https://shop.example/done".into());
     a.on_login();
+    a.r.runner.lock().page.focus = Some(
+        json!({"tag": "INPUT", "type": "email", "name": "email", "label": "Email", "fi": 0, "sb": "Continue", "ce": false, "sh": false}),
+    );
     let (error, text) = a.call(
         "browser_fill",
         json!({"ref": "e3", "text": "swordfish-test-value"}),
@@ -1066,7 +1083,7 @@ fn one_row_per_act_with_the_url_after_the_posts_and_no_typed_value() {
 
 // ---- uploads ----
 
-fn write(path: &Path, bytes: &[u8]) {
+pub(super) fn write(path: &Path, bytes: &[u8]) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
@@ -1172,6 +1189,7 @@ fn dotfiles_credentials_keychains_and_symlinks_into_them_are_never_uploaded() {
     write(&home.join("proj/fine.txt"), b"fine");
     #[cfg(unix)]
     std::os::unix::fs::symlink(home.join(".ssh/id_test"), home.join("proj/innocent.txt")).unwrap();
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut refused = vec![
         home.join("proj/.env"),
         home.join("proj/.git/config"),
@@ -1224,7 +1242,7 @@ fn a_missing_file_a_folder_a_relative_path_and_no_files_are_refused() {
 
 // ---- tab ownership ----
 
-fn with_user_tab(a: &Act, url: &str) {
+pub(super) fn with_user_tab(a: &Act, url: &str) {
     a.r.runner.lock().user_tab = Some(("tab-user-1".into(), url.into(), "My tab".into()));
 }
 
@@ -1472,7 +1490,7 @@ fn stop_withdraws_an_open_card() {
     assert!(wait_until(|| !a.queue.pending().is_empty()));
     a.up.stop_turn(0);
     let (error, text) = worker.join().unwrap();
-    assert!(error && text.contains("nobody could answer"), "{text}");
+    assert!(error && text.contains("stopped the browser"), "{text}");
     assert!(a.queue.pending().is_empty());
     assert!(a.sent().is_empty());
 }

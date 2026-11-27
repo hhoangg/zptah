@@ -5,30 +5,34 @@
 //! Every act tool is the same sequence:
 //!
 //! 1. validate the arguments (no process runs for a malformed call);
-//! 2. a **fresh read** of the page right before the action: the tab URL and title, the snapshot
-//!    refs, and for the target its `type`, `autocomplete`, link `href` and button `formaction`,
-//!    the page's `form` and the actions of its forms. The call fails with "the element changed,
-//!    take a new snapshot" when the ref was never in a snapshot the Mono took, no longer
-//!    resolves, has another role or name, or the tab is on another URL than at that snapshot;
-//! 3. checks that no approval can override: the page and the destination (a link's `href`, a
-//!    form's `action`) against the Mono's origin lists, a password or one-time code field, a
-//!    character key whose focus is not known to be harmless, an upload outside the allowed places;
-//! 4. the shared classifier ([`TrustState::evaluate`]) on the fresh read, and when it says ask,
-//!    a card through the approval queue (a grant, a soul rule and the level work as for the
-//!    extension backend);
+//! 2. a **fresh read** of the page right before the action ([`super::read`]): the tab URL and
+//!    title, the snapshot refs, the target's attributes, the page's `form` and the actions of its
+//!    forms, the text around a bare button, and for a key with no ref the focused element. The
+//!    call fails with "the element changed, take a new snapshot" when the ref was never in a
+//!    snapshot the Mono took, no longer resolves, has another role or name, or the tab is on
+//!    another URL than at that snapshot;
+//! 3. checks that no approval can override, then the shared classifier on the fresh read
+//!    ([`super::judge`]); when it says ask, a card through the approval queue (a grant, a soul
+//!    rule and the level work as for the extension backend). No card is posted for a turn that
+//!    was stopped;
+//! 4. after the user answered, the fresh read and the decision again: the same destinations and
+//!    categories and no new refusal, or the call fails as changed. An upload's files are checked
+//!    again too (the same file, not swapped for a link);
 //! 5. the command, then the URL after it, the origin check of the page it left the tab on
 //!    ([`ArdiaUpstream::after`]) and one audit row.
 //!
 //! An act call is never repeated: when its outcome is unknown (Ardia went away after the command
 //! was sent, a timeout) the Mono is told it may or may not have run.
-use super::fresh::{self, Attrs, ElementInput, FormActions, FormRead, CHANGED};
+use super::fresh::{self, CHANGED};
+use super::judge::Judged;
+use super::read::Read;
 use super::uploads;
+use super::user_tab;
 use super::*;
 use crate::mono::browser::ardia::runner::literal_value;
 use crate::mono::browser::copy::{ActionDesc, CardFacts};
-use crate::mono::browser::gate::extension::act::looks_vietnamese;
 use crate::mono::browser::risk::decide::Decision;
-use crate::mono::browser::risk::signals::{registrable_domain_of, site_category, ActionKind};
+use crate::mono::browser::risk::signals::{registrable_domain_of, site_category};
 use crate::mono::browser::risk::Category;
 use crate::mono::browser::trust::approval::{
     offers_conversation, NoticeKind, Outcome, Request, UserAnswer,
@@ -38,19 +42,21 @@ use crate::mono::browser::trust::{
     Action as TrustAction, Answer, BrowserLevel, Config as TrustConfig, Evaluation, Tier,
 };
 use std::collections::BTreeSet;
-
+use std::time::Instant;
 /// How often a card's wait renews the holds on the conversation's tabs.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
+/// How often a card's wait looks at whether the turn was stopped.
+const STOP_POLL: Duration = Duration::from_millis(200);
 /// The longest text one `browser_type` or `browser_fill` takes.
 const MAX_TYPED: usize = 20_000;
 /// The added elements an act reply lists (their refs become usable without a new snapshot).
 const MAX_ADDED: usize = 20;
 /// What the Mono is told for a ref it never got from a snapshot.
-const NEVER_SEEN: &str = "That ref was not in any snapshot you took of this page, so it is not used. Take a new snapshot and use a ref from it (the element changed, take a new snapshot).";
+pub(super) const NEVER_SEEN: &str = "That ref was not in any snapshot you took of this page, so it is not used. Take a new snapshot and use a ref from it (the element changed, take a new snapshot).";
 
 /// The tool name the shared classifier knows (its tier table, the soul rules and the deny list
 /// use the extension backend's names). The audit and the Mono keep the Ardia names.
-fn classifier_name(tool: &str) -> &'static str {
+pub(super) fn classifier_name(tool: &str) -> &'static str {
     match tool {
         "browser_click" | "browser_check" => "browser_click",
         "browser_type" | "browser_fill" => "browser_type",
@@ -63,7 +69,7 @@ fn classifier_name(tool: &str) -> &'static str {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Op {
+pub(super) enum Op {
     Click,
     Check,
     Hover,
@@ -75,22 +81,26 @@ enum Op {
 }
 
 /// How the call is run and shown, built from the tool and its arguments.
-struct Plan {
-    tool: String,
-    op: Op,
-    args: Value,
-    /// `e12`: the ref the call acts on (none for a key).
-    ref_: Option<String>,
+pub(super) struct Plan {
+    pub tool: String,
+    pub op: Op,
+    pub args: Value,
+    /// `e12`: the ref the call acts on (a key may have none).
+    pub ref_: Option<String>,
     /// The command and its flags.
-    cmd: Vec<&'static str>,
-    /// The values after `--`, the ref first (`@e12`).
-    values: Vec<String>,
+    pub cmd: Vec<&'static str>,
+    /// The values after `--`, the ref first (`@e12`), then the text or key.
+    pub values: Vec<String>,
     /// Every value the call types (looked at for a card number, never stored).
-    typed: Option<String>,
-    key: Option<String>,
-    paths: Vec<String>,
+    pub typed: Option<String>,
+    pub key: Option<String>,
+    pub paths: Vec<String>,
     /// For the audit: what was done, never a typed value.
-    summary: String,
+    pub summary: String,
+    /// `browser_check` with `checked: false`.
+    pub uncheck: bool,
+    /// The text of a type or fill has a line break (which can press Enter).
+    pub newline: bool,
 }
 
 fn build_plan(tool: &str, args: &Value) -> Result<Plan, String> {
@@ -112,6 +122,8 @@ fn build_plan(tool: &str, args: &Value) -> Result<Plan, String> {
         key: None,
         paths: Vec::new(),
         summary: String::new(),
+        uncheck: false,
+        newline: false,
     };
     let with_ref = |plan: &mut Plan, r: String| {
         plan.values.push(format!("@{r}"));
@@ -128,6 +140,7 @@ fn build_plan(tool: &str, args: &Value) -> Result<Plan, String> {
             plan.op = Op::Check;
             let on = args["checked"].as_bool().unwrap_or(true);
             plan.cmd = vec![if on { "check" } else { "uncheck" }];
+            plan.uncheck = !on;
             with_ref(&mut plan, ref_()?);
             plan.summary = if on { "check" } else { "uncheck" }.into();
         }
@@ -149,6 +162,7 @@ fn build_plan(tool: &str, args: &Value) -> Result<Plan, String> {
             literal_value("text", text, fill, MAX_TYPED)?;
             plan.values.push(text.to_owned());
             plan.typed = Some(text.to_owned());
+            plan.newline = text.contains(['\n', '\r']);
             plan.summary = typed_summary("field", text);
         }
         "browser_select" => {
@@ -169,9 +183,17 @@ fn build_plan(tool: &str, args: &Value) -> Result<Plan, String> {
             plan.cmd = vec!["press"];
             let key = args["key"].as_str().ok_or("browser_press needs `key`.")?;
             literal_value("key", key, false, 40)?;
+            // With a `ref` the key is pressed in that element (`press @e3 Enter`), so the gate
+            // judges exactly it and its form; without one the gate reads the focus itself.
+            let has_ref = ["ref", "target"]
+                .iter()
+                .any(|k| args.get(*k).is_some_and(|v| !v.is_null()));
+            if has_ref {
+                with_ref(&mut plan, ref_()?);
+            }
             plan.values.push(key.to_owned());
             plan.key = Some(key.to_owned());
-            plan.summary = if fresh::is_printable_key(key) {
+            plan.summary = if fresh::is_printable_key(key) && !fresh::is_space_key(key) {
                 "press a character key".into()
             } else {
                 format!("press {}", key.chars().take(20).collect::<String>())
@@ -201,44 +223,45 @@ fn build_plan(tool: &str, args: &Value) -> Result<Plan, String> {
     Ok(plan)
 }
 
-/// Everything the gate read from the page right before the action.
-#[derive(Default)]
-struct Read {
-    tab: String,
-    url: String,
-    title: String,
-    /// The element the action lands on: the target, or the focused element of a key.
-    ref_: Option<String>,
-    role: String,
-    name: String,
-    attrs: Attrs,
-    form: FormRead,
-    actions: FormActions,
-    /// For a key: the focus is known (a snapshot line marks it).
-    focus_known: bool,
-}
-
-fn is_stale_code(code: Option<&str>) -> bool {
+pub(super) fn is_stale_code(code: Option<&str>) -> bool {
     matches!(code, Some("stale_ref" | "vocab_superseded" | "unknown_ref"))
 }
 
-fn is_field_role(role: &str) -> bool {
+/// Roles of a control that holds typed text.
+pub(super) fn is_field_role(role: &str) -> bool {
     matches!(
         role,
         "textbox" | "searchbox" | "combobox" | "spinbutton" | "textarea"
     )
 }
 
+/// Roles `check` and `uncheck` work on. `check` on anything else CLICKS it (a page script runs)
+/// and only then fails, so the gate refuses it first.
+pub(super) fn is_checkable_role(role: &str) -> bool {
+    matches!(
+        role,
+        "checkbox" | "radio" | "switch" | "menuitemcheckbox" | "menuitemradio"
+    )
+}
+
+/// How an act was decided.
+enum Decided {
+    /// Allowed (no card).
+    Go(AuditDecision),
+    /// The user answered a card.
+    Asked { card: String, answer: Answer },
+}
+
 impl ArdiaUpstream {
     // ---- trust state, per conversation ----
 
-    fn trust_map(&self) -> MutexGuard<'_, HashMap<i64, TrustState>> {
+    pub(super) fn trust_map(&self) -> MutexGuard<'_, HashMap<i64, TrustState>> {
         self.trust.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Runs `f` on the conversation's trust state, creating it on first use. `None` when this
     /// Mono has no act settings.
-    fn with_trust<R>(
+    pub(super) fn with_trust<R>(
         &self,
         session: i64,
         f: impl FnOnce(&mut TrustState, &ActConfig) -> R,
@@ -257,9 +280,29 @@ impl ArdiaUpstream {
 
     pub(super) fn begin_run_trust(&self, session: i64, message: &str) {
         self.with_trust(session, |state, _| state.begin_run(message));
+        // A new turn: nothing read, nothing declared. `message` is what the user typed (empty for
+        // a run no user message started).
+        let page = self.conv(session, |c| c.page.clone());
+        self.turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(session, defense::Turn::new(message, &page));
     }
     pub(super) fn note_read(&self, session: i64, url: &str, text: &str) {
         self.with_trust(session, |state, _| state.note_read(url, text));
+        // What the Mono read is untrusted content: from now on an action it did not declare asks.
+        self.with_turn(session, |turn| {
+            turn.note_page(url);
+            turn.read(text, true);
+        });
+    }
+
+    /// The conversation's turn (what it has read and declared), created on first use.
+    pub(super) fn with_turn<R>(&self, session: i64, f: impl FnOnce(&mut defense::Turn) -> R) -> R {
+        let mut turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
+        f(turns
+            .entry(session)
+            .or_insert_with(|| defense::Turn::new("", "")))
     }
     pub(super) fn flag_injection(&self, session: i64) {
         self.with_trust(session, |state, _| state.flag_injection());
@@ -267,6 +310,10 @@ impl ArdiaUpstream {
     /// The conversation ended: its grants and what the gate remembered end, its cards are
     /// withdrawn.
     pub(super) fn end_trust(&self, conversation: i64) {
+        self.turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&conversation);
         let removed = self.trust_map().remove(&conversation);
         let act = self.config().act;
         match (removed, &act) {
@@ -314,7 +361,7 @@ impl ArdiaUpstream {
     // ---- audit ----
 
     /// Writes one decision row (never a typed value).
-    fn write_row(&self, mut row: DecisionAudit) {
+    pub(super) fn write_row(&self, mut row: DecisionAudit) {
         let config = self.config();
         let store = config
             .act
@@ -327,12 +374,12 @@ impl ArdiaUpstream {
         row.profile = row
             .profile
             .or_else(|| config.act.as_ref().and_then(|a| a.profile.clone()));
-        row.summary = row.summary.chars().take(300).collect();
+        row.summary = row.summary.chars().take(1200).collect();
         let _ = store.record_decision(&self.mono_id, &row);
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn row(
+    pub(super) fn row(
         &self,
         id: i64,
         tool: &str,
@@ -371,7 +418,7 @@ impl ArdiaUpstream {
     }
 
     /// A refusal: one row, and the text for the Mono.
-    fn refuse(
+    pub(super) fn refuse(
         &self,
         id: i64,
         plan: &Plan,
@@ -398,7 +445,7 @@ impl ArdiaUpstream {
     // ---- levels ----
 
     /// The act settings, when this Mono may act.
-    fn act_allowed(&self, id: i64, tool: &str) -> Result<ActConfig, String> {
+    pub(super) fn act_allowed(&self, id: i64, tool: &str) -> Result<ActConfig, String> {
         let Some(act) = self.config().act else {
             return Err(format!(
                 "{tool} is not available: this browser has no act settings loaded."
@@ -426,9 +473,20 @@ impl ArdiaUpstream {
 
     // ---- the act tools ----
 
+    /// `Err` when the turn was stopped: nothing more runs and no card is posted.
+    pub(super) fn not_stopped(&self, id: i64) -> Result<(), String> {
+        let (stopped, cancelled) = self.conv(id, |c| (c.stopped, c.cancel.is_cancelled()));
+        if stopped || cancelled {
+            Err(STOPPED.into())
+        } else {
+            Ok(())
+        }
+    }
+
     pub(super) fn act_tool(&self, id: i64, name: &str, args: &Value) -> Result<String, String> {
         let act = self.act_allowed(id, name)?;
-        let plan = build_plan(name, args)?;
+        let mut plan = build_plan(name, args)?;
+        self.not_stopped(id)?;
         let files = if plan.op == Op::Upload {
             Some(self.upload_files(id, &plan)?)
         } else {
@@ -441,36 +499,131 @@ impl ArdiaUpstream {
         }
         self.hold(id)?;
         let read = self.fresh_read(id, &tab, &plan)?;
-        let (ev, extra) = self.evaluate(id, &plan, &read, &act, files.as_deref())?;
-        let (approval_id, decision) = self.decide(id, &act, &plan, &read, &ev, files.as_deref())?;
-        if approval_id.is_some() {
-            // The card may have waited minutes: the page can have changed meanwhile.
-            self.hold(id)?;
-            self.still_same(id, &plan, &read).inspect_err(|text| {
-                self.row(
-                    id,
-                    &plan.tool,
-                    &read.url,
-                    &plan.summary,
-                    self.is_user_tab(id, &tab),
-                    Some(&ev),
-                    AuditDecision::Blocked,
-                    "the page changed while the user was asked",
-                    approval_id.clone(),
-                );
-                let _ = text;
-            })?;
+        self.note_key_text(id, &tab, &mut plan);
+        let judged = self.evaluate(id, &plan, &read, files.as_deref())?;
+        let (approval_id, decision) =
+            match self.decide(id, &act, &plan, &read, &judged.ev, files.as_deref())? {
+                Decided::Go(how) => (None, how),
+                Decided::Asked { card, answer } => {
+                    // The card may have waited minutes: the page can have changed meanwhile.
+                    self.hold(id)?;
+                    self.after_card(id, &tab, &plan, &read, &judged, &card, files.as_deref())?;
+                    let granted = self
+                        .with_trust(id, |state, _| state.commit(&judged.ev, answer))
+                        .unwrap_or_default();
+                    if let Some(action) = &judged.taint {
+                        self.with_turn(id, |turn| turn.note_approved(action));
+                    }
+                    let how = if answer == Answer::AllowedTask && !granted.is_empty() {
+                        AuditDecision::AskedAllowedTask
+                    } else {
+                        AuditDecision::AskedAllowedOnce
+                    };
+                    (Some(card), how)
+                }
+            };
+        if let Some(files) = &files {
+            // Right before the command: the same files as were checked, not swapped since.
+            for file in files {
+                if let Err(why) = file.recheck() {
+                    self.row(
+                        id,
+                        &plan.tool,
+                        &read.url,
+                        &plan.summary,
+                        self.is_user_tab(id, &tab),
+                        Some(&judged.ev),
+                        AuditDecision::Blocked,
+                        &why,
+                        approval_id.clone(),
+                    );
+                    return Err(format!("Not done: {why}. Nothing was uploaded."));
+                }
+            }
         }
         self.run_act(
             id,
             &plan,
             &read,
-            &ev,
-            &extra,
+            &judged.ev,
             decision,
             approval_id,
             files.as_deref(),
         )
+    }
+
+    /// After a card: the fresh read and the decision once more. The same destinations and
+    /// categories and no new refusal, or the call fails as changed.
+    #[allow(clippy::too_many_arguments)]
+    fn after_card(
+        &self,
+        id: i64,
+        tab: &str,
+        plan: &Plan,
+        read: &Read,
+        judged: &Judged,
+        card: &str,
+        files: Option<&[uploads::UploadFile]>,
+    ) -> Result<(), String> {
+        let row = |why: &str| {
+            self.row(
+                id,
+                &plan.tool,
+                &read.url,
+                &plan.summary,
+                self.is_user_tab(id, tab),
+                Some(&judged.ev),
+                AuditDecision::Blocked,
+                why,
+                Some(card.to_owned()),
+            )
+        };
+        self.not_stopped(id)
+            .inspect_err(|_| row("stopped while the user was asked"))?;
+        let again = self.fresh_read(id, tab, plan).inspect_err(|_| {
+            row("the page could not be read again after the user answered");
+        })?;
+        let second = match self.evaluate(id, plan, &again, files) {
+            Ok(second) => second,
+            Err(_) => {
+                row("a new refusal appeared while the user was asked");
+                return Err(CHANGED.to_owned());
+            }
+        };
+        if second.sig != judged.sig {
+            row("the page changed while the user was asked");
+            return Err(CHANGED.to_owned());
+        }
+        Ok(())
+    }
+
+    /// Characters pressed one key at a time add up per tab, in memory only, so a card number typed
+    /// digit by digit is still seen by the card check. Never written anywhere.
+    fn note_key_text(&self, id: i64, tab: &str, plan: &mut Plan) {
+        if !matches!(plan.op, Op::Press | Op::Type | Op::Fill) {
+            return;
+        }
+        let text = (plan.op == Op::Press)
+            .then(|| plan.key.as_deref().and_then(fresh::key_text))
+            .flatten();
+        let buffer = self.conv(id, |c| match text {
+            Some(text) => {
+                let buffer = c.key_text.entry(tab.to_owned()).or_default();
+                buffer.push_str(&text);
+                let extra = buffer.chars().count().saturating_sub(64);
+                if extra > 0 {
+                    *buffer = buffer.chars().skip(extra).collect();
+                }
+                Some(buffer.clone())
+            }
+            None => {
+                c.key_text.remove(tab);
+                None
+            }
+        });
+        if buffer.is_some() {
+            plan.typed = buffer;
+        }
     }
 
     fn upload_files(&self, id: i64, plan: &Plan) -> Result<Vec<uploads::UploadFile>, String> {
@@ -501,7 +654,7 @@ impl ArdiaUpstream {
 
     // ---- the fresh read ----
 
-    fn url_now(&self, id: i64) -> Result<String, String> {
+    pub(super) fn url_now(&self, id: i64) -> Result<String, String> {
         let data = self
             .browse(id, &["get", "url"], &[])
             .map_err(|f| self.act_fail(id, f))?;
@@ -509,446 +662,16 @@ impl ArdiaUpstream {
     }
 
     /// A failure before the command ran: a ref Ardia no longer knows is "the element changed".
-    fn act_fail(&self, id: i64, failure: Failure) -> String {
+    pub(super) fn act_fail(&self, id: i64, failure: Failure) -> String {
         if is_stale_code(failure.code()) {
             return CHANGED.to_owned();
         }
         self.fail(id, failure)
     }
 
-    /// One attribute: `Some(Some(v))` a value, `Some(None)` present but empty, `None` not
-    /// readable (absent, or the element has no such attribute).
-    fn attr_probe(
-        &self,
-        id: i64,
-        target: &str,
-        name: &str,
-    ) -> Result<Option<Option<String>>, String> {
-        match self.browse(id, &["get", "attr"], &[target, name]) {
-            Ok(data) => Ok(Some(fresh::attr_value(&data))),
-            Err(Failure::Refused { code, .. }) if is_stale_code(code.as_deref()) => {
-                Err(CHANGED.to_owned())
-            }
-            Err(Failure::Refused { .. }) => Ok(None),
-            Err(other) => Err(self.fail(id, other)),
-        }
-    }
-    fn attr(&self, id: i64, target: &str, name: &str) -> Result<Option<String>, String> {
-        Ok(self.attr_probe(id, target, name)?.flatten())
-    }
-
-    fn form_now(&self, id: i64) -> Result<FormRead, String> {
-        match self.browse(id, &["form"], &[]) {
-            Ok(data) => Ok(FormRead::parse(&data)),
-            Err(Failure::Refused { .. }) => Ok(FormRead::default()),
-            Err(other) => Err(self.fail(id, other)),
-        }
-    }
-
-    /// The actions of the page's forms, each resolved against the page address. The first form
-    /// is read with `get attr form action` (measured); further forms are probed one by one
-    /// (`form:nth-of-type(N)`, not measured) until one is not found. A form with no `action`
-    /// posts to the page itself.
-    fn form_actions_now(
-        &self,
-        id: i64,
-        page: &str,
-        form: &FormRead,
-    ) -> Result<FormActions, String> {
-        let mut out = FormActions {
-            urls: Vec::new(),
-            complete: true,
-        };
-        let mut push = |raw: Option<String>| match raw {
-            Some(raw) => match fresh::resolve(page, &raw) {
-                Some(url) => out.urls.push(url),
-                None => out.complete = false,
-            },
-            None => out.urls.push(page.to_owned()),
-        };
-        match self.attr_probe(id, "form", "action")? {
-            Some(raw) => push(raw),
-            None => {
-                // No form found. A page whose `form` lists fields has one: its action is unknown.
-                if form.known && (!form.fields.is_empty() || !form.submits.is_empty()) {
-                    out.complete = false;
-                }
-                return Ok(out);
-            }
-        }
-        for n in 2..=6 {
-            match self.attr_probe(id, &format!("form:nth-of-type({n})"), "action")? {
-                Some(raw) => push(raw),
-                None => break,
-            }
-        }
-        Ok(out)
-    }
-
-    fn fresh_read(&self, id: i64, tab: &str, plan: &Plan) -> Result<Read, String> {
-        let mut read = Read {
-            tab: tab.to_owned(),
-            url: self.url_now(id)?,
-            ..Read::default()
-        };
-        let config = self.config();
-        // The page the action would happen on must be one this Mono may use.
-        if let Err(refusal) = config.origins.check(&read.url) {
-            let text = format!(
-                "{} Nothing was done: the tab is on a page this Mono may not use.",
-                tabs_origin_refusal(refusal)
-            );
-            return Err(self.refuse(
-                id,
-                plan,
-                &read,
-                AuditDecision::Blocked,
-                "the page the action would happen on is not allowed",
-                text,
-            ));
-        }
-        read.title = match self.browse(id, &["get", "title"], &[]) {
-            Ok(data) => data["title"].as_str().unwrap_or("").to_owned(),
-            Err(Failure::Refused { .. }) => String::new(),
-            Err(other) => return Err(self.fail(id, other)),
-        };
-        let key = plan.key.as_deref();
-        let key_prints = key.is_some_and(fresh::is_printable_key);
-        let key_submits = key.is_some_and(fresh::is_submit_key);
-        let needs_refs = plan.ref_.is_some() || key_prints || key_submits;
-        if !needs_refs {
-            return Ok(read);
-        }
-        let changed = |this: &Self, read: &Read, why: &str, text: &str| {
-            this.refuse(id, plan, read, AuditDecision::Blocked, why, text.to_owned())
-        };
-        let seen = self
-            .conv(id, |c| c.seen.get(tab).cloned())
-            .unwrap_or_default();
-        if let Some(r) = &plan.ref_ {
-            if !seen.refs.contains_key(r) {
-                return Err(changed(
-                    self,
-                    &read,
-                    "the ref was never in a snapshot",
-                    NEVER_SEEN,
-                ));
-            }
-            if seen.url != read.url {
-                return Err(changed(
-                    self,
-                    &read,
-                    "the tab URL changed since the snapshot",
-                    CHANGED,
-                ));
-            }
-        }
-        let snapshot = self
-            .browse(id, &["snapshot", "-i"], &[])
-            .map_err(|f| self.act_fail(id, f))?;
-        let refs = fresh::refs_of(&snapshot);
-        if let Some(r) = &plan.ref_ {
-            match (refs.get(r), seen.refs.get(r)) {
-                (Some(now), Some(then)) if now == then => {
-                    read.role = now.0.clone();
-                    read.name = now.1.clone();
-                    read.ref_ = Some(r.clone());
-                }
-                _ => {
-                    return Err(changed(
-                        self,
-                        &read,
-                        "the ref no longer resolves to what the snapshot showed",
-                        CHANGED,
-                    ))
-                }
-            }
-        } else if let Some(focus) = fresh::focused_ref(snapshot["snapshot"].as_str().unwrap_or(""))
-        {
-            // A key: the focused element, when the snapshot marks one.
-            if let Some((role, name)) = refs.get(&focus) {
-                read.focus_known = true;
-                read.role = role.clone();
-                read.name = name.clone();
-                read.ref_ = Some(focus);
-            }
-        }
-        self.read_attrs(id, plan, &mut read)?;
-        Ok(read)
-    }
-
-    /// The attributes, the form and the form actions the action's risk depends on.
-    fn read_attrs(&self, id: i64, plan: &Plan, read: &mut Read) -> Result<(), String> {
-        let at = read.ref_.as_ref().map(|r| format!("@{r}"));
-        let link = read.role == "link";
-        let needs_form = match plan.op {
-            Op::Click => !link,
-            Op::Type | Op::Fill => true,
-            Op::Press => {
-                read.ref_.is_some() || plan.key.as_deref().is_some_and(fresh::is_submit_key)
-            }
-            _ => false,
-        };
-        if let Some(at) = &at {
-            match plan.op {
-                Op::Click if link => read.attrs.href = self.attr(id, at, "href")?,
-                Op::Click => {
-                    read.attrs.input_type = self.attr(id, at, "type")?;
-                    read.attrs.formaction = self.attr(id, at, "formaction")?;
-                }
-                Op::Check | Op::Upload => read.attrs.input_type = self.attr(id, at, "type")?,
-                Op::Type | Op::Fill | Op::Press => {
-                    read.attrs.input_type = self.attr(id, at, "type")?;
-                    read.attrs.autocomplete = self.attr(id, at, "autocomplete")?;
-                }
-                _ => {}
-            }
-        }
-        if needs_form {
-            read.form = self.form_now(id)?;
-            if read.attrs.input_type.is_none() {
-                // `form` lists the type of every field: it fills a `get attr` that failed.
-                read.attrs.input_type = read
-                    .ref_
-                    .as_deref()
-                    .and_then(|r| read.form.field(r))
-                    .map(|f| f.input_type.clone())
-                    .filter(|t| !t.is_empty());
-            }
-        }
-        let submit_like = match plan.op {
-            Op::Click => {
-                !link
-                    && (read.ref_.as_deref().is_some_and(|r| read.form.is_submit(r))
-                        || read.attrs.input_type.as_deref() == Some("submit")
-                        || !read.form.known
-                        || read.attrs.input_type.is_none())
-            }
-            Op::Press => plan.key.as_deref().is_some_and(fresh::is_submit_key),
-            _ => false,
-        };
-        if submit_like {
-            read.actions = self.form_actions_now(id, &read.url, &read.form)?;
-        } else {
-            read.actions.complete = true;
-        }
-        Ok(())
-    }
-
-    /// After a card: the same url and the same element as before.
-    fn still_same(&self, id: i64, plan: &Plan, read: &Read) -> Result<(), String> {
-        if self.url_now(id)? != read.url {
-            return Err(CHANGED.to_owned());
-        }
-        if let Some(r) = &plan.ref_ {
-            let snapshot = self
-                .browse(id, &["snapshot", "-i"], &[])
-                .map_err(|f| self.act_fail(id, f))?;
-            let refs = fresh::refs_of(&snapshot);
-            if refs
-                .get(r)
-                .is_none_or(|(role, name)| *role != read.role || *name != read.name)
-            {
-                return Err(CHANGED.to_owned());
-            }
-        }
-        Ok(())
-    }
-
     // ---- the decision ----
 
-    /// Checks no approval overrides, then the shared classifier. `Err` is the refusal (already
-    /// audited); `Ok` the evaluation and the categories the read added itself.
-    fn evaluate(
-        &self,
-        id: i64,
-        plan: &Plan,
-        read: &Read,
-        _act: &ActConfig,
-        files: Option<&[uploads::UploadFile]>,
-    ) -> Result<(Evaluation, BTreeSet<Category>), String> {
-        let page = &read.url;
-        let name = clean(&read.name);
-        let origins = self.config().origins;
-        let deny = |decision: AuditDecision, reason: &str, text: String| {
-            self.refuse(id, plan, read, decision, reason, text)
-        };
-
-        // Passwords and one-time codes, and character keys that could land in one.
-        let types = matches!(plan.op, Op::Type | Op::Fill);
-        let key = plan.key.as_deref();
-        let key_prints = key.is_some_and(fresh::is_printable_key);
-        if key_prints && !read.focus_known {
-            return Err(deny(
-                AuditDecision::Blocked,
-                "a character key with a focus that could not be read",
-                "A character key is not sent: zptah could not tell which element has the focus, and the key could land in a password field. Use browser_type or browser_fill with the ref of the field.".into(),
-            ));
-        }
-        if types || key_prints {
-            if let Some(why) = fresh::secret_field(&name, &read.attrs) {
-                self.post_password_notice(page);
-                return Err(deny(
-                    AuditDecision::Invariant,
-                    why,
-                    format!(
-                        "Not allowed: {why}. Ask the user to enter it themselves, then continue."
-                    ),
-                ));
-            }
-        }
-
-        // The destinations: a link's address, a form's action, the button's own `formaction`.
-        let signals_input = ElementInput {
-            role: &read.role,
-            name: &name,
-            attrs: &read.attrs,
-            form: &read.form,
-            ref_: read.ref_.as_deref().unwrap_or(""),
-            page_url: page,
-        };
-        let mut element = fresh::element_signals(&signals_input);
-        let submits = match plan.op {
-            Op::Click => element.is_submit || !read.actions.urls.is_empty(),
-            Op::Press => key.is_some_and(fresh::is_submit_key),
-            _ => false,
-        };
-        let link = plan.op == Op::Click && read.role == "link";
-        let mut destinations: Vec<(&str, String)> = Vec::new();
-        if link {
-            if let Some(raw) = read.attrs.href.as_deref() {
-                match fresh::resolve(page, raw) {
-                    Some(url) => destinations.push(("the link", url)),
-                    // A link whose address can not be read is not followed blind.
-                    None => destinations.push(("the link", raw.to_owned())),
-                }
-            }
-        }
-        if submits {
-            for url in &read.actions.urls {
-                destinations.push(("the form", url.clone()));
-            }
-            if let Some(url) = &element.form_action {
-                destinations.push(("the button", url.clone()));
-            }
-        }
-        for (what, url) in &destinations {
-            if let Err(refusal) = origins.check(url) {
-                let shown = audit_url(url);
-                return Err(deny(
-                    AuditDecision::Blocked,
-                    &format!("{what} leads to {shown}, which this Mono may not use"),
-                    format!(
-                        "Not done: {what} leads to {}. {} The page was left as it is.",
-                        if shown.is_empty() {
-                            "an address that is not a web page".to_owned()
-                        } else {
-                            shown
-                        },
-                        tabs_origin_refusal(refusal)
-                    ),
-                ));
-            }
-        }
-
-        // The classifier's inputs.
-        let mut ext: BTreeSet<Category> = BTreeSet::new();
-        let mut declared: BTreeSet<Category> = BTreeSet::new();
-        // A submit whose destination or form could not be read in full: ask.
-        if submits
-            && (!read.actions.complete || (!read.form.known && !read.actions.urls.is_empty()))
-        {
-            ext.insert(Category::SoulRule);
-        }
-        let kind = match plan.op {
-            Op::Click | Op::Check => Some(ActionKind::Click),
-            Op::Select => Some(ActionKind::Select),
-            Op::Upload => Some(ActionKind::Upload),
-            Op::Hover => None,
-            Op::Type | Op::Fill => Some(ActionKind::Type(fresh::field_kind(&name, &read.attrs))),
-            Op::Press if key_prints => {
-                Some(ActionKind::Type(fresh::field_kind(&name, &read.attrs)))
-            }
-            Op::Press if key.is_some_and(fresh::is_submit_key) => {
-                // Enter presses the focused control or submits its form: judged as a click on the
-                // form's submit button.
-                element.is_submit = true;
-                if !(read.focus_known && read.role == "button") {
-                    element.role = "button".into();
-                    element.name = read
-                        .form
-                        .submits
-                        .first()
-                        .map(|(_, label)| clean(label))
-                        .unwrap_or_default();
-                    element.label = Some(element.name.clone()).filter(|n| !n.is_empty());
-                }
-                Some(ActionKind::Click)
-            }
-            Op::Press => None,
-        };
-        // A textbox whose kind could not be read, on a sign-in page: asks first.
-        if types
-            && read.attrs.input_type.is_none()
-            && (is_field_role(&read.role) || read.role.is_empty())
-            && fresh::login_like(page, &read.title, &read.form)
-        {
-            declared.insert(Category::CredentialEntry);
-        }
-        let heading = read.title.clone();
-        let vi = looks_vietnamese(&format!("{} {} {}", read.title, name, element.nearby_text));
-        let legacy = classifier_name(&plan.tool);
-        let mut action = TrustAction::new(legacy, &plan.args, page);
-        action.kind = kind;
-        action.form = read.form.signals();
-        action.element = element;
-        action.page_title = &read.title;
-        action.page_heading = &heading;
-        action.page_vi = vi;
-        action.typed = plan.typed.as_deref();
-        action.declared.extend(declared);
-        action.ext = if plan.op == Op::Hover {
-            BTreeSet::new()
-        } else {
-            ext.clone()
-        };
-        let ev = self
-            .with_trust(id, |state, cfg| {
-                state.evaluate(
-                    &TrustConfig {
-                        level: cfg.level,
-                        rules: &cfg.rules,
-                    },
-                    &action,
-                )
-            })
-            .ok_or("This browser has no act settings loaded.")?;
-        let _ = files;
-        match &ev.decision {
-            Decision::Deny(reason) => {
-                let audit = if reason.contains("password") {
-                    AuditDecision::Invariant
-                } else {
-                    AuditDecision::Blocked
-                };
-                self.row(
-                    id,
-                    &plan.tool,
-                    page,
-                    &plan.summary,
-                    self.is_user_tab(id, &read.tab),
-                    Some(&ev),
-                    audit,
-                    reason,
-                    None,
-                );
-                Err(format!("Not allowed: {reason}."))
-            }
-            _ => Ok((ev, ext)),
-        }
-    }
-
-    fn post_password_notice(&self, page: &str) {
+    pub(super) fn post_password_notice(&self, page: &str) {
         if let Some(act) = self.config().act {
             let site = registrable_domain_of(page).unwrap_or_default();
             act.queue
@@ -956,8 +679,8 @@ impl ArdiaUpstream {
         }
     }
 
-    /// Allow, allow by grant, or ask. `Ok`: the card id when one was asked, and how it was
-    /// decided for the audit row.
+    /// Allow, allow by grant, or ask. `Asked`: the card id and the answer (nothing is committed
+    /// until the page was checked again).
     fn decide(
         &self,
         id: i64,
@@ -966,26 +689,15 @@ impl ArdiaUpstream {
         read: &Read,
         ev: &Evaluation,
         files: Option<&[uploads::UploadFile]>,
-    ) -> Result<(Option<String>, AuditDecision), String> {
+    ) -> Result<Decided, String> {
         match &ev.decision {
-            Decision::Allow => Ok((None, AuditDecision::Auto)),
-            Decision::AllowByGrant(_) => Ok((None, AuditDecision::Auto)),
+            Decision::Allow | Decision::AllowByGrant(_) => Ok(Decided::Go(AuditDecision::Auto)),
             Decision::Deny(reason) => Err(format!("Not allowed: {reason}.")),
             Decision::Ask(_) => {
                 let facts = self.facts(act, plan, read, ev, files);
                 let user_tab = self.is_user_tab(id, &read.tab);
                 match self.ask_card(act, id, &plan.tool, facts, ev) {
-                    Ok((answer, card)) => {
-                        let granted = self
-                            .with_trust(id, |state, _| state.commit(ev, answer))
-                            .unwrap_or_default();
-                        let how = if answer == Answer::AllowedTask && !granted.is_empty() {
-                            AuditDecision::AskedAllowedTask
-                        } else {
-                            AuditDecision::AskedAllowedOnce
-                        };
-                        Ok((Some(card), how))
-                    }
+                    Ok((answer, card)) => Ok(Decided::Asked { card, answer }),
                     Err((text, audit, card)) => {
                         self.row(
                             id,
@@ -996,7 +708,7 @@ impl ArdiaUpstream {
                             Some(ev),
                             audit,
                             &text,
-                            Some(card),
+                            Some(card).filter(|c| !c.is_empty()),
                         );
                         Err(text)
                     }
@@ -1016,7 +728,11 @@ impl ArdiaUpstream {
     ) -> CardFacts {
         let label = clean(&read.name);
         let desc = match plan.op {
-            Op::Click | Op::Check => ActionDesc::Click { label },
+            Op::Click => ActionDesc::Click { label },
+            Op::Check => ActionDesc::Check {
+                label,
+                on: !plan.uncheck,
+            },
             Op::Type | Op::Fill => ActionDesc::Type { label },
             Op::Select => ActionDesc::Select { label },
             Op::Press => ActionDesc::Press {
@@ -1043,6 +759,8 @@ impl ArdiaUpstream {
             ev.categories.iter().copied().collect(),
         );
         facts.url = read.url.clone();
+        facts.in_dialog = read.ctx.in_dialog || read.modal;
+        facts.dialog_text = Some(clean(&read.ctx.dialog_text)).filter(|t| !t.is_empty());
         facts.recipients = read.form.signals().recipients;
         facts.amounts = crate::mono::browser::risk::signals::extract_amounts(&read.name);
         facts.field = matches!(plan.op, Op::Type | Op::Fill)
@@ -1067,10 +785,11 @@ impl ArdiaUpstream {
         facts
     }
 
-    /// Opens a card and waits for the answer. `Err`: the text for the Mono, how to audit it and
-    /// the card id.
+    /// Opens a card and waits for the answer. Nothing is posted for a turn that was stopped, and
+    /// the wait looks at the stop about five times a second. `Err`: the text for the Mono, how to
+    /// audit it and the card id (empty when no card was posted).
     #[allow(clippy::type_complexity)]
-    fn ask_card(
+    pub(super) fn ask_card(
         &self,
         act: &ActConfig,
         id: i64,
@@ -1078,6 +797,9 @@ impl ArdiaUpstream {
         facts: CardFacts,
         ev: &Evaluation,
     ) -> Result<(Answer, String), (String, AuditDecision, String)> {
+        if self.not_stopped(id).is_err() {
+            return Err((STOPPED.into(), AuditDecision::Stopped, String::new()));
+        }
         let categories: Vec<Category> = ev.categories.iter().copied().collect();
         let request = Request {
             mono_id: self.mono_id.clone(),
@@ -1088,13 +810,24 @@ impl ArdiaUpstream {
             screenshot: None,
             offer_conversation: offers_conversation(&categories, ev.tier == Tier::Always),
         };
-        let (card, outcome) = act
-            .queue
-            .ask(request, act.approval_timeout, KEEP_ALIVE, || {
-                // The holds on the tabs last 2 minutes: a card can wait for longer.
+        let mut last_hold = Instant::now();
+        let (card, outcome) = act.queue.ask(request, act.approval_timeout, STOP_POLL, || {
+            if self.not_stopped(id).is_err() {
+                // The Stop came after the card was posted: take the card back.
+                act.queue.withdraw_session(id);
+                return;
+            }
+            // The holds on the tabs last 2 minutes: a card can wait for longer.
+            if last_hold.elapsed() >= KEEP_ALIVE {
+                last_hold = Instant::now();
                 let _ = self.hold(id);
-            });
+            }
+        });
+        let stopped = self.not_stopped(id).is_err();
         match outcome {
+            Outcome::Answered(_) if stopped => {
+                Err((STOPPED.into(), AuditDecision::Stopped, card))
+            }
             Outcome::Answered(UserAnswer::AllowOnce) => Ok((Answer::AllowedOnce, card)),
             Outcome::Answered(UserAnswer::AllowConversation) => Ok((Answer::AllowedTask, card)),
             Outcome::Answered(UserAnswer::Deny) => Err((
@@ -1108,6 +841,7 @@ impl ArdiaUpstream {
                 AuditDecision::AskedTimeout,
                 card,
             )),
+            Outcome::Withdrawn if stopped => Err((STOPPED.into(), AuditDecision::Stopped, card)),
             Outcome::Withdrawn => Err((
                 "Denied: nobody could answer the question (the run ended or was stopped, or no one is there to ask).".into(),
                 AuditDecision::AskedDenied,
@@ -1125,7 +859,6 @@ impl ArdiaUpstream {
         plan: &Plan,
         read: &Read,
         ev: &Evaluation,
-        _extra: &BTreeSet<Category>,
         decision: AuditDecision,
         approval_id: Option<String>,
         files: Option<&[uploads::UploadFile]>,
@@ -1199,32 +932,46 @@ impl ArdiaUpstream {
         };
 
         let changes = &data["changes"];
-        let after = self
-            .url_now(id)
-            .ok()
-            .filter(|u| !u.is_empty())
-            .or_else(|| changes["url"]["to"].as_str().map(str::to_owned))
-            .unwrap_or_else(|| read.url.clone());
+        // The URL after the action. A page that can not be read is a hit: where the tab is now is
+        // not known, so it is stopped like a blocked page.
+        let after = match self.url_now(id) {
+            Ok(url) if !url.is_empty() => url,
+            _ => {
+                self.row(
+                    id,
+                    &plan.tool,
+                    &read.url,
+                    &format!("{}; url after: unknown", plan.summary),
+                    user_tab,
+                    Some(ev),
+                    decision,
+                    &format!("{reason}; the page after the action could not be read"),
+                    approval_id,
+                );
+                return Err(self.halt_unknown(id, &read.tab, &read.url, &plan.tool));
+            }
+        };
         let title = changes["title"]["to"]
             .as_str()
             .map(str::to_owned)
             .unwrap_or_else(|| read.title.clone());
         let writes = fresh::writes_of(changes);
-        let mut summary = plan.summary.clone();
+        let opened = fresh::new_tabs_of(changes);
+        let mut head = plan.summary.clone();
         if matches!(plan.op, Op::Type | Op::Fill) {
-            summary = summary.replace(
+            head = head.replace(
                 "field",
                 &clean(&read.name).chars().take(60).collect::<String>(),
             );
         } else if !read.name.is_empty() {
-            summary = format!(
-                "{summary} \"{}\"",
+            head = format!(
+                "{head} \"{}\"",
                 clean(&read.name).chars().take(80).collect::<String>()
             );
         }
         if let Some(files) = files {
-            summary = format!(
-                "{summary}: {}",
+            head = format!(
+                "{head}: {}",
                 files
                     .iter()
                     .map(|f| f
@@ -1236,9 +983,20 @@ impl ArdiaUpstream {
                     .join(", ")
             );
         }
-        summary = format!("{summary}; url after {}", audit_url(&after));
+        // The free text is cut, never the list of requests the action caused.
+        let mut summary = format!(
+            "{}; url after {}",
+            head.chars().take(100).collect::<String>(),
+            audit_url(&after)
+        );
         if !writes.is_empty() {
             summary = format!("{summary}; wrote: {}", writes.join(", "));
+        }
+        if !opened.is_empty() {
+            summary = format!(
+                "{summary}; opened a new tab ({}), not bound and not closed",
+                opened.join(", ")
+            );
         }
         self.row(
             id,
@@ -1293,7 +1051,9 @@ impl ArdiaUpstream {
         body.push_str(&format!(
             "- Ran {}{}.\n",
             plan.tool.trim_start_matches("browser_"),
-            if read.name.is_empty() {
+            // A name that came from the focus eval is page text the Mono was never shown: it is
+            // not echoed.
+            if read.name.is_empty() || plan.ref_.is_none() {
                 String::new()
             } else {
                 format!(
@@ -1304,6 +1064,9 @@ impl ArdiaUpstream {
         ));
         if navigated {
             body.push_str("- The page changed: the refs of the old page no longer work.\n");
+        }
+        if !opened.is_empty() {
+            body.push_str("- The action opened a new tab. It is not this conversation's tab and zptah did not bind it; use browser_open for a page you want to work in.\n");
         }
         if let Some(files) = files {
             body.push_str(&format!("- Attached {} file(s).\n", files.len()));
@@ -1338,34 +1101,33 @@ impl ArdiaUpstream {
     // ---- the user's own tab ----
 
     /// `browser_tabs adopt_active`: the tab the user has open now, once they approve (the first
-    /// time for that tab in this conversation). It joins the conversation's set: never closed,
+    /// time for that tab id in this conversation). It joins the conversation's set: never closed,
     /// only let go of.
+    ///
+    /// The tab is found without binding anything (`ardia call windows`: the active tab of the
+    /// focused window), refused when it is not in the Mono's Ardia profile or shows a page this
+    /// Mono may not use, shown to the user with its address, and only after the approval is that
+    /// exact id bound (`tab <tab-id>`, checked against the id Ardia says it bound). The approval
+    /// is recorded before the bind, so a retry after a failed bind asks nothing twice.
     pub(super) fn adopt_active(&self, id: i64, args: &Value) -> Result<String, String> {
         let act = self.act_allowed(id, "browser_tabs adopt_active")?;
+        self.not_stopped(id)?;
         self.ready(id)?;
         let wanted = args["tab"]
             .as_str()
             .map(str::trim)
             .filter(|t| !t.is_empty());
-        let data = self
-            .browse(id, &["tab", "list"], &[])
+        let windows = self
+            .controller
+            .cli()
+            .call_without_params("windows")
             .map_err(|f| self.fail(id, f))?;
-        let active = data["tabs"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|t| {
-                t["active"] == true
-                    && t["appTabId"].as_str().is_some()
-                    && t["type"].as_str().is_none_or(|k| k == "page")
-            })
-            .cloned();
-        let Some(active) = active else {
+        let Some(active) = user_tab::active_tab(&windows) else {
             return Err("The user has no tab open in Ardia that can be used.".into());
         };
-        let tab = active["appTabId"].as_str().unwrap_or("").to_owned();
-        let url = active["url"].as_str().unwrap_or("").to_owned();
-        let title = clean(active["title"].as_str().unwrap_or(""));
+        let tab = active.id.clone();
+        let url = active.url.clone();
+        let title = clean(&active.title);
         if wanted.is_some_and(|w| w != tab) {
             self.audit(
                 id,
@@ -1379,6 +1141,42 @@ impl ArdiaUpstream {
             return Err(format!(
                 "Tab {tab} is already one of this conversation's tabs."
             ));
+        }
+        // A tab zptah opened (for any conversation) is never the user's own.
+        let zptah_tab = self
+            .controller
+            .sessions()
+            .iter()
+            .any(|s| self.controller.session_tabs(s).contains(&tab));
+        if zptah_tab {
+            self.audit(
+                id,
+                "tab_rejected",
+                "",
+                "adopt_active of a tab zptah opened for a conversation",
+            );
+            return Err(
+                "The tab in front is one zptah opened for a conversation, not the user's own tab."
+                    .into(),
+            );
+        }
+        let profile = self.config().profile;
+        if active.profile != profile {
+            self.row(
+                id,
+                "browser_tabs",
+                &url,
+                "adopt the user's active tab",
+                true,
+                None,
+                AuditDecision::Blocked,
+                "the user's tab is not in this Mono's Ardia profile",
+                None,
+            );
+            return Err("The tab the user has open now is not in the Ardia profile of this Mono, so it was not taken. Ask the user to open the page in that profile, or use browser_open.".into());
+        }
+        if url.trim().is_empty() {
+            return Err("The user's tab shows no page yet, so it was not taken.".into());
         }
         if let Err(refusal) = self.config().origins.check(&url) {
             self.row(
@@ -1417,7 +1215,11 @@ impl ArdiaUpstream {
             );
             facts.url = url.clone();
             match self.ask_card(&act, id, "browser_tabs", facts, &ev) {
-                Ok((_, card)) => approval = Some(card),
+                Ok((_, card)) => {
+                    // Recorded before anything else can fail, so a retry does not ask again.
+                    self.conv(id, |c| c.approved_user_tabs.insert(tab.clone()));
+                    approval = Some(card);
+                }
                 Err((text, audit, card)) => {
                     self.row(
                         id,
@@ -1428,12 +1230,14 @@ impl ArdiaUpstream {
                         Some(&ev),
                         audit,
                         &text,
-                        Some(card),
+                        Some(card).filter(|c| !c.is_empty()),
                     );
                     return Err(text);
                 }
             }
         }
+        self.not_stopped(id)?;
+        // Only now is that exact id bound, and the reply must say it is the one that was bound.
         let bound = self.bind(id, &tab)?;
         self.conv(id, |c| {
             c.user_tab = Some(tab.clone());
@@ -1541,7 +1345,7 @@ impl ArdiaUpstream {
                             Some(&ev),
                             audit,
                             &text,
-                            Some(card),
+                            Some(card).filter(|c| !c.is_empty()),
                         );
                         Err(text)
                     }
@@ -1622,7 +1426,7 @@ impl ArdiaUpstream {
                     Some(&ev),
                     audit,
                     &text,
-                    Some(card),
+                    Some(card).filter(|c| !c.is_empty()),
                 );
                 Err(text)
             }

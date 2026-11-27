@@ -200,7 +200,9 @@ impl MonoBrowserStore {
                 row.ts_ms as i64,
                 row.tool,
                 row.url,
-                row.summary.chars().take(200).collect::<String>(),
+                // Long enough for the list of requests an action caused (the free text is cut
+                // before it, never the list).
+                row.summary.chars().take(1200).collect::<String>(),
                 row.tab_id,
                 row.tab_owner,
                 row.tier,

@@ -493,6 +493,10 @@ fn run_turn_using(
         })?;
         // These providers parse slash arguments themselves. App context before
         // the command would turn it into an ordinary message instead.
+        // What the user typed, before anything is added to it. Only a real user message counts
+        // as the user's word for the browser gate (an automation or an internal message does not).
+        settings.user_prompt =
+            (!settings.internal_message && !settings.automated).then(|| prompt.clone());
         let prompt = settings.prepared_prompt.take().unwrap_or(prompt);
         let raw_native_command = matches!(kind, Kind::Omp | Kind::Devin)
             && provider::native_prompt(kind, &prompt)

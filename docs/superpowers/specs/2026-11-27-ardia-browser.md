@@ -170,8 +170,11 @@ Migration: none. The extension was never used outside development (confirmed by 
 - Cleanup: the gate tracks the tab ids it opened and closes them with `ardia tabs close` when the
   conversation ends. `windows.close` alone is not enough: Ardia moved the tabs of a closed window
   into the remaining window, including a tab from another profile.
-- The user's own tab is used only when the Mono asks for it (`tab active`, act level only, with an
-  approval the first time per conversation).
+- The user's own tab is used only when the Mono asks for it (`browser_tabs adopt_active`, act level
+  only). The gate finds it without binding anything (`ardia call windows`: the active tab of the
+  focused window), refuses it unless it is in the Mono's Ardia profile, shows its address on the
+  approval card (once per conversation per tab id, recorded before the bind), and only then binds
+  that exact id (`tab <tab-id>`) and checks the id Ardia says it bound.
 - **Tab ownership.** For each session the gate keeps the set of tab ids it opened for that session,
   plus the user's active tab once the approval above is given (that exact tab id only). The gate
   binds (`tab <tab-id>`), switches to and acts in only tab ids in that set, and closes only the
@@ -276,6 +279,8 @@ tool the gate:
 3. evaluates the risk on the fresh read (not on the old snapshot) and checks origins (section 5);
 4. asks if needed;
 5. runs the `ardia browse` command and audits its result, including the URL after it.
+
+When the gate cannot read enough of the page to tell what an action does (a destination it could not read, a bare word such as Confirm with no dialog or page text to explain it, a focus it could not identify), the action asks with its own category `unclear` (card line: "zptah could not read enough of this page to tell what this does."), which is never granted for the conversation.
 
 M0 documents how stable `@eN` refs are: whether they survive a re-snapshot, a scroll, a DOM update
 and a navigation, and whether a stale ref errors or silently points at another element. If a stale

@@ -25,6 +25,8 @@ mod fake_page;
 #[cfg(test)]
 mod nits_tests;
 #[cfg(test)]
+mod review_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(all(test, unix))]
 mod unix_tests;

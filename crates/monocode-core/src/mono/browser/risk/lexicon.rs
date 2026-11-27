@@ -424,6 +424,13 @@ impl Lexicon {
         self.classify_norm(&normalize(name), kind, page_vi).0
     }
 
+    /// Whether the name is a bare word that takes its meaning from the dialog or the page around
+    /// it (Confirm, OK, Yes, Continue, Xác nhận ...): what it does can not be told from the name.
+    pub fn takes_context(&self, name: &str, kind: ControlKind, page_vi: bool) -> bool {
+        let (_, context, ctx_dismiss) = self.classify_norm(&normalize(name), kind, page_vi);
+        context || ctx_dismiss
+    }
+
     /// Returns the classification and whether a context-taking word matched.
     fn classify_norm(
         &self,

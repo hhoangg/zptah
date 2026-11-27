@@ -95,6 +95,11 @@ pub enum ActionDesc {
     Upload {
         names: Vec<String>,
     },
+    /// Tick (`on`) or untick a checkbox, radio or switch.
+    Check {
+        label: String,
+        on: bool,
+    },
     /// Open an address (navigation, a tab).
     Navigate,
     /// Answer a JavaScript dialog.
@@ -207,7 +212,7 @@ fn primary(categories: &[Category]) -> Option<Category> {
 
 /// The categories present, most serious first.
 fn ordered(categories: &[Category]) -> Vec<Category> {
-    const ORDER: [Category; 14] = [
+    const ORDER: [Category; 15] = [
         Category::Payment,
         Category::Destructive,
         Category::AccountSecurity,
@@ -221,6 +226,7 @@ fn ordered(categories: &[Category]) -> Vec<Category> {
         Category::Tainted,
         Category::UnrelatedDomain,
         Category::SensitiveSite,
+        Category::Unclear,
         Category::SoulRule,
     ];
     ORDER
@@ -286,6 +292,12 @@ fn verb_phrase(lang: Lang, facts: &CardFacts) -> String {
             Some(noun) => format!("nhập {noun}"),
             None => format!("nhập vào {}", label(l)),
         },
+        (ActionDesc::Check { label: l, on }, Lang::En) => {
+            format!("{} {}", if *on { "check" } else { "uncheck" }, label(l))
+        }
+        (ActionDesc::Check { label: l, on }, Lang::Vi) => {
+            format!("{} {}", if *on { "chọn" } else { "bỏ chọn" }, label(l))
+        }
         (ActionDesc::Select { label: l }, Lang::En) => format!("change {}", label(l)),
         (ActionDesc::Select { label: l }, Lang::Vi) => format!("chọn ở {}", label(l)),
         (ActionDesc::Press { key }, Lang::En) => format!("press the {} key", clean(key, 32)),
@@ -493,6 +505,12 @@ fn tail(lang: Lang, category: Category, facts: &CardFacts) -> Option<String> {
                 clean(&facts.mono, MAX_LABEL)
             ),
         },
+        (Category::Unclear, Lang::En) => {
+            "zptah could not read enough of this page to tell what this does.".into()
+        }
+        (Category::Unclear, Lang::Vi) => {
+            "zptah không đọc đủ nội dung trang này để biết thao tác này làm gì.".into()
+        }
         (Category::Tainted, Lang::En) => {
             "It carries something read on another site to this one.".into()
         }
@@ -551,7 +569,9 @@ fn extra(lang: Lang, category: Category, facts: &CardFacts) -> Option<String> {
             )
         }
         (Category::SoulRule, _) => return tail(lang, category, facts),
-        (Category::Tainted, _) | (Category::Injection, _) => return tail(lang, category, facts),
+        (Category::Tainted, _) | (Category::Injection, _) | (Category::Unclear, _) => {
+            return tail(lang, category, facts)
+        }
     })
 }
 
@@ -620,6 +640,14 @@ pub fn card(lang: Lang, facts: &CardFacts) -> CardText {
                 }
             }
         }
+    }
+    // The user's own tab: the card says which page is being handed over.
+    if matches!(facts.action, ActionDesc::TabTransfer { .. }) && !facts.url.is_empty() {
+        let url = clean(&facts.url, 300);
+        lines.push(match lang {
+            Lang::En => format!("Address: {url}"),
+            Lang::Vi => format!("Địa chỉ: {url}"),
+        });
     }
     if facts.categories.contains(&Category::Payment) && !facts.amounts.is_empty() {
         let amounts = join(&facts.amounts, 3);
@@ -712,20 +740,6 @@ pub fn password_stop(lang: Lang, mono: &str, site: &str) -> CardText {
         allow_conversation: None,
         deny: b.deny,
         show_tab: b.show_tab,
-    }
-}
-
-/// The banner shown after the toolbar Stop: what happened and the label of the resume button.
-pub fn stopped_banner(lang: Lang) -> (&'static str, &'static str) {
-    match lang {
-        Lang::En => (
-            "zptah Browser is stopped. No Mono can use the browser until you resume it.",
-            "Resume",
-        ),
-        Lang::Vi => (
-            "zptah Browser đã dừng. Không Mono nào dùng được trình duyệt cho đến khi bạn tiếp tục.",
-            "Tiếp tục",
-        ),
     }
 }
 

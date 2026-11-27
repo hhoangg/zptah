@@ -566,6 +566,12 @@ impl Cli {
         self.bare(args, timeout)
     }
 
+    /// `ardia call <method> --json` with no `--params` (the methods that take none, `windows`).
+    pub fn call_without_params(&self, method: &str) -> Result<Value, Failure> {
+        let args = vec!["call".to_owned(), method.to_owned(), "--json".to_owned()];
+        self.bare(args, QUICK_TIMEOUT)
+    }
+
     /// `ardia tabs open <url> --profile P --json`: the new tab's id (`results[0].tabs[0]`).
     pub fn tabs_open(&self, url: &str, profile: &str) -> Result<String, Failure> {
         let refuse = |message: String| Failure::Refused {

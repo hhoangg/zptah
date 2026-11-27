@@ -56,6 +56,7 @@ fn all_cases() -> Vec<(&'static str, CardFacts)> {
     rule.rule = Some("ask: click \"Book\" on airbnb.com".into());
     let tainted = click("Submit", &[Category::Tainted]);
     let injection = click("Submit", &[Category::Injection]);
+    let unclear = click("Confirm", &[Category::Unclear]);
     let mut other = facts(ActionDesc::Other, &[Category::SoulRule]);
     other.agent_action = Some("Empty the trash".into());
     other.agent_details = Some("12 files".into());
@@ -74,6 +75,7 @@ fn all_cases() -> Vec<(&'static str, CardFacts)> {
         ("soul_rule", rule),
         ("tainted", tainted),
         ("injection", injection),
+        ("unclear", unclear),
         ("other", other),
     ]
 }
@@ -106,6 +108,7 @@ const SNAPSHOTS: &[(&str, &str, &str)] = &[
     ("en", "soul_rule", "Mira wants to click \"Book\" on airbnb.com.\n  Your rule for Mira says to ask first: click \"Book\" on airbnb.com."),
     ("en", "tainted", "Mira wants to click \"Submit\" on shop.example.\n  It carries something read on another site to this one."),
     ("en", "injection", "Mira wants to click \"Submit\" on shop.example.\n  A page tried to give instructions to the Mono, so every change asks."),
+    ("en", "unclear", "Mira wants to click \"Confirm\" on shop.example.\n  zptah could not read enough of this page to tell what this does."),
     ("en", "other", "Mira asks your OK on shop.example: \"Empty the trash\"\n  Details from Mira: \"12 files\""),
     ("vi", "payment", "Mira muốn bấm \"Pay 1,200,000 VND\" trên shopee.vn.\n  Đây có vẻ là một khoản thanh toán."),
     ("vi", "destructive", "Mira muốn bấm \"Delete\" trong hộp thoại trên mail.google.com.\n  Hộp thoại ghi: \"Delete 12 conversations?\""),
@@ -121,6 +124,7 @@ const SNAPSHOTS: &[(&str, &str, &str)] = &[
     ("vi", "soul_rule", "Mira muốn bấm \"Book\" trên airbnb.com.\n  Quy tắc bạn đặt cho Mira yêu cầu hỏi trước: click \"Book\" on airbnb.com."),
     ("vi", "tainted", "Mira muốn bấm \"Submit\" trên shop.example.\n  Việc này mang thông tin đọc được ở trang khác sang trang này."),
     ("vi", "injection", "Mira muốn bấm \"Submit\" trên shop.example.\n  Một trang web đã thử ra lệnh cho Mono, nên mọi thay đổi đều được hỏi."),
+    ("vi", "unclear", "Mira muốn bấm \"Confirm\" trên shop.example.\n  zptah không đọc đủ nội dung trang này để biết thao tác này làm gì."),
     ("vi", "other", "Mira xin bạn đồng ý trên shop.example: \"Empty the trash\"\n  Chi tiết từ Mira: \"12 files\""),
 ];
 
@@ -136,7 +140,7 @@ fn every_category_reads_well_in_english_and_vietnamese() {
 }
 
 #[test]
-fn all_fourteen_categories_and_other_have_a_card() {
+fn all_fifteen_categories_and_other_have_a_card() {
     let names: Vec<&str> = all_cases().iter().map(|(n, _)| *n).collect();
     for category in [
         Category::Payment,
@@ -153,6 +157,7 @@ fn all_fourteen_categories_and_other_have_a_card() {
         Category::SoulRule,
         Category::Tainted,
         Category::Injection,
+        Category::Unclear,
     ] {
         assert!(names.contains(&category.as_str()), "{}", category.as_str());
     }
@@ -259,8 +264,6 @@ fn the_password_stop_the_banner_and_the_rule_review_have_both_languages() {
         "Mira cần mật khẩu của bạn trên accounts.google.com."
     );
     assert_eq!(vi.show_tab, "Xem tab");
-    assert_eq!(stopped_banner(Lang::En).1, "Resume");
-    assert_eq!(stopped_banner(Lang::Vi).1, "Tiếp tục");
     let review = rule_review(
         Lang::En,
         "Mira",

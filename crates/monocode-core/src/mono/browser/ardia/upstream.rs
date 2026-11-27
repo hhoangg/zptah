@@ -33,9 +33,16 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::Duration;
 
 mod act;
+mod focus;
 mod fresh;
+mod judge;
+mod page;
+mod read;
 mod uploads;
+mod user_tab;
 
+#[cfg(test)]
+pub(super) use focus::FOCUS_SCRIPT;
 pub use fresh::CHANGED;
 
 /// Tabs one conversation keeps open at most.
@@ -160,6 +167,11 @@ struct Conv {
     approved_user_tabs: HashSet<String>,
     /// What the user wrote in this conversation (a path in it may be uploaded).
     user_messages: Vec<String>,
+    /// A browser call was made in this turn and the turn has not ended: the "Working in Ardia"
+    /// row (with Stop) stays up between the calls.
+    active: bool,
+    /// Single keys pressed per tab, for the card-number check only (in memory, never written).
+    key_text: HashMap<String, String>,
 }
 
 pub struct ArdiaUpstream {
@@ -169,6 +181,12 @@ pub struct ArdiaUpstream {
     convs: Mutex<HashMap<i64, Conv>>,
     /// What the gate remembers per conversation: grants, task domains, taint.
     trust: Mutex<HashMap<i64, TrustState>>,
+    /// What each conversation's turn has read and declared (`browser_declare_intent`): an act
+    /// after untrusted content asks unless it was declared first.
+    turns: Mutex<HashMap<i64, defense::Turn>>,
+    /// Tests of other features skip the untrusted-content rule.
+    #[cfg(test)]
+    taint_exempt: std::sync::atomic::AtomicBool,
     shots: AtomicU64,
     bind_delay: Duration,
 }
@@ -254,6 +272,9 @@ impl ArdiaUpstream {
             config: Mutex::new(Config::default()),
             convs: Mutex::new(HashMap::new()),
             trust: Mutex::new(HashMap::new()),
+            turns: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            taint_exempt: std::sync::atomic::AtomicBool::new(false),
             shots: AtomicU64::new(0),
             bind_delay,
         });
@@ -286,6 +307,12 @@ impl ArdiaUpstream {
         for id in ids {
             self.end_conversation(id);
         }
+    }
+    /// Tests of other features skip the untrusted-content rule (`false` turns it back on).
+    #[cfg(test)]
+    pub fn set_taint_exempt(&self, exempt: bool) {
+        self.taint_exempt
+            .store(exempt, std::sync::atomic::Ordering::SeqCst);
     }
     /// The controller this upstream runs on.
     pub fn controller(&self) -> &Arc<Controller> {
@@ -342,7 +369,13 @@ impl ArdiaUpstream {
 
     /// Closes the conversation's tabs and forgets it.
     pub fn end_conversation(&self, conversation: i64) {
-        self.controller.end_session(&self.session(conversation));
+        // A conversation that only worked in the user's own tab has no tab of its own to close,
+        // but its session still holds a binding to release.
+        let used_user_tab = self.conv(conversation, |c| {
+            c.user_tab.is_some() || !c.approved_user_tabs.is_empty()
+        });
+        self.controller
+            .end_session_releasing(&self.session(conversation), used_user_tab);
         self.convs().remove(&conversation);
         self.controller.turn_ended(&self.turn_key(conversation));
         self.end_trust(conversation);
@@ -370,11 +403,14 @@ impl ArdiaUpstream {
             );
         });
     }
-    /// Whether a browser call of this conversation is running now.
+    /// Whether the conversation is working in Ardia: from its first browser call of the turn
+    /// until the turn ends (`run_ended`, or the next `run_started`), not only while a call is in
+    /// flight, so the "Working in Ardia" row with Stop stays up while the Mono thinks between the
+    /// calls. A stopped turn is not working.
     pub fn working(&self, conversation: i64) -> bool {
         self.convs()
             .get(&conversation)
-            .is_some_and(|c| c.in_flight > 0)
+            .is_some_and(|c| !c.stopped && (c.in_flight > 0 || c.active))
     }
 
     // ---- one tool call ----
@@ -386,7 +422,10 @@ impl ArdiaUpstream {
         }
         let _busy = self.controller.begin_call(&self.turn_key(conversation));
         let _flight = Flight::start(self, conversation);
-        self.conv(conversation, |c| c.lost = false);
+        self.conv(conversation, |c| {
+            c.lost = false;
+            c.active = true;
+        });
         let mut outcome = self.dispatch(conversation, name, args);
         // The one place that decides whether a call is repeated: when Ardia went away during a
         // call that only reads or moves the view, check again (which starts Ardia where zptah
@@ -531,6 +570,12 @@ impl ArdiaUpstream {
         for attempt in 1..=BIND_TRIES {
             self.hold(id)?;
             match self.browse(id, &["tab", tab], &[]) {
+                // Binding by id works for any tab, so the reply must name the tab that was asked
+                // for: never act in another one.
+                Ok(data) if data["appTabId"].as_str() != Some(tab) => {
+                    self.conv(id, |c| c.bound = None);
+                    return Err("Ardia bound a different tab than the one asked for, so nothing was done in it. Open a page with browser_open.".into());
+                }
                 Ok(data) => {
                     self.conv(id, |c| {
                         c.bound = Some(tab.to_owned());
@@ -647,13 +692,29 @@ impl ArdiaUpstream {
     /// After the call: the tab must not be on a blocked page. On a hit the tab is stopped for the
     /// turn, closed when it is zptah's own, audited, and the caller drops what it read.
     fn after(&self, id: i64, tab: &str, url: &str, action: &str) -> Result<(), String> {
-        let refusal = match self.config().origins.check(url) {
+        match self.config().origins.check(url) {
             Ok(()) => {
                 self.conv(id, |c| c.page = url.to_owned());
-                return Ok(());
+                Ok(())
             }
-            Err(refusal) => refusal,
-        };
+            Err(refusal) => Err(self.halt(id, tab, url, action, tabs_origin_refusal(refusal))),
+        }
+    }
+
+    /// The page the tab is on after an action could not be read: where it is is not known, so it
+    /// counts as a hit and the tab is stopped like one on a blocked page.
+    fn halt_unknown(&self, id: i64, tab: &str, before: &str, action: &str) -> String {
+        self.conv(id, |c| c.page = before.to_owned());
+        self.halt(
+            id,
+            tab,
+            "",
+            action,
+            "zptah could not read which page the tab is on, and treats an unknown page like one this Mono may not use.",
+        )
+    }
+
+    fn halt(&self, id: i64, tab: &str, url: &str, action: &str, why: &str) -> String {
         let before = self.conv(id, |c| {
             c.halted.insert(tab.to_owned());
             std::mem::take(&mut c.page)
@@ -679,13 +740,20 @@ impl ArdiaUpstream {
             &format!(
                 "after {action}: from {} to {}",
                 audit_url(&before),
-                audit_url(url)
+                if url.is_empty() {
+                    "an unknown page".to_owned()
+                } else {
+                    audit_url(url)
+                }
             ),
         );
-        Err(format!(
-            "Stopped: after {action} the page was on {}. {} Further calls in this tab are refused for the rest of the turn{}. What was read was withheld.",
-            audit_url(url),
-            tabs_origin_refusal(refusal),
+        format!(
+            "Stopped: after {action} the page was on {}. {why} Further calls in this tab are refused for the rest of the turn{}. What was read was withheld.",
+            if url.is_empty() {
+                "a page that could not be read".to_owned()
+            } else {
+                audit_url(url)
+            },
             if closed {
                 ", and the tab was closed"
             } else if unbound_user_tab {
@@ -693,7 +761,7 @@ impl ArdiaUpstream {
             } else {
                 ""
             },
-        ))
+        )
     }
 
     // ---- the tools ----
@@ -1047,6 +1115,7 @@ impl Upstream for ArdiaUpstream {
     fn run_started(&self, session: i64, user_message: &str) {
         self.conv(session, |c| {
             c.halted.clear();
+            c.active = false;
             // A new user message ends a Stop: the turn may use the browser again.
             c.stopped = false;
             c.cancel = CancelToken::new();
@@ -1060,11 +1129,15 @@ impl Upstream for ArdiaUpstream {
         self.controller.turn_ended(&self.turn_key(session));
     }
     fn run_ended(&self, session: i64) {
+        self.conv(session, |c| c.active = false);
         self.end_run_cards(session);
         self.controller.turn_ended(&self.turn_key(session));
     }
     fn injection_found(&self, session: i64) {
         self.flag_injection(session);
+    }
+    fn intent_declared(&self, session: i64, intent: &defense::Intent, approved: bool) {
+        self.with_turn(session, |turn| turn.declare(intent.clone(), approved));
     }
 }
 
@@ -1127,7 +1200,7 @@ fn tool_definitions() -> Vec<Value> {
         act("browser_click", "Click", "Click an element. zptah reads the element fresh first and asks the user before a risky click (payment, deletion, sending, posting, account changes). Take a browser_snapshot first: only refs from a snapshot work, and a ref that changed since fails.", object(json!({"ref": target, "purpose": purpose, "declared_risk": declared}), json!(["ref"]))),
         act("browser_type", "Type text", "Type text into a field, key by key. Never into a password or one-time code field (zptah refuses).", object(json!({"ref": target, "text": {"type": "string"}, "purpose": purpose, "declared_risk": declared}), json!(["ref", "text"]))),
         act("browser_fill", "Fill a field", "Set the value of a field. Never a password or one-time code field (zptah refuses).", object(json!({"ref": target, "text": {"type": "string"}, "purpose": purpose, "declared_risk": declared}), json!(["ref", "text"]))),
-        act("browser_press", "Press a key", "Press a key in the page (Enter, Tab, Escape, ArrowDown, ...). Enter can submit a form. A character key is only sent when zptah can tell the focus is not a password field.", object(json!({"key": {"type": "string"}, "purpose": purpose, "declared_risk": declared}), json!(["key"]))),
+        act("browser_press", "Press a key", "Press a key (Enter, Tab, Escape, ArrowDown, Control+Enter ...). Give `ref` (from a browser_snapshot) to press it in that element: zptah then judges that element and its form. Without `ref` the key goes to whatever has the focus, which zptah reads first. Enter can submit a form. A character key is only sent when zptah can tell the target is not a password field.", object(json!({"key": {"type": "string"}, "ref": target, "purpose": purpose, "declared_risk": declared}), json!(["key"]))),
         act("browser_select", "Choose an option", "Choose an option of a select or dropdown by its text or value.", object(json!({"ref": target, "value": {"type": "string"}, "purpose": purpose, "declared_risk": declared}), json!(["ref", "value"]))),
         act("browser_check", "Check or uncheck", "Tick (checked true, the default) or untick (checked false) a checkbox or radio.", object(json!({"ref": target, "checked": {"type": "boolean"}, "purpose": purpose, "declared_risk": declared}), json!(["ref"]))),
         act("browser_hover", "Hover", "Point at an element (opens menus and tooltips). It changes nothing.", object(json!({"ref": target}), json!(["ref"]))),

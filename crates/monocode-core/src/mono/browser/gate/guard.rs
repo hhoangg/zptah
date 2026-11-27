@@ -162,7 +162,16 @@ impl Inner {
             Some(file) => format!("{text}\n{file}"),
             None => text.clone(),
         };
-        match self.after_read(route, name, &seen, true) {
+        // An Ardia error can quote the page (an element name, a message the page set): it is
+        // scanned for an injection like any read, but it does not taint the turn by itself.
+        let error_of_ardia =
+            !content && result["isError"] == true && self.lock_state().policy.ardia;
+        let (scan_as, taints) = if error_of_ardia {
+            ("browser_read", false)
+        } else {
+            (name, true)
+        };
+        match self.after_read(route, scan_as, &seen, taints) {
             Err(reason) => {
                 return tool_text(
                     format!(
@@ -245,6 +254,16 @@ impl Inner {
             .map_err(|reason| format!("The recipe was not run. {reason}"))
     }
 
+    /// Tells the upstream what the Mono declared (an upstream that judges actions itself keeps
+    /// its own record of the turn).
+    fn tell_upstream(&self, route: &str, intents: &[defense::Intent], approved: bool) {
+        let upstream = self.lock_state().upstream.clone();
+        let session = self.session_of(route);
+        for intent in intents {
+            upstream.intent_declared(session, intent, approved);
+        }
+    }
+
     /// `browser_declare_intent`. Before any read it records the intents. After a read each one
     /// needs the user's card; one that is not approved is kept as unapproved and never counts.
     pub(super) fn declare_intent(&self, route: &str, args: &Value) -> Value {
@@ -264,6 +283,7 @@ impl Inner {
         };
         if !self.with_turn(route, |turn| turn.tainted) {
             let count = intents.len();
+            self.tell_upstream(route, &intents, true);
             self.with_turn(route, |turn| {
                 for intent in intents {
                     turn.declare(intent, true);
@@ -292,6 +312,7 @@ impl Inner {
                 }
             });
             let allowed = self.ask(route, request).is_ok();
+            self.tell_upstream(route, std::slice::from_ref(&intent), allowed);
             self.with_turn(route, |turn| turn.declare(intent, allowed));
             if allowed {
                 approved += 1;

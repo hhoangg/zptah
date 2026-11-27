@@ -1,0 +1,563 @@
+//! The decision of an act tool: what can never be done, then the shared classifier on the fresh
+//! read (design spec section 6).
+//!
+//! * Checks no approval overrides: the page and every destination (a link's `href`, a form's
+//!   `action`, a button's `formaction`) against the Mono's origin lists, a password or one-time
+//!   code field (by `type`, `autocomplete`, `name`, `id`, `placeholder`, label and name), a
+//!   character key whose focus is not known to be harmless, `type` and `fill` into anything that
+//!   is not a text field, `check` on anything that is not a checkbox, radio or switch.
+//! * An action whose effect the gate cannot read in full (a destination it could not read, a bare
+//!   word such as Confirm with no dialog or page text to explain it, a focus it could not
+//!   identify) asks with [`Category::Unclear`].
+//! * An Enter, or a line break in typed text, submits: every form's `action` in scope is checked
+//!   and every submit button in scope is classified as a click (the categories of all of them are
+//!   joined). The form of the focused element is its own when the page says which it is.
+//! * After untrusted content was read, an action that was not declared first asks
+//!   ([`defense::Turn::check`], fed by `browser_declare_intent`).
+use super::act::{classifier_name, is_checkable_role, is_field_role, Op, Plan};
+use super::focus::Focus;
+use super::fresh::{self, Attrs, ElementInput};
+use super::read::{press_effect, PressEffect, Read};
+use super::uploads;
+use super::*;
+use crate::mono::browser::defense::{self, Action as TaintAction};
+use crate::mono::browser::gate::extension::act::looks_vietnamese;
+use crate::mono::browser::risk::decide::Decision;
+use crate::mono::browser::risk::lexicon::{lexicon, ControlKind};
+use crate::mono::browser::risk::signals::{extract_amounts, ActionKind, ElementSignals};
+use crate::mono::browser::risk::Category;
+use crate::mono::browser::trust::audit::AuditDecision;
+use crate::mono::browser::trust::{Action as TrustAction, Config as TrustConfig, Evaluation};
+use std::collections::BTreeSet;
+
+/// What was decided, and what to compare after the user answered.
+pub(super) struct Judged {
+    pub ev: Evaluation,
+    /// The action as the taint rule saw it, when it asked (to note an approval).
+    pub taint: Option<TaintAction>,
+    /// Everything the decision rested on: after a card the same read must give the same one.
+    pub sig: Sig,
+}
+
+/// The facts a decision rests on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Sig {
+    url: String,
+    role: String,
+    name: String,
+    attrs: Attrs,
+    per_form: Vec<Option<String>>,
+    complete: bool,
+    dialog: (bool, String),
+    focus: Option<Focus>,
+    categories: BTreeSet<Category>,
+}
+
+/// Which forms a submit may reach.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scope {
+    /// The form at this index of the page's forms.
+    Own(usize),
+    /// Any form of the page (the page did not say which one the target belongs to).
+    Any,
+}
+
+fn scope_of(read: &Read) -> Scope {
+    match &read.focus {
+        Some(Focus::Element(el)) if el.form.is_some() => Scope::Own(el.form.unwrap_or(0)),
+        _ if read.actions.per_form.len() == 1 => Scope::Own(0),
+        _ => Scope::Any,
+    }
+}
+
+/// One thing the action does, as the classifier takes it.
+struct Cand {
+    kind: Option<ActionKind>,
+    element: ElementSignals,
+}
+
+fn button(label: &str) -> ElementSignals {
+    ElementSignals {
+        role: "button".into(),
+        name: label.to_owned(),
+        label: Some(label.to_owned()).filter(|n| !n.is_empty()),
+        amounts: extract_amounts(label),
+        is_submit: true,
+        ..Default::default()
+    }
+}
+
+impl ArdiaUpstream {
+    /// `Err` is the refusal (already audited); `Ok` the evaluation.
+    pub(super) fn evaluate(
+        &self,
+        id: i64,
+        plan: &Plan,
+        read: &Read,
+        _files: Option<&[uploads::UploadFile]>,
+    ) -> Result<Judged, String> {
+        let page = &read.url;
+        let name = clean(&read.name);
+        let origins = self.config().origins;
+        let deny = |decision: AuditDecision, reason: &str, text: String| {
+            self.refuse(id, plan, read, decision, reason, text)
+        };
+        let key = plan.key.as_deref();
+        let effect = (plan.op == Op::Press).then(|| press_effect(plan, read));
+        let types = matches!(plan.op, Op::Type | Op::Fill) || effect == Some(PressEffect::Types);
+
+        if plan.op == Op::Check && !is_checkable_role(&read.role) {
+            return Err(deny(
+                AuditDecision::Blocked,
+                "check on an element that is not a checkbox, radio or switch",
+                format!(
+                    "Not done: browser_check works on a checkbox, radio or switch, and that element is a {}. On anything else it would click it. Use browser_click if a click is what you mean.",
+                    if read.role.is_empty() { "control" } else { &read.role }
+                ),
+            ));
+        }
+        if matches!(plan.op, Op::Type | Op::Fill) && !is_field_role(&read.role) {
+            return Err(deny(
+                AuditDecision::Blocked,
+                "type or fill into an element that is not a text field",
+                format!(
+                    "Not done: {} types into a text field (a textbox, searchbox, combobox or spinbutton), and that element is a {}. Use browser_click, browser_select or browser_check for it.",
+                    plan.tool,
+                    if read.role.is_empty() { "control" } else { &read.role }
+                ),
+            ));
+        }
+        if effect == Some(PressEffect::Types)
+            && plan.ref_.is_none()
+            && !matches!(read.focus, Some(Focus::Element(_)))
+        {
+            return Err(deny(
+                AuditDecision::Blocked,
+                "a character key with a focus that could not be read",
+                "A character key is not sent: zptah could not tell which element has the focus, and the key could land in a password field. Use browser_type or browser_fill with the ref of the field, or press it with the ref of the field.".into(),
+            ));
+        }
+        if types {
+            if read.attrs.type_unreadable || read.attrs.autocomplete_unreadable {
+                return Err(deny(
+                    AuditDecision::Blocked,
+                    "the type of the field could not be read",
+                    "Not done: zptah could not read what kind of field this is, so it did not type into it (it could be a password).".into(),
+                ));
+            }
+            if let Some(why) = fresh::secret_field(&name, &read.attrs) {
+                self.post_password_notice(page);
+                return Err(deny(
+                    AuditDecision::Invariant,
+                    why,
+                    format!(
+                        "Not allowed: {why}. Ask the user to enter it themselves, then continue."
+                    ),
+                ));
+            }
+        }
+
+        // The element the classifier judges first: the target, or the focused control.
+        let mut element = match (&read.focus, plan.ref_.is_some()) {
+            (Some(Focus::Element(el)), false) => {
+                let mut e = ElementSignals {
+                    role: read.role.clone(),
+                    name: name.clone(),
+                    label: Some(name.clone()).filter(|n| !n.is_empty()),
+                    amounts: extract_amounts(&name),
+                    input_type: el.input_type.clone(),
+                    autocomplete: el.autocomplete.clone(),
+                    input_name: el.name.clone(),
+                    form_action: el
+                        .form_action
+                        .as_deref()
+                        .filter(|a| !fresh::is_javascript(a))
+                        .map(str::to_owned),
+                    href: el
+                        .href
+                        .as_deref()
+                        .filter(|h| !fresh::is_javascript(h))
+                        .map(str::to_owned),
+                    ..Default::default()
+                };
+                e.is_submit = el.form.is_some()
+                    && matches!(
+                        el.input_type
+                            .as_deref()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .as_str(),
+                        "submit" | "image"
+                    );
+                e
+            }
+            _ => fresh::element_signals(&ElementInput {
+                role: &read.role,
+                name: &name,
+                attrs: &read.attrs,
+                form: &read.form,
+                ref_: read.ref_.as_deref().unwrap_or(""),
+                page_url: page,
+            }),
+        };
+        let ctx = &read.ctx;
+        element.in_dialog = ctx.in_dialog || read.modal;
+        if ctx.in_dialog {
+            element.dialog_text = Some(clean(&ctx.dialog_text)).filter(|t| !t.is_empty());
+            element.dialog_has_primary = !ctx.dialog_buttons.is_empty();
+            element.dialog_primary_names = ctx.dialog_buttons.iter().map(|b| clean(b)).collect();
+        }
+        element.nearby_text = clean(&ctx.nearby_text);
+        let heading = if ctx.heading.is_empty() {
+            read.title.clone()
+        } else {
+            clean(&ctx.heading)
+        };
+
+        // What the action does to the page.
+        let clicks =
+            matches!(plan.op, Op::Click | Op::Check) || effect == Some(PressEffect::Presses);
+        let submits_labels = matches!(effect, Some(PressEffect::Submits | PressEffect::Unknown))
+            || (matches!(plan.op, Op::Type | Op::Fill) && plan.newline && !read.multiline);
+        let scope = scope_of(read);
+        let submit_like = clicks && read.submit_like || submits_labels;
+        let mut unclear: Option<&str> = None;
+
+        // The destinations: a link's address, a form's action, the button's own `formaction`.
+        let mut destinations: Vec<(&str, String)> = Vec::new();
+        if clicks {
+            let raw = read
+                .attrs
+                .href
+                .as_deref()
+                .filter(|h| !fresh::is_javascript(h));
+            if let Some(raw) = raw {
+                match fresh::resolve(page, raw) {
+                    Some(url) => destinations.push(("the link", url)),
+                    // A link whose address can not be read is not followed blind.
+                    None => destinations.push(("the link", raw.to_owned())),
+                }
+            }
+            if read.attrs.href_unreadable || read.attrs.formaction_unreadable {
+                unclear.get_or_insert("the address of the control could not be read");
+            }
+            if let Some(url) = &element.form_action {
+                if submit_like {
+                    destinations.push(("the button", url.clone()));
+                }
+            }
+        }
+        if submit_like {
+            let (urls, complete) = match scope {
+                Scope::Own(i) => match read.actions.per_form.get(i) {
+                    Some(Some(url)) => (vec![url.clone()], true),
+                    _ => (Vec::new(), false),
+                },
+                Scope::Any => (read.actions.urls(), read.actions.complete),
+            };
+            for url in urls {
+                destinations.push(("the form", url));
+            }
+            if !complete {
+                unclear.get_or_insert("where the form sends its data could not be read");
+            }
+            if read.form_cut {
+                unclear.get_or_insert("the page's form lists more fields than were read");
+            }
+            if !read.form.known && !read.actions.is_empty() {
+                unclear.get_or_insert("the page's form could not be read");
+            }
+        }
+        for (what, url) in &destinations {
+            if let Err(refusal) = origins.check(url) {
+                let shown = audit_url(url);
+                return Err(deny(
+                    AuditDecision::Blocked,
+                    &format!("{what} leads to {shown}, which this Mono may not use"),
+                    format!(
+                        "Not done: {what} leads to {}. {} The page was left as it is.",
+                        if shown.is_empty() {
+                            "an address that is not a web page".to_owned()
+                        } else {
+                            shown
+                        },
+                        tabs_origin_refusal(refusal)
+                    ),
+                ));
+            }
+        }
+
+        // The classifier's inputs.
+        let mut ext: BTreeSet<Category> = BTreeSet::new();
+        let mut declared: BTreeSet<Category> = BTreeSet::new();
+        if matches!(effect, Some(PressEffect::Unknown)) {
+            unclear.get_or_insert("the focus could not be identified");
+        }
+        let vi = looks_vietnamese(&format!("{} {} {}", read.title, name, element.nearby_text));
+        // A bare word (Confirm, OK, Yes ...) takes its meaning from the dialog or the page.
+        let lex = lexicon();
+        if clicks && lex.takes_context(&name, ControlKind::Button, vi) && !ctx.readable() {
+            unclear.get_or_insert("a bare word with no dialog or page text to explain it");
+        }
+        let mut cands: Vec<Cand> = Vec::new();
+        let field_kind = || fresh::field_kind(&name, &read.attrs);
+        match plan.op {
+            Op::Click | Op::Check => cands.push(Cand {
+                kind: Some(ActionKind::Click),
+                element: element.clone(),
+            }),
+            Op::Select => cands.push(Cand {
+                kind: Some(ActionKind::Select),
+                element: element.clone(),
+            }),
+            Op::Upload => cands.push(Cand {
+                kind: Some(ActionKind::Upload),
+                element: element.clone(),
+            }),
+            Op::Hover => cands.push(Cand {
+                kind: None,
+                element: element.clone(),
+            }),
+            Op::Type | Op::Fill => cands.push(Cand {
+                kind: Some(ActionKind::Type(field_kind())),
+                element: element.clone(),
+            }),
+            Op::Press => match effect.unwrap_or(PressEffect::Nothing) {
+                PressEffect::Nothing => cands.push(Cand {
+                    kind: None,
+                    element: element.clone(),
+                }),
+                PressEffect::Types => cands.push(Cand {
+                    kind: Some(ActionKind::Type(field_kind())),
+                    element: element.clone(),
+                }),
+                PressEffect::Presses => {
+                    // Enter or Space presses the control: a click on it.
+                    cands.push(Cand {
+                        kind: Some(ActionKind::Click),
+                        element: element.clone(),
+                    })
+                }
+                PressEffect::Submits | PressEffect::Unknown => {}
+            },
+        }
+        if submits_labels {
+            // The submit buttons in scope, each judged as a click on it.
+            let labels: Vec<String> = match (&read.focus, scope) {
+                (Some(Focus::Element(el)), Scope::Own(_)) => el
+                    .default_submit
+                    .iter()
+                    .map(|l| clean(l))
+                    .collect::<Vec<_>>(),
+                _ => read.form.submits.iter().map(|(_, l)| clean(l)).collect(),
+            };
+            let labels = if labels.is_empty() {
+                vec![String::new()]
+            } else {
+                labels
+            };
+            for label in labels {
+                if lex.takes_context(&label, ControlKind::Submit, vi) && !ctx.readable() {
+                    unclear.get_or_insert("a bare word with no dialog or page text to explain it");
+                }
+                let mut b = button(&label);
+                b.in_dialog = element.in_dialog;
+                cands.push(Cand {
+                    kind: Some(ActionKind::Click),
+                    element: b,
+                });
+            }
+        }
+
+        // After untrusted content was read, an action that was not declared asks.
+        let mut taint = None;
+        let mut taint_note = String::new();
+        if let Some(action) = self.taint_action(plan, read, effect, &name, &cands) {
+            if let Some(why) = self.taint_check(id, &action) {
+                ext.insert(why.1);
+                taint_note = why.0;
+                taint = Some(action);
+            }
+        }
+        if let Some(why) = unclear {
+            ext.insert(Category::Unclear);
+            taint_note = if taint_note.is_empty() {
+                why.to_owned()
+            } else {
+                format!("{taint_note}; {why}")
+            };
+        }
+        // Pasting puts text the gate never sees into the field.
+        if key.is_some_and(fresh::is_paste_chord) {
+            declared.insert(Category::CredentialEntry);
+        }
+        // A textbox whose kind could not be read, on a sign-in page: asks first.
+        if types
+            && read.attrs.input_type.is_none()
+            && (is_field_role(&read.role) || read.role.is_empty())
+            && fresh::login_like(page, &read.title, &read.form)
+        {
+            declared.insert(Category::CredentialEntry);
+        }
+
+        let evaluate_one =
+            |cand: &Cand, extra: &BTreeSet<Category>| -> Result<Evaluation, String> {
+                let legacy = classifier_name(&plan.tool);
+                let mut action = TrustAction::new(legacy, &plan.args, page);
+                action.kind = cand.kind;
+                action.form = read.form.signals();
+                action.element = cand.element.clone();
+                action.page_title = &read.title;
+                action.page_heading = &heading;
+                action.page_vi = vi;
+                action.typed = plan.typed.as_deref();
+                action.declared.extend(declared.iter().copied());
+                action.ext = if plan.op == Op::Hover {
+                    BTreeSet::new()
+                } else {
+                    ext.union(extra).copied().collect()
+                };
+                self.with_trust(id, |state, cfg| {
+                    state.evaluate(
+                        &TrustConfig {
+                            level: cfg.level,
+                            rules: &cfg.rules,
+                        },
+                        &action,
+                    )
+                })
+                .ok_or_else(|| "This browser has no act settings loaded.".to_owned())
+            };
+        let none = BTreeSet::new();
+        let first_pass: Vec<Evaluation> = cands
+            .iter()
+            .map(|c| evaluate_one(c, &none))
+            .collect::<Result<_, _>>()?;
+        let ev = {
+            // Every candidate counts: the first that denies decides; otherwise the one with the
+            // most categories is judged again with the categories of all the others added.
+            let mut ev = first_pass
+                .iter()
+                .find(|e| matches!(e.decision, Decision::Deny(_)))
+                .cloned();
+            if ev.is_none() {
+                let all: BTreeSet<Category> = first_pass
+                    .iter()
+                    .flat_map(|e| e.categories.iter().copied())
+                    .collect();
+                let at = first_pass
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(i, e)| (e.categories.len(), std::cmp::Reverse(*i)))
+                    .map_or(0, |(i, _)| i);
+                let extra: BTreeSet<Category> = all
+                    .difference(&first_pass[at].categories)
+                    .copied()
+                    .collect();
+                ev = Some(if extra.is_empty() {
+                    first_pass[at].clone()
+                } else {
+                    evaluate_one(&cands[at], &extra)?
+                });
+            }
+            ev.ok_or("There was nothing to judge.")?
+        };
+        if let Decision::Deny(reason) = &ev.decision {
+            let audit = if reason.contains("password") {
+                AuditDecision::Invariant
+            } else {
+                AuditDecision::Blocked
+            };
+            self.row(
+                id,
+                &plan.tool,
+                page,
+                &plan.summary,
+                self.is_user_tab(id, &read.tab),
+                Some(&ev),
+                audit,
+                reason,
+                None,
+            );
+            return Err(format!("Not allowed: {reason}."));
+        }
+        let mut ev = ev;
+        if !taint_note.is_empty() && !ev.reason.starts_with("soul rule") {
+            ev.reason = format!("{}; {taint_note}", ev.reason);
+        }
+        let sig = Sig {
+            url: read.url.clone(),
+            role: read.role.clone(),
+            name: read.name.clone(),
+            attrs: read.attrs.clone(),
+            per_form: read.actions.per_form.clone(),
+            complete: read.actions.complete,
+            dialog: (element.in_dialog, ctx.dialog_text.clone()),
+            focus: read.focus.clone(),
+            categories: ev.categories.clone(),
+        };
+        Ok(Judged { ev, taint, sig })
+    }
+
+    /// The call as the taint rule describes it (`None`: it changes nothing).
+    fn taint_action(
+        &self,
+        plan: &Plan,
+        read: &Read,
+        effect: Option<PressEffect>,
+        name: &str,
+        cands: &[Cand],
+    ) -> Option<TaintAction> {
+        let label = |c: &Cand| format!("{} {}", c.element.role, c.element.name);
+        let mut element = format!("{} {}", read.role, name).trim().to_owned();
+        let tool = match plan.op {
+            Op::Hover => return None,
+            Op::Click | Op::Check => "browser_click",
+            Op::Select => "browser_select_option",
+            Op::Upload => "browser_file_upload",
+            Op::Type | Op::Fill => "browser_type",
+            Op::Press => match effect? {
+                PressEffect::Nothing => return None,
+                PressEffect::Types => "browser_type",
+                PressEffect::Presses => "browser_click",
+                PressEffect::Submits | PressEffect::Unknown => {
+                    element = cands.iter().map(label).collect::<Vec<_>>().join(" ");
+                    "browser_click"
+                }
+            },
+        };
+        let mut args = json!({"ref": plan.ref_.as_deref().unwrap_or("e0"), "element": element});
+        if let Some(typed) = &plan.typed {
+            args["text"] = json!(typed);
+        }
+        let resolved = element.clone();
+        let mut action =
+            TaintAction::describe_with(tool, &args, &read.url, &|_| Some(resolved.clone()));
+        if matches!(plan.op, Op::Press)
+            && matches!(effect, Some(PressEffect::Submits | PressEffect::Unknown))
+            && action.kind.is_none()
+        {
+            // A submit of a form whose button could not be named is a write that must be declared.
+            action.kind = Some(defense::Kind::Write);
+        }
+        Some(action)
+    }
+
+    /// The taint rule on one action: why it asks, and the category that says so.
+    fn taint_check(&self, id: i64, action: &TaintAction) -> Option<(String, Category)> {
+        #[cfg(test)]
+        if self.taint_exempt.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        self.with_turn(id, |turn| {
+            turn.check(action).map(|why| {
+                let category = if turn.flagged() {
+                    Category::Injection
+                } else {
+                    Category::Tainted
+                };
+                (why.text, category)
+            })
+        })
+    }
+}

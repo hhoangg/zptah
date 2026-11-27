@@ -2,9 +2,15 @@
 //! and the replies of `snapshot -i`, `get attr`, `form`, `get title` and the act commands, built
 //! from the recorded replies in `fixtures/` (shapes are kept exact; the values are the test's).
 //!
-//! Not measured against a real Ardia (marked where used): the reply of `check`, `uncheck` and
-//! `hover` on success (the key that names the act is a guess: the gate does not read it), and
-//! `get attr` on a form after the first (`form:nth-of-type(N)`).
+//! Measured on a real Ardia (2026-11-28) and kept here: `snapshot` never marks the focus (the gate
+//! asks with one fixed `eval`); `get count form` and `get attr "form >> nth=i" action` read the
+//! forms; an absent attribute is `{"attribute":..,"value":null}` with exit 0; `check` on a button
+//! clicks it and only then fails; `press @eN KEY` presses in that element; with no form `form`
+//! answers `count: 0` and no `submits`; with an open dialog `snapshot -i` is scoped to it and says
+//! so in `modal`, and the full `snapshot` shows its text.
+//!
+//! Not measured against a real Ardia (marked where used): the reply of `hover` on success (the
+//! key that names the act is a guess: the gate does not read it).
 use super::runner::{Output, RunFailure};
 use super::tests::{json_of, State};
 use serde_json::{json, Value};
@@ -59,11 +65,27 @@ pub(super) struct Page {
     pub elements: Vec<El>,
     /// The `action` attribute of each form, in order (`None`: a form with no action).
     pub forms: Vec<Option<String>>,
-    /// The reply of the `form` command (`None`: the command refuses).
+    /// The reply of the `form` command (`None`: the page has no form: `count: 0`).
     pub form: Option<Value>,
-    /// The ref marked `[active]` in the snapshot.
-    pub focus: Option<String>,
+    /// The `form` command is refused.
+    pub form_refuses: bool,
+    /// What the focus `eval` answers as an object (`None`: `{"tag":"BODY"}`).
+    pub focus: Option<Value>,
     pub epoch: u64,
+    /// The text the full `snapshot` (no `-i`) shows.
+    pub full: Option<String>,
+    /// The `modal` of `snapshot -i` (a dialog is open).
+    pub modal: Option<Value>,
+}
+
+/// The focus `eval` result of a plain text input.
+pub(super) fn focus_input(input_type: &str, name: Option<&str>, label: Option<&str>) -> Value {
+    json!({"tag": "INPUT", "type": input_type, "ac": null, "name": name, "label": label, "text": null, "ce": false, "sh": false, "fi": null, "sb": null, "fa": null, "hr": null})
+}
+
+/// The focus `eval` result of a button (`form`: its index among the forms).
+pub(super) fn focus_button(text: &str, form: Option<usize>) -> Value {
+    json!({"tag": "BUTTON", "type": "submit", "ac": null, "name": null, "label": null, "text": text, "ce": false, "sh": false, "fi": form, "sb": text, "fa": null, "hr": null})
 }
 
 /// How a command that is made to fail fails.
@@ -104,6 +126,15 @@ impl State {
         cmd: &[&str],
         values: &[&str],
     ) -> Option<Result<Output, RunFailure>> {
+        if self
+            .on_cmd
+            .as_ref()
+            .is_some_and(|(name, _)| cmd.first() == Some(&name.as_str()))
+        {
+            if let Some((_, hook)) = self.on_cmd.take() {
+                hook(self);
+            }
+        }
         if let Some((name, kind)) = self.fail_on.clone() {
             if cmd.first() == Some(&name.as_str()) {
                 self.fail_on = None;
@@ -132,6 +163,7 @@ impl State {
                 d["title"] = json!(self.page.title.clone());
             })),
             (["snapshot", ..], []) if !self.page.elements.is_empty() => {
+                let interactive = cmd.contains(&"-i");
                 let refs: serde_json::Map<String, Value> = self
                     .page
                     .elements
@@ -142,46 +174,66 @@ impl State {
                     .page
                     .elements
                     .iter()
-                    .map(|e| {
-                        let active = if self.page.focus.as_deref() == Some(&e.r) {
-                            "active, "
-                        } else {
-                            ""
-                        };
-                        format!("- {} \"{}\" [{active}ref={}]", e.role, e.name, e.r)
-                    })
+                    .map(|e| format!("- {} \"{}\" [ref={}]", e.role, e.name, e.r))
                     .collect();
                 let origin = self
                     .snapshot_origin
                     .clone()
                     .unwrap_or_else(|| self.url.clone());
                 let epoch = self.page.epoch;
+                let (full, modal) = (self.page.full.clone(), self.page.modal.clone());
                 Some(with_data(SNAPSHOT_I, move |d| {
                     d["origin"] = json!(origin);
                     d["refs"] = Value::Object(refs);
                     d["snapshot"] = json!(lines.join("\n"));
                     d["epoch"] = json!(epoch);
+                    match (interactive, full, modal) {
+                        // The full snapshot shows the text of a dialog.
+                        (false, Some(full), _) => d["snapshot"] = json!(full),
+                        (true, _, Some(modal)) => d["modal"] = modal,
+                        _ => {}
+                    }
                 }))
             }
-            (["get", "attr"], [target, name]) => Some(self.get_attr(target, name)),
-            (["tab", "list"], []) if self.user_tab.is_some() => {
-                // Own tabs first (not active), then the user's active tab.
-                let (id, url, title) = self.user_tab.clone().unwrap();
-                let mut tabs: Vec<Value> = self
-                    .tabs
-                    .iter()
-                    .map(|t| json!({"tabId": "t1", "appTabId": t, "title": "Mono tab", "url": self.url, "type": "page", "active": false, "openedBySession": false}))
-                    .collect();
-                tabs.push(json!({"tabId": "t9", "appTabId": id, "title": title, "url": url, "type": "page", "active": true, "openedBySession": false}));
+            (["eval"], [script]) => {
+                self.evals.push(script.to_string());
+                assert_eq!(
+                    *script,
+                    super::upstream::FOCUS_SCRIPT,
+                    "the only eval the gate sends is its own fixed focus script"
+                );
+                if self.focus_fails {
+                    return Some(refused(
+                        r#"{"success":false,"data":null,"error":"eval is unavailable","code":"command_failed"}"#,
+                    ));
+                }
+                let result = self.focus_raw.clone().unwrap_or_else(|| {
+                    self.page
+                        .focus
+                        .clone()
+                        .unwrap_or_else(|| json!({"tag": "BODY"}))
+                        .to_string()
+                });
                 Some(ok(
-                    json!({"success": true, "data": {"tabs": tabs}, "error": null}),
+                    json!({"success": true, "data": {"origin": "file://", "result": result}, "error": null}),
                 ))
             }
-            (["form"], []) => Some(match &self.page.form {
-                Some(form) => with_data(FORM, |d| *d = form.clone()),
-                None => refused(
+            (["get", "count"], ["form"]) => Some(ok(
+                json!({"success": true, "data": {"count": self.page.forms.len(), "selector": "form"}, "error": null}),
+            )),
+            (["get", "attr"], [target, name]) => Some(self.get_attr(target, name)),
+            (["form"], []) => Some(if self.page.form_refuses {
+                refused(
                     r#"{"success":false,"data":null,"error":"No form on the page","code":"command_failed"}"#,
-                ),
+                )
+            } else {
+                match &self.page.form {
+                    Some(form) => with_data(FORM, |d| *d = form.clone()),
+                    // No form: a count of 0 and no `submits` key (measured).
+                    None => ok(
+                        json!({"success": true, "data": {"url": self.url, "count": 0, "more": false, "stopped": null, "fields": []}, "error": null}),
+                    ),
+                }
             }),
             (
                 ["click" | "check" | "uncheck" | "hover" | "fill" | "type" | "select" | "upload"],
@@ -193,7 +245,15 @@ impl State {
             }
             (["press"], [key]) => {
                 self.act_sent.push(vec!["press".into(), key.to_string()]);
-                Some(self.press(key))
+                Some(self.press(key, None))
+            }
+            (["press"], [target, key]) => {
+                self.act_sent
+                    .push(vec!["press".into(), target.to_string(), key.to_string()]);
+                if let Err(reply) = self.element(target) {
+                    return Some(reply);
+                }
+                Some(self.press(key, Some(target)))
             }
             _ => None,
         }
@@ -228,25 +288,23 @@ impl State {
     }
 
     fn get_attr(&mut self, target: &str, name: &str) -> Result<Output, RunFailure> {
+        if self.attr_fail.iter().any(|a| a == name) {
+            return refused(
+                r#"{"success":false,"data":null,"error":"The attribute could not be read","code":"command_failed"}"#,
+            );
+        }
         let value = if target == "form" {
             self.page.forms.first().cloned()
         } else if let Some(n) = target
-            .strip_prefix("form:nth-of-type(")
-            .and_then(|r| r.strip_suffix(')'))
+            .strip_prefix("form >> nth=")
             .and_then(|n| n.parse::<usize>().ok())
         {
-            // Not measured: the selector of a later form.
-            self.page.forms.get(n - 1).cloned()
+            // Measured: `form:nth-of-type(N)` does not find the Nth form; `form >> nth=N` does.
+            self.page.forms.get(n).cloned()
         } else {
             match self.element(target) {
-                Ok(el) => match el.attrs.get(name) {
-                    Some(v) => Some(Some(v.clone())),
-                    None => {
-                        return refused(
-                            r#"{"success":false,"data":null,"error":"No such attribute","code":"command_failed"}"#,
-                        )
-                    }
-                },
+                // An absent attribute is a reply with `value: null`, not a refusal (measured).
+                Ok(el) => Some(el.attrs.get(name).cloned()),
                 Err(reply) => return reply,
             }
         };
@@ -266,11 +324,18 @@ impl State {
             Ok(el) => el,
             Err(reply) => return reply,
         };
+        if let Some(text) = self.act_error.take() {
+            return refused(
+                &json!({"success": false, "data": null, "error": text, "code": "command_failed"})
+                    .to_string(),
+            );
+        }
         let url = self.url.clone();
         match cmd {
             "click"
                 if el.attrs.contains_key("navigates_to")
-                    || (el.role == "link" && el.attrs.contains_key("href")) =>
+                    || (el.role == "link"
+                        && el.attrs.get("href").is_some_and(|h| h.starts_with("http"))) =>
             {
                 let to = el
                     .attrs
@@ -292,6 +357,10 @@ impl State {
             }
             "click" => with_data(CLICK_ADD, |d| {
                 d["clicked"] = json!(target);
+                // Not measured: how `changes` reports a tab the click opened.
+                if el.attrs.contains_key("opens_tab") {
+                    d["changes"]["opened"] = json!([{"id": "tab-popup-9"}]);
+                }
                 // The recorded click inserted a button `e12`; only an element that does so here.
                 if !el.attrs.contains_key("adds") {
                     d["changes"]["added"] = json!([]);
@@ -308,6 +377,18 @@ impl State {
                 *d = json!({"filled": target, "changes": changes});
             }),
             "type" => with_data(TYPE, |d| d["typed"] = json!(target)),
+            // Measured: `check` on a button CLICKS it (the page script ran) and only then fails.
+            "check" | "uncheck"
+                if !matches!(
+                    el.role.as_str(),
+                    "checkbox" | "radio" | "switch" | "menuitemcheckbox" | "menuitemradio"
+                ) =>
+            {
+                self.misclicks += 1;
+                refused(&format!(
+                    r#"{{"success":false,"data":null,"error":"Clicking {target} didn't check it","code":"command_failed"}}"#
+                ))
+            }
             "select" => with_data(SELECT, |d| d["selected"] = json!(rest)),
             "upload" => with_data(UPLOAD, |d| d["uploaded"] = json!(rest)),
             // Not measured: the key that names a successful check, uncheck or hover.
@@ -318,18 +399,38 @@ impl State {
         }
     }
 
-    fn press(&mut self, key: &str) -> Result<Output, RunFailure> {
-        if matches!(key, "Enter" | "NumpadEnter") {
+    fn press(&mut self, key: &str, target: Option<&str>) -> Result<Output, RunFailure> {
+        let enter = key
+            .rsplit('+')
+            .next()
+            .is_some_and(|k| matches!(k, "Enter" | "NumpadEnter" | "Return"));
+        if enter {
             if let Some(to) = self.enter_to.clone() {
                 let from = self.url.clone();
                 self.url = to.clone();
                 return with_data(PRESS_ENTER, |d| {
                     d["pressed"] = json!(key);
+                    if let Some(target) = target {
+                        d["in"] = json!(target);
+                    }
                     d["changes"]["url"] = json!({"from": from, "to": to});
                     d["changes"]["network"][0]["url"] = json!("https://shop.example/session");
+                    if !self.posts.is_empty() {
+                        d["changes"]["network"] = Value::Array(
+                            self.posts
+                                .iter()
+                                .map(|u| json!({"method": "POST", "url": u, "type": "Fetch", "statuses": [], "status": 200, "failed": null}))
+                                .collect(),
+                        );
+                    }
                 });
             }
         }
-        with_data(PRESS_TAB, |d| d["pressed"] = json!(key))
+        with_data(PRESS_TAB, |d| {
+            d["pressed"] = json!(key);
+            if let Some(target) = target {
+                d["in"] = json!(target);
+            }
+        })
     }
 }
