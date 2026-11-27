@@ -109,8 +109,23 @@ impl TranscriptView {
         if self.list.is_following_tail() || max - scrolled <= NEAR_END {
             return Some(last);
         }
-        let mut above = None;
-        for &prompt in prompts {
+        // Locate the last prompt at or before the scroll top. Only that
+        // prompt can be partly visible above the first following prompt.
+        let top = self.list.logical_scroll_top().item_ix;
+        let next = prompts.partition_point(|prompt| {
+            self.messages
+                .binary_search_by_key(prompt, |message| message.start)
+                .is_ok_and(|ix| self.messages[ix].display_start <= top)
+                || *prompt < self.history_start
+        });
+        let first_loaded = prompts.partition_point(|prompt| *prompt < self.history_start);
+        let start = first_loaded.max(next.saturating_sub(1));
+        let mut above = prompts[first_loaded..start]
+            .iter()
+            .rev()
+            .copied()
+            .find(|&prompt| self.prompt_rows(prompt).is_some());
+        for &prompt in &prompts[start..] {
             let Some((first, end)) = self.prompt_rows(prompt) else {
                 continue;
             };
@@ -124,7 +139,7 @@ impl TranscriptView {
             }
             return Some(prompt);
         }
-        above.or(prompts.first().copied())
+        above.or(prompts.get(first_loaded).copied())
     }
     /// The source index of the prompt `turns` before the last one.
     pub(super) fn prompt_from_end(&self, turns: usize) -> Option<usize> {
@@ -153,7 +168,16 @@ impl TranscriptView {
         self.outline.open = false;
         cx.notify();
     }
+    /// Scrolls to a prompt, first paging in the older turns when it lies above
+    /// the loaded window.
     pub(super) fn jump_to_prompt(&mut self, prompt: usize, cx: &mut Context<Self>) {
+        self.history_search = None;
+        self.history_prompt = None;
+        if prompt < self.history_start {
+            self.history_prompt = Some(prompt);
+            self.load_older_history(cx);
+            return;
+        }
         let Some((first, _)) = self.prompt_rows(prompt) else {
             return;
         };
@@ -185,7 +209,7 @@ impl TranscriptView {
         let active_ix = self
             .outline
             .active
-            .and_then(|active| prompts.iter().position(|&p| p == active));
+            .and_then(|active| prompts.binary_search(&active).ok());
         let (start, end, gap) = bar_stack(prompts.len(), active_ix, budget);
         let bars: Vec<usize> = prompts[start..end].to_vec();
         let hover_ix = self

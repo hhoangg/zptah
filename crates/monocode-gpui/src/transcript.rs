@@ -735,6 +735,8 @@ pub(crate) struct TranscriptView {
     /// The last page read failed; only a scroll retries it.
     history_failed: bool,
     history_search: Option<(usize, String)>,
+    /// A prompt above the loaded window that a jump is waiting to page in.
+    history_prompt: Option<usize>,
     prepared_parsers: HashMap<usize, MarkdownParser>,
     mono: bool,
     /// The Mono's emoji library, for `:emo[..]` tokens in its replies.
@@ -954,6 +956,8 @@ impl TranscriptView {
         self.rebuild(0, cx);
     }
     pub(crate) fn reveal_search(&mut self, row: usize, query: &str, cx: &mut Context<Self>) {
+        self.history_search = None;
+        self.history_prompt = None;
         if row < self.history_start {
             self.history_search = Some((row, query.into()));
             self.list.pause_following_tail();
@@ -2720,6 +2724,7 @@ impl TranscriptView {
             history_pager: None,
             history_failed: false,
             history_search: None,
+            history_prompt: None,
             prepared_parsers: HashMap::new(),
             mono: false,
             emoji: None,

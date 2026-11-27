@@ -461,4 +461,54 @@ mod tests {
             })
             .unwrap();
     }
+
+    /// Opening a long chat that has no entity yet shows its recent turns on
+    /// its own: nothing but the load itself asks for a frame.
+    #[gpui::test]
+    fn a_freshly_opened_long_chat_paints_its_bounded_window(cx: &mut TestAppContext) {
+        let (window, _, _) = super::super::tests::window(cx);
+        let id = window
+            .update(cx, |shell, _, _| {
+                let mut store = locked(&shell.store).unwrap();
+                let summary = store.create("codex", "/work/long").unwrap();
+                let rows: Vec<_> = (0..60)
+                    .flat_map(|turn| {
+                        ["user", "assistant"].map(|role| monocode_core::transcript::Row {
+                            role: role.into(),
+                            text: format!("{role} {turn}"),
+                            first: true,
+                            sent_at: None,
+                        })
+                    })
+                    .collect();
+                store.write_rows(summary.id, 0, &rows).unwrap();
+                summary.id
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, _, _| {
+                let mut summary = locked(&shell.store)
+                    .unwrap()
+                    .sessions()
+                    .unwrap()
+                    .into_iter()
+                    .find(|s| s.id == id)
+                    .unwrap();
+                summary.has_messages = true;
+                shell.session_summaries.insert(id, summary);
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, window, cx| shell.open(id, window, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                let chat = shell.sessions[&id].read(cx);
+                assert!(chat.history_loaded());
+                let transcript = chat.transcript.read(cx);
+                assert!(transcript.rendered > 0, "the window was never laid out");
+            })
+            .unwrap();
+    }
 }

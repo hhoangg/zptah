@@ -61,6 +61,18 @@ impl Conversation {
     pub(crate) fn history_weight(&self, cx: &gpui::App) -> usize {
         self.transcript.read(cx).history_weight()
     }
+    /// The source row the history should open around: a search hit waiting
+    /// for the load, else where the reader left an evicted history.
+    pub(super) fn history_preparation_anchor(&self, cx: &gpui::App) -> Option<usize> {
+        // A Mono's search rows count from its first turn, not from its window.
+        if self.settings.mono.is_some() {
+            return None;
+        }
+        self.pending_search
+            .as_ref()
+            .map(|(row, _)| *row)
+            .or_else(|| self.transcript.read(cx).saved_history_anchor())
+    }
     /// Only a settled, saved conversation can lose its reconstructible payload.
     /// Keep drafts, queued messages and their edits in the live entity, and pin
     /// their history so row positions remain valid during background saves.
@@ -125,6 +137,7 @@ impl Conversation {
         let id = self.summary.id;
         let store = self.store.clone();
         let mono = self.settings.mono.is_some();
+        let anchor = self.history_preparation_anchor(cx);
         let work = cx.background_executor().spawn(async move {
             let probe = crate::perf_switch::clock();
             let (history, turns, before) = {
@@ -137,7 +150,7 @@ impl Conversation {
                 )
             };
             let loaded = (
-                crate::transcript::PreparedHistory::new(history.rows, mono),
+                crate::transcript::PreparedHistory::at(history.rows, mono, anchor),
                 turns,
                 before,
             );

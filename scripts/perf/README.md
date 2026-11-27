@@ -108,6 +108,8 @@ that frame laid out. Percentiles are nearest-rank. The `MONOCODE_PERF_SWITCH_*`
 settings (log file, label, titles, trials, warmup, scenarios, anchor turns,
 exit) are listed at the top of `crates/monocode-gpui/src/perf_switch.rs`; the
 script also takes `TRIALS`, `WARMUP`, `SCENARIOS`, `ANCHOR_TURNS`, `BLOCKS` and
-`TARGET_MIB`. Nothing runs, and nothing is measured, when
+`TARGET_MIB`. The window must be able to paint: keep the display awake and
+the screen unlocked, or no frame is drawn and every trial times out
+(`timeout=1`, `first_paint_ms=-`). Nothing runs, and nothing is measured, when
 `MONOCODE_PERF_SWITCH` is unset. Compare two builds that both contain these
 probes, run back to back on an idle machine.

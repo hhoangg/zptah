@@ -8,7 +8,8 @@
 # it with MONOCODE_PERF_SWITCH=1, and lets the app switch between the two over
 # and over (first open, evicted history, evicted at a scroll position, history
 # still loaded). It prints one line per trial and a summary per scenario, then
-# the app quits itself. Run it on a release build, with the machine otherwise
+# the app quits itself. Keep the display awake and the screen unlocked: a
+# window that cannot paint makes every trial time out. Run it on a release build, with the machine otherwise
 # idle, once per build, with the same label scheme (for example `base` and
 # `candidate`), and compare the summaries.
 #

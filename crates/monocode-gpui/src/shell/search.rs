@@ -333,10 +333,10 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if let Some(view) = self.ensure_session(id, cx) {
-            self.open(id, window, cx);
             if let Some((row, query)) = jump {
                 view.update(cx, |v, cx| v.reveal_search(row, query, cx));
             }
+            self.open(id, window, cx);
             return;
         }
         if let Some(monos) = &self.monos

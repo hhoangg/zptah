@@ -926,6 +926,7 @@ impl Conversation {
         let store = self.store.clone();
         let id = self.summary.id;
         let mono = self.settings.mono.is_some();
+        let anchor = self.history_preparation_anchor(cx);
         let work = cx.background_executor().spawn(async move {
             let probe = crate::perf_switch::clock();
             // One lock and one read of the history for everything the chat
@@ -962,7 +963,7 @@ impl Conversation {
             let loaded = (
                 history.map(|(history, edits)| {
                     (
-                        crate::transcript::PreparedHistory::new(history.rows, mono),
+                        crate::transcript::PreparedHistory::at(history.rows, mono, anchor),
                         edits,
                     )
                 }),
