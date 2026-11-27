@@ -198,7 +198,7 @@ impl Monos {
         }
     }
 
-    /// The Mono's browser is on (the extension is the only backend).
+    /// The Mono's browser is on.
     fn browser_uses_extension(&self, mono_id: &str) -> bool {
         self.roster
             .get(mono_id)
@@ -209,6 +209,11 @@ impl Monos {
     fn browser_approval_tick(&mut self, cx: &mut Context<Self>) {
         self.browser_ui.approval.ticks += 1;
         let with_rules = self.browser_ui.approval.ticks.is_multiple_of(RULE_TICKS);
+        self.browser_surfaces_refresh(with_rules, cx);
+    }
+
+    /// Rebuilds the browser surface of every Mono that has its browser on.
+    pub(super) fn browser_surfaces_refresh(&mut self, with_rules: bool, cx: &mut Context<Self>) {
         let ids: Vec<String> = self
             .roster
             .monos
@@ -288,13 +293,15 @@ impl Monos {
             notices: queue.notices(),
             stopped: uses && gate::upstream_for(mono_id).is_some_and(|u| u.stopped()),
             review,
+            ardia_running: uses && self.browser_ui.ops.ardia_owned(),
         };
         let key = format!(
-            "{:?}|{:?}|{}|{:?}",
+            "{:?}|{:?}|{}|{:?}|{}",
             surface.cards.iter().map(|c| &c.id).collect::<Vec<_>>(),
             surface.notices.iter().map(|n| &n.id).collect::<Vec<_>>(),
             surface.stopped,
-            surface.review
+            surface.review,
+            surface.ardia_running
         );
         let changed = self.browser_ui.approval.keys.get(mono_id) != Some(&key);
         let counting = !surface.cards.is_empty();
@@ -358,6 +365,7 @@ impl Monos {
                     .detach();
                 }
             }
+            BrowserAction::QuitArdia => self.browser_ardia_quit(cx),
             BrowserAction::ConfirmRules => self.browser_rules_confirm(mono_id, cx),
             BrowserAction::KeepRules => {
                 if let Some(status) = self.browser_ui.approval.rules.get(mono_id) {

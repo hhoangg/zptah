@@ -25,11 +25,17 @@ pub(crate) struct Surface {
     pub notices: Vec<Notice>,
     pub stopped: bool,
     pub review: Option<ReviewPrompt>,
+    /// An Ardia that zptah started is running: its indicator and Quit button show.
+    pub ardia_running: bool,
 }
 
 impl Surface {
     pub(crate) fn is_empty(&self) -> bool {
-        self.cards.is_empty() && self.notices.is_empty() && !self.stopped && self.review.is_none()
+        self.cards.is_empty()
+            && self.notices.is_empty()
+            && !self.stopped
+            && self.review.is_none()
+            && !self.ardia_running
     }
 }
 
@@ -42,6 +48,8 @@ pub(crate) enum BrowserAction {
     ConfirmRules,
     /// "Keep the old rules": hide the prompt, change nothing.
     KeepRules,
+    /// "Quit" on the row of an Ardia that zptah started.
+    QuitArdia,
 }
 impl EventEmitter<BrowserAction> for Conversation {}
 
@@ -456,6 +464,38 @@ impl Conversation {
             .into_any_element()
     }
 
+    /// "Ardia running (started by zptah)" with its Quit button.
+    fn browser_ardia_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (message, quit) = match copy::app_language() {
+            Lang::En => ("Ardia running (started by zptah)", "Quit"),
+            Lang::Vi => ("Ardia đang chạy (do zptah mở)", "Thoát"),
+        };
+        div()
+            .id("browser-ardia-running")
+            .debug_selector(|| "browser-ardia-running".into())
+            .role(Role::Group)
+            .aria_label(message)
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .py(px(6.))
+            .child(icon("globe", 14.).text_color(content(0.6)))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .text_color(content(0.8))
+                    .child(message),
+            )
+            .child(
+                button("browser-ardia-quit".into(), quit)
+                    .bg(content(0.06))
+                    .hover(|s| s.bg(content(0.1)))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(BrowserAction::QuitArdia))),
+            )
+            .into_any_element()
+    }
+
     fn browser_review(&self, prompt: &ReviewPrompt, cx: &mut Context<Self>) -> AnyElement {
         let text = copy::rule_review(
             copy::app_language(),
@@ -533,6 +573,9 @@ impl Conversation {
         let mut rows: Vec<AnyElement> = Vec::new();
         if surface.stopped {
             rows.push(self.browser_banner(cx));
+        }
+        if surface.ardia_running {
+            rows.push(self.browser_ardia_row(cx));
         }
         if let Some(prompt) = &surface.review {
             rows.push(self.browser_review(prompt, cx));
@@ -953,5 +996,50 @@ mod tests {
         visual.refresh().unwrap();
         assert!(queue.notices().is_empty());
         assert!(visual.debug_bounds("browser-notice").is_none());
+    }
+
+    #[gpui::test]
+    fn the_ardia_row_shows_for_an_ardia_zptah_started_and_quit_emits_its_action(
+        cx: &mut TestAppContext,
+    ) {
+        let mono = format!("card-ardia-{}", monocode_core::mono::new_id());
+        let window = conversation(cx, &mono);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let entity = window.entity(visual).unwrap();
+        let _sub = visual.update(|_, cx| {
+            cx.subscribe(&entity, move |_, event: &BrowserAction, _| {
+                log.lock().unwrap().push(*event)
+            })
+        });
+        assert!(visual.debug_bounds("browser-ardia-running").is_none());
+        show(&window, visual, Surface::default());
+        assert!(visual.debug_bounds("browser-shelf").is_none());
+        show(
+            &window,
+            visual,
+            Surface {
+                ardia_running: true,
+                ..Default::default()
+            },
+        );
+        for part in [
+            "browser-shelf",
+            "browser-ardia-running",
+            "browser-ardia-quit",
+        ] {
+            assert!(visual.debug_bounds(part).is_some(), "{part} is on screen");
+        }
+        assert!(
+            !window
+                .read_with(visual, |view, _| view.browser_needs_attention())
+                .unwrap(),
+            "an indicator is not something waiting for the user"
+        );
+        let center = visual.debug_bounds("browser-ardia-quit").unwrap().center();
+        visual.simulate_click(center, Default::default());
+        visual.refresh().unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![BrowserAction::QuitArdia]);
     }
 }

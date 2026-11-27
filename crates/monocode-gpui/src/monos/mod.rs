@@ -4,9 +4,7 @@ pub(crate) mod avatar;
 mod browser_approval;
 #[cfg(test)]
 mod browser_approval_tests;
-mod browser_connect;
-#[cfg(test)]
-mod browser_connect_tests;
+mod browser_ardia;
 mod browser_migration;
 #[cfg(test)]
 mod browser_tests;
@@ -38,7 +36,6 @@ mod notifications;
 mod overview;
 mod panel_stack;
 mod panels;
-mod recipes_ui;
 mod reset;
 mod scheduler;
 mod search;

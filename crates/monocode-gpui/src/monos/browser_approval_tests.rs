@@ -2,17 +2,19 @@
 //! reach the queue, the timeout, the stopped banner, the grants list and the rule confirmation.
 //! Nothing here touches a browser: the Mono's side is a thread that asks the queue the way the gate
 //! does.
+use super::browser_tests::{Fake, closed, running, tap};
 use super::workflows_ui::tests::click;
 use super::*;
 use crate::conversation::browser_cards::BrowserAction;
 use crate::monos::tests::{Setup, setup};
 use gpui::{TestAppContext, VisualTestContext};
+use monocode_core::mono::browser::ardia::Owner;
 use monocode_core::mono::browser::copy::{self, ActionDesc, CardFacts, Lang};
 use monocode_core::mono::browser::risk::Category;
 use monocode_core::mono::browser::trust::approval::{self, Outcome, Request, UserAnswer};
 use monocode_core::mono::browser::trust::grants::GrantBook;
 use std::collections::BTreeSet;
-use std::sync::Mutex as StdMutex;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::thread::JoinHandle;
 
 /// The app language is process wide; tests that read card text take turns.
@@ -125,7 +127,7 @@ impl Rig {
         })
     }
     fn click(&mut self, selector: &'static str) {
-        click(&mut self.visual, selector);
+        tap(&mut self.visual, selector);
         self.settle();
     }
 }
@@ -348,6 +350,64 @@ fn the_extension_is_the_only_backend_so_there_is_no_preview_switch(cx: &mut Test
     assert!(rig.on("mono-browser-grants-empty"));
     rig.click("mono-browser-enabled");
     assert!(!rig.on("mono-browser-grants-empty"));
+}
+
+/// Whether the conversation's surface shows the "Ardia running" row.
+fn ardia_row_flag(rig: &mut Rig) -> bool {
+    let id = rig.mono();
+    rig.s.manager.read_with(&rig.visual, |m, cx| {
+        m.chats[&id].read(cx).browser_surface().ardia_running
+    })
+}
+
+/// Installs a fake Ardia, then lets every Mono's surface follow it.
+fn with_ardia(rig: &mut Rig, report: monocode_core::mono::browser::ardia::Report) -> Arc<Fake> {
+    let ops = Arc::new(Fake::default());
+    ops.set_report(report);
+    let o = ops.clone();
+    rig.s.manager.update(&mut rig.visual, |m, cx| {
+        m.browser_ui.use_fakes(o);
+        m.browser_surfaces_refresh(false, cx);
+    });
+    rig.settle();
+    ops
+}
+
+#[gpui::test]
+fn the_conversation_shows_an_ardia_that_zptah_started_and_quit_quits_it(cx: &mut TestAppContext) {
+    let mut rig = open(cx, Lang::En);
+    assert!(!ardia_row_flag(&mut rig));
+    let ops = with_ardia(&mut rig, running(Owner::Zptah));
+    assert!(ardia_row_flag(&mut rig));
+    assert_eq!(
+        rig.surface_cards(),
+        0,
+        "it is an indicator, not a card waiting for an answer"
+    );
+    // The conversation's Quit button emits this action; the manager answers it.
+    let id = rig.mono();
+    rig.s.manager.update(&mut rig.visual, |m, cx| {
+        m.browser_action(&id, BrowserAction::QuitArdia, cx)
+    });
+    rig.settle();
+    assert_eq!(*ops.quit_calls.lock().unwrap(), 1);
+    // Ardia is gone, so the row follows.
+    rig.s.manager.update(&mut rig.visual, |m, cx| {
+        m.browser_surfaces_refresh(false, cx)
+    });
+    rig.settle();
+    assert!(!ardia_row_flag(&mut rig));
+}
+
+#[gpui::test]
+fn the_conversation_hides_the_indicator_for_an_ardia_the_user_started_or_a_closed_one(
+    cx: &mut TestAppContext,
+) {
+    let mut rig = open(cx, Lang::En);
+    with_ardia(&mut rig, running(Owner::User));
+    assert!(!ardia_row_flag(&mut rig));
+    with_ardia(&mut rig, closed());
+    assert!(!ardia_row_flag(&mut rig));
 }
 
 #[test]

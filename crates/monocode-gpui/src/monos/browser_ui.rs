@@ -1,22 +1,21 @@
-//! A Mono's Browser settings page: switch, Chrome check, Chrome profile, connection to the zptah
-//! Browser extension, safety rules, recipes and the audit log. Design:
-//! `docs/superpowers/specs/2026-11-25-zptah-browser-extension.md`.
+//! A Mono's Browser settings page: switch, Ardia readiness, the Ardia profile, the idle quit,
+//! safety rules and the audit log. Design: `docs/superpowers/specs/2026-11-27-ardia-browser.md`.
 //!
-//! What a Mono keeps is `Mono::browser` in the roster (no secret). Anything that would touch
-//! Chrome, System Settings or a running gate goes through [`BrowserOps`], which tests replace.
-use super::panels::{card, heading, setting, switch_setting, switch_track};
+//! What a Mono keeps is `Mono::browser` in the roster (no secret). Anything that would run or
+//! look up Ardia goes through [`BrowserOps`], which tests replace. The Ardia parts of the page
+//! are in `browser_ardia.rs`.
+use super::panels::{card, heading, switch_setting, switch_track};
 use super::*;
 use crate::{
     cloud_dialog_ui::alert,
-    popover::{Choice, ChoiceEvent, Choices, Popover},
+    popover::{ChoiceEvent, Choices, Popover},
 };
 use gpui::{Div, Stateful};
+#[cfg(not(test))]
+use monocode_core::mono::browser::ardia::{self, Owner};
+use monocode_core::mono::browser::ardia::{ArdiaProfile, Readiness, Report};
 use monocode_core::mono::browser::copy;
-use monocode_core::mono::browser::recipe::manage::DryRunReport;
-use monocode_core::mono::browser::{
-    self, AuditEntry, BrowserLevel, Check, ChromeProfile, MonoBrowser, MonoBrowserStore, PrereqEnv,
-    Prerequisites,
-};
+use monocode_core::mono::browser::{self, AuditEntry, BrowserLevel, MonoBrowser, MonoBrowserStore};
 use std::sync::Arc;
 
 /// Drops the Mono's gate (its browser was turned off or changed). It is the app's own state, so
@@ -33,7 +32,8 @@ pub(super) fn trust_selector(trust: BrowserLevel) -> &'static str {
         BrowserLevel::Act => "mono-browser-trust-act",
     }
 }
-const TRUST_SUBTITLE: &str = "How far this Mono may act in your Chrome. Change it any time; it applies from the next message.";
+const TRUST_SUBTITLE: &str =
+    "How far this Mono may act in Ardia. Change it any time; it applies from the next message.";
 
 /// One level of the trust selector: a radio dot, the level's name and what it means.
 fn trust_row(trust: BrowserLevel, selected: bool, cx: &mut Context<Monos>) -> AnyElement {
@@ -93,85 +93,122 @@ fn trust_row(trust: BrowserLevel, selected: bool, cx: &mut Context<Monos>) -> An
         .into_any_element()
 }
 
-/// The Full Disk Access pane of System Settings. The scheme has a dot: `x-apple.systempreferences`.
-#[cfg(any(target_os = "macos", test))]
-pub(super) const FULL_DISK_ACCESS_URL: &str =
-    "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 const SELECT_PRIORITY: usize = 90;
 const AUDIT_ROWS: usize = 20;
-pub(super) const SUBTITLE: &str = "Let this Mono use your own Chrome, with the sessions you are signed in to, through the zptah Browser extension. Off by default.";
+pub(super) const SUBTITLE: &str = "Let this Mono use Ardia, with the sessions you are signed in to in the chosen Ardia profile. Off by default.";
 
-/// What touches the outside world. The real one opens Chrome and System Settings and reaches the
-/// Mono's running gate.
+/// What runs or looks up Ardia. The real one asks the process-wide Ardia controller; every method
+/// except the two `ardia_owned` and `ardia_can_launch` lookups blocks on an `ardia` process, so the
+/// page calls them off the UI thread.
 pub(super) trait BrowserOps: Send + Sync {
-    fn open_full_disk_access(&self);
-    /// A recipe's dry run through the Mono's running gate (see `Gate::dry_run_recipe`). It
-    /// blocks until a run in progress ends, so it is called off the UI thread.
-    fn dry_run_recipe(&self, mono_id: &str, recipe_id: &str) -> Result<DryRunReport, String>;
+    /// The readiness of the Mono's profile (see `Controller::report`). Never launches Ardia.
+    fn ardia_report(&self, profile: &str) -> Report;
+    /// The profiles of the running Ardia.
+    fn ardia_profiles(&self) -> Result<Vec<ArdiaProfile>, Readiness>;
+    /// Starts a closed Ardia in the background. `Ok(true)`: zptah started it now.
+    fn ardia_start(&self) -> Result<bool, Readiness>;
+    /// Closes the session tabs and quits an Ardia that zptah started.
+    fn ardia_quit(&self) -> Result<(), String>;
+    /// Whether zptah may start and quit Ardia on this platform.
+    fn ardia_can_launch(&self) -> bool;
+    /// Whether zptah started the running Ardia. A lock lookup, safe on the UI thread.
+    fn ardia_owned(&self) -> bool;
+    /// The minutes of idleness after which zptah quits an Ardia it started (0 = never).
+    fn ardia_set_idle_minutes(&self, minutes: u32);
 }
+#[cfg(not(test))]
 struct RealOps;
+#[cfg(not(test))]
 impl BrowserOps for RealOps {
-    fn open_full_disk_access(&self) {
-        #[cfg(target_os = "macos")]
-        let _ = std::process::Command::new("open")
-            .arg(FULL_DISK_ACCESS_URL)
-            .spawn();
+    fn ardia_report(&self, profile: &str) -> Report {
+        ardia::controller().report(profile)
     }
-    fn dry_run_recipe(&self, mono_id: &str, recipe_id: &str) -> Result<DryRunReport, String> {
-        browser::server::servers()
-            .gate(mono_id)
-            .ok_or_else(|| {
-                "This Mono's browser is not running yet. Send the Mono a message that uses the browser, then try the dry run again.".to_owned()
-            })?
-            .dry_run_recipe(recipe_id)
+    fn ardia_profiles(&self) -> Result<Vec<ArdiaProfile>, Readiness> {
+        ardia::controller().profiles()
     }
+    fn ardia_start(&self) -> Result<bool, Readiness> {
+        ardia::controller().start_now()
+    }
+    fn ardia_quit(&self) -> Result<(), String> {
+        ardia::controller().quit_now()
+    }
+    fn ardia_can_launch(&self) -> bool {
+        ardia::controller().platform().can_launch()
+    }
+    fn ardia_owned(&self) -> bool {
+        ardia::controller().owner() == Owner::Zptah
+    }
+    fn ardia_set_idle_minutes(&self, minutes: u32) {
+        ardia::controller().set_idle_minutes(minutes);
+    }
+}
+
+/// What tests get until they install their own: Ardia closed, nothing to start or quit, and never
+/// a look at the real app.
+#[cfg(test)]
+struct InertOps;
+#[cfg(test)]
+impl BrowserOps for InertOps {
+    fn ardia_report(&self, _profile: &str) -> Report {
+        Report {
+            failure: None,
+            running: false,
+            cached: None,
+            owner: monocode_core::mono::browser::ardia::Owner::Nobody,
+        }
+    }
+    fn ardia_profiles(&self) -> Result<Vec<ArdiaProfile>, Readiness> {
+        Err(Readiness::NotRunning)
+    }
+    fn ardia_start(&self) -> Result<bool, Readiness> {
+        Err(Readiness::NotRunning)
+    }
+    fn ardia_quit(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn ardia_can_launch(&self) -> bool {
+        false
+    }
+    fn ardia_owned(&self) -> bool {
+        false
+    }
+    fn ardia_set_idle_minutes(&self, _minutes: u32) {}
+}
+
+#[cfg(test)]
+fn default_ops() -> Arc<dyn BrowserOps> {
+    Arc::new(InertOps)
+}
+#[cfg(not(test))]
+fn default_ops() -> Arc<dyn BrowserOps> {
+    Arc::new(RealOps)
 }
 
 /// The page's own state; the setting itself is on the Mono.
 pub(super) struct BrowserUi {
     pub(super) ops: Arc<dyn BrowserOps>,
-    pub(super) env: Option<PrereqEnv>,
-    pub(super) prereq: Option<Prerequisites>,
-    pub(super) profiles: Vec<ChromeProfile>,
-    /// Chrome's profile list could not be read: `profiles` holds only the saved profile.
-    pub(super) profiles_unreadable: bool,
+    pub(super) ardia: super::browser_ardia::ArdiaUi,
     pub(super) audit: Vec<AuditEntry>,
-    pub(super) recipes: super::recipes_ui::RecipesUi,
     pub(super) select: Option<Choices<String>>,
     pub(super) profile_anchor: AnchorSlot,
     pub(super) error: Option<String>,
-    pub(super) connect: super::browser_connect::ConnectUi,
     pub(super) approval: super::browser_approval::ApprovalUi,
 }
 impl BrowserUi {
     pub(super) fn new() -> Self {
         Self {
-            ops: Arc::new(RealOps),
-            // Tests start with Chrome absent, never the real one.
-            env: cfg!(test).then(|| PrereqEnv {
-                chrome_binaries: Vec::new(),
-                user_data_dir: PathBuf::new(),
-            }),
-            prereq: None,
-            profiles: Vec::new(),
-            profiles_unreadable: false,
+            ops: default_ops(),
+            ardia: Default::default(),
             audit: Vec::new(),
-            recipes: Default::default(),
             select: None,
             profile_anchor: AnchorSlot::default(),
             error: None,
-            connect: Default::default(),
             approval: super::browser_approval::ApprovalUi::new(),
         }
     }
-    /// Chrome's environment as the page sees it now.
-    fn env(&self) -> PrereqEnv {
-        self.env.clone().unwrap_or_else(PrereqEnv::detect)
-    }
     #[cfg(test)]
-    pub(super) fn use_fakes(&mut self, ops: Arc<dyn BrowserOps>, env: PrereqEnv) {
+    pub(super) fn use_fakes(&mut self, ops: Arc<dyn BrowserOps>) {
         self.ops = ops;
-        self.env = Some(env);
     }
     #[cfg(test)]
     pub(super) fn error(&self) -> Option<&str> {
@@ -220,76 +257,21 @@ impl Monos {
         MonoBrowserStore::for_store(&store)
     }
 
-    /// Reads what the page shows from disk: prerequisites, profiles and the audit log. Then keeps
-    /// the Mono's `ready` flag true to it.
+    /// Reads what the page shows: the audit log and the idle setting, then asks Ardia for its
+    /// readiness and profiles on a worker.
     pub(super) fn browser_refresh(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.active.clone() else {
             return;
         };
-        self.browser_connect_refresh(cx);
         self.browser_approval_page_refresh(cx);
-        let env = self.browser_ui.env();
-        let (profile_dir, profile_name) = self
-            .roster
-            .get(&id)
-            .and_then(|m| m.browser.as_ref())
-            .map(|b| (b.profile_dir.clone(), b.profile_name.clone()))
-            .unwrap_or_default();
-        let ui = &mut self.browser_ui;
-        ui.prereq = Some(browser::check_prerequisites(&env));
-        let listed = browser::read_local_state(&env)
-            .ok()
-            .and_then(|text| browser::parse_local_state(&text).ok());
-        ui.profiles_unreadable = listed.is_none();
-        ui.profiles = listed.unwrap_or_default();
-        // The saved profile is always offered, even when Chrome's profile list cannot be read
-        // (Full Disk Access missing), so the picker still opens and shows the current choice.
-        if browser::valid_profile_dir(&profile_dir)
-            && !ui.profiles.iter().any(|p| p.dir == profile_dir)
-        {
-            ui.profiles.push(ChromeProfile {
-                dir: profile_dir.clone(),
-                name: if profile_name.is_empty() {
-                    profile_dir.clone()
-                } else {
-                    profile_name
-                },
-                email: String::new(),
-                avatar_icon: String::new(),
-                picture: None,
-            });
-        }
         let store = self.browser_store().ok();
         let ui = &mut self.browser_ui;
         ui.audit = store
             .as_ref()
             .map(|s| s.recent(&id, AUDIT_ROWS))
             .unwrap_or_default();
-        self.recipes_refresh();
-        self.browser_sync(cx);
-    }
-
-    /// `ready` is the page's own summary: Chrome and a profile. A launch does not read it. Full
-    /// Disk Access is not part of it: it only lets the page list other profiles.
-    fn browser_sync(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.active.clone() else {
-            return;
-        };
-        let ready = self
-            .browser_ui
-            .prereq
-            .as_ref()
-            .is_some_and(Prerequisites::can_attach);
-        let Some(setting) = self.roster.get_mut(&id).and_then(|m| m.browser.as_mut()) else {
-            cx.notify();
-            return;
-        };
-        let ready = ready && !setting.profile_dir.is_empty();
-        if setting.ready != ready {
-            setting.ready = ready;
-            self.save(cx);
-            self.configure_chat_with(&id, false, cx);
-        }
+        self.browser_ardia_load_idle(cx);
+        self.browser_ardia_refresh(cx);
         cx.notify();
     }
 
@@ -325,33 +307,6 @@ impl Monos {
         self.browser_edit(cx, |b| b.trust = trust);
     }
 
-    /// The "Show agent actions on the page" switch was flipped.
-    pub(super) fn browser_toggle_show_actions(&mut self, cx: &mut Context<Self>) {
-        self.browser_edit(cx, |b| b.show_actions = !b.show_actions);
-    }
-
-    fn browser_show_actions_card(
-        &mut self,
-        setting_: &MonoBrowser,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        // The switch is the Mono's virtual cursor (spec 10).
-        let title = "Show cursor";
-        let hint = "While the Mono acts, a cursor in the Mono's color moves to each target in the page, with its name and what it is doing. Off: no cursor. The glow and the Stop button in the tab stay.";
-        let toggle = switch_track("mono-browser-show-actions", title, setting_.show_actions)
-            .debug_selector(|| "mono-browser-show-actions".into())
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| this.browser_toggle_show_actions(cx)));
-        card()
-            .child(switch_setting(
-                title,
-                hint,
-                false,
-                toggle.into_any_element(),
-            ))
-            .into_any_element()
-    }
-
     fn browser_toggle(&mut self, cx: &mut Context<Self>) {
         self.browser_edit(cx, |b| b.enabled = !b.enabled);
         self.browser_refresh(cx);
@@ -363,23 +318,13 @@ impl Monos {
             .unwrap_or_default()
     }
 
-    fn browser_open_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn browser_open_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(open) = self.browser_ui.select.take() {
             open.close(window, cx);
             cx.notify();
             return;
         }
-        let current = self.browser_setting().profile_dir;
-        let choices = self
-            .browser_ui
-            .profiles
-            .iter()
-            .map(|p| Choice {
-                value: p.dir.clone(),
-                label: p.label().into(),
-                checked: p.dir == current,
-            })
-            .collect::<Vec<_>>();
+        let choices = self.browser_ardia_choices();
         if choices.is_empty() {
             return;
         }
@@ -389,7 +334,7 @@ impl Monos {
             .get()
             .map_or(260., |b| b.size.width.as_f32().max(220.));
         self.browser_ui.select = Some(Choices::open(
-            "Chrome profile",
+            "Ardia profile",
             choices,
             width,
             window,
@@ -412,26 +357,28 @@ impl Monos {
         Some(open.popover(&self.browser_ui.profile_anchor, SELECT_PRIORITY, cx))
     }
 
-    /// A choice always takes effect, also when Chrome's profile list cannot be read.
-    pub(super) fn browser_choose_profile(&mut self, dir: &str, cx: &mut Context<Self>) {
-        // A listed profile, else the saved one, else any valid directory name.
+    /// A choice always takes effect, also when Ardia's profile list cannot be read.
+    pub(super) fn browser_choose_profile(&mut self, id: &str, cx: &mut Context<Self>) {
+        // A listed profile, else the saved one, else any valid id.
+        let saved = self.browser_setting();
         let Some(profile) = self
             .browser_ui
-            .profiles
+            .ardia
+            .listed()
             .iter()
-            .find(|p| p.dir == dir)
-            .map(|p| (p.dir.clone(), p.name.clone()))
-            .or_else(|| browser::valid_profile_dir(dir).then(|| (dir.to_owned(), dir.to_owned())))
+            .find(|p| p.id == id)
+            .map(|p| (p.id.clone(), p.name.clone()))
+            .or_else(|| {
+                (saved.ardia_profile == id && !saved.ardia_profile_name.is_empty())
+                    .then(|| (id.to_owned(), saved.ardia_profile_name.clone()))
+            })
+            .or_else(|| browser::valid_ardia_profile(id).then(|| (id.to_owned(), id.to_owned())))
         else {
             return;
         };
-        let changed = self.browser_setting().profile_dir != dir;
         self.browser_edit(cx, |b| {
-            b.profile_dir = profile.0.clone();
-            b.profile_name = profile.1.clone();
-            if changed {
-                b.ready = false;
-            }
+            b.ardia_profile = profile.0.clone();
+            b.ardia_profile_name = profile.1.clone();
         });
         self.browser_refresh(cx);
     }
@@ -596,7 +543,6 @@ impl Monos {
                 .into_any_element(),
             );
         }
-        sections.extend(self.browser_notice_card(&setting, cx));
         let toggle = switch_track("mono-browser-enabled", "Use the browser", setting.enabled)
             .debug_selector(|| "mono-browser-enabled".into())
             .cursor_pointer()
@@ -605,21 +551,16 @@ impl Monos {
             card()
                 .child(switch_setting(
                     "Use the browser",
-                    "Off by default. The Mono drives the Chrome profile you choose.",
+                    "Off by default. The Mono drives the Ardia profile you choose.",
                     false,
                     toggle.into_any_element(),
                 ))
                 .into_any_element(),
         );
         if setting.enabled {
-            sections.extend(self.browser_reconnect_card(&setting, cx));
-            sections.extend(self.browser_connect_card(cx));
+            sections.extend(self.browser_ardia_cards(mono, cx));
+            sections.push(self.browser_safety_card(&setting, window, cx));
             sections.extend(self.browser_extension_cards(mono, &setting, cx));
-            sections.push(self.browser_prerequisites(cx));
-            sections.push(self.browser_profile_card(mono, &setting, cx));
-            sections.push(self.browser_safety_card(&mono.label(), &setting, window, cx));
-            sections.push(self.browser_show_actions_card(&setting, cx));
-            sections.push(self.recipes_card(cx));
             sections.push(self.browser_audit_card());
         }
         div()
@@ -649,123 +590,8 @@ impl Monos {
             .into_any_element()
     }
 
-    fn browser_prerequisites(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(prereq) = self.browser_ui.prereq.clone() else {
-            return div().into_any_element();
-        };
-        let row = |id: &'static str, label: &str, check: &Check, fix: Option<AnyElement>| {
-            let (text, alpha) = match check {
-                Check::Ok => ("Ready".to_owned(), 0.7),
-                Check::Missing(why) => (why.clone(), 0.5),
-                Check::Denied => ("Needs Full Disk Access".to_owned(), 0.5),
-            };
-            setting(
-                label,
-                None,
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(note(id, text, alpha))
-                    .children(fix)
-                    .into_any_element(),
-            )
-        };
-        let fda_fix = (prereq.full_disk_access == Check::Denied).then(|| {
-            action("mono-browser-fda-fix", "Open settings")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.browser_ui.ops.open_full_disk_access();
-                    cx.notify();
-                }))
-                .into_any_element()
-        });
-        card()
-            .child(row(
-                "mono-browser-prereq-chrome",
-                "Google Chrome",
-                &prereq.chrome,
-                None,
-            ))
-            .child(div().h(px(1.)).bg(content(0.05)))
-            .child(row(
-                "mono-browser-prereq-fda",
-                "Access to Chrome's profiles",
-                &prereq.full_disk_access,
-                fda_fix,
-            ))
-            .into_any_element()
-    }
-
-    fn browser_profile_card(
-        &mut self,
-        mono: &Mono,
-        setting_: &MonoBrowser,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let label = self
-            .browser_ui
-            .profiles
-            .iter()
-            .find(|p| p.dir == setting_.profile_dir)
-            .map(ChromeProfile::label)
-            .or_else(|| (!setting_.profile_name.is_empty()).then(|| setting_.profile_name.clone()))
-            .unwrap_or_else(|| "Choose a profile".into());
-        let trigger = div()
-            .id("mono-browser-profile")
-            .debug_selector(|| "mono-browser-profile".into())
-            .role(Role::Button)
-            .aria_label(label.clone())
-            .relative()
-            .h(px(28.))
-            .min_w(px(160.))
-            .max_w(px(260.))
-            .px_2p5()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_2()
-            .rounded_md()
-            .border_1()
-            .border_color(content(0.1))
-            .text_size(px(12.))
-            .text_color(content(0.85))
-            .cursor_pointer()
-            .hover(|s| s.bg(content(0.06)))
-            .on_click(cx.listener(|this, _, window, cx| this.browser_open_select(window, cx)))
-            .child(self.browser_ui.profile_anchor.probe())
-            .child(div().min_w_0().truncate().child(label))
-            .child(icon("chevron-down", 12.).text_color(content(0.5)));
-        let shared = browser::profile_shared_with(&self.roster.monos, &mono.id);
-        let mut card_ = card()
-            .child(setting(
-                "Chrome profile",
-                Some("The signed-in browser this Mono drives."),
-                trigger.into_any_element(),
-            ))
-            .child(div().h(px(1.)).bg(content(0.05)));
-        if !shared.is_empty() {
-            card_ = card_.child(div().px_3().py_2().child(note(
-                "mono-browser-shared-warning",
-                format!(
-                    "{} also uses this profile. Two Monos on one browser can fight over its tabs.",
-                    shared.join(", ")
-                ),
-                0.75,
-            )));
-        }
-        if self.browser_ui.profiles_unreadable {
-            card_ = card_.child(div().px_3().py_2().child(note(
-                "mono-browser-profiles-note",
-                "Other Chrome profiles are not listed: the app cannot read Chrome's profile data. Grant Full Disk Access to list them. The saved profile keeps working.",
-                0.6,
-            )));
-        }
-        card_.into_any_element()
-    }
-
     fn browser_safety_card(
         &mut self,
-        mono_name: &str,
         setting_: &MonoBrowser,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -774,7 +600,6 @@ impl Monos {
             .into_iter()
             .map(|trust| trust_row(trust, setting_.trust == trust, cx))
             .collect();
-        let suggest = self.browser_suggest_card(mono_name, setting_, cx);
         let blocked = self.browser_origin_card(false, &setting_.blocked_origins, window, cx);
         let allowed = self.browser_origin_card(true, &setting_.allowed_origins, window, cx);
         div()
@@ -792,7 +617,6 @@ impl Monos {
                 .px_1()
                 .pb_2(),
             )
-            .children(suggest)
             .child(blocked)
             .child(allowed)
             .into_any_element()
