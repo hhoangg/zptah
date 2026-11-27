@@ -431,6 +431,20 @@ impl Conversation {
         .detach();
         cx.notify();
     }
+    /// Whether the phone may move this conversation to account `id` now. Checked
+    /// before any other part of the request is applied, so a refused pick
+    /// leaves the model, settings and access as they were.
+    pub(crate) fn mobile_account_ready(&self, id: &str) -> Result<(), String> {
+        if self.settings.account.id != id
+            && (self.busy
+                || self.stopping
+                || self.account_switching
+                || self.editing_last_turn.pending())
+        {
+            return Err("Wait for the reply to finish before changing the account".into());
+        }
+        Ok(())
+    }
     /// The phone's account pick, applied as the desktop pickers apply it: a
     /// conversation with history moves in place, a blank one just takes the
     /// account. Refuses what the desktop would ignore, so the phone never
@@ -443,10 +457,7 @@ impl Conversation {
         if self.settings.account.id == profile.id {
             return Ok(());
         }
-        if self.busy || self.stopping || self.account_switching || self.editing_last_turn.pending()
-        {
-            return Err("Wait for the reply to finish before changing the account".into());
-        }
+        self.mobile_account_ready(&profile.id)?;
         if self.summary.has_messages
             || self.needs_history_restore()
             || self.account_recovery_limit(cx).is_some()

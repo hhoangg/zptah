@@ -210,6 +210,11 @@ export const SessionConfigureParamsSchema = z.object({
   modelSettings: ModelSettings.optional(),
   runtimeMode: SendableRuntimeModeSchema.optional(),
   providerAccountId: z.string().optional(),
+  /**
+   * The user picked `providerAccountId` for this request. Without it the desktop ignores the account:
+   * older clients resend the account they last saw with every change, and a stale one must not switch.
+   */
+  switchAccount: z.literal(true).optional(),
 });
 
 export const SessionStartParamsSchema = z.object({

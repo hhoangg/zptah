@@ -61,7 +61,11 @@ export function ModelControls({
   const selection = useMemo<ModelSelectionInput | null>(() => {
     if (value) return value;
     if (!current) return null;
-    return { ...currentSelection(current), ...(draft ?? {}), runtimeMode: draft?.runtimeMode ?? current.current.runtimeMode };
+    const reported = currentSelection(current);
+    if (!draft) return reported;
+    // An account belongs to one provider: a draft on another provider never inherits the reported one.
+    const providerAccountId = draft.providerAccountId ?? (draft.harness === reported.harness ? reported.providerAccountId : undefined);
+    return { ...reported, ...draft, providerAccountId, runtimeMode: draft.runtimeMode ?? reported.runtimeMode };
   }, [value, current, draft]);
   const usage = useAccountUsage(open && selection ? selection.harness : undefined);
 
@@ -75,10 +79,10 @@ export function ModelControls({
     );
   }
 
-  const apply = (next: ModelSelection) => {
+  const apply = (next: ModelSelection, change?: { accountPicked?: boolean }) => {
     setDraft(next);
     onChange?.(next);
-    if (conversationId) configure(next);
+    if (conversationId) configure(next, { switchAccount: change?.accountPicked === true });
   };
   const summary = summarizeSelection(current, selection);
 

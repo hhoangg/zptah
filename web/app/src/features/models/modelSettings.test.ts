@@ -63,9 +63,22 @@ describe("no code path emits full-access", () => {
   it("every sendable mode passes through and validates, and the empty case adds nothing", () => {
     for (const mode of SendableRuntimeModeSchema.options) {
       const params = buildModelSettingsParams("c1", { harness: "claude", model: "opus", modelSettings: {}, runtimeMode: mode, providerAccountId: "work" });
-      expect(params).toMatchObject({ runtimeMode: mode, providerAccountId: "work" });
+      expect(params).toMatchObject({ runtimeMode: mode });
       expect(SessionConfigureParamsSchema.safeParse(params).success).toBe(true);
     }
     expect(buildStartModelParams(undefined)).toEqual({});
+  });
+
+  it("session.configure carries the account only for an explicit pick", () => {
+    const selection = { harness: "claude", model: "opus", modelSettings: {}, providerAccountId: "work" };
+    // A model or setting change: the account is the cached one and may be stale, so it is not sent.
+    const change = buildModelSettingsParams("c1", selection);
+    expect("providerAccountId" in change).toBe(false);
+    expect("switchAccount" in change).toBe(false);
+    const pick = buildModelSettingsParams("c1", selection, true);
+    expect(pick).toMatchObject({ providerAccountId: "work", switchAccount: true });
+    expect(SessionConfigureParamsSchema.safeParse(pick).success).toBe(true);
+    // No account, no switch request.
+    expect("switchAccount" in buildModelSettingsParams("c1", { ...selection, providerAccountId: undefined }, true)).toBe(false);
   });
 });

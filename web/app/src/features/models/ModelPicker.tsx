@@ -22,7 +22,8 @@ export interface ModelPickerProps {
   onOpenChange: (open: boolean) => void;
   catalog: ModelCatalog;
   value: ModelSelectionInput;
-  onChange: (next: ModelSelection) => void;
+  /** `accountPicked`: this change is the user picking the account, not a model or setting change. */
+  onChange: (next: ModelSelection, change?: { accountPicked?: boolean }) => void;
   /** A running session (not a new chat): switching accounts opens a new chat instead. */
   existingSession?: boolean;
   /** Called instead of `onChange` when the account of a running session is picked. */
@@ -135,7 +136,7 @@ function ModelList({
     if (disabled) return;
     const next = toEmitted({ ...value, providerAccountId: id });
     if (existingSession && onSwitchAccount) onSwitchAccount(id, next);
-    else onChange(next);
+    else onChange(next, { accountPicked: true });
   };
 
   return (

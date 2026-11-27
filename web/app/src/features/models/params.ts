@@ -29,7 +29,16 @@ export function buildStartModelParams(selection: ModelSelection | undefined): Pa
   };
 }
 
-/** `session.configure` params for a running session. */
-export function buildModelSettingsParams(conversationId: string, selection: ModelSelection): SessionConfigureParams {
-  return { conversationId, ...buildStartModelParams(selection) } as SessionConfigureParams;
+/**
+ * `session.configure` params for a running session. The account is sent only with `switchAccount`, when
+ * the user picked it: otherwise it is the cached `models.list` value, which may be stale (the desktop
+ * moved the chat to another account) and would switch the chat back.
+ */
+export function buildModelSettingsParams(conversationId: string, selection: ModelSelection, switchAccount = false): SessionConfigureParams {
+  const { providerAccountId, ...fields } = buildStartModelParams(selection);
+  return {
+    conversationId,
+    ...fields,
+    ...(switchAccount && providerAccountId ? { providerAccountId, switchAccount: true as const } : {}),
+  } as SessionConfigureParams;
 }

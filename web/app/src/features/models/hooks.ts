@@ -66,8 +66,12 @@ export const CONFIGURE_DEBOUNCE_MS = 400;
  */
 export function useSessionConfigure(conversationId: string | undefined, onError?: (message: string) => void) {
   const mutation = useLinkMutation("session.configure");
+  const queryClient = useQueryClient();
+  const desktopId = useLinkDesktopId();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<ModelSelection | null>(null);
+  // An account pick stays requested until it is sent, even when a later change replaces the selection.
+  const pendingSwitch = useRef(false);
   // Refs keep `flush` stable across renders, so the unmount flush below only runs on unmount or when
   // the session changes.
   const sendRef = useRef(mutation.mutate);
@@ -81,16 +85,22 @@ export function useSessionConfigure(conversationId: string | undefined, onError?
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
     const next = pending.current;
+    const switchAccount = pendingSwitch.current;
     pending.current = null;
+    pendingSwitch.current = false;
     if (!next || !conversationId) return;
-    sendRef.current(buildModelSettingsParams(conversationId, next), {
+    sendRef.current(buildModelSettingsParams(conversationId, next, switchAccount), {
       onError: (error) => onErrorRef.current?.(error.message),
+      // The catalog is cached without refetching: read back what the desktop now runs (its account
+      // included), so the next change starts from it and not from the old snapshot.
+      onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["link", desktopId, "models.list"] }),
     });
-  }, [conversationId]);
+  }, [conversationId, queryClient, desktopId]);
 
   const configure = useCallback(
-    (selection: ModelSelection) => {
+    (selection: ModelSelection, options: { switchAccount?: boolean } = {}) => {
       pending.current = selection;
+      if (options.switchAccount) pendingSwitch.current = true;
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(flush, CONFIGURE_DEBOUNCE_MS);
     },
