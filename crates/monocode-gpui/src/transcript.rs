@@ -5734,7 +5734,12 @@ impl TranscriptView {
                         || self.clamped_prompts.contains(&message_start)
                         || self.prompt_lines(&text, window) > 4);
                 let bubble = div()
+                    // Under photos the bubble shrinks to its text, so nothing
+                    // stretches it to the column. A long message (seen with a
+                    // link in it) then took its unwrapped width and spilled out
+                    // of the column. The cap makes it wrap inside the column.
                     .when(photo_body.is_none(), |d| d.w_full())
+                    .when(photo_body.is_some(), |d| d.min_w_0().max_w_full())
                     .relative()
                     .flex()
                     .flex_col()
@@ -6944,6 +6949,103 @@ mod scroll_tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_long_message_under_photos_wraps_inside_its_bubble(cx: &mut TestAppContext) {
+        // Photos above a bubble made it as wide as its text unwrapped: the
+        // text ran off the column's left edge on one line.
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let window = cx.update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        point(px(0.), px(0.)),
+                        size(px(900.), px(700.)),
+                    ))),
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|_| TranscriptView::new()),
+            )
+            .unwrap()
+        });
+        let manifest = Row {
+            role: monocode_core::transcript::attachments::ROLE.into(),
+            text: monocode_core::transcript::attachments::from_paths(&[
+                std::path::PathBuf::from("/tmp/one.png"),
+                std::path::PathBuf::from("/tmp/two.png"),
+            ])
+            .to_string(),
+            first: true,
+            sent_at: None,
+        };
+        let long = "a long message that has to wrap ".repeat(24);
+        let bubble_of = |text: &str, expand: bool, cx: &mut TestAppContext| {
+            let rows = vec![
+                row("user", text),
+                manifest.clone(),
+                row("assistant", "Answer"),
+            ];
+            window
+                .update(cx, |view, _, cx| {
+                    *view = TranscriptView::new();
+                    view.mono_mode("cat", 0xe86b5f, "MonoCat");
+                    view.patch(0, rows, cx);
+                    if expand {
+                        view.toggle_prompt(0, cx);
+                    }
+                    settle(view, cx);
+                })
+                .unwrap();
+            for _ in 0..2 {
+                window.update(cx, |_, _, cx| cx.notify()).unwrap();
+                cx.refresh().unwrap();
+                cx.run_until_parked();
+            }
+            window
+                .update(cx, |_, window, _| {
+                    let scale = window.scale_factor();
+                    let bubbles: Vec<_> = window
+                        .painted_quads()
+                        .into_iter()
+                        .filter(|quad| quad.background == user_bubble_fill().into())
+                        .collect();
+                    assert_eq!(bubbles.len(), 1, "one bubble under the photos");
+                    let bounds = bubbles[0].bounds;
+                    (
+                        bounds.left().0 / scale,
+                        bounds.right().0 / scale,
+                        bounds.size.height.0 / scale,
+                    )
+                })
+                .unwrap()
+        };
+        // A link in the text and an expanded message each take another path
+        // through the bubble's text than a clamped plain one.
+        let with_link = format!("see https://example.com/page then {long}");
+        for (name, text, expand) in [
+            ("plain", long.clone(), false),
+            ("expanded", long.clone(), true),
+            ("with a link", with_link, false),
+        ] {
+            let (left, right, height) = bubble_of(&text, expand, cx);
+            assert!(
+                right - left <= f32::from(PROMPT_BUBBLE_MAX),
+                "{name}: the bubble stays within its cap, got {}",
+                right - left
+            );
+            assert!(
+                left >= 0. && right <= 900.,
+                "{name}: inside the window: {left}..{right}"
+            );
+            assert!(
+                height > 3. * 20.,
+                "{name}: the text wraps onto several lines, got {height}"
+            );
+        }
+        let (left, right, height) = bubble_of("oke", false, cx);
+        assert!(right - left < 96., "a short message still hugs its text");
+        assert!(height < 48., "and stays on one line, got {height}");
     }
 
     #[gpui::test]
