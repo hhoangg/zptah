@@ -49,3 +49,25 @@ had to shape because its line cache missed. Any run of the app takes
 Compare a change with the report from before it (CPU, main thread, and the
 view and layout rows). Profile a release build; a debug build's numbers say
 little about release.
+
+## Tool-heavy live transcript
+
+`live-transcript-run.py` is macOS-only (it uses libproc, `lsappinfo` and
+`mach_timebase_info`). It measures a stable window after the text stream
+starts. `--tools tools` sends 24 Read results of 48 KiB each first, and
+`--tools agent` adds a delegated Agent result. Use `--tools text` as the
+shorter-path control. `--stage live-scroll` also drives scrolling before
+the reply ends. `settled` and `settled-scroll` measure after the reply.
+
+```sh
+python3 scripts/perf/live-transcript-run.py path/to/release/monocode-gpui /tmp/replay-one --tools agent
+python3 scripts/perf/live-transcript-run.py path/to/release/monocode-gpui /tmp/replay-two --tools agent --stage live-scroll
+```
+
+The runner uses a fake CLI and an ephemeral home, project and database.
+It verifies the persisted reply digest and delivered tool results before
+keeping the process CPU, memory footprint, foreground observations, frame
+log, patch timings and aggregate parse/rebuild counts. Compare binaries
+with the same fixture, stage, cadence and foreground state. The release
+baseline must include the same `MONOCODE_PERF_TRANSCRIPT=1` probes as the
+candidate so both record the same measurements.
