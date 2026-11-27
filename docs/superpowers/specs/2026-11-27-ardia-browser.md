@@ -129,7 +129,7 @@ then forgot keeps that door open with nobody watching. So zptah keeps the window
   which signal is reliable), zptah treats it as the user's: no idle quit, no Quit button, only the
   session tabs are closed.
 
-Linux and Windows launch and quit paths are still open for M0.
+Linux and Windows: no auto-launch in v1 (section 12b).
 
 ## 3. Settings
 
@@ -407,6 +407,125 @@ CI runs on Linux and Windows and has no Ardia, so no automated test needs a real
 - Real-Ardia checks are a manual macOS script (in `scripts/`, not run in CI) that drives an
   installed Ardia through the same commands and compares the shapes with the fixtures. It is run
   by hand when Ardia or its CLI updates.
+
+## 12b. M0 findings (2026-11-27)
+
+Measured on macOS with Ardia 0.2.49 and the `ardia` CLI 0.7.0, protocol 4, Ardia closed first and
+quit again afterwards. Only `example.com`, `iana.org` and local `file://` test pages were used, in
+the Secondary profile; every tab opened was closed. Linux and Windows were not run (no machine).
+The raw replies are checked in as fixtures (section 12a).
+
+**Decision (user, 2026-11-27): no auto-launch on Linux and Windows in v1.** The gate does not
+start or quit Ardia there; with Ardia closed a tool call fails with "Open Ardia" and the readiness
+row shows the same step. No idle quit and no Quit button on those platforms. macOS works as in
+section 2a.
+
+Tabs and profiles (section 4):
+
+- `ardia tabs open <url> --profile <id> --json` opens a background tab that belongs to that
+  profile, in the last window (whatever profile the window shows), without focusing the window,
+  changing its active tab or unhiding Ardia. Reply: `results[0].tabs[0]` is the `tab-...` id.
+  **This is the mechanism.**
+- Bind with `ardia browse --session <s> tab <tab-id> --json`. Right after opening, the bind can
+  fail with `code: "tab_asleep"` (Ardia keeps new background tabs asleep). `tabs.hold {session,
+  tabs, seconds}` before the bind loads it; the gate holds, binds, and retries a `tab_asleep` bind
+  a few times.
+- `ardia browse tab new` and `ardia browse open` with no bound tab open the tab in the **default**
+  profile, and `tab new` also made it the window's active tab. `read <url>`, `read-urls`,
+  `click --new-tab` and `window new` open tabs of their own too. The gate never sends those forms:
+  it creates every tab with `ardia tabs open --profile`, sends `open` only to a bound tab and
+  `read` without URLs.
+- `ardia browse tab list` lists every tab Ardia can drive (the user's, extension pages), marked
+  `openedBySession: false`; a bound tab opened with `tabs open` is also `openedBySession: false`.
+  `browser_tabs` filters by the gate's own set (section 4).
+- `ardia browse tab close` refuses a tab the session did not open (`command_failed`: "one of the
+  user's tabs"), so the gate closes its tabs with `ardia tabs close <tab-id> --json`.
+- `tabs.hold {untilDisconnect}` lasts only as long as the connection, and every `ardia call` is
+  its own connection, so the gate holds with `seconds` (120) and renews on every call;
+  `tabs.release {session}` at cleanup.
+- Ardia restores tabs at relaunch (`restoreSession` is on by default), with the same `tab-...`
+  ids. A tab left open when Ardia quit comes back, so the gate keeps the ids it opened in its own
+  state and closes leftovers on the next live check.
+- Session names must match `^[A-Za-z0-9._-]{1,64}$` (`tabs.hold`); the gate uses
+  `zptah-<monoId>-<conversationId>` when it fits and a short hash of it otherwise.
+
+Output and exit codes (section 5):
+
+- `ardia browse ... --json` prints `{success, data, error, code?, remedy?}`, exit 0 on success,
+  1 on a refused or failed command, 2 when Ardia or the browse daemon can't be reached. Codes
+  seen: `unknown_command`, `unknown_ref`, `stale_ref`, `vocab_superseded`, `not_visible`,
+  `tab_asleep`, `no_session_tab`, `no_flow`, `failed`, `command_failed`, `daemon_unreachable`.
+- `ardia call ... --json` prints the bare result; exit 1 on refusal (message on stderr), 2 when
+  unreachable (`ardia: Ardia isn't running, ...` on stderr). `ardia tabs open/close --json` reply
+  like `apply`: `{ok, applied, results, tabs, groups, windows}`.
+- Act replies carry `changes` (`document`, `url {from,to}`, `title`, added/removed/changed nodes,
+  `network` with the POSTs caused). `fill` into a password field succeeds and reports
+  `verify.kind: "password"` after the fact: Ardia itself does not stop it.
+- **`--json` output has no `UNTRUSTED_PAGE_CONTENT` markers**; only the text output has them. The
+  gate uses `--json` and fences page fields itself with `defense.rs` (correcting section 8).
+- "Control is off." was not measured (Control was not switched off on the user's Ardia; it is
+  `cliControl` in `settings.schema` and the CLI cannot change it). The string is in Ardia's
+  bundle; the fixture assumes `ardia call` exits 1 with it on stderr.
+- Ardia has no per-caller restriction of Control (`hello` takes an informational `caller`), so
+  the shell block of section 1 stays a guard against mistakes (section 13).
+
+Refs and fields (section 6):
+
+- `@eN` refs are numbered per session and only grow. A ref survives a re-snapshot, a scroll and a
+  DOM insert (the new node gets a new ref). After a navigation or reload every older ref fails
+  with `vocab_superseded`; a removed element fails with `stale_ref`; an unknown one with
+  `unknown_ref`. No stale ref resolved to another element. A ref whose element changed its name
+  keeps the ref (`e8` "IANA" became `e8` "Changed"), so the gate still compares role and name
+  from the fresh read.
+- `snapshot` shows role and name only. `form` lists fields with `type` (`password`, `email`),
+  `name`, `label`, `value`, `required` and the submit buttons, not `autocomplete`.
+  `get attr @eN type|autocomplete|href|formaction` reads one attribute of a ref
+  (`one-time-code`, `current-password` came back). **So the first branch of "Passwords and
+  one-time codes" applies**: the gate refuses `browser_fill` and `browser_type` into a field whose
+  `type` is `password` or whose `autocomplete` is `current-password`, `new-password` or
+  `one-time-code`, and keeps the lexicon rule as a second check.
+- The enclosing form's `action` has no ref form; the gate reads the page's forms (`get attr form
+  action` and, if there are several, every form's action resolved against the page URL) and
+  treats any blocked one as a hit (leans to refusing).
+
+Flows (section 7):
+
+- Stored per site, not per profile: `<Ardia data>/Flows/<site>/<name>.json`, shared by every
+  profile, session and the user's own terminal. A run uses the session's bound tab, so the logins
+  of the Mono's profile.
+- Two kinds: data flows (`kind` absent, `writes: false`: GET requests only, returns
+  `{list, total, matched, items}`) and page-action flows (`kind: "actions"`, `writes: true`,
+  `flow save <name> --actions`). An action flow refuses to run without `--yes` (exit 1, code
+  `failed`); the gate passes `--yes` only after its own check.
+- `flow show <name> --json` returns `data.flow`: `version` (2), `name`, `site`, `origin`,
+  `startUrl`, `hosts`, `params`, `steps[] {seq, command[], url, action {type, intent, candidates,
+  fingerprint, value}}`, `kind`, `writes`. Step `action.type` seen: `open`, `click`; `command[0]`
+  is an `ardia browse` command (`open`, `find ... click|fill`). The hash covers the `data.flow`
+  JSON with `createdAt` kept. Every `startUrl`, `hosts` entry and step `url` is checked against the
+  origins. `flow run` returns per-step `ok` but not the final URL; the gate reads `get url` after.
+- `flow list --json`: `data.flows[] {site, name, description, params, verified, kind, writes}`.
+  Typed passwords are kept as params with no value (`<redacted>` in `flow steps`).
+
+Ardia closed, launch and quit (section 2a):
+
+- Closed: `ardia call hello` and `ardia browse ...` exit 2. Quit mid-call: the running
+  `ardia browse` exits 2 with `code: "daemon_unreachable"`.
+- `open -g -j -a Ardia` reached `hello` in 1.0-1.5 s again, hidden and not frontmost; tabs opened
+  and driven while hidden left it hidden.
+- Quit: `osascript -e 'tell application id "com.ardia.browser" to quit'`, gone after about 7 s.
+  `warnBeforeQuitting` (default off) would make Ardia ask first; the gate reads it with
+  `settings.get {keys}` and does not idle-quit when it is on.
+- Telling the user's Ardia from zptah's: not measured live (bringing Ardia forward would have
+  taken focus from the user). Signals the gate uses, both leaning to "the user's": an
+  `app.activated` or `window.opened` event on an `ardia events app.activated window.opened --json`
+  stream kept open while a zptah-launched Ardia runs, and Ardia no longer being hidden (macOS
+  `NSRunningApplication.isHidden`) at idle-quit time. Events seen: `tab.opened`, `tab.navigated`,
+  `tab.closed` with `{windowId, tabId, profile, url, title}`.
+
+Risk data: `crates/monocode-core` reads the risk lexicon and site table generated into
+`extensions/zptah-browser/shared/`. They move to `BD/risk/data/` with their generator
+(`gen-risk-lexicon.mjs`, its manual input and its test), and the CI check that the generated
+file is in sync moves with them, before the extension folder is deleted (M4).
 
 ## 13. Risks
 
