@@ -36,6 +36,7 @@ and its event triggers. Automations are deleted.
 | Concurrency | Up to N runs per workflow at once (default 3, 1-10). The rest are queued |
 | Workspace | Default: one worktree per run. Each For each branch gets its own |
 | Where runs execute | Desktop only. A Mono reached from the web can start a run, which runs on the desktop |
+| Web app | Read-only list of workflows and their runs (no canvas, no editing) |
 | Canvas | Left to right |
 
 ## Non-goals
@@ -43,8 +44,11 @@ and its event triggers. Automations are deleted.
 - Webhooks, a daemon, or running while the app is closed. Event triggers keep the Inbox polling
   they use today.
 - Version history or diffs of workflow definitions. Auto-resume after an app restart.
-- Editing or running workflows from web or mobile devices directly. A Mono reached from the web
-  can still call `workflows.*`, and the run happens on the desktop.
+- Editing workflows, or a canvas, on the web app. The web app only lists workflows and runs (see
+  "Web app"). A Mono reached from the web can still call `workflows.*`, and the run happens on the
+  desktop.
+- Slash commands in chat sessions. A user who needs one (for example `/ship`) uses a terminal
+  session node.
 - Changes to Habits.
 
 ## Data model
@@ -177,7 +181,7 @@ New or changed fields:
 
 | Node | Fields |
 |---|---|
-| Session | `reply` (the final reply text), `sessionId`, `worktree`, `branch`, `commit` (HEAD), `changedFiles` (compared with the run base), `diffStat` |
+| Session | `reply` (the final reply text; chat sessions only), `sessionId`, `worktree`, `branch`, `commit` (HEAD), `changedFiles` (compared with the run base), `diffStat` |
 | Command | `exitCode`, `stdout`, `stderr` (capped, as today) |
 
 These are enough for most chains, for example: "Review the changes on `{{build.branch}}`".
@@ -227,7 +231,7 @@ These are enough for most chains, for example: "Review the changes on `{{build.b
 ## Workspace per run
 
 - **Run start.** When `workspace.mode = perRun`, the run first creates one worktree from
-  `workspace.project` at `baseBranch`. The default is the project's current branch. The branch
+  `workspace.project` at `baseBranch`. The default is `main`; the user can set another branch. The branch
   is named `wf/<slug>-<run number>`.
   - Every session and command defaults to it.
   - The scope gains `{{run.worktree}}` and `{{run.branch}}`.
@@ -244,8 +248,7 @@ These are enough for most chains, for example: "Review the changes on `{{build.b
   work.
 - **Example.** An "Implement" chat session, then a final terminal session whose prompt is
   `/ship`, both in the run worktree. The TUI types the first prompt into the CLI, so slash
-  commands work there. Whether chat sessions accept slash commands is unverified (see "Open
-  points").
+  commands work there.
 
 ## Concurrency and queue
 
@@ -291,6 +294,21 @@ Reference: the HTML mockup reviewed in the design session. It is not checked in.
 - Sessions started by a workflow get the zap badge in the sidebar. Today the badge comes from
   `automation_state.session_automations` (`rails.rs:538`); Phase 1 adds the workflow-run source
   and Phase 6 removes the automation one.
+
+## Web app
+
+- The web app gets a read-only **Workflows** screen: the list of workflows (name, triggers,
+  enabled, next run, last run status) and, per workflow, its runs (status, caller, start time,
+  duration, the node list with each node's status, output and error, and links to the run's
+  sessions). No canvas and no editing.
+- The desktop serves it over the mobile link with two new read actions (`workflows.list`,
+  `workflows.runs`). Today the web app has no workflow code, and Mono workflows are kept off
+  remote devices.
+- **Visibility.** A paired device sees a workflow when it can see every project the workflow uses,
+  and sees a run's sessions by the same project rule as ordinary sessions. Today a Mono's
+  workflow sessions are hidden and served only to a device that selected that Mono
+  (`shell/mobile_host.rs:1108-1131`, H-02). Run sessions of global workflows are ordinary project
+  sessions, so that Mono rule no longer applies to them.
 
 ## Mono integration
 
@@ -371,17 +389,15 @@ Reference: the HTML mockup reviewed in the design session. It is not checked in.
 6. **Delete Automations.** Code, tables and settings, plus the docs and the `CLAUDE.md` merge
    rule.
 
+7. **Web app.** The read-only Workflows screen and the two read actions on the mobile link.
+
 Phase 6 needs phases 1-4, because Automations stay usable until Workflows cover event triggers.
-Phase 5 can run in parallel with phases 2-4.
+Phase 5 can run in parallel with phases 2-4. Phase 7 needs phase 1.
 
-## Open points to verify during implementation
+## Decided limits
 
-- Whether chat (non-terminal) sessions of each harness accept slash commands such as `/ship`.
-- How to get the final reply and the transcript of a terminal session for the `reply` built-in
-  and for extraction.
-- The `baseBranch` default when the project is on a feature branch.
-- Who owns sessions of global workflow runs for web device visibility. Today that ownership
-  assumes a Mono (`shell/mobile_host.rs:1108-1131`, H-02).
+- Terminal sessions get no `reply` built-in and no fallback extraction for now. Most users use
+  chat sessions. If it is needed later, read the transcript from the harness's JSONL.
 
 ## Testing
 
