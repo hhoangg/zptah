@@ -59,6 +59,7 @@ mod git_gate;
 mod git_graph;
 mod git_picker;
 mod git_status;
+mod global_hotkey;
 mod gpu_trim;
 #[cfg(target_os = "macos")]
 mod hang_watchdog;

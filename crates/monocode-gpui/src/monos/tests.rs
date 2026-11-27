@@ -613,6 +613,24 @@ fn floating_chat_opens_after_releasing_the_manager_and_shares_the_runtime(cx: &m
 }
 
 #[gpui::test]
+fn a_mono_shortcut_toggles_its_floating_chat(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let toggle = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            s.manager
+                .update(cx, |m, cx| m.toggle_floating(s.id.clone(), cx))
+        });
+        cx.run_until_parked();
+    };
+    toggle(cx);
+    cx.update(|cx| assert!(s.manager.read(cx).floating_shows(&s.id, cx)));
+    toggle(cx);
+    cx.update(|cx| assert!(!s.manager.read(cx).floating_shows(&s.id, cx)));
+    toggle(cx);
+    cx.update(|cx| assert!(s.manager.read(cx).floating_shows(&s.id, cx)));
+}
+
+#[gpui::test]
 fn floating_chat_leaves_the_workspace_selection_alone(cx: &mut TestAppContext) {
     let s = setup(cx);
     let other = cx.update(|cx| {

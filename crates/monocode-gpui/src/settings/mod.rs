@@ -72,6 +72,7 @@ pub(crate) struct SettingsContext {
     pub projects: Vec<(String, String)>,
     pub sessions: Vec<(i64, String, bool)>,
     pub quick_error: Option<String>,
+    pub mono_hotkey_error: Option<String>,
     pub catalogs: HashMap<String, Vec<(String, String)>>,
     pub inbox_connections: HashMap<String, (bool, String)>,
     /// The web app link, or `None` when this desktop cannot offer it.
@@ -113,6 +114,7 @@ impl PartialEq for SettingsContext {
             && self.projects == other.projects
             && self.sessions == other.sessions
             && self.quick_error == other.quick_error
+            && self.mono_hotkey_error == other.mono_hotkey_error
             && self.catalogs == other.catalogs
             && self.inbox_connections == other.inbox_connections
             && self.web == other.web
