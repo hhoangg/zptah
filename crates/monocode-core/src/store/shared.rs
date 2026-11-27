@@ -232,6 +232,54 @@ fn operator_prompt(block: &Value) -> bool {
                 .is_some()
             }))
 }
+/// The rows of the newest turns of a history that is split but not parsed,
+/// a suffix of what projecting all of it gives. They run back to the block
+/// holding the `PAGE_TURNS`th prompt before the row that has `rows_after`
+/// rows after it (the last row without it). None when that is the first
+/// block or an earlier one cannot be read, so a short history is not
+/// previewed. It is also None once the rows reach `PREVIEW_MAX_PROMPTS`
+/// prompts or `PREVIEW_MAX_BYTES` of text, so a reader who left a chat far
+/// from its end does not get most of it parsed twice: the preview costs
+/// about what the window does (roughly 13 ms per ten turns), and the full
+/// open restores such a position as before.
+const PREVIEW_MAX_PROMPTS: usize = 4 * super::PAGE_TURNS;
+const PREVIEW_MAX_BYTES: usize = 4 * 1024 * 1024;
+fn newest_rows(
+    split: &[&serde_json::value::RawValue],
+    rows_after: Option<usize>,
+) -> Option<Vec<Row>> {
+    let threshold = rows_after.unwrap_or(0);
+    let mut chunks = Vec::new();
+    let mut seen = 0;
+    let mut prompts = 0;
+    let mut all_prompts = 0;
+    let mut bytes = 0;
+    for (at, block) in split.iter().enumerate().rev() {
+        let block: Value = serde_json::from_str(block.get()).ok()?;
+        let rows = blocks::project(std::slice::from_ref(&block)).ok()?;
+        prompts += rows
+            .iter()
+            .enumerate()
+            .filter(|(ix, row)| {
+                seen + (rows.len() - 1 - ix) >= threshold && row.first && row.is_prompt()
+            })
+            .count();
+        all_prompts += rows
+            .iter()
+            .filter(|row| row.first && row.is_prompt())
+            .count();
+        bytes += rows.iter().map(|row| row.text.len()).sum::<usize>();
+        if all_prompts > PREVIEW_MAX_PROMPTS || bytes > PREVIEW_MAX_BYTES {
+            return None;
+        }
+        seen += rows.len();
+        chunks.push(rows);
+        if prompts >= super::PAGE_TURNS {
+            return (at > 0).then(|| chunks.into_iter().rev().flatten().collect());
+        }
+    }
+    None
+}
 /// Where a history's first draft is: its block index and the rows before it.
 type FirstDraft = Option<(usize, usize)>;
 /// What a session's settings take from its blocks, read once with them.
@@ -1160,6 +1208,7 @@ impl Store {
         &self,
         id: i64,
         follow_ups: bool,
+        mut preview: Option<super::PreviewRequest<'_>>,
     ) -> Option<super::OpenedHistory> {
         let original = self.persisted_session_id(id).ok()?;
         if self.shared_window(id, &original).ok()?.is_some() {
@@ -1170,7 +1219,10 @@ impl Store {
         } else {
             None
         };
-        let blocks = self.shared_blocks(id).ok()?;
+        let blocks = match preview.as_mut() {
+            Some(request) => self.shared_blocks_previewing(id, request).ok()?,
+            None => self.shared_blocks(id).ok()?,
+        };
         let mut rows = Vec::new();
         let mut operator_enabled = false;
         let mut root_turn = None;
@@ -1220,6 +1272,32 @@ impl Store {
             settings,
             follow_ups,
         })
+    }
+    /// `shared_blocks` for a blob history, which first hands the newest turns
+    /// to `request` once the blob is read and split, before the rest of it is
+    /// parsed. Blocks are parsed one by one from the split, which gives the
+    /// values the whole-array parse gives.
+    fn shared_blocks_previewing(
+        &self,
+        id: i64,
+        request: &mut super::PreviewRequest<'_>,
+    ) -> Result<Vec<Value>, String> {
+        let original = self.persisted_session_id(id)?;
+        let raw: String = sql(self.conn.query_row(
+            "SELECT blocks_json FROM sessions WHERE id=?1",
+            [original],
+            |r| r.get(0),
+        ))?;
+        if raw.len() < request.min_bytes {
+            return parse(&raw);
+        }
+        let Ok(split) = serde_json::from_str::<Vec<&serde_json::value::RawValue>>(&raw) else {
+            return parse(&raw);
+        };
+        if let Some(rows) = newest_rows(&split, request.rows_after) {
+            (request.send)(rows);
+        }
+        split.iter().map(|block| parse(block.get())).collect()
     }
     pub(super) fn shared_store_blocks(&self, id: i64, blocks: &[Value]) -> Result<(), String> {
         // A terminal session never stores blocks: writing them would clear

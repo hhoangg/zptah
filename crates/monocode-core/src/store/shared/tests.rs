@@ -2321,3 +2321,176 @@ fn perf_blob_open_phases() {
         timed(|| store.load_for_open(id, true)),
     );
 }
+
+/// `turns` prompts, each with a tool block and a reply, after a hidden
+/// preamble block, with floats that must survive a per-block parse.
+fn long_blob(turns: usize) -> Vec<Value> {
+    let mut blocks = vec![json!({"id":"preamble","role":"system","text":"","future":-0.0})];
+    for turn in 0..turns {
+        blocks.push(
+            json!({"id":format!("u{turn}"),"role":"user","text":format!("Question {turn}"),
+            "sentAt":1000 + turn,"startedAt":1000 + turn,"durationMs":5,
+            "turnModel":{"harness":"claude","id":"claude:m","name":"M"},
+            "turnMetrics":{"cacheHitPercent":95.12525746447635 + turn as f64,"inputTokens":turn}}),
+        );
+        blocks.push(json!({"id":format!("t{turn}"),"role":"tool","text":"Run","tool":{"callId":format!("c{turn}"),
+            "kind":"execute","title":"Run","status":"completed","detail":format!("output {turn}\n").repeat(30),
+            "future":[0.1, -0.0, 1e300, 5e-324]}}));
+        blocks.push(
+            json!({"id":format!("a{turn}"),"role":"assistant","text":format!("Answer {turn}")}),
+        );
+    }
+    blocks
+}
+fn previewed(
+    store: &Store,
+    id: i64,
+    rows_after: Option<usize>,
+) -> (Option<Vec<Row>>, Option<HistoryRevision>, Opened) {
+    let mut sent = None;
+    let mut revision_at_send = Some(None);
+    let opened = store.load_for_open_previewing(
+        id,
+        true,
+        Some(super::super::PreviewRequest {
+            min_bytes: 0,
+            rows_after,
+            send: &mut |rows| {
+                revision_at_send = Some(revision(store, id));
+                sent = Some(rows);
+            },
+        }),
+    );
+    (
+        sent,
+        revision_at_send.flatten(),
+        (
+            opened.transcript.unwrap().rows,
+            serde_json::to_value(opened.settings.unwrap()).unwrap(),
+            serde_json::to_value(opened.follow_ups.unwrap().unwrap()).unwrap(),
+            revision(store, id),
+        ),
+    )
+}
+/// The index of the `n`th prompt row before `before`, as the window picks it.
+fn nth_prompt_before(rows: &[Row], before: usize, n: usize) -> Option<usize> {
+    rows[..before.min(rows.len())]
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, row)| row.first && row.is_prompt())
+        .nth(n - 1)
+        .map(|(at, _)| at)
+}
+
+#[test]
+fn a_preview_is_a_suffix_of_the_full_projection_and_only_for_long_histories() {
+    use crate::store::PAGE_TURNS;
+    for turns in [1, 2, PAGE_TURNS - 1] {
+        let store = Store::open_monocode(Path::new(":memory:")).unwrap();
+        let (id, _) = saved(&store, json!(long_blob(turns)));
+        let (sent, _, _) = previewed(&store, id, None);
+        assert!(sent.is_none(), "{turns} turns are shown whole");
+    }
+    // Only a hidden preamble and no prompt at all.
+    let store = Store::open_monocode(Path::new(":memory:")).unwrap();
+    let (id, _) = saved(
+        &store,
+        json!(vec![json!({"id":"p","role":"system","text":""}); 50]),
+    );
+    assert!(previewed(&store, id, None).0.is_none());
+    for turns in [PAGE_TURNS, PAGE_TURNS + 1, 60] {
+        let store = Store::open_monocode(Path::new(":memory:")).unwrap();
+        let (id, _) = saved(&store, json!(long_blob(turns)));
+        let (sent, _, opened) = previewed(&store, id, None);
+        let full = &opened.0;
+        // Hidden preamble blocks above the first prompt make no rows, so with
+        // exactly PAGE_TURNS prompts the preview may be everything.
+        let rows = sent.expect("a history of PAGE_TURNS prompts or more");
+        assert!(!rows.is_empty());
+        assert!(rows.len() < full.len() || turns == PAGE_TURNS);
+        assert_eq!(rows, full[full.len() - rows.len()..]);
+        let start = nth_prompt_before(full, full.len(), PAGE_TURNS).unwrap();
+        assert!(full.len() - rows.len() <= start, "it covers the window");
+    }
+}
+
+#[test]
+fn a_preview_around_a_saved_position_counts_rows_from_the_end() {
+    use crate::store::PAGE_TURNS;
+    let store = Store::open_monocode(Path::new(":memory:")).unwrap();
+    let (id, _) = saved(&store, json!(long_blob(80)));
+    let full = previewed(&store, id, None).2 .0;
+    for anchor in [full.len() - 1, full.len() - 30, full.len() - 60] {
+        let after = full.len() - 1 - anchor;
+        let (sent, _, opened) = previewed(&store, id, Some(after));
+        assert_eq!(opened.0, full);
+        let rows = sent.expect("a long history");
+        let first = full.len() - rows.len();
+        assert_eq!(rows, full[first..]);
+        assert!(first <= anchor, "the saved row is inside the preview");
+        // Its window is the one the full history would open on.
+        let window = nth_prompt_before(&full, anchor + 1, PAGE_TURNS).unwrap();
+        assert!(first <= window);
+    }
+    // A saved row far from the end would make the preview most of the history
+    // (parsed twice): nothing is previewed, and the full open is the same.
+    for anchor in [full.len() / 2, 40] {
+        let (sent, at_send, opened) = previewed(&store, id, Some(full.len() - 1 - anchor));
+        assert!(sent.is_none() && at_send.is_none());
+        assert_eq!(opened.0, full);
+    }
+    // A saved row further back than the history reaches is not previewed.
+    assert!(previewed(&store, id, Some(full.len() + 5)).0.is_none());
+}
+
+#[test]
+fn a_preview_records_no_revision_and_the_full_open_is_unchanged() {
+    let store = Store::open_monocode(Path::new(":memory:")).unwrap();
+    let blocks = long_blob(40);
+    let (id, _) = saved(&store, json!(blocks));
+    let (sent, at_send, opened) = previewed(&store, id, None);
+    assert!(sent.is_some());
+    assert_eq!(
+        at_send, None,
+        "nothing is recorded when the preview is sent"
+    );
+    // Per-block parsing gives the same blocks, so the same revision and rows.
+    assert_eq!(
+        opened.3,
+        Some(HistoryRevision::of(&store.shared_blocks(id).unwrap()))
+    );
+    let plain = Store::open_monocode(Path::new(":memory:")).unwrap();
+    let (other, _) = saved(&plain, json!(blocks));
+    let expected = read_for_open(&plain, other);
+    assert_eq!(opened.0, expected.0, "rows");
+    assert_eq!(opened.1, expected.1, "settings");
+    assert_eq!(opened.2, expected.2, "follow-ups");
+    assert_eq!(opened.3, expected.3, "revision");
+}
+
+#[test]
+fn parsing_each_block_of_a_split_history_equals_parsing_the_whole_array() {
+    let blocks = long_blob(30);
+    let raw = json!(blocks).to_string();
+    let whole: Vec<Value> = parse(&raw).unwrap();
+    let split: Vec<&serde_json::value::RawValue> = serde_json::from_str(&raw).unwrap();
+    let each: Vec<Value> = split
+        .iter()
+        .map(|block| parse(block.get()).unwrap())
+        .collect();
+    assert_eq!(whole, each);
+    assert_eq!(HistoryRevision::of(&whole), HistoryRevision::of(&each));
+    // Floats are what a revision tells apart: negative zero, exponents, ULPs.
+    let floats =
+        r#"[{"a":-0.0,"b":0.1,"c":1e300,"d":5e-324,"e":95.12525746447635,"f":-0,"g":1.0}]"#;
+    let whole: Vec<Value> = parse(floats).unwrap();
+    let split: Vec<&serde_json::value::RawValue> = serde_json::from_str(floats).unwrap();
+    let each: Vec<Value> = split
+        .iter()
+        .map(|block| parse(block.get()).unwrap())
+        .collect();
+    assert_eq!(whole, each);
+    assert_eq!(HistoryRevision::of(&whole), HistoryRevision::of(&each));
+    assert_eq!(whole[0]["e"].to_string(), each[0]["e"].to_string());
+}

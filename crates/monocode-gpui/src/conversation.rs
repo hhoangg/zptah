@@ -21,6 +21,8 @@ mod edit_last_turn;
 mod follow_up;
 pub(crate) mod git_actions;
 mod history;
+#[cfg(test)]
+pub(crate) use history::previews_sent;
 mod mobile;
 mod mobile_commands;
 mod mobile_pending_send;
@@ -222,6 +224,11 @@ pub(crate) struct Conversation {
     remote_plans: remote_plans::State,
     store: Database,
     pub(crate) transcript: Entity<TranscriptView>,
+    /// The newest turns, shown while the history loads. Display only: it is
+    /// never `transcript`, so nothing is sent to it and no save reads it.
+    history_preview: Option<Entity<TranscriptView>>,
+    /// Bumped by every history load, so a preview of an older one is dropped.
+    history_generation: u64,
     pub(crate) review: Entity<crate::session_review::SessionReview>,
     _review_events: Subscription,
     _review_observation: Subscription,
@@ -748,6 +755,8 @@ impl Conversation {
             submission_generation: 0,
             mono_ui: mono::ChatState::default(),
             transcript,
+            history_preview: None,
+            history_generation: 0,
             review,
             _review_events: review_events,
             _review_observation: review_observation,
@@ -894,6 +903,9 @@ impl Conversation {
     pub(crate) fn reveal_search(&mut self, row: usize, query: String, cx: &mut Context<Self>) {
         if !self.loaded || self.history_unloaded {
             self.pending_search = Some((row, query));
+            if self.history_preview.take().is_some() {
+                cx.notify();
+            }
             self.load(cx);
             return;
         }
@@ -927,12 +939,13 @@ impl Conversation {
         let id = self.summary.id;
         let mono = self.settings.mono.is_some();
         let anchor = self.history_preparation_anchor(cx);
+        let preview = self.start_history_preview(cx);
         let work = cx.background_executor().spawn(async move {
             let probe = crate::perf_switch::clock();
             // One lock and one read of the history for everything the chat
             // needs; the transcript is prepared after the lock is released.
             let read = locked(&store).map(|s| {
-                let opened = s.load_for_open(id, true);
+                let opened = preview.with(|request| s.load_for_open_previewing(id, true, request));
                 let history = opened.transcript.and_then(|history| {
                     let edits = if mono {
                         Vec::new()
@@ -960,6 +973,7 @@ impl Conversation {
                     Err(error),
                 ),
             };
+            preview.wait_for_gate().await;
             let loaded = (
                 history.map(|(history, edits)| {
                     (
@@ -978,6 +992,7 @@ impl Conversation {
         cx.spawn(async move |this, cx| {
             let (result, settings, context, follow_ups, before) = work.await;
             let _ = this.update(cx, |this, cx| {
+                this.finish_history_preview(result.as_ref().ok().map(|(history, _)| history), cx);
                 this.loading = false;
                 this.context = context.ok().flatten();
                 match follow_ups {
@@ -4307,7 +4322,9 @@ impl Render for Conversation {
                     .flex_1()
                     .min_h_0()
                     .child(
-                        self.transcript
+                        self.history_preview
+                            .as_ref()
+                            .unwrap_or(&self.transcript)
                             .clone()
                             .cached(StyleRefinement::default().size_full()),
                     )

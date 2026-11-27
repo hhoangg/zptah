@@ -97,12 +97,113 @@ fn parse_history_markdown(
         .collect()
 }
 
-pub(super) struct HistoryPosition {
+#[derive(Clone, Copy)]
+pub(crate) struct HistoryPosition {
     key: Option<(usize, usize)>,
     offset: ListOffset,
     following: bool,
+    /// The rows from the one at `key` to the end of the history, so the
+    /// position can be found again in a preview that is numbered from its end.
+    after: usize,
 }
 impl TranscriptView {
+    /// How many rows follow the row a suspended history's reader was looking
+    /// at, for a preview of that part of the history.
+    pub(crate) fn saved_history_rows_after(&self) -> Option<usize> {
+        self.history_position
+            .as_ref()
+            .filter(|position| !position.following && position.key.is_some())
+            .map(|position| position.after.saturating_sub(1))
+    }
+
+    /// A display-only transcript for the last `len` rows of a history that is
+    /// still loading, to install them into. It looks like this one, opens
+    /// where the reader left it (the rows are numbered from their end), and is
+    /// never given actions. The saved `after` was measured against the end of
+    /// the history when it was suspended, so rows appended elsewhere since
+    /// shift an anchored preview for a moment; the saved absolute key and the
+    /// hand-off's content check keep the final position right.
+    pub(crate) fn loading_preview(&self, len: usize) -> Self {
+        let mut preview = Self::new();
+        preview.chat_layout = self.chat_layout;
+        preview.collapse_groups = self.collapse_groups;
+        preview.fold_work = self.fold_work;
+        preview.file_link_base = self.file_link_base.clone();
+        preview.identity(&self.provider, &self.model);
+        preview.visible = self.visible;
+        preview.history_preview_scrolled = Some(false);
+        let saved = self.history_position.filter(|p| !p.following);
+        preview.history_position = saved.and_then(|position| {
+            let ((_, part), row) = position.key.zip(len.checked_sub(position.after))?;
+            Some(HistoryPosition {
+                key: Some((row, part)),
+                ..position
+            })
+        });
+        if preview.history_position.is_some() {
+            // The end of a window around an old turn is not the end of the chat.
+            preview.list.set_follow_mode(FollowMode::Normal);
+        }
+        preview
+    }
+
+    /// Where the reader of a scrolled preview is, as a position in the full
+    /// `history`, if the preview's rows are still the history's last ones.
+    /// An untouched preview hands nothing over: the history opens as usual.
+    pub(crate) fn preview_position(&self, history: &PreparedHistory) -> Option<HistoryPosition> {
+        if self.history_preview_scrolled != Some(true) {
+            return None;
+        }
+        let offset = self.list.logical_scroll_top();
+        let following = self.list.is_following_tail();
+        let (row, part) = if following {
+            (self.source.len().checked_sub(1)?, 0)
+        } else {
+            self.rows.get(offset.item_ix)?.key
+        };
+        let source = self.source.get(row)?;
+        let absolute = history.rows.len().checked_sub(self.source.len())? + row;
+        // A save or an edit can land between the two reads, and a reused row
+        // number does not identify the message the reader was on.
+        if history.rows.get(absolute) != Some(source)
+            || (following && absolute + 1 != history.rows.len())
+        {
+            return None;
+        }
+        Some(HistoryPosition {
+            key: Some((absolute, part)),
+            offset,
+            following,
+            after: history.rows.len() - absolute,
+        })
+    }
+
+    /// Test helper: the reader of a preview scrolled to its row `row`.
+    #[cfg(test)]
+    pub(crate) fn scroll_preview_to(&mut self, row: usize, offset: gpui::Pixels) {
+        let item_ix = self.rows.iter().position(|r| r.key.0 == row).unwrap();
+        self.list.pause_following_tail();
+        self.list.scroll_to(ListOffset {
+            item_ix,
+            offset_in_item: offset,
+        });
+        self.history_preview_scrolled = Some(true);
+    }
+    /// Test helper: the source row at the top of the list, and whether the
+    /// list follows the end.
+    #[cfg(test)]
+    pub(crate) fn top_row(&self) -> (Option<usize>, bool) {
+        let top = self.list.logical_scroll_top();
+        (
+            self.rows.get(top.item_ix).map(|r| r.key.0),
+            self.list.is_following_tail(),
+        )
+    }
+
+    pub(crate) fn set_history_position(&mut self, position: HistoryPosition) {
+        self.history_position = Some(position);
+    }
+
     /// The source row the reader of a suspended history was looking at, which
     /// the history reopens around. None when they were following the end.
     pub(crate) fn saved_history_anchor(&self) -> Option<usize> {
@@ -462,6 +563,7 @@ impl TranscriptView {
         }
         let offset = self.list.logical_scroll_top();
         let base = self.base;
+        let rows_in_window = self.source.len().saturating_sub(base);
         self.drop_older_history();
         self.selection.clear();
         self.history_position = Some(HistoryPosition {
@@ -471,6 +573,12 @@ impl TranscriptView {
                 .and_then(|row| Some((row.key.0.checked_sub(base)?, row.key.1))),
             offset,
             following: self.list.is_following_tail(),
+            after: rows_in_window.saturating_sub(
+                self.rows
+                    .get(offset.item_ix)
+                    .and_then(|row| row.key.0.checked_sub(base))
+                    .unwrap_or(0),
+            ),
         });
         self.source = Vec::new();
         self.tool_agents = HashMap::new();
@@ -687,6 +795,122 @@ mod tests {
             assert!(view.history_start <= 10);
             assert_eq!(view.history_search, None);
             assert_eq!(view.search_match, Some((10, "Question 5".into())));
+        });
+    }
+
+    #[gpui::test]
+    fn an_anchored_preview_keeps_its_position_until_the_reader_scrolls(cx: &mut TestAppContext) {
+        let rows = long_mono(50);
+        let history = PreparedHistory::full(rows.clone());
+        // The reader left row 70: 30 rows from it to the end. The preview is
+        // the last 44 rows, numbered from its end.
+        let main = cx.new(|_| {
+            let mut view = TranscriptView::new();
+            view.history_position = Some(HistoryPosition {
+                key: Some((70, 0)),
+                offset: ListOffset {
+                    item_ix: 0,
+                    offset_in_item: px(9.),
+                },
+                following: false,
+                after: 30,
+            });
+            view
+        });
+        let template = main.read_with(cx, |view, _| view.loading_preview(44));
+        let preview = cx.new(|cx| {
+            let mut preview = template;
+            preview.install_prepared_history(PreparedHistory::full(rows[56..].to_vec()), cx);
+            preview
+        });
+        preview.update(cx, |view, _| {
+            assert!(!view.list.is_following_tail());
+            let top = view.list.logical_scroll_top();
+            assert_eq!(view.rows[top.item_ix].key.0, 14, "row 70 of the history");
+            assert_eq!(top.offset_in_item, px(9.));
+            assert!(
+                view.preview_position(&history).is_none(),
+                "an untouched preview hands nothing over"
+            );
+            view.history_preview_scrolled = Some(true);
+            let position = view.preview_position(&history).unwrap();
+            assert_eq!(position.key.map(|key| key.0), Some(70));
+            assert_eq!(position.after, 30);
+            assert!(!position.following);
+            // The history changed between the two reads: it is not that row.
+            let mut rewritten = rows.clone();
+            rewritten[70].text = "Different saved message".into();
+            assert!(
+                view.preview_position(&PreparedHistory::full(rewritten))
+                    .is_none()
+            );
+            // A shorter history cannot hold the preview at all.
+            assert!(
+                view.preview_position(&PreparedHistory::full(rows[90..].to_vec()))
+                    .is_none()
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_scrolled_preview_that_followed_the_end_hands_over_the_end(cx: &mut TestAppContext) {
+        let rows = long_mono(50);
+        let view = cx.new(|_| TranscriptView::new());
+        view.update(cx, |view, cx| {
+            view.install_prepared_history(PreparedHistory::full(rows[60..].to_vec()), cx);
+            view.history_preview_scrolled = Some(true);
+            assert!(view.list.is_following_tail());
+            let position = view
+                .preview_position(&PreparedHistory::full(rows.clone()))
+                .unwrap();
+            assert!(position.following);
+            assert_eq!(position.key.map(|key| key.0), Some(99));
+            // New rows arrived since the preview: the end is no longer the same.
+            let mut grown = rows;
+            grown.push(Row {
+                role: "assistant".into(),
+                text: "Later".into(),
+                first: true,
+                sent_at: None,
+            });
+            assert!(
+                view.preview_position(&PreparedHistory::full(grown))
+                    .is_none()
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_far_saved_position_gets_no_preview_and_still_reopens_in_place(cx: &mut TestAppContext) {
+        let (_, _, rows, chat) = saved_local_chat(120, cx);
+        let transcript = chat.read_with(cx, |chat, _| chat.transcript.clone());
+        // Read near the top of the chat: row 20 of 240.
+        transcript.update(cx, |view, cx| view.reveal_search(20, "user 10", cx));
+        cx.run_until_parked();
+        let (key, offset) = transcript.update(cx, |view, cx| {
+            let item_ix = view.rows.iter().position(|row| row.key.0 == 20).unwrap();
+            view.list.pause_following_tail();
+            view.list.scroll_to(ListOffset {
+                item_ix,
+                offset_in_item: px(6.),
+            });
+            view.visible(false, cx);
+            (view.rows[item_ix].key, px(6.))
+        });
+        assert!(chat.update(cx, |chat, cx| chat.unload_history(cx)));
+        let before = crate::conversation::previews_sent();
+        chat.update(cx, |chat, cx| chat.load(cx));
+        cx.run_until_parked();
+        assert_eq!(
+            crate::conversation::previews_sent(),
+            before,
+            "a position this far back would make the preview most of the chat"
+        );
+        transcript.read_with(cx, |view, _| {
+            assert_eq!(view.source_rows(), rows);
+            let top = view.list.logical_scroll_top();
+            assert_eq!(view.rows[top.item_ix].key, key);
+            assert_eq!(top.offset_in_item, offset);
         });
     }
 

@@ -156,7 +156,8 @@ impl Reading {
 /// The trial being timed. Everything is measured from `t0`.
 struct Armed {
     id: i64,
-    transcript: Option<EntityId>,
+    /// The transcripts whose frames count: the chat's own, and a preview of it.
+    transcripts: Vec<EntityId>,
     t0: Instant,
     first_paint: Option<Duration>,
     ready: Option<Duration>,
@@ -178,7 +179,7 @@ pub(crate) fn arm(id: i64, transcript: Option<EntityId>) {
     if let Ok(mut state) = ARMED.lock() {
         *state = Some(Armed {
             id,
-            transcript,
+            transcripts: transcript.into_iter().collect(),
             t0: Instant::now(),
             first_paint: None,
             ready: None,
@@ -350,10 +351,24 @@ pub(crate) fn installed(id: i64, transcript: EntityId, started: Option<Instant>)
         armed(|trial| {
             if trial.id == id && trial.install.is_none() {
                 trial.install = Some(started.elapsed());
-                trial.transcript.get_or_insert(transcript);
+                if !trial.transcripts.contains(&transcript) {
+                    trial.transcripts.push(transcript);
+                }
             }
         });
     }
+}
+/// A display-only preview of session `id`'s history was made: its frames
+/// count as the chat painting.
+pub(crate) fn watch(id: i64, transcript: EntityId) {
+    if !enabled() {
+        return;
+    }
+    armed(|trial| {
+        if trial.id == id && !trial.transcripts.contains(&transcript) {
+            trial.transcripts.push(transcript);
+        }
+    });
 }
 /// Session `id` finished loading and shows "Ready".
 pub(crate) fn ready(id: i64) {
@@ -378,7 +393,7 @@ pub(crate) fn frame(
         return;
     }
     armed(|trial| {
-        if trial.transcript == Some(transcript) && trial.first_paint.is_none() {
+        if trial.transcripts.contains(&transcript) && trial.first_paint.is_none() {
             trial.first_paint = Some(trial.t0.elapsed());
             trial.rows = rows;
             trial.reading = reading();
