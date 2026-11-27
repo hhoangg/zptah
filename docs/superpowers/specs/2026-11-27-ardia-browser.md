@@ -499,6 +499,34 @@ Refs and fields (section 6):
   action` and, if there are several, every form's action resolved against the page URL) and
   treats any blocked one as a hit (leans to refusing).
 
+Act inputs (measured 2026-11-28, local test pages):
+
+- `snapshot` never marks the focused element. The gate reads focus with a fixed script of its own
+  through `eval --isolated -- '<script>'`. Without `--isolated` the script runs in the page's
+  world, and a page that replaced `JSON.stringify` made it report `{"tag":"BODY"}` for a focused
+  password field; with `--isolated` it reported `INPUT`/`password`. Every gate `eval` uses
+  `--isolated`; the Mono never gets `eval`.
+- `press @eN <key>` presses in that element (`{"pressed":"Enter","in":"@e3",...}`) and submitted
+  its form; `Control+Enter` is accepted the same way.
+- `type`/`fill`/`keyboard type` with a trailing newline did not submit a form on Ardia 0.7.0; the
+  gate still judges such text as typing then Enter.
+- `check @eN` on a button or a link clicks it (its script ran) and only then fails with
+  `command_failed`, so the gate allows check and uncheck only on checkable roles.
+- `get count form` and `get attr "form >> nth=<i>" action` read every form;
+  `form:nth-of-type(<i>)` misses forms under different parents. An absent attribute is
+  `value: null` with exit 0. On a page without forms `form` has no `submits` key.
+- With a dialog open, `snapshot -i` is scoped to it and the reply carries
+  `modal {role, name, ref}`; the full `snapshot` shows the dialog's text nested under its
+  `- dialog "<name>"` line. Quotes inside names are escaped (`"x\" [ref=e99]"`).
+- `ardia call windows` reports `focused: true` for Ardia's last focused window even while Ardia is
+  hidden and another app is in front.
+- A click on a `target=_blank` link (and, by the same path, `window.open`) opened a page target
+  that `ardia tabs` does not list (`appTabId: null` in `tab list`, `changes` reports nothing),
+  and switched the user's window to the Mono's profile. The gate reads the link's `target`
+  before a click and loads such a link in the session's own tab instead (after the origin check);
+  after every act it closes any new page target without an `appTabId` (`cdp Target.closeTarget`,
+  gate-internal) and puts the window back on the profile it showed before.
+
 Flows (section 7):
 
 - Stored per site, not per profile: `<Ardia data>/Flows/<site>/<name>.json`, shared by every
