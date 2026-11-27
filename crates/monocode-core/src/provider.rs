@@ -1510,6 +1510,13 @@ fn write_mcp_config(
     Ok(file)
 }
 
+/// The Claude rule that keeps a Mono's shell from running `ardia`, for a launch whose browser
+/// is not attached (an attached one carries it in `Runtime::claude_disallowed`).
+pub(crate) fn unattached_shell_deny(settings: &Settings, attached: bool) -> Option<&'static str> {
+    (!attached && settings.mono.is_some() && !settings.text_only)
+        .then_some(crate::mono::browser::SHELL_DENY)
+}
+
 /// Resolves the Mono's browser once and records the outcome in the settings, so the rules the
 /// provider gets agree with what the launch adds (the server, or the reason it is missing).
 fn apply_browser(
@@ -1545,6 +1552,19 @@ fn run_operation(
     if cancel.load(Ordering::Relaxed) {
         return Err("Stopped".into());
     }
+    // A Mono's shell command that runs `ardia` skips the browser gate: it is recorded in the audit.
+    let mut shell_audit = crate::mono::browser::ardia::shell::ShellAudit::new(
+        request.settings.mono.as_ref(),
+        process::owner(),
+    );
+    let mut emit = move |events: Vec<Event>| {
+        for event in &events {
+            if let Event::Tool(tool) = event {
+                shell_audit.see(tool);
+            }
+        }
+        emit(events)
+    };
     if request.kind == Kind::OpenCode {
         return opencode::run(request, cancel, controls, probe, compact, emit);
     }
@@ -1671,6 +1691,9 @@ fn run_operation(
                 allowed.push(browser.claude_allowed());
                 disallowed.push(browser.claude_disallowed());
             }
+            // The browser is off or could not be attached: the shell route to Ardia is closed
+            // all the same.
+            disallowed.extend(unattached_shell_deny(settings, browser.is_some()).map(String::from));
             let mut system = Vec::new();
             if let Some(mono) = settings.mono.as_ref().filter(|_| !settings.text_only) {
                 system.push(crate::mono::browser::launch_instructions(
@@ -2267,6 +2290,27 @@ mod tests {
             executable: "/bin/monocode-gpui".into(),
             browser_database: None,
         }
+    }
+    #[test]
+    fn every_claude_mono_launch_denies_the_ardia_shell_route() {
+        let mono = Settings {
+            mono: Some(browser_mono_context()),
+            ..Default::default()
+        };
+        // Browser off, unavailable or attached (the attached one has it in `claude_disallowed`).
+        assert_eq!(unattached_shell_deny(&mono, false), Some("Bash(ardia:*)"));
+        assert_eq!(unattached_shell_deny(&mono, true), None);
+        let plain = Settings::default();
+        assert_eq!(unattached_shell_deny(&plain, false), None, "not a Mono run");
+        let text_only = Settings {
+            text_only: true,
+            ..mono
+        };
+        assert_eq!(
+            unattached_shell_deny(&text_only, false),
+            None,
+            "no tools at all"
+        );
     }
     #[test]
     fn codex_is_told_why_an_enabled_browser_could_not_be_attached() {

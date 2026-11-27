@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{mpsc, Arc, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub const EXIT_REFUSED: i32 = 1;
@@ -22,6 +22,8 @@ pub const EXIT_UNREACHABLE: i32 = 2;
 pub const BROWSE_TIMEOUT: Duration = Duration::from_secs(60);
 /// The longest a quick control call (`hello`, `tabs.hold`, `tabs close`) may take.
 pub const QUICK_TIMEOUT: Duration = Duration::from_secs(15);
+/// The most a command may print before the call fails (a page snapshot is far below it).
+pub const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 /// The string Ardia prints when its Control setting is off. Section 12b: not measured, the
 /// fixture `call_control_off.stderr.txt` assumes it comes on stderr with exit 1.
 const CONTROL_OFF: &str = "Control is off";
@@ -41,6 +43,8 @@ pub enum RunFailure {
     NotFound,
     /// The process did not finish in time and was killed.
     TimedOut,
+    /// It printed more than [`MAX_OUTPUT`] bytes.
+    TooLarge,
     Spawn(String),
 }
 
@@ -48,6 +52,44 @@ pub enum RunFailure {
 pub trait LineStream: Send {
     /// The next line, or `None` when the stream ended.
     fn next_line(&mut self) -> Option<String>;
+    /// A handle that stops the process from another thread (the reader may be blocked).
+    fn stopper(&self) -> Box<dyn Fn() + Send + Sync> {
+        Box::new(|| {})
+    }
+}
+
+// ---- values that reach the command line ----
+
+/// A value a Mono supplied (a selector, a text, a key), safe to put in the `ardia` argv: the
+/// command parses `-x` and `--x=y` as flags, so a value that starts with `-` is refused, as is
+/// anything with a control character. M2 passes every Mono-supplied value through this.
+pub fn plain_value<'a>(what: &str, value: &'a str) -> Result<&'a str, String> {
+    let bad = |why: &str| Err(format!("`{what}` {why}."));
+    if value.trim().is_empty() {
+        return bad("is empty");
+    }
+    if value.starts_with('-') || value.trim_start().starts_with('-') {
+        return bad("must not start with `-` (it would be read as an option)");
+    }
+    if value.chars().any(char::is_control) {
+        return bad("must not contain control characters");
+    }
+    if value.len() > 2000 {
+        return bad("is too long");
+    }
+    Ok(value)
+}
+
+/// An address for the command line: http or https with a host, never a leading `-`.
+pub fn web_url(value: &str) -> Result<String, String> {
+    let url = plain_value("url", value.trim())?;
+    let parsed = url::Url::parse(url)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some());
+    match parsed {
+        Some(_) => Ok(url.to_owned()),
+        None => Err("Only http and https addresses can be opened (not javascript:, data:, file: or others).".into()),
+    }
 }
 
 /// Starts `ardia` processes. The real one is [`ProcessRunner`]; tests replay fixtures.
@@ -170,8 +212,8 @@ impl Runner for ProcessRunner {
         let mut child = command
             .spawn()
             .map_err(|e| RunFailure::Spawn(e.to_string()))?;
-        let out = drain(child.stdout.take());
-        let err = drain(child.stderr.take());
+        let out = drain(child.stdout.take(), MAX_OUTPUT);
+        let err = drain(child.stderr.take(), 64 * 1024);
         let deadline = Instant::now() + timeout;
         let status = loop {
             match child.try_wait() {
@@ -186,10 +228,14 @@ impl Runner for ProcessRunner {
         };
         // A grandchild that keeps the pipe open must not hold the call: take what is there.
         let grace = Duration::from_secs(2);
+        let (stdout, too_large) = out.recv_timeout(grace).unwrap_or_default();
+        if too_large {
+            return Err(RunFailure::TooLarge);
+        }
         Ok(Output {
             code: status.code().unwrap_or(-1),
-            stdout: out.recv_timeout(grace).unwrap_or_default(),
-            stderr: err.recv_timeout(grace).unwrap_or_default(),
+            stdout,
+            stderr: err.recv_timeout(grace).unwrap_or_default().0,
         })
     }
 
@@ -204,21 +250,36 @@ impl Runner for ProcessRunner {
             .take()
             .ok_or_else(|| RunFailure::Spawn("no stdout".into()))?;
         Ok(Box::new(ChildStream {
-            child,
+            child: Arc::new(Mutex::new(child)),
             lines: BufReader::new(stdout),
         }))
     }
 }
 
-/// Reads a pipe to its end on a thread and sends the text once.
-fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> mpsc::Receiver<String> {
+/// Reads a pipe to its end on a thread and sends the text once, with whether more than `limit`
+/// bytes came (the rest is read and dropped, so the process never blocks on a full pipe).
+fn drain<R: Read + Send + 'static>(
+    pipe: Option<R>,
+    limit: usize,
+) -> mpsc::Receiver<(String, bool)> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
+        let mut over = false;
         if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut bytes);
+            let mut chunk = [0u8; 16 * 1024];
+            while let Ok(n) = pipe.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                if bytes.len() + n <= limit {
+                    bytes.extend_from_slice(&chunk[..n]);
+                } else {
+                    over = true;
+                }
+            }
         }
-        let _ = sender.send(String::from_utf8_lossy(&bytes).into_owned());
+        let _ = sender.send((String::from_utf8_lossy(&bytes).into_owned(), over));
     });
     receiver
 }
@@ -229,12 +290,21 @@ fn kill_tree(child: &mut Child) {
     unsafe {
         libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
     }
+    #[cfg(windows)]
+    {
+        // `ardia` is a script that starts other processes: take the whole tree down.
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
     let _ = child.kill();
     let _ = child.wait();
 }
 
 struct ChildStream {
-    child: Child,
+    child: Arc<Mutex<Child>>,
     lines: BufReader<std::process::ChildStdout>,
 }
 impl LineStream for ChildStream {
@@ -245,10 +315,20 @@ impl LineStream for ChildStream {
             Ok(_) => Some(line.trim_end().to_owned()),
         }
     }
+    fn stopper(&self) -> Box<dyn Fn() + Send + Sync> {
+        let child = self.child.clone();
+        Box::new(move || {
+            if let Ok(mut child) = child.lock() {
+                kill_tree(&mut child);
+            }
+        })
+    }
 }
 impl Drop for ChildStream {
     fn drop(&mut self) {
-        kill_tree(&mut self.child);
+        if let Ok(mut child) = self.child.lock() {
+            kill_tree(&mut child);
+        }
     }
 }
 
@@ -318,6 +398,9 @@ impl Cli {
             .map_err(|failure| match failure {
                 RunFailure::NotFound => Failure::NotInstalled,
                 RunFailure::TimedOut => Failure::TimedOut,
+                RunFailure::TooLarge => {
+                    Failure::Malformed("the output was over the size limit".into())
+                }
                 RunFailure::Spawn(why) => Failure::Malformed(why),
             })
     }
@@ -392,6 +475,13 @@ impl Cli {
 
     /// `ardia tabs open <url> --profile P --json`: the new tab's id (`results[0].tabs[0]`).
     pub fn tabs_open(&self, url: &str, profile: &str) -> Result<String, Failure> {
+        let refuse = |message: String| Failure::Refused {
+            code: None,
+            message,
+        };
+        let url = web_url(url).map_err(refuse)?;
+        let profile = plain_value("profile", profile).map_err(refuse)?;
+        let url = url.as_str();
         let args = ["tabs", "open", url, "--profile", profile, "--json"]
             .into_iter()
             .map(String::from)

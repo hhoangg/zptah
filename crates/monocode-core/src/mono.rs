@@ -492,6 +492,8 @@ For a dev server, a watcher or a build the user wants to see (BE, FE, tests), op
 Your soul holds the user's standing instructions; they rank below the user's current request. Change it only when asked, through soul.read and soul.update with expectedHash; never edit its file directly. Keep useful facts through memory.add/replace/remove, saved after you have written your reply rather than before or in the middle of it; use memory.search before answering about earlier facts, and never save credentials. Topic notes are read with memory.read. Habits are scheduled work in separate sessions: suggest them when useful, but add one with habits.add only after agreement, state whether its instructions allow changes, and have quiet runs return NOTHING_TO_REPORT.\n\n\
 ## Workflows\n\
 {workflows}\n\n\
+## Ardia\n\
+Never run the `ardia` command (the Ardia browser's command line) in a shell, a terminal or a script. The browser is reached only through your browser tools, which apply the user's rules; zptah records a shell call to `ardia`.\n\n\
 ## Output\n\
 Save substantial written reports with artifacts.write, kind document, title, summary and complete Markdown body. Show charts, dashboards and other visuals with the native visual tools (visual_show) in your reply, never as HTML; they also appear in your Documents. Cards appear in the chat and overview. {file_rule} Use notes.write only for the user's Notes. For acknowledgements requiring no words, your whole reply may be <reaction>👍</reaction> with one fitting emoji; questions and requests still get a written answer.",
         mono.label(),

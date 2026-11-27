@@ -107,18 +107,24 @@ impl BrowserServers {
         if let Some(gate) = gate {
             gate.clear_output();
         }
+        // Its tabs in Ardia go with it.
+        if let Some(upstream) = super::ardia::upstream::upstream_for(mono_id) {
+            upstream.end_all_in_background();
+        }
     }
     /// Drops every gate (the app quits).
     pub fn stop_everything(&self) {
-        let gates: Vec<Arc<Gate>> = self
+        let gates: Vec<(String, Arc<Gate>)> = self
             .gates
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .drain()
-            .map(|(_, gate)| gate)
             .collect();
-        for gate in gates {
+        for (mono_id, gate) in gates {
             gate.clear_output();
+            if let Some(upstream) = super::ardia::upstream::upstream_for(&mono_id) {
+                upstream.end_all_in_background();
+            }
         }
     }
     pub fn running(&self) -> usize {

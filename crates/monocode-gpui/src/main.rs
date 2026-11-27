@@ -9,6 +9,8 @@ mod activity;
 mod app_log;
 mod app_menu;
 mod arcade;
+#[cfg(target_os = "macos")]
+mod ardia_platform;
 mod assets;
 mod attachment_tray;
 mod automations;
@@ -506,6 +508,9 @@ fn main() {
             notifications::updater::version(),
         );
     }
+    // Quitting and hiding Ardia go through AppKit, not Apple Events.
+    #[cfg(target_os = "macos")]
+    ardia_platform::register();
     let platform = gpui_platform::current_platform(false);
     let title_raster = particle_text::GlyphRaster(platform.text_system());
     gpui::Application::with_platform(platform)
@@ -530,10 +535,16 @@ fn main() {
             popover::bind(cx);
             cx.set_prompt_builder(modal::prompt_builder);
             // A quit that macOS starts (Dock, logout) never reaches `quit`.
-            cx.on_app_quit(|_| {
+            cx.on_app_quit(|cx| {
                 monocode_core::process::guard::kill_all();
                 monocode_core::mono::browser::connect::shutdown();
-                async {}
+                // Closes the tabs zptah opened in Ardia and quits an Ardia it started, in at
+                // most a few seconds.
+                cx.background_executor().spawn(async {
+                    monocode_core::mono::browser::ardia::controller::shutdown(
+                        std::time::Duration::from_secs(4),
+                    )
+                })
             })
             .detach();
             explorer::bind(cx);

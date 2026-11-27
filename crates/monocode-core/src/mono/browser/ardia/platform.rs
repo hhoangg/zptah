@@ -28,51 +28,25 @@ mod mac {
     use super::BUNDLE_ID;
     use std::process::Command;
 
+    /// The Ardia application is in one of the two usual folders. The app registers a platform
+    /// that asks LaunchServices instead (`NSWorkspace`), see `monocode-gpui/src/ardia_platform.rs`.
     pub fn installed() -> bool {
-        // LaunchServices knows the bundle id wherever the app was copied to.
-        Command::new("mdfind")
-            .arg(format!("kMDItemCFBundleIdentifier == '{BUNDLE_ID}'"))
-            .output()
-            .is_ok_and(|out| !String::from_utf8_lossy(&out.stdout).trim().is_empty())
+        let home = crate::scm::shell::dirs_home().map(std::path::PathBuf::from);
+        let mut places = vec![std::path::PathBuf::from("/Applications/Ardia.app")];
+        places.extend(home.map(|h| h.join("Applications/Ardia.app")));
+        places.iter().any(|p| p.is_dir())
     }
     pub fn launch() -> Result<(), String> {
-        // `-g` background, `-j` hidden: measured not to steal focus or show a window.
+        // `-g` background, `-j` hidden: measured not to steal focus or show a window. By bundle
+        // id, so a renamed or moved app still starts.
         let status = Command::new("open")
-            .args(["-g", "-j", "-a", "Ardia"])
+            .args(["-g", "-j", "-b", BUNDLE_ID])
             .status()
             .map_err(|e| e.to_string())?;
         status
             .success()
             .then_some(())
             .ok_or_else(|| "open could not start Ardia".to_owned())
-    }
-    pub fn quit() -> Result<(), String> {
-        let script = format!("tell application id \"{BUNDLE_ID}\" to quit");
-        let status = Command::new("osascript")
-            .args(["-e", &script])
-            .status()
-            .map_err(|e| e.to_string())?;
-        status
-            .success()
-            .then_some(())
-            .ok_or_else(|| "Ardia did not accept the quit request".to_owned())
-    }
-    pub fn is_hidden() -> Option<bool> {
-        let script = format!(
-            "ObjC.import('AppKit'); const a = $.NSRunningApplication.runningApplicationsWithBundleIdentifier('{BUNDLE_ID}'); a.count > 0 ? String(a.objectAtIndex(0).hidden) : 'none'"
-        );
-        let out = Command::new("osascript")
-            .args(["-l", "JavaScript", "-e", &script])
-            .output()
-            .ok()?;
-        parse_hidden(&String::from_utf8_lossy(&out.stdout))
-    }
-    pub fn parse_hidden(text: &str) -> Option<bool> {
-        match text.trim() {
-            "true" => Some(true),
-            "false" => Some(false),
-            _ => None,
-        }
     }
 }
 
@@ -102,33 +76,10 @@ impl Platform for RealPlatform {
         }
     }
     fn quit(&self) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
-        {
-            mac::quit()
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Err("zptah can not quit Ardia on this system.".into())
-        }
+        // Quitting needs AppKit (no Apple Events permission): the app's platform does it.
+        Err("zptah can not quit Ardia here.".into())
     }
     fn is_hidden(&self) -> Option<bool> {
-        #[cfg(target_os = "macos")]
-        {
-            mac::is_hidden()
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            None
-        }
-    }
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    #[test]
-    fn hidden_flag_is_read_from_the_script_output() {
-        assert_eq!(super::mac::parse_hidden("true\n"), Some(true));
-        assert_eq!(super::mac::parse_hidden("false"), Some(false));
-        assert_eq!(super::mac::parse_hidden("none"), None);
+        None
     }
 }

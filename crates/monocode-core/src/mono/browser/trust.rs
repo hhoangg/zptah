@@ -98,8 +98,8 @@ impl BrowserLevel {
     /// The short explanation shown under the level.
     pub fn explanation(self) -> &'static str {
         match self {
-            Self::ReadOnly => "Looks only: opens pages, reads, takes screenshots and scrolls (with the Page Up, Page Down, Home, End and arrow keys). It cannot click, type or submit.",
-            Self::Act => "Clicks, types and navigates on its own. Asks you first only before risky steps such as payments, deletions, sending, posting and account changes.",
+            Self::ReadOnly => "Looks only: opens pages, reads them, takes screenshots, reads the console and scrolls. It cannot click, type or submit.",
+            Self::Act => "Reads like Read only for now: clicking, typing and forms come in a later update. Once they do, it acts on its own and asks you first only before risky steps such as payments, deletions, sending, posting and account changes.",
         }
     }
 

@@ -12,7 +12,7 @@ use crate::{
 };
 use gpui::{Div, Stateful};
 #[cfg(not(test))]
-use monocode_core::mono::browser::ardia::{self, Owner};
+use monocode_core::mono::browser::ardia;
 use monocode_core::mono::browser::ardia::{ArdiaProfile, Readiness, Report};
 use monocode_core::mono::browser::copy;
 use monocode_core::mono::browser::{self, AuditEntry, BrowserLevel, MonoBrowser, MonoBrowserStore};
@@ -111,7 +111,7 @@ pub(super) trait BrowserOps: Send + Sync {
     fn ardia_quit(&self) -> Result<(), String>;
     /// Whether zptah may start and quit Ardia on this platform.
     fn ardia_can_launch(&self) -> bool;
-    /// Whether zptah started the running Ardia. A lock lookup, safe on the UI thread.
+    /// Whether zptah started the Ardia and it answered the last check. A lock lookup, safe on the UI thread.
     fn ardia_owned(&self) -> bool;
     /// The minutes of idleness after which zptah quits an Ardia it started (0 = never).
     fn ardia_set_idle_minutes(&self, minutes: u32);
@@ -136,7 +136,8 @@ impl BrowserOps for RealOps {
         ardia::controller().platform().can_launch()
     }
     fn ardia_owned(&self) -> bool {
-        ardia::controller().owner() == Owner::Zptah
+        // Started by zptah and answering: a Quit on an Ardia that is not running does nothing.
+        ardia::controller().owned_and_up()
     }
     fn ardia_set_idle_minutes(&self, minutes: u32) {
         ardia::controller().set_idle_minutes(minutes);

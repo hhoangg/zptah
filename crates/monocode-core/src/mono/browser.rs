@@ -748,24 +748,10 @@ impl MonoBrowserStore {
     }
 }
 
-/// A shell command that runs `ardia` is flagged: Claude's launch denies it and Codex is told not
-/// to, but neither is airtight (design spec section 1, decision 2), so the audit says it happened.
-/// `tool_name` is the harness's shell tool (`Bash`, `shell`, `local_shell`, `exec_command`).
+/// A shell command that runs `ardia` is flagged (see [`ardia::shell`]). `tool_name` is the
+/// harness's shell tool (`Bash`, `shell`, `commandExecution`, ...).
 fn shell_ardia_entry(tool_name: &str, input: &str, session_id: i64) -> Option<AuditEntry> {
-    let lower = tool_name.to_lowercase();
-    if !(lower.contains("bash") || lower.contains("shell") || lower.contains("exec")) {
-        return None;
-    }
-    let runs_ardia = input
-        .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/')))
-        .any(|word| word == "ardia" || word.ends_with("/ardia"));
-    runs_ardia.then(|| AuditEntry {
-        ts_ms: crate::time::now_ms(),
-        session_id,
-        tool: "shell_ardia".to_owned(),
-        url: String::new(),
-        summary: "ran the ardia command from the shell: it skips the browser gate".to_owned(),
-    })
+    ardia::shell::input_runs_ardia(tool_name, input).then(|| ardia::shell::entry(session_id))
 }
 
 /// The audit entry for a tool call of this Mono's browser server, or None for any other tool.

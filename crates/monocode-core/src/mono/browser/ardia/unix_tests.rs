@@ -126,3 +126,17 @@ fn ardia_is_found_on_the_path_and_in_the_local_bin_folder() {
     );
     assert_eq!(runner.executable(), Some(first.path().join("ardia")));
 }
+
+#[test]
+fn a_command_that_prints_too_much_fails_with_a_clear_error() {
+    let dir = tempfile::tempdir().unwrap();
+    script(
+        dir.path(),
+        "head -c 9000000 /dev/zero | tr '\\\\0' 'a'; exit 0",
+    );
+    let cli = cli(dir.path());
+    match cli.browse("s", &["read"]) {
+        Err(Failure::Malformed(why)) => assert!(why.contains("size limit"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+}

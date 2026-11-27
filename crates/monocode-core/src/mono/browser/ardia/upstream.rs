@@ -18,7 +18,7 @@ use super::super::defense;
 use super::super::gate::extension::refusal_text as tabs_origin_refusal;
 use super::super::gate::{audit_url, Origins, RunContext, Upstream};
 use super::controller::{controller, Controller, Readiness};
-use super::runner::Failure;
+use super::runner::{plain_value, web_url, Failure};
 use crate::mono::browser::{AuditEntry, MonoBrowserStore};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -83,6 +83,8 @@ struct Conv {
     halted: HashSet<String>,
     /// The last page the bound tab was known to show.
     page: String,
+    /// A call found Ardia gone (see `fail`): the dispatcher checks again and retries once.
+    lost: bool,
 }
 
 pub struct ArdiaUpstream {
@@ -171,8 +173,31 @@ impl ArdiaUpstream {
         all.push(Arc::downgrade(&upstream));
         upstream
     }
-    pub fn configure(&self, config: Config) {
-        *self.config.lock().unwrap_or_else(|e| e.into_inner()) = config;
+    /// Applies the Mono's setting. A changed Ardia profile ends every conversation of the Mono
+    /// (its tabs belong to the old profile and are closed, never rebound).
+    pub fn configure(self: &Arc<Self>, config: Config) {
+        let changed = {
+            let mut current = self.config.lock().unwrap_or_else(|e| e.into_inner());
+            let changed = !current.profile.is_empty() && current.profile != config.profile;
+            *current = config;
+            changed
+        };
+        if changed {
+            self.end_all_in_background();
+        }
+    }
+    /// Ends every conversation of this Mono (its browser was turned off or its profile changed),
+    /// on a thread so the caller never waits for `ardia`.
+    pub fn end_all_in_background(self: &Arc<Self>) {
+        let me = self.clone();
+        std::thread::spawn(move || me.end_all());
+    }
+    /// Closes the tabs and releases the holds of every conversation of this Mono.
+    pub fn end_all(&self) {
+        let ids: Vec<i64> = self.convs().keys().copied().collect();
+        for id in ids {
+            self.end_conversation(id);
+        }
     }
     fn config(&self) -> Config {
         self.config
@@ -188,6 +213,15 @@ impl ArdiaUpstream {
     }
     fn session(&self, conversation: i64) -> String {
         session_name(&self.mono_id, conversation)
+    }
+    /// The tabs of this conversation in the Mono's current profile: the only ones it may use.
+    fn own_tabs(&self, conversation: i64) -> Vec<String> {
+        self.controller
+            .session_tabs_in(&self.session(conversation), &self.config().profile)
+    }
+    fn owns(&self, conversation: i64, tab: &str) -> bool {
+        self.controller
+            .owns_tab(&self.session(conversation), &self.config().profile, tab)
     }
     fn turn_key(&self, conversation: i64) -> String {
         format!("{}:{conversation}", self.mono_id)
@@ -205,7 +239,15 @@ impl ArdiaUpstream {
     fn call_tool(&self, name: &str, args: &Value) -> Value {
         let conversation = RunContext::current().map_or(0, |c| c.session_id);
         let _busy = self.controller.begin_call(&self.turn_key(conversation));
-        match self.dispatch(conversation, name, args) {
+        self.conv(conversation, |c| c.lost = false);
+        let mut outcome = self.dispatch(conversation, name, args);
+        // Ardia went away during a read call: check again (which starts it where zptah can) and
+        // run the call once more. Every M1 tool only reads or moves the view, so a repeat is
+        // safe. M2: never repeat an act call whose outcome is unknown.
+        if outcome.is_err() && self.conv(conversation, |c| std::mem::take(&mut c.lost)) {
+            outcome = self.dispatch(conversation, name, args);
+        }
+        match outcome {
             // Page text was cleaned where it was taken from the reply; the addresses and the
             // paths zptah made stay as they are.
             Ok(text) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
@@ -258,7 +300,10 @@ impl ArdiaUpstream {
         match failure {
             Failure::Unreachable(_) => {
                 self.controller.note_unreachable();
-                self.conv(id, |c| c.bound = None);
+                self.conv(id, |c| {
+                    c.bound = None;
+                    c.lost = true;
+                });
                 "Ardia was closed or stopped answering during the call. Call the tool again: zptah opens Ardia again where it can, then open the page again with browser_open.".into()
             }
             Failure::Refused { code, message } => match code.as_deref() {
@@ -297,7 +342,7 @@ impl ArdiaUpstream {
     /// Renews the hold on the conversation's tabs (every call does).
     fn hold(&self, id: i64) -> Result<(), String> {
         let session = self.session(id);
-        let tabs = self.controller.session_tabs(&session);
+        let tabs = self.own_tabs(id);
         if tabs.is_empty() {
             return Ok(());
         }
@@ -349,16 +394,23 @@ impl ArdiaUpstream {
     /// A new tab in the Mono's profile, bound to the conversation's session.
     fn open_tab(&self, id: i64, url: &str) -> Result<(String, Value), String> {
         let session = self.session(id);
-        if self.controller.session_tabs(&session).len() >= MAX_TABS {
+        if self.own_tabs(id).len() >= MAX_TABS {
             return Err(format!("This conversation already has {MAX_TABS} tabs open. Use browser_navigate in one of them, or close one with browser_tabs."));
         }
         let profile = self.config().profile;
-        let tab = self
-            .controller
-            .cli()
-            .tabs_open(url, &profile)
-            .map_err(|f| self.fail(id, f))?;
-        self.controller.add_tab(&session, &tab);
+        let before = self.controller.tab_ids();
+        let tab = match self.controller.cli().tabs_open(url, &profile) {
+            Ok(tab) => tab,
+            Err(failure) => {
+                // The open may have gone through before it timed out or failed to read: find
+                // the tab it made (an id that was not there before) and close it.
+                if matches!(failure, Failure::TimedOut | Failure::Malformed(_)) {
+                    self.controller.close_new_tabs(&session, &profile, before);
+                }
+                return Err(self.fail(id, failure));
+            }
+        };
+        self.controller.add_tab(&session, &profile, &tab);
         match self.bind(id, &tab) {
             Ok(data) => Ok((tab, data)),
             Err(error) => {
@@ -371,13 +423,12 @@ impl ArdiaUpstream {
     /// The tab the conversation works in: the bound one, or its last own tab bound again (Ardia
     /// was relaunched and restored it).
     fn bound_tab(&self, id: i64) -> Result<String, String> {
-        let session = self.session(id);
         if let Some(tab) = self.conv(id, |c| c.bound.clone()) {
-            if self.controller.owns_tab(&session, &tab) {
+            if self.owns(id, &tab) {
                 return Ok(tab);
             }
         }
-        match self.controller.session_tabs(&session).last().cloned() {
+        match self.own_tabs(id).last().cloned() {
             Some(tab) => {
                 self.bind(id, &tab)?;
                 Ok(tab)
@@ -425,12 +476,8 @@ impl ArdiaUpstream {
         if url.is_empty() {
             return Err("This tool needs `url`.".into());
         }
-        let parsed = url::Url::parse(url)
-            .ok()
-            .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some());
-        if parsed.is_none() {
-            return Err("Only http and https addresses can be opened (not javascript:, data:, file: or others).".into());
-        }
+        // Never a leading `-`: the command would read it as an option.
+        web_url(url)?;
         self.config()
             .origins
             .check(url)
@@ -452,8 +499,7 @@ impl ArdiaUpstream {
             std::mem::take(&mut c.page)
         });
         let session = self.session(id);
-        let closed = self.controller.owns_tab(&session, tab)
-            && self.controller.close_tab(&session, tab).is_ok();
+        let closed = self.owns(id, tab) && self.controller.close_tab(&session, tab).is_ok();
         if closed {
             self.conv(id, |c| {
                 if c.bound.as_deref() == Some(tab) {
@@ -549,9 +595,13 @@ impl ArdiaUpstream {
             cmd.push("-i");
         }
         if let Some(selector) = args["selector"].as_str().filter(|s| !s.trim().is_empty()) {
-            cmd.extend(["-s", selector]);
+            cmd.extend(["-s", plain_value("selector", selector)?]);
         }
         let (data, tab) = self.in_tab(id, &cmd)?;
+        // The snapshot names the page it read: that origin is checked too.
+        if let Some(origin) = data["origin"].as_str().filter(|o| o.starts_with("http")) {
+            self.after(id, &tab, origin, "browser_snapshot")?;
+        }
         let url = self.current_url(id)?;
         let text = data["snapshot"].as_str().unwrap_or("");
         let body = format!("### Snapshot\n{}\n", cap(text));
@@ -561,7 +611,7 @@ impl ArdiaUpstream {
     fn read(&self, id: i64, args: &Value) -> Result<String, String> {
         let mut cmd = vec!["read"];
         if let Some(selector) = args["selector"].as_str().filter(|s| !s.trim().is_empty()) {
-            cmd.extend(["-s", selector]);
+            cmd.extend(["-s", plain_value("selector", selector)?]);
         }
         let (data, tab) = self.in_tab(id, &cmd)?;
         let url = data["finalUrl"]
@@ -656,7 +706,7 @@ impl ArdiaUpstream {
         match args["action"].as_str().unwrap_or("list") {
             "list" => {
                 let (data, _) = self.in_tab_or_list(id)?;
-                let own = self.controller.session_tabs(&session);
+                let own = self.own_tabs(id);
                 let bound = self.conv(id, |c| c.bound.clone());
                 let mut out = String::from("### Tabs\n");
                 let mut any = false;
@@ -668,6 +718,12 @@ impl ArdiaUpstream {
                         continue;
                     };
                     any = true;
+                    let page = entry["url"].as_str().unwrap_or("");
+                    if self.config().origins.check(page).is_err() {
+                        // A page this Mono may not use is not described to it.
+                        out.push_str(&format!("- {app_id} [a page this Mono may not use]\n"));
+                        continue;
+                    }
                     out.push_str(&format!(
                         "- {app_id}{} [{}]({})\n",
                         if bound.as_deref() == Some(app_id) {
@@ -690,7 +746,7 @@ impl ArdiaUpstream {
                 self.open(id, url)
             }
             action @ ("select" | "close") => {
-                if !self.controller.owns_tab(&session, &tab) {
+                if !self.owns(id, &tab) {
                     self.audit(
                         id,
                         "tab_rejected",
@@ -724,7 +780,7 @@ impl ArdiaUpstream {
     /// `tab list` needs a session; a conversation with no tab yet has none to list.
     fn in_tab_or_list(&self, id: i64) -> Result<(Value, String), String> {
         let session = self.session(id);
-        if self.controller.session_tabs(&session).is_empty() {
+        if self.own_tabs(id).is_empty() {
             return Ok((json!({"tabs": []}), String::new()));
         }
         self.hold(id)?;
@@ -792,7 +848,7 @@ impl Upstream for ArdiaUpstream {
 /// Page text for the Mono: invisible characters removed, secrets masked. The gate then fences,
 /// scans and taints it (`Inner::defend`).
 pub fn clean(text: &str) -> String {
-    defense::redact_secrets(&defense::strip_invisible(text))
+    defense::redact_page_text(text)
 }
 
 fn one_line(text: &str) -> String {
@@ -812,7 +868,10 @@ fn cap(text: &str) -> String {
 
 /// The first lines of every reply: `- Page URL:` is what the gate remembers as the page.
 fn header(url: &str, title: &str) -> String {
-    let mut out = format!("### Page\n- Page URL: {}\n", one_line(url));
+    let mut out = format!(
+        "### Page\n- Page URL: {}\n",
+        defense::redact_url_secrets(&one_line(url))
+    );
     if !title.is_empty() {
         out.push_str(&format!("- Page Title: {}\n", one_line(title)));
     }

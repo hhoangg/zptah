@@ -10,6 +10,7 @@
 pub mod controller;
 pub mod platform;
 pub mod runner;
+pub mod shell;
 pub mod upstream;
 
 pub use controller::{

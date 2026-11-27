@@ -113,6 +113,38 @@ pub fn redact_secrets(text: &str) -> String {
         .into_owned()
 }
 
+/// Query or fragment parameters that carry credentials (OAuth `code`, tokens, keys, sessions).
+const SECRET_PARAMS: &str = r"code|token|access_token|id_token|refresh_token|auth|authorization|key|api_key|apikey|secret|client_secret|password|passwd|sig|signature|session|sessionid|sid|assertion|otp";
+
+/// `text` with the values of credential parameters (`?code=...`, `#access_token=...`) masked.
+pub fn redact_url_secrets(text: &str) -> String {
+    static PARAM: OnceLock<Regex> = OnceLock::new();
+    regex(
+        &PARAM,
+        &format!(r#"(?i)([?&#;](?:{SECRET_PARAMS})=)[^\s&#"'<>)\]]+"#),
+    )
+    .replace_all(text, "${1}[redacted]")
+    .into_owned()
+}
+
+/// What the Mono is shown of a page: invisible characters removed, credentials masked. Unlike
+/// [`redact_secrets`] it keeps long plain words, slugs and addresses (it does not mask every run
+/// of 24 or more characters), because that would garble ordinary page text. It keeps the known
+/// token shapes, `password: x` pairs, card numbers and credential parameters of addresses.
+pub fn redact_page_text(text: &str) -> String {
+    static PAIR: OnceLock<Regex> = OnceLock::new();
+    static DIGITS: OnceLock<Regex> = OnceLock::new();
+    let text = strip_invisible(text);
+    let text = crate::sandboxes::redact(&text);
+    let text = regex(
+        &PAIR,
+        r"(?i)\b(password|passwd|pwd|secret|token|api[ _-]?key|otp|pin|mat khau|mật khẩu)\b\s*[:=]\s*\S+",
+    )
+    .replace_all(&text, "$1=[redacted]");
+    let text = regex(&DIGITS, r"\d(?:[ -]?\d){12,18}").replace_all(&text, "[redacted]");
+    redact_url_secrets(&text)
+}
+
 /// Lower case with every run of white space (and invisible characters) as one space.
 fn squeeze(text: &str) -> String {
     strip_invisible(text)

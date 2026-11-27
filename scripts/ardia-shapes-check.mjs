@@ -15,7 +15,7 @@
 // Usage: node scripts/ardia-shapes-check.mjs --profile <id> [--ardia <path>] [--keep-going]
 // Exit: 0 all ok, 1 mismatch or failure, 2 usage error.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -159,10 +159,31 @@ function cleanup() {
   }
   fs.rmSync(tmp, { recursive: true, force: true });
 }
-process.on("SIGINT", () => {
-  cleanup();
-  process.exit(1);
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    cleanup();
+    process.exit(1);
+  });
+}
+
+// The events zptah's idle quit relies on (`app.activated`, `window.opened`): start the stream
+// before anything is opened and report the event names it carried. With `--watch-events N` the
+// script then waits N seconds so you can bring Ardia to the front and open a window by hand,
+// which measures the two names that nothing here triggers.
+const watchSeconds = Number(opt("--watch-events") || 0);
+const seen = new Set();
+const events = spawn(ardia, ["events", "app.activated", "window.opened", "--json"], { stdio: ["ignore", "pipe", "ignore"], env });
+events.stdout.on("data", (chunk) => {
+  for (const line of String(chunk).split("\n")) {
+    try {
+      seen.add(JSON.parse(line).event);
+    } catch {
+      /* not a JSON line */
+    }
+  }
 });
+events.on("error", () => {});
+process.on("exit", () => events.kill());
 
 const hold = () =>
   runJson(["call", "tabs.hold", "--params", JSON.stringify({ session: S, tabs: [TAB], seconds: 120 }), "--json"]);
@@ -201,6 +222,9 @@ try {
     hold();
   }
   if (bind) report("browse tab", diffShapes(fixture("browse_tab_bind"), bind));
+  // Nothing below can work without a bound tab, and `open` without one would make a tab in the
+  // wrong profile: stop here.
+  if (!bind || bind.success !== true) throw new Stop();
 
   const cmds = [
     ["get url", ["get", "url"], "browse_get_url"],
@@ -217,6 +241,17 @@ try {
     ["tab list", ["tab", "list"], "browse_tab_list"],
   ];
   for (const [name, cmd, fx] of cmds) step(`browse ${name}`, browse(cmd), fx);
+  if (watchSeconds > 0) {
+    console.log(`INFO bring Ardia to the front and open a window within ${watchSeconds} s`);
+    spawnSync("sleep", [String(watchSeconds)]);
+  }
+  console.log(`INFO events seen: ${[...seen].sort().join(", ") || "none"}`);
+  for (const name of ["tab.opened", "tab.closed"]) {
+    if (!seen.has(name)) report(`event ${name}`, [], "not seen");
+  }
+  if (watchSeconds > 0) {
+    for (const name of ["app.activated", "window.opened"]) if (!seen.has(name)) report(`event ${name}`, [], "not seen");
+  }
 } catch (e) {
   if (!(e instanceof Stop)) {
     console.log(`FAIL unexpected: ${e.message}`);

@@ -67,6 +67,23 @@ pub(super) struct State {
     pub events: Vec<String>,
     pub warn_before_quitting: bool,
     pub gone_on_next_browse: bool,
+    /// `tabs open` makes the tab but the answer never comes (the process timed out).
+    pub open_times_out: bool,
+    /// The profile of each open tab.
+    pub tab_profile: HashMap<String, String>,
+    /// The event stream ends at once instead of staying open.
+    pub end_watch: bool,
+    /// Senders that keep the open event streams alive (a send or a drop ends one).
+    pub watch_keep: Vec<std::sync::mpsc::Sender<()>>,
+    pub watchers_stopped: Arc<AtomicUsize>,
+    /// `settings.get` fails.
+    pub settings_fail: bool,
+    /// The events arrive this long after the stream opens.
+    pub events_delay: Duration,
+    /// `gone_on_next_browse` only drops the browse daemon: Ardia itself stays up.
+    pub daemon_only: bool,
+    /// What a snapshot reports as its `origin`.
+    pub snapshot_origin: Option<String>,
 }
 
 pub(super) struct FakeRunner {
@@ -165,6 +182,21 @@ impl Runner for FakeRunner {
                     ok(reply.to_string())
                 }
                 "tabs.release" => ok(json!({"released": true}).to_string()),
+                "tabs.list" => {
+                    let list: Vec<Value> = st
+                        .tabs
+                        .iter()
+                        .map(|id| {
+                            json!({"id": id, "url": st.url, "profile": st.tab_profile.get(id).cloned().unwrap_or_else(|| "default".into())})
+                        })
+                        .collect();
+                    ok(Value::Array(list).to_string())
+                }
+                "settings.get" if st.settings_fail => Ok(Output {
+                    code: 1,
+                    stdout: String::new(),
+                    stderr: "settings unavailable".into(),
+                }),
                 "settings.get" => {
                     ok(json!({"warnBeforeQuitting": st.warn_before_quitting}).to_string())
                 }
@@ -174,6 +206,10 @@ impl Runner for FakeRunner {
                 st.next_tab += 1;
                 let id = format!("tab-fake-{}", st.next_tab);
                 st.tabs.push(id.clone());
+                st.tab_profile.insert(id.clone(), arg(4).to_owned());
+                if st.open_times_out {
+                    return Err(RunFailure::TimedOut);
+                }
                 let mut reply = json_of(TABS_OPEN);
                 reply["results"][0]["tabs"][0] = json!(id);
                 st.url = arg(2).to_owned();
@@ -196,7 +232,9 @@ impl Runner for FakeRunner {
             "browse" => {
                 if st.gone_on_next_browse {
                     st.gone_on_next_browse = false;
-                    st.up = false;
+                    if !st.daemon_only {
+                        st.up = false;
+                    }
                     return Ok(Output {
                         code: 2,
                         stdout: DAEMON_GONE.into(),
@@ -248,6 +286,9 @@ impl Runner for FakeRunner {
                         if let Some(text) = &st.snapshot {
                             reply["data"]["snapshot"] = json!(text);
                         }
+                        if let Some(origin) = &st.snapshot_origin {
+                            reply["data"]["origin"] = json!(origin);
+                        }
                         ok(reply.to_string())
                     }
                     ["read", ..] => {
@@ -277,14 +318,50 @@ impl Runner for FakeRunner {
         }
     }
     fn watch(&self, _args: &[String]) -> Result<Box<dyn LineStream>, RunFailure> {
-        let lines = self.lock().events.clone();
-        Ok(Box::new(Lines(lines.into_iter())))
+        let mut st = self.lock();
+        let (keep, hold) = std::sync::mpsc::channel();
+        let end = st.end_watch;
+        if !end {
+            st.watch_keep.push(keep.clone());
+        }
+        Ok(Box::new(Lines {
+            lines: st.events.clone().into_iter(),
+            end,
+            hold,
+            stop: keep,
+            stopped: st.watchers_stopped.clone(),
+            delay: st.events_delay,
+        }))
     }
 }
-struct Lines(std::vec::IntoIter<String>);
+/// The recorded events, then silence until the stream is stopped (like the real one).
+struct Lines {
+    lines: std::vec::IntoIter<String>,
+    end: bool,
+    hold: std::sync::mpsc::Receiver<()>,
+    stop: std::sync::mpsc::Sender<()>,
+    stopped: Arc<AtomicUsize>,
+    delay: Duration,
+}
 impl LineStream for Lines {
     fn next_line(&mut self) -> Option<String> {
-        self.0.next()
+        std::thread::sleep(std::mem::take(&mut self.delay));
+        if let Some(line) = self.lines.next() {
+            return Some(line);
+        }
+        if self.end {
+            return None;
+        }
+        let _ = self.hold.recv();
+        None
+    }
+    fn stopper(&self) -> Box<dyn Fn() + Send + Sync> {
+        let stop = Mutex::new(self.stop.clone());
+        let stopped = self.stopped.clone();
+        Box::new(move || {
+            stopped.fetch_add(1, Ordering::SeqCst);
+            let _ = stop.lock().unwrap().send(());
+        })
     }
 }
 
@@ -297,6 +374,10 @@ pub(super) struct FakePlatform {
     pub hidden: Mutex<Option<bool>>,
     pub launches: AtomicUsize,
     pub quits: AtomicUsize,
+    /// Runs once when the idle check asks whether Ardia is hidden (a call can start right then).
+    pub on_hidden: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// How long a quit takes.
+    pub quit_delay: Duration,
 }
 impl FakePlatform {
     pub fn new(runner: &Arc<FakeRunner>) -> Arc<Self> {
@@ -308,6 +389,8 @@ impl FakePlatform {
             hidden: Mutex::new(Some(true)),
             launches: AtomicUsize::new(0),
             quits: AtomicUsize::new(0),
+            on_hidden: Mutex::new(None),
+            quit_delay: Duration::ZERO,
         })
     }
 }
@@ -326,11 +409,15 @@ impl Platform for FakePlatform {
         Ok(())
     }
     fn quit(&self) -> Result<(), String> {
+        std::thread::sleep(self.quit_delay);
         self.quits.fetch_add(1, Ordering::SeqCst);
         self.runner.lock().up = false;
         Ok(())
     }
     fn is_hidden(&self) -> Option<bool> {
+        if let Some(hook) = self.on_hidden.lock().unwrap().take() {
+            hook();
+        }
         *self.hidden.lock().unwrap()
     }
 }
@@ -372,8 +459,16 @@ impl Rig {
 }
 
 fn upstream(rig: &Rig, origins: Origins, database: Option<PathBuf>) -> Arc<ArdiaUpstream> {
+    upstream_of(rig, "mono-1", origins, database)
+}
+fn upstream_of(
+    rig: &Rig,
+    mono: &str,
+    origins: Origins,
+    database: Option<PathBuf>,
+) -> Arc<ArdiaUpstream> {
     let upstream =
-        ArdiaUpstream::with_bind_delay("mono-1", rig.controller.clone(), Duration::from_millis(1));
+        ArdiaUpstream::with_bind_delay(mono, rig.controller.clone(), Duration::from_millis(1));
     upstream.configure(Config {
         profile: PROFILE.into(),
         origins,
@@ -517,7 +612,8 @@ fn a_launch_that_never_answers_fails_with_didnt_start() {
     let why = r.controller.ensure_live(PROFILE).unwrap_err();
     assert_eq!(why, Readiness::DidntStart);
     assert!(why.message().contains("Ardia didn't start"));
-    assert_eq!(r.controller.owner(), Owner::Nobody);
+    // It was asked to start, so a late answer is still its own (ownership is not reachability).
+    assert_eq!(r.controller.owner(), Owner::Zptah);
 }
 
 #[test]
@@ -646,11 +742,16 @@ fn zptah_never_quits_an_ardia_the_user_took_over() {
 #[test]
 fn the_event_watcher_marks_the_user_when_ardia_is_activated() {
     let r = rig(false);
-    r.runner.lock().events = vec![
-        // A recorded event of another kind does not count.
-        EVENTS.lines().next().unwrap().to_owned(),
-        json!({"event": "app.activated", "time": 1, "data": {}}).to_string(),
-    ];
+    {
+        let mut st = r.runner.lock();
+        // The events come after Ardia answered, as the real stream's do.
+        st.events_delay = Duration::from_millis(80);
+        st.events = vec![
+            // A recorded event of another kind does not count.
+            EVENTS.lines().next().unwrap().to_owned(),
+            json!({"event": "app.activated", "time": 1, "data": {}}).to_string(),
+        ];
+    }
     r.controller.ensure_live(PROFILE).unwrap();
     let mut seen = false;
     for _ in 0..200 {
@@ -930,21 +1031,21 @@ fn tabs_left_by_an_earlier_run_are_closed_at_the_next_live_check() {
 }
 
 #[test]
-fn ardia_closed_mid_call_fails_the_call_and_the_next_one_relaunches() {
+fn ardia_closed_mid_call_is_started_again_and_the_read_is_repeated_once() {
     let r = rig(false);
     let up = upstream(&r, no_limits(), None);
     call(&up, "browser_open", json!({"url": "https://example.com"}));
-    r.runner.lock().gone_on_next_browse = true;
-    let (error, text) = call(&up, "browser_read", json!({}));
-    assert!(
-        error && text.contains("closed or stopped answering"),
-        "{text}"
-    );
     assert_eq!(r.platform.launches.load(Ordering::SeqCst), 1);
-    // The next call checks again and starts Ardia, which restored its tabs.
+    r.runner.lock().gone_on_next_browse = true;
+    // The call finds Ardia gone, starts it (it restored its tabs) and reads again.
     let (error, text) = call(&up, "browser_read", json!({}));
-    assert!(!error, "{text}");
+    assert!(!error && text.contains("### Content"), "{text}");
     assert_eq!(r.platform.launches.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        r.runner.count("browse --session zptah-mono-1-0 read"),
+        2,
+        "once more, no more"
+    );
 }
 
 #[test]
@@ -1255,4 +1356,498 @@ fn a_shell_call_to_ardia_is_flagged_in_the_audit() {
         .tool,
         "browser_open"
     );
+}
+
+// ---- review fixes ----
+
+#[test]
+fn a_value_that_looks_like_an_option_never_reaches_the_command_line() {
+    for bad in [
+        "--session=evil",
+        "--new-tab",
+        "-s",
+        " -s",
+        "-",
+        "--",
+        "--profile=x",
+    ] {
+        assert!(plain_value("selector", bad).is_err(), "{bad:?}");
+        assert!(web_url(bad).is_err(), "{bad:?}");
+    }
+    assert!(plain_value("selector", "main > a.x").is_ok());
+    assert!(
+        plain_value("selector", "a\nb").is_err(),
+        "control characters"
+    );
+    assert!(web_url("--x=https://a.example").is_err());
+    assert!(web_url("https://example.com/-x?--new-tab").is_ok());
+    assert!(web_url("javascript:alert(1)").is_err());
+
+    let r = rig(true);
+    let up = upstream(&r, no_limits(), None);
+    call(&up, "browser_open", json!({"url": "https://example.com"}));
+    let before = r.runner.calls().len();
+    for selector in ["--session=evil", "--new-tab", "-s"] {
+        for tool in ["browser_snapshot", "browser_read"] {
+            let (error, text) = call(&up, tool, json!({"selector": selector}));
+            assert!(
+                error && text.contains("option"),
+                "{tool} {selector}: {text}"
+            );
+        }
+    }
+    for url in ["-s", "--new-tab", "--profile=x"] {
+        for tool in ["browser_open", "browser_navigate"] {
+            let (error, _) = call(&up, tool, json!({"url": url}));
+            assert!(error, "{tool} {url}");
+        }
+    }
+    let sent = r.runner.calls()[before..].join("\n");
+    for forbidden in [
+        "snapshot",
+        " read",
+        "--new-tab",
+        "--session=evil",
+        "tabs open",
+        "zptah-mono-1-0 open",
+    ] {
+        assert!(
+            !sent.contains(forbidden),
+            "{forbidden} reached ardia: {sent}"
+        );
+    }
+    // The command wrapper refuses them too (M2 reuses it for text, keys and values).
+    let cli = Cli::new(r.runner.clone());
+    assert!(cli.tabs_open("--new-tab", "p").is_err());
+    assert!(cli.tabs_open("https://example.com", "--profile=x").is_err());
+}
+
+#[test]
+fn a_browse_daemon_that_goes_away_does_not_change_who_started_ardia() {
+    let r = rig(false);
+    launched(&r);
+    let up = upstream(&r, no_limits(), None);
+    call(&up, "browser_open", json!({"url": "https://example.com"}));
+    {
+        let mut st = r.runner.lock();
+        st.gone_on_next_browse = true;
+        st.daemon_only = true;
+    }
+    let (error, text) = call(&up, "browser_read", json!({}));
+    assert!(!error, "{text}");
+    assert_eq!(
+        r.controller.owner(),
+        Owner::Zptah,
+        "Ardia itself never closed"
+    );
+    assert_eq!(r.platform.launches.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn an_ardia_that_answers_late_after_didnt_start_is_still_zptahs() {
+    let r = rig_with(false, |p| p.launch_works = false);
+    assert_eq!(
+        r.controller.ensure_live(PROFILE),
+        Err(Readiness::DidntStart)
+    );
+    assert_eq!(r.controller.owner(), Owner::Zptah, "zptah asked for it");
+    r.runner.lock().up = true;
+    r.controller.ensure_live(PROFILE).unwrap();
+    assert_eq!(r.controller.owner(), Owner::Zptah);
+}
+
+#[test]
+fn an_ardia_launched_with_control_off_is_still_zptahs() {
+    let r = rig(false);
+    r.runner.lock().control_off = true;
+    assert_eq!(
+        r.controller.ensure_live(PROFILE),
+        Err(Readiness::ControlOff)
+    );
+    assert_eq!(r.controller.owner(), Owner::Zptah);
+    r.runner.lock().control_off = false;
+    r.controller.ensure_live(PROFILE).unwrap();
+    assert_eq!(r.controller.owner(), Owner::Zptah);
+}
+
+#[test]
+fn a_confirmed_closed_ardia_resets_the_owner_and_the_next_launch_is_new() {
+    let r = rig_with(false, |p| p.can_launch = false);
+    r.runner.lock().up = true;
+    r.controller.ensure_live(PROFILE).unwrap();
+    assert_eq!(r.controller.owner(), Owner::User);
+    r.runner.lock().up = false;
+    assert_eq!(
+        r.controller.ensure_live(PROFILE),
+        Err(Readiness::NotRunning)
+    );
+    assert_eq!(r.controller.owner(), Owner::Nobody);
+}
+
+#[test]
+fn a_call_that_starts_just_before_the_idle_quit_is_not_cut_off() {
+    let r = rig(false);
+    launched(&r);
+    let controller = r.controller.clone();
+    let guard = Arc::new(Mutex::new(None));
+    let slot = guard.clone();
+    // Between the idle check and the quit, a tool call begins.
+    *r.platform.on_hidden.lock().unwrap() = Some(Box::new(move || {
+        *slot.lock().unwrap() = Some(controller.begin_call("mono-1:0"));
+    }));
+    r.minutes(20);
+    assert_eq!(r.controller.idle_tick(), IdleOutcome::Busy);
+    assert_eq!(r.platform.quits.load(Ordering::SeqCst), 0);
+    assert!(guard.lock().unwrap().is_some());
+}
+
+#[test]
+fn a_call_during_a_quit_waits_for_it_and_finds_ardia_closed() {
+    let r = rig_with(false, |p| p.quit_delay = Duration::from_millis(200));
+    launched(&r);
+    let controller = r.controller.clone();
+    let quitter = std::thread::spawn(move || controller.quit_now());
+    std::thread::sleep(Duration::from_millis(60));
+    let started = std::time::Instant::now();
+    let guard = r.controller.begin_call("mono-1:0");
+    assert!(
+        started.elapsed() >= Duration::from_millis(80),
+        "it waited for the quit"
+    );
+    assert_eq!(
+        r.platform.quits.load(Ordering::SeqCst),
+        1,
+        "the quit was over"
+    );
+    assert!(quitter.join().unwrap().is_ok());
+    drop(guard);
+    // The next live check starts Ardia again.
+    r.controller.ensure_live(PROFILE).unwrap();
+    assert_eq!(r.platform.launches.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_shell_command_runs_ardia_only_in_command_position() {
+    use super::shell::runs_ardia;
+    for yes in [
+        "ardia browse snapshot",
+        "cd /tmp && ardia call hello",
+        "ls | ardia x",
+        "FOO=1 ardia tabs close t",
+        "command ardia call hello",
+        "sudo ardia call hello",
+        "/Users/user/.local/bin/ardia tabs close tab-1",
+        "echo hi; ardia call hello",
+        "echo $(ardia call hello)",
+        "bash -lc 'ardia call hello'",
+        "sh -c \"cd x && ardia browse open https://a.example\"",
+        "exec ardia call hello",
+    ] {
+        assert!(runs_ardia(yes), "{yes}");
+    }
+    for no in [
+        "grep ardia notes.txt",
+        "echo ardia",
+        "cat ardia-notes.txt",
+        "ls ~/.local/bin/ardia",
+        "echo \"ardia; ardia\"",
+        "which ardia",
+        "git log --grep ardia",
+        "npm run ardia-build",
+        "bash -lc 'echo ardia'",
+        "",
+    ] {
+        assert!(!runs_ardia(no), "{no}");
+    }
+}
+
+#[test]
+fn a_shell_call_to_ardia_in_a_mono_run_is_recorded_once() {
+    use super::shell::ShellAudit;
+    let (_dir, database) = audit_database();
+    let mono = crate::mono::Mono::default();
+    let context = crate::agent::MonoContext {
+        mono: mono.clone(),
+        root: PathBuf::from("/monos"),
+        executable: "/bin/app".into(),
+        browser_database: Some(database.clone()),
+    };
+    let mut watch = ShellAudit::new(Some(&context), Some(5));
+    let call_of = |id: &str, name: &str, input: Value| {
+        let mut tool = crate::tool::ToolCall::new(id, name);
+        tool.input = input.to_string();
+        tool
+    };
+    watch.see(&call_of(
+        "a",
+        "Bash",
+        json!({"command": "ardia browse snapshot"}),
+    ));
+    // The same call seen again as its input streams in.
+    watch.see(&call_of(
+        "a",
+        "Bash",
+        json!({"command": "ardia browse snapshot"}),
+    ));
+    // Codex: an argv array.
+    watch.see(&call_of(
+        "b",
+        "commandExecution",
+        json!({"command": ["/bin/zsh", "-lc", "ardia call hello"]}),
+    ));
+    watch.see(&call_of(
+        "c",
+        "Bash",
+        json!({"command": "grep ardia notes.txt"}),
+    ));
+    watch.see(&call_of("d", "Read", json!({"file_path": "ardia"})));
+    let rows = crate::mono::browser::MonoBrowserStore::at(database).recent(&mono.id, 10);
+    assert_eq!(
+        rows.iter().filter(|r| r.tool == "shell_ardia").count(),
+        2,
+        "{rows:?}"
+    );
+    assert!(rows.iter().all(|r| r.session_id == 5));
+}
+
+#[test]
+fn changing_the_ardia_profile_closes_the_old_tabs_and_never_rebinds_them() {
+    let r = rig(true);
+    let up = upstream_of(&r, "mono-profile", no_limits(), None);
+    call(&up, "browser_open", json!({"url": "https://example.com"}));
+    let session = "zptah-mono-profile-0";
+    assert!(r.controller.owns_tab(session, PROFILE, "tab-fake-1"));
+    up.configure(Config {
+        profile: "default".into(),
+        origins: no_limits(),
+        output_dir: None,
+        database: None,
+    });
+    // A tab of the old profile is not this Mono's any more, whether or not it is closed yet.
+    assert!(!r.controller.owns_tab(session, "default", "tab-fake-1"));
+    let (error, text) = call(&up, "browser_read", json!({}));
+    assert!(error && text.contains("No tab is open"), "{text}");
+    for _ in 0..200 {
+        if r.runner.lock().tabs.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(r.runner.lock().tabs.is_empty(), "the old tabs are closed");
+}
+
+#[test]
+fn turning_the_browser_off_ends_every_conversation_of_the_mono() {
+    use crate::mono::browser::server::BrowserServers;
+    let r = rig(true);
+    let up = upstream_of(&r, "mono-off", no_limits(), None);
+    call(&up, "browser_open", json!({"url": "https://example.com"}));
+    let servers = BrowserServers::new();
+    servers
+        .gate_for_ardia(
+            "mono-off",
+            up.clone(),
+            Policy::ardia(BrowserLevel::Act, vec![]),
+        )
+        .unwrap();
+    servers.stop("mono-off");
+    for _ in 0..200 {
+        if r.runner.lock().tabs.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(r.runner.lock().tabs.is_empty());
+    assert_eq!(r.runner.count("tabs.release"), 1);
+}
+
+#[test]
+fn quitting_the_app_closes_the_tabs_stops_the_watcher_and_quits_a_zptah_ardia() {
+    let r = rig(false);
+    launched(&r);
+    let up = upstream(&r, no_limits(), None);
+    call(&up, "browser_open", json!({"url": "https://example.com"}));
+    r.controller.shutdown();
+    assert!(r.runner.lock().tabs.is_empty());
+    assert_eq!(r.platform.quits.load(Ordering::SeqCst), 1);
+    assert!(r.runner.lock().watchers_stopped.load(Ordering::SeqCst) >= 1);
+
+    // The user's Ardia keeps running; only the tabs go.
+    let r = rig(true);
+    r.controller.ensure_live(PROFILE).unwrap();
+    let up = upstream(&r, no_limits(), None);
+    call(&up, "browser_open", json!({"url": "https://example.com"}));
+    r.controller.shutdown();
+    assert!(r.runner.lock().tabs.is_empty());
+    assert_eq!(r.platform.quits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn windows_opened_while_ardia_restores_its_session_do_not_hand_it_to_the_user() {
+    let r = rig(false);
+    launched(&r);
+    let window = json!({"event": "window.opened", "data": {}}).to_string();
+    r.controller.note_event(&window);
+    assert_eq!(
+        r.controller.owner(),
+        Owner::Zptah,
+        "inside the restore grace"
+    );
+    r.minutes(1);
+    r.controller.note_event(&window);
+    assert_eq!(r.controller.owner(), Owner::User);
+
+    let r = rig(false);
+    launched(&r);
+    r.controller
+        .note_event(&json!({"event": "app.activated", "data": {}}).to_string());
+    assert_eq!(
+        r.controller.owner(),
+        Owner::User,
+        "an activation counts at once"
+    );
+}
+
+#[test]
+fn an_event_stream_that_ends_stops_the_idle_quit_until_ardia_is_seen_closed() {
+    let r = rig(false);
+    r.runner.lock().end_watch = true;
+    launched(&r);
+    for _ in 0..200 {
+        if !r.controller.watching() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!r.controller.watching());
+    r.minutes(20);
+    assert_eq!(r.controller.idle_tick(), IdleOutcome::NotOurs);
+    assert_eq!(r.platform.quits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn nothing_is_quit_when_ardias_settings_can_not_be_read() {
+    let r = rig(false);
+    launched(&r);
+    r.runner.lock().settings_fail = true;
+    r.minutes(20);
+    assert_eq!(r.controller.idle_tick(), IdleOutcome::Waiting);
+    assert_eq!(r.platform.quits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn the_tab_file_is_written_whole_and_leaves_no_temporary_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("_ardia").join("tabs.json");
+    let r = rig(true);
+    r.controller.set_state_file(file.clone());
+    r.controller.add_tab("s", PROFILE, "tab-1");
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(saved["tabs"], json!(["tab-1"]));
+    let names: Vec<_> = std::fs::read_dir(file.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["tabs.json"]);
+}
+
+#[test]
+fn only_a_zptah_ardia_that_answers_shows_in_the_conversation_row() {
+    let r = rig(false);
+    assert!(!r.controller.owned_and_up());
+    launched(&r);
+    assert!(r.controller.owned_and_up());
+    r.controller.quit_now().unwrap();
+    assert!(
+        !r.controller.owned_and_up(),
+        "a quit Ardia has no Quit button"
+    );
+    let r = rig(true);
+    r.controller.ensure_live(PROFILE).unwrap();
+    assert!(!r.controller.owned_and_up(), "the user's Ardia has none");
+}
+
+#[test]
+fn an_open_that_timed_out_closes_the_tab_it_may_have_made() {
+    let r = rig(true);
+    let up = upstream(&r, no_limits(), None);
+    r.runner.lock().open_times_out = true;
+    let (error, _) = call(&up, "browser_open", json!({"url": "https://example.com"}));
+    assert!(error);
+    assert!(
+        r.runner.lock().tabs.is_empty(),
+        "the tab it made was closed"
+    );
+}
+
+#[test]
+fn a_tab_on_a_page_the_mono_may_not_use_is_not_described_in_the_list() {
+    let r = rig(true);
+    let up = upstream(&r, no_limits(), None);
+    call(&up, "browser_open", json!({"url": "https://example.com"}));
+    up.configure(Config {
+        profile: PROFILE.into(),
+        origins: Origins::new(&[], &["https://example.com".to_owned()]),
+        output_dir: None,
+        database: None,
+    });
+    let (error, text) = call(&up, "browser_tabs", json!({"action": "list"}));
+    assert!(!error, "{text}");
+    assert!(
+        text.contains("may not use") && !text.contains("example.com"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_origin_a_snapshot_reports_is_checked_too() {
+    let r = rig(true);
+    let origins = Origins::new(&[], &["https://blocked.example".to_owned()]);
+    let up = upstream(&r, origins, None);
+    call(&up, "browser_open", json!({"url": "https://example.com"}));
+    // The tab's address looks fine, the snapshot says it read another origin.
+    r.runner.lock().snapshot_origin = Some("https://blocked.example/".into());
+    let (error, text) = call(&up, "browser_snapshot", json!({}));
+    assert!(error && text.contains("withheld"), "{text}");
+}
+
+#[test]
+fn page_text_keeps_long_words_and_masks_credentials() {
+    let r = rig(true);
+    let up = upstream(&r, no_limits(), None);
+    let (_, opened) = call(
+        &up,
+        "browser_open",
+        json!({"url": "https://example.com/cb?code=sekrit123&lang=en"}),
+    );
+    assert!(
+        opened.contains("code=[redacted]") && opened.contains("lang=en"),
+        "{opened}"
+    );
+    assert!(!opened.contains("sekrit123"));
+    r.runner.lock().snapshot = Some(
+        [
+            "- link \"https://example.com/this-is-a-very-long-article-slug-about-things\"",
+            "- StaticText \"supercalifragilisticexpialidocious_and_more_words\"",
+            "- link \"https://app.example/done#access_token=abc.def&x=1\"",
+            "- StaticText \"password: hunter2\"",
+        ]
+        .join("\n"),
+    );
+    let (error, text) = call(&up, "browser_snapshot", json!({}));
+    assert!(!error);
+    assert!(
+        text.contains("this-is-a-very-long-article-slug-about-things"),
+        "{text}"
+    );
+    assert!(text.contains("supercalifragilisticexpialidocious_and_more_words"));
+    assert!(!text.contains("abc.def"), "{text}");
+    let masked = crate::mono::browser::defense::redact_url_secrets(
+        "https://a.example/cb?x=1&code=zz9#access_token=yy8&state=ok",
+    );
+    assert_eq!(
+        masked,
+        "https://a.example/cb?x=1&code=[redacted]#access_token=[redacted]&state=ok"
+    );
+    assert!(!text.contains("hunter2"));
 }
