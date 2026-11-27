@@ -5569,7 +5569,7 @@ mod tests {
     #[gpui::test]
     fn session_configure_applies_a_model_and_an_account_together(cx: &mut gpui::TestAppContext) {
         let (window, codex, _) = super::super::tests::window(cx);
-        window
+        let work = window
             .update(cx, |shell, window, cx| {
                 let (work, _) = claude_accounts(shell, cx);
                 let device = web(None, None);
@@ -5599,6 +5599,13 @@ mod tests {
                         .mobile_session_command(&device, "session.configure", &params, window, cx)
                         .is_ok()
                 );
+                work
+            })
+            .unwrap();
+        // The pick lands like the desktop picker's: possibly after the provider move settles.
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
                 let v = shell.sessions[&codex].read(cx);
                 assert_eq!(v.summary.provider, Kind::Claude.id());
                 assert_eq!(v.settings.account.id, work);
