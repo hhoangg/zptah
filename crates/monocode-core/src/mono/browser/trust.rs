@@ -121,7 +121,17 @@ impl BrowserLevel {
     /// tools and the two gate-only tools (approval request, declared intent), always the tools no
     /// level allows.
     pub fn disabled_tools_ardia(self) -> Vec<&'static str> {
+        self.disabled_tools_ardia_for(true)
+    }
+
+    /// [`Self::disabled_tools_ardia`] for a system that has (`uploads`) or has not a private
+    /// folder for the copies of uploaded files: without one `browser_upload` is disabled at every
+    /// level.
+    pub fn disabled_tools_ardia_for(self, uploads: bool) -> Vec<&'static str> {
         let mut tools = ALWAYS_BLOCKED_TOOLS.to_vec();
+        if !uploads {
+            tools.push("browser_upload");
+        }
         if self == Self::ReadOnly {
             tools.extend(super::ardia::upstream::ACT_TOOLS);
             tools.push(super::gate::APPROVAL_TOOL);
@@ -474,6 +484,20 @@ impl TrustState {
             let token_digits: String = token.chars().filter(char::is_ascii_digit).collect();
             token_digits.len() >= 6 && digits.contains(&token_digits)
         })
+    }
+
+    /// What a value the Mono supplies (a flow parameter) would be on `site`, whatever field it
+    /// ends up in: a card number is credential entry, and something read on another site is
+    /// tainted. The value is looked at and dropped.
+    pub fn value_categories(&self, value: &str, site: &str) -> BTreeSet<Category> {
+        let mut out = BTreeSet::new();
+        if typed_value_is_card(value) {
+            out.insert(Category::CredentialEntry);
+        }
+        if self.carries_read_data(value, site) {
+            out.insert(Category::Tainted);
+        }
+        out
     }
 
     fn url_carries_read_data(&self, url: &str, dest: &str) -> bool {

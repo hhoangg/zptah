@@ -16,6 +16,7 @@ use monocode_core::mono::browser::ardia::{ArdiaProfile, Readiness, Report};
 pub(super) const IDLE_FIELD: &str = "browser-idle-minutes";
 /// The largest idle timeout the field accepts: one week.
 const MAX_IDLE_MINUTES: u32 = 10_080;
+pub(super) const NO_UPLOADS_NOTE: &str = "Uploads are not available on this system.";
 pub(super) const CONTROL_NOTE: &str = "Ardia's Control lets any local program drive this browser, not only zptah. That is how Ardia works. zptah quits an Ardia it started when it has been idle.";
 
 /// What the Ardia cards keep between frames.
@@ -452,6 +453,14 @@ impl Monos {
         cards.extend(self.browser_running_card(cx));
         cards.push(self.browser_profile_card(mono, cx));
         cards.push(self.browser_idle_card(cx));
+        if !self.browser_ui.ops.uploads_available() {
+            cards.push(
+                div()
+                    .px_1()
+                    .child(note("mono-browser-uploads-note", NO_UPLOADS_NOTE, 0.55))
+                    .into_any_element(),
+            );
+        }
         cards.push(
             div()
                 .px_1()

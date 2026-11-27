@@ -51,6 +51,7 @@ pub(super) struct Fake {
     pub(super) reports_for: StdMutex<Vec<String>>,
     pub(super) working: StdMutex<bool>,
     pub(super) stops: StdMutex<Vec<(String, i64)>>,
+    pub(super) uploads: StdMutex<bool>,
 }
 impl Default for Fake {
     fn default() -> Self {
@@ -66,6 +67,7 @@ impl Default for Fake {
             reports_for: StdMutex::new(Vec::new()),
             working: StdMutex::new(false),
             stops: StdMutex::new(Vec::new()),
+            uploads: StdMutex::new(true),
         }
     }
 }
@@ -114,6 +116,9 @@ impl BrowserOps for Fake {
     }
     fn browser_working(&self, _conversation: i64) -> bool {
         *self.working.lock().unwrap()
+    }
+    fn uploads_available(&self) -> bool {
+        *self.uploads.lock().unwrap()
     }
     fn stop_browser(&self, mono_id: &str, conversation: i64) {
         self.stops
@@ -653,6 +658,18 @@ fn the_page_says_that_ardias_control_lets_any_local_program_drive_the_browser(
     page.enable();
     assert!(page.on("mono-browser-control-note"));
     assert!(browser_ardia::CONTROL_NOTE.contains("any local program"));
+}
+
+#[gpui::test]
+fn a_system_with_no_private_upload_folder_says_uploads_are_not_available(cx: &mut TestAppContext) {
+    let mut works = open(cx);
+    works.enable();
+    assert!(!works.on("mono-browser-uploads-note"), "uploads work here");
+    let mut page = open(cx);
+    *page.ops.uploads.lock().unwrap() = false;
+    page.enable();
+    assert!(page.on("mono-browser-uploads-note"));
+    assert!(browser_ardia::NO_UPLOADS_NOTE.contains("Uploads are not available on this system"));
 }
 
 #[gpui::test]

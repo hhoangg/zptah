@@ -6,7 +6,10 @@ use monocode_core::{
 };
 pub(super) const ACCOUNT_UNAVAILABLE: &str =
     "This provider account is no longer signed in. Choose another account to continue.";
-pub(crate) struct UsageResumed;
+pub(crate) struct UsageResumed {
+    /// The app resumed by itself at the reset: nobody typed the prompt.
+    pub(crate) automatic: bool,
+}
 impl EventEmitter<UsageResumed> for Conversation {}
 impl Conversation {
     /// Update notifications refresh the account-specific picker after a CLI update.
@@ -274,13 +277,18 @@ impl Conversation {
             .as_ref()
             .is_some_and(|l| l.resume_due(usage::now_ms(), self.busy))
         {
-            self.resume_usage(cx);
+            self.resume_usage_as(true, cx);
         }
         cx.notify();
     }
     pub(crate) fn resume_usage(&mut self, cx: &mut Context<Self>) {
+        self.resume_usage_as(false, cx);
+    }
+    /// `automatic`: the app resumes at the reset by itself (nobody typed anything), so the prompt
+    /// is not the user's words and cannot lift a browser Stop.
+    pub(crate) fn resume_usage_as(&mut self, automatic: bool, cx: &mut Context<Self>) {
         if self.needs_history_restore() {
-            self.defer_history_action(|this, cx| this.resume_usage(cx), cx);
+            self.defer_history_action(move |this, cx| this.resume_usage_as(automatic, cx), cx);
             return;
         }
         if self.busy
@@ -295,14 +303,16 @@ impl Conversation {
         self.status = "Ready".into();
         self.save_settings(cx);
         if self.settings.mono.is_some() {
-            cx.emit(UsageResumed);
+            cx.emit(UsageResumed { automatic });
             cx.emit(SessionChanged);
             cx.notify();
             return;
         }
         let outer = self.mobile_no_wake;
         self.mobile_no_wake = outer || carried;
+        self.settings.automatic_resume = automatic;
         self.launch_prompt("Continue from where you left off.".into(), cx);
+        self.settings.automatic_resume = false;
         self.mobile_no_wake = outer;
         cx.emit(SessionChanged);
         cx.notify();
@@ -319,7 +329,7 @@ impl Conversation {
         self.save_settings(cx);
         self.save_follow_ups(cx);
         if self.settings.mono.is_some() {
-            cx.emit(UsageResumed);
+            cx.emit(UsageResumed { automatic: false });
         }
         cx.emit(SessionChanged);
         cx.notify();

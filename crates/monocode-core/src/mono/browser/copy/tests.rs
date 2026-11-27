@@ -63,11 +63,15 @@ fn all_cases() -> Vec<(&'static str, CardFacts)> {
     let mut flow_run = facts(
         ActionDesc::FlowRun {
             name: "order-coffee".into(),
+            site: "evil-example.net".into(),
             risky: vec![
                 "step 3: click \"Pay now\"".into(),
                 "step 5: goes to evil-example.net".into(),
             ],
-            params: vec![("size".into(), 5), ("note".into(), 12)],
+            params: vec![
+                ("size".into(), "large".into()),
+                ("note".into(), "no sugar please".into()),
+            ],
         },
         &[Category::Payment, Category::UnrelatedDomain],
     );
@@ -75,7 +79,12 @@ fn all_cases() -> Vec<(&'static str, CardFacts)> {
     let flow_save = facts(
         ActionDesc::FlowSave {
             name: "order-coffee".into(),
+            site: "coffee.example".into(),
             steps: 4,
+            listed: vec![
+                "1: open https://coffee.example/".into(),
+                "2: fill textbox \"Size\" <text, 5 characters>".into(),
+            ],
             replaces: true,
         },
         &[],
@@ -132,10 +141,10 @@ const SNAPSHOTS: &[(&str, &str, &str)] = &[
     ("en", "injection", "Mira wants to click \"Submit\" on shop.example.\n  A page tried to give instructions to the Mono, so every change asks."),
     ("en", "unclear", "Mira wants to click \"Confirm\" on shop.example.\n  zptah could not read enough of this page to tell what this does."),
     ("en", "other", "Mira asks your OK on shop.example: \"Empty the trash\"\n  Details from Mira: \"12 files\""),
-    ("en", "flow_run", "Mira wants to run the flow \"order-coffee\" on shop.example.\n  This looks like a payment.\n  This site is not part of what you asked for.\n  Steps that need your OK:\n  - step 3: click \"Pay now\"\n  - step 5: goes to evil-example.net\n  Parameters: size (5 characters), note (12 characters). The values are not shown."),
-    ("en", "flow_save", "Mira wants to save the flow \"order-coffee\" in Ardia.\n  This writes a flow into Ardia's flow store, which you and every profile share.\n  It saves the 4 step(s) recorded in this conversation.\n  A flow with this name already exists and may be replaced."),
-    ("vi", "flow_run", "Mira muốn chạy luồng \"order-coffee\" trên shop.example.\n  Đây có vẻ là một khoản thanh toán.\n  Trang này không thuộc việc bạn yêu cầu.\n  Các bước cần bạn đồng ý:\n  - step 3: click \"Pay now\"\n  - step 5: goes to evil-example.net\n  Tham số: size (5 ký tự), note (12 ký tự). Giá trị không được hiển thị."),
-    ("vi", "flow_save", "Mira muốn lưu luồng \"order-coffee\" vào Ardia.\n  Việc này ghi một luồng vào kho luồng của Ardia, nơi bạn và mọi hồ sơ dùng chung.\n  Nó lưu 4 bước đã ghi trong cuộc trò chuyện này.\n  Đã có một luồng cùng tên và nó có thể bị thay thế."),
+    ("en", "flow_run", "Mira wants to run the flow \"order-coffee\" on shop.example.\n  This looks like a payment.\n  This site is not part of what you asked for.\n  Steps that need your OK:\n  - step 3: click \"Pay now\"\n  - step 5: goes to evil-example.net\n  Parameters:\n  - size: \"large\"\n  - note: \"no sugar please\""),
+    ("en", "flow_save", "Mira wants to save the flow \"order-coffee\" in Ardia.\n  This writes a flow into Ardia's flow store, which you and every profile share.\n  Site: coffee.example.\n  It saves the 4 step(s) recorded in this conversation.\n  Steps (typed values are hidden here):\n  - 1: open https://coffee.example/\n  - 2: fill textbox \"Size\" <text, 5 characters>\n  Values typed in these steps are stored in Ardia's shared flow store exactly as they were typed, unless Ardia masks them (it masks passwords only).\n  A flow with this name already exists on this site and may be replaced."),
+    ("vi", "flow_run", "Mira muốn chạy luồng \"order-coffee\" trên shop.example.\n  Đây có vẻ là một khoản thanh toán.\n  Trang này không thuộc việc bạn yêu cầu.\n  Các bước cần bạn đồng ý:\n  - step 3: click \"Pay now\"\n  - step 5: goes to evil-example.net\n  Tham số:\n  - size: \"large\"\n  - note: \"no sugar please\""),
+    ("vi", "flow_save", "Mira muốn lưu luồng \"order-coffee\" vào Ardia.\n  Việc này ghi một luồng vào kho luồng của Ardia, nơi bạn và mọi hồ sơ dùng chung.\n  Trang: coffee.example.\n  Nó lưu 4 bước đã ghi trong cuộc trò chuyện này.\n  Các bước (giá trị đã nhập được ẩn ở đây):\n  - 1: open https://coffee.example/\n  - 2: fill textbox \"Size\" <text, 5 characters>\n  Các giá trị đã nhập trong những bước này được lưu trong kho luồng dùng chung của Ardia đúng như đã nhập, trừ khi Ardia che chúng (Ardia chỉ che mật khẩu).\n  Đã có một luồng cùng tên trên trang này và nó có thể bị thay thế."),
     ("vi", "payment", "Mira muốn bấm \"Pay 1,200,000 VND\" trên shopee.vn.\n  Đây có vẻ là một khoản thanh toán."),
     ("vi", "destructive", "Mira muốn bấm \"Delete\" trong hộp thoại trên mail.google.com.\n  Hộp thoại ghi: \"Delete 12 conversations?\""),
     ("vi", "account_security", "Mira muốn bấm \"Turn off 2-Step Verification\" trên myaccount.google.com.\n  Thao tác này thay đổi cách bảo vệ tài khoản của bạn."),
@@ -200,6 +209,7 @@ fn a_flow_card_lists_at_most_six_steps_and_says_when_a_flow_is_unclear_or_has_no
     let f = facts(
         ActionDesc::FlowRun {
             name: "big".into(),
+            site: "big.example".into(),
             risky,
             params: vec![],
         },
@@ -227,6 +237,7 @@ fn a_flow_card_lists_at_most_six_steps_and_says_when_a_flow_is_unclear_or_has_no
     let g = facts(
         ActionDesc::FlowRun {
             name: "a\"b".into(),
+            site: "a.example".into(),
             risky: vec![format!("step 1:\n{}", "Z".repeat(300))],
             params: vec![],
         },
@@ -244,6 +255,7 @@ fn a_flow_card_lists_at_most_six_steps_and_says_when_a_flow_is_unclear_or_has_no
         &facts(
             ActionDesc::FlowRun {
                 name: "p".into(),
+                site: "p.example".into(),
                 risky: vec![],
                 params: vec![]
             },

@@ -11,22 +11,27 @@
 //!    through the normal navigation path (origin check, the act tools' navigation rules);
 //! 4. `flow show` again: only the content that was checked and approved runs, a changed flow is
 //!    checked and asked again (three rounds, then the call fails);
-//! 5. `flow run [--yes] [--param k=v ...] -- <name>`, `--yes` only for a flow that writes and only
-//!    after steps 1 to 4;
-//! 6. the tab's URL after, the origin check of it, the windows the flow opened, one audit row.
+//! 5. `flow run --site <site> [--yes] [--param k=v ...] -- <name>`, `--yes` only for a flow that
+//!    writes and only after steps 1 to 4;
+//! 6. the reply is compared with the flow that was approved (site, steps), the tab's URL after,
+//!    the origin check of it, the windows the flow opened, one audit row.
+//!
+//! A flow is told apart by `(site, name)`: the site comes from `flow_list` (the Mono names it when
+//! the name is on more than one site) and is always passed as `--site`.
 //!
 //! The run is an act call: when its outcome is unknown (Ardia went away after it was sent, a
-//! timeout, a Stop) it is never repeated, and the Mono is told it may or may not have run.
+//! timeout, a Stop) it is never repeated, and the Mono is told it may or may not have run, and
+//! may have run partly. Stop kills the `ardia` process, which stops the remaining steps
+//! (measured).
 //!
-//! Not measured against a real Ardia (see `flow_model`): `flow run` with `--param`, `--limit`,
-//! `--fields`, `--where`, `--yes` in this position, the output of a data flow, `flow steps` as
-//! the name of the command that lists the session's recorded steps (spec section 12b calls it
-//! that). The code fails closed on what it does not recognise.
-use super::flow_model::{self as model, Flow, Kind, RunOptions};
+//! Not measured against a real Ardia (see `flow_model`): `--limit`, `--fields`, `--where` and the
+//! output of a data flow. The code fails closed on what it does not recognise.
+use super::flow_model::{self as model, Flow, Kind, ParamSource, RunOptions};
 use super::flow_risk::Classified;
 use super::fresh::SeenRefs;
 use super::*;
 use crate::mono::browser::copy::{ActionDesc, CardFacts};
+use crate::mono::browser::gate::extension::ReadRefusal;
 use crate::mono::browser::risk::decide::{never_granted, Decision};
 use crate::mono::browser::risk::signals::{registrable_domain_of, site_category};
 use crate::mono::browser::risk::Category;
@@ -44,6 +49,8 @@ const MAX_DESCRIPTION: usize = 200;
 /// What a `flow_run` call asked for.
 struct RunRequest {
     name: String,
+    /// The site of the flow, as `flow_list` shows it.
+    site: String,
     params: BTreeMap<String, String>,
     opts: RunOptions,
     purpose: Option<String>,
@@ -57,9 +64,10 @@ struct Approval {
 }
 
 /// The key a conversation grant for one flow content is stored under (the grant book keys by
-/// site; this is no real site, so it never matches one).
-pub(super) fn grant_key(name: &str, hash: &str) -> String {
-    format!("flow:{name}:{}", &hash[..32.min(hash.len())])
+/// site; this is no real site, so it never matches one): `flow:<name>@<site>:<hash>`.
+/// `grants::grant_label` turns it into "Flow <name> on <site>" for Settings.
+pub(super) fn grant_key(name: &str, site: &str, hash: &str) -> String {
+    format!("flow:{name}@{site}:{}", &hash[..32.min(hash.len())])
 }
 
 fn unreadable(what: &str, why: &str) -> String {
@@ -78,6 +86,29 @@ fn kind_words(kind: &Kind, writes: Option<bool>) -> &'static str {
 
 fn short(text: &str, max: usize) -> String {
     clean(&one_line(text)).chars().take(max).collect()
+}
+
+/// A parameter value as the card shows it: clipped and cleaned, and only a value that looks like
+/// a card number is masked.
+fn shown_value(value: &str) -> String {
+    if crate::mono::browser::gate::contains_card_number(&json!(value)) {
+        "<card number>".to_owned()
+    } else {
+        short(value, 80)
+    }
+}
+
+/// The site of an address as `flow list` writes it: the host, and the port when the address
+/// names one. Empty for an address that is not a web page.
+fn site_of(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(u) if matches!(u.scheme(), "http" | "https") => match (u.host_str(), u.port()) {
+            (Some(host), Some(port)) => format!("{host}:{port}"),
+            (Some(host), None) => host.to_owned(),
+            _ => String::new(),
+        },
+        _ => String::new(),
+    }
 }
 
 impl ArdiaUpstream {
@@ -99,11 +130,104 @@ impl ArdiaUpstream {
         )
     }
 
-    fn show_flow(&self, id: i64, name: &str) -> Result<Flow, String> {
+    /// `flow show --site <site> -- <name>`, read into a [`Flow`] that is for that name and site.
+    fn show_flow(&self, id: i64, name: &str, site: &str) -> Result<Flow, String> {
         let data = self
-            .flow_browse(id, &["flow", "show"], &[name], BROWSE_TIMEOUT)
+            .flow_browse(
+                id,
+                &["flow", "show", "--site", site],
+                &[name],
+                BROWSE_TIMEOUT,
+            )
             .map_err(|f| self.fail(id, f))?;
-        model::parse_flow(&data, name).map_err(|why| unreadable("description of the flow", &why))
+        model::parse_flow(&data, name, site)
+            .map_err(|why| unreadable("description of the flow", &why))
+    }
+
+    /// Whether a flow is one this Mono may not know about: its origin, start address or one of its
+    /// hosts is blocked (or is not a web page). It is hidden from `flow_list` and `flow_show`.
+    fn hidden(&self, flow: &Flow) -> bool {
+        let origins = self.config().origins;
+        let mut places: Vec<&str> = vec![flow.start_url.as_str()];
+        places.push(flow.raw["origin"].as_str().unwrap_or(""));
+        places.extend(
+            flow.raw["hosts"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str),
+        );
+        places.iter().filter(|u| !u.trim().is_empty()).any(|u| {
+            matches!(
+                origins.check(u),
+                Err(ReadRefusal::Blocked | ReadRefusal::Restricted)
+            )
+        })
+    }
+
+    /// The site of the flow the Mono means: the one it named, else the only site that has a flow
+    /// of that name (not counting the flows hidden from this Mono). Asks for `site` when there
+    /// are several.
+    fn resolve_site(&self, id: i64, name: &str, requested: &Value) -> Result<String, String> {
+        if let Some(site) = requested.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            return model::site_name(site);
+        }
+        let data = self
+            .flow_browse(id, &["flow", "list"], &[], BROWSE_TIMEOUT)
+            .map_err(|f| self.fail(id, f))?;
+        let flows = data["flows"]
+            .as_array()
+            .ok_or_else(|| unreadable("list of flows", "no `flows` list"))?;
+        let mut sites: Vec<String> = Vec::new();
+        for flow in flows.iter().filter(|f| f["name"].as_str() == Some(name)) {
+            let Some(site) = flow["site"].as_str().and_then(|s| model::site_name(s).ok()) else {
+                continue;
+            };
+            if !sites.contains(&site) {
+                sites.push(site);
+            }
+        }
+        // A flow this Mono may not know about does not count (its site is not named either).
+        if sites.len() > 1 {
+            sites.retain(|site| {
+                self.show_flow(id, name, site)
+                    .map(|f| !self.hidden(&f))
+                    .unwrap_or(true)
+            });
+        }
+        match sites.as_slice() {
+            [] => Err(format!(
+                "No saved flow named {name} (`flow_list` shows the saved flows)."
+            )),
+            [one] => Ok(one.clone()),
+            many => Err(format!(
+                "{name} is saved for more than one site: {}. Pass the one you mean as `site`.",
+                many.iter()
+                    .map(|s| short(s, 80))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+
+    /// A parameter list as the Mono reads it: names, with the ones the user must fill in marked.
+    fn params_line(flow: &Value) -> Vec<String> {
+        flow["params"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                let name = p["name"].as_str().or_else(|| p.as_str())?;
+                Some(if p["source"] == "secret" {
+                    format!(
+                        "{} (secret: the user enters it, you can not)",
+                        short(name, 40)
+                    )
+                } else {
+                    short(name, 40)
+                })
+            })
+            .collect()
     }
 
     // ---- flow_list and flow_show (read) ----
@@ -116,13 +240,29 @@ impl ArdiaUpstream {
             .as_array()
             .ok_or_else(|| unreadable("list of flows", "no `flows` list"))?;
         let mut out = String::from("### Flows\n");
-        if flows.is_empty() {
-            out.push_str("No flows are saved.\n");
-        }
+        let mut listed = 0;
         for flow in flows.iter().take(MAX_LISTED) {
             let name = flow["name"].as_str().unwrap_or("");
+            let Some(site) = flow["site"].as_str().and_then(|s| model::site_name(s).ok()) else {
+                continue;
+            };
             if name.is_empty() {
                 continue;
+            }
+            // A flow of a place this Mono may not use is not shown to it: the list has no
+            // addresses, so each flow is read.
+            match self.flow_browse(
+                id,
+                &["flow", "show", "--site", site.as_str()],
+                &[name],
+                BROWSE_TIMEOUT,
+            ) {
+                Ok(shown) => match model::parse_flow(&shown, name, &site) {
+                    Ok(parsed) if !self.hidden(&parsed) => {}
+                    _ => continue,
+                },
+                Err(failure @ Failure::Unreachable(_)) => return Err(self.fail(id, failure)),
+                Err(_) => continue,
             }
             let kind = match &flow["kind"] {
                 Value::Null => Kind::Data,
@@ -130,11 +270,12 @@ impl ArdiaUpstream {
                 Value::String(s) if s == "data" => Kind::Data,
                 other => Kind::Other(other.as_str().unwrap_or("?").to_owned()),
             };
-            let params = model::param_names(&flow["params"]).unwrap_or_default();
+            let params = Self::params_line(flow);
+            listed += 1;
             out.push_str(&format!(
                 "- {} (site {}) [{}]{}{}\n",
                 short(name, 64),
-                short(flow["site"].as_str().unwrap_or("?"), 80),
+                short(&site, 80),
                 kind_words(&kind, flow["writes"].as_bool()),
                 match flow["description"]
                     .as_str()
@@ -146,16 +287,12 @@ impl ArdiaUpstream {
                 if params.is_empty() {
                     String::new()
                 } else {
-                    format!(
-                        "; parameters: {}",
-                        params
-                            .iter()
-                            .map(|p| short(p, 40))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
+                    format!("; parameters: {}", params.join(", "))
                 },
             ));
+        }
+        if listed == 0 {
+            out.push_str("No flows are saved.\n");
         }
         if flows.len() > MAX_LISTED {
             out.push_str(&format!("... and {} more.\n", flows.len() - MAX_LISTED));
@@ -166,7 +303,13 @@ impl ArdiaUpstream {
 
     pub(super) fn flow_show(&self, id: i64, args: &Value) -> Result<String, String> {
         let name = model::flow_name(args["name"].as_str().unwrap_or("").trim())?;
-        let flow = self.show_flow(id, &name)?;
+        let site = self.resolve_site(id, &name, &args["site"])?;
+        let flow = self.show_flow(id, &name, &site)?;
+        if self.hidden(&flow) {
+            return Err(format!(
+                "No saved flow named {name} (`flow_list` shows the saved flows)."
+            ));
+        }
         let mut out = String::from("### Flow\n");
         out.push_str(&format!("- Name: {}\n", short(&flow.name, 64)));
         out.push_str(&format!("- Site: {}\n", short(&flow.site, 80)));
@@ -199,7 +342,13 @@ impl ArdiaUpstream {
             } else {
                 flow.params
                     .iter()
-                    .map(|p| short(p, 40))
+                    .map(|p| match &p.source {
+                        ParamSource::Secret => format!(
+                            "{} (secret: the user enters it, you can not)",
+                            short(&p.name, 40)
+                        ),
+                        _ => short(&p.name, 40),
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             }
@@ -209,11 +358,18 @@ impl ArdiaUpstream {
             let n = step
                 .seq
                 .map_or_else(|| (i + 1).to_string(), |n| n.to_string());
-            let words = defense::redact_url_secrets(&short(&step.command.join(" "), 200));
+            // What the step types or chooses is never shown (a placeholder of a parameter is).
+            let words = defense::redact_url_secrets(&short(
+                &model::masked_command(&step.command).join(" "),
+                200,
+            ));
             if step.intent.trim().is_empty() {
                 out.push_str(&format!("- {n}: {words}\n"));
             } else {
-                out.push_str(&format!("- {n}: {} ({words})\n", short(&step.intent, 160)));
+                out.push_str(&format!(
+                    "- {n}: {} ({words})\n",
+                    short(&model::masked_text(&step.intent, step), 160)
+                ));
             }
         }
         if flow.steps.is_empty() {
@@ -259,11 +415,17 @@ impl ArdiaUpstream {
     }
 
     fn run_summary(req: &RunRequest, cls: &Classified) -> String {
-        format!("flow {} #{}", req.name, &cls.hash[..8.min(cls.hash.len())])
+        format!(
+            "flow {} on {} #{}",
+            req.name,
+            req.site,
+            &cls.hash[..8.min(cls.hash.len())]
+        )
     }
 
     // ---- flow_run ----
 
+    /// The arguments of a call, checked before any process runs (the site is found afterwards).
     fn run_request(args: &Value) -> Result<RunRequest, String> {
         let name = model::flow_name(args["name"].as_str().unwrap_or("").trim())?;
         let declared = args["declared_risk"]
@@ -272,10 +434,13 @@ impl ArdiaUpstream {
             .flatten()
             .filter_map(|v| v.as_str().and_then(Category::parse))
             .collect();
+        let params = model::parse_params(args)?;
+        let opts = RunOptions::parse(args)?;
         Ok(RunRequest {
             name,
-            params: model::parse_params(args)?,
-            opts: RunOptions::parse(args)?,
+            site: String::new(),
+            params,
+            opts,
             purpose: args["purpose"]
                 .as_str()
                 .map(str::trim)
@@ -287,18 +452,20 @@ impl ArdiaUpstream {
 
     /// `flow show` and the check of it. An unreadable reply fails the call (nothing runs).
     fn check_flow(&self, id: i64, req: &RunRequest) -> Result<Classified, String> {
-        let flow = self.show_flow(id, &req.name).inspect_err(|text| {
-            self.flow_row(
-                id,
-                "flow_run",
-                None,
-                "",
-                &format!("flow {}: its description could not be read", req.name),
-                AuditDecision::Blocked,
-                text,
-                None,
-            );
-        })?;
+        let flow = self
+            .show_flow(id, &req.name, &req.site)
+            .inspect_err(|text| {
+                self.flow_row(
+                    id,
+                    "flow_run",
+                    None,
+                    "",
+                    &format!("flow {}: its description could not be read", req.name),
+                    AuditDecision::Blocked,
+                    text,
+                    None,
+                );
+            })?;
         let mut cls = self.classify_flow(id, flow, &req.params);
         // What the Mono declared can only add questions.
         if !req.declared.is_empty() {
@@ -313,9 +480,26 @@ impl ArdiaUpstream {
 
     pub(super) fn flow_run(&self, id: i64, args: &Value) -> Result<String, String> {
         let act = self.act_allowed(id, "flow_run")?;
-        let req = Self::run_request(args)?;
+        let mut req = Self::run_request(args)?;
         self.not_stopped(id)?;
         self.ready(id)?;
+        // The session's own tab is where a flow runs, never the user's: a flow replays steps the
+        // gate does not see, and the user's tab holds the user's own pages and logins.
+        if self.conv(id, |c| c.user_tab.is_some() && c.user_tab == c.bound) {
+            let page = self.conv(id, |c| c.page.clone());
+            self.flow_row(
+                id,
+                "flow_run",
+                None,
+                &page,
+                "refused: the session is in the user's own tab",
+                AuditDecision::Blocked,
+                "a flow does not run in the user's own tab",
+                None,
+            );
+            return Err("flow_run does not run in the user's own tab. Let go of it (browser_tabs close) and open a tab of your own with browser_open, then run the flow there.".into());
+        }
+        req.site = self.resolve_site(id, &req.name, &args["site"])?;
         let mut cls = self.check_flow(id, &req)?;
         if !cls.flow.is_data() && !req.opts.is_empty() {
             return Err("`limit`, `fields` and `where` shape the data of a flow that only reads. This flow changes pages.".into());
@@ -389,7 +573,7 @@ impl ArdiaUpstream {
                 card: None,
             });
         }
-        let key = grant_key(&req.name, &cls.hash);
+        let key = grant_key(&req.name, &req.site, &cls.hash);
         let covered = self
             .with_trust(id, |state, _| state.grants().covered(&key))
             .unwrap_or_default();
@@ -417,11 +601,12 @@ impl ArdiaUpstream {
             &cls.site,
             ActionDesc::FlowRun {
                 name: req.name.clone(),
+                site: req.site.clone(),
                 risky: cls.risks.iter().map(|r| r.text.clone()).collect(),
                 params: req
                     .params
                     .iter()
-                    .map(|(k, v)| (k.clone(), v.chars().count()))
+                    .map(|(k, v)| (short(k, 40), shown_value(v)))
                     .collect(),
             },
             categories,
@@ -523,7 +708,7 @@ impl ArdiaUpstream {
         // `--yes` is the gate's: only for a flow that says it writes, only after the check, the
         // approval and the second read above. A data flow never gets it.
         let yes = cls.flow.writes == Some(true);
-        let (cmd, values) = model::run_argv(&req.name, yes, &req.params, &req.opts);
+        let (cmd, values) = model::run_argv(&req.name, &req.site, yes, &req.params, &req.opts);
         let cmd: Vec<&str> = cmd.iter().map(String::as_str).collect();
         let values: Vec<&str> = values.iter().map(String::as_str).collect();
         let summary = Self::run_summary(req, cls);
@@ -585,9 +770,9 @@ impl ArdiaUpstream {
                     "the outcome is unknown",
                 );
                 return Err(if stopped {
-                    format!("{STOPPED} The flow may or may not have run: look at the page before trying anything again.\n{cleanup}")
+                    format!("{STOPPED} The flow may or may not have run, and it may have run partly: the steps before the stop were done and the steps after it did not run. Look at the page before trying anything again.\n{cleanup}")
                 } else {
-                    format!("The result of this flow is unknown: Ardia stopped answering after the command was sent, so it may or may not have run, and some steps may have been done. It was NOT repeated. Look at the page (browser_snapshot) before trying again.\n{cleanup}")
+                    format!("The result of this flow is unknown: Ardia stopped answering after the command was sent, so it may or may not have run, and it may have run partly (some steps may have been done). It was NOT repeated. Look at the page (browser_snapshot) before trying again.\n{cleanup}")
                 });
             }
         };
@@ -603,6 +788,27 @@ impl ArdiaUpstream {
                 return Err(stop);
             }
         };
+        // What ran must be what was approved: the flow, its site and its steps.
+        if let Some(detail) = Self::run_mismatch(req, cls, &data) {
+            row(
+                &before,
+                &format!("{summary}; flow changed during run"),
+                &format!("flow changed during run: {detail}"),
+            );
+            let text = self.halt(
+                id,
+                &tab,
+                &after,
+                "flow_run",
+                "The flow that ran is not the flow the user approved (it changed while it ran). What it did is not known.",
+            );
+            return Err(format!(
+                "{text} Tell the user: the flow \"{}\" on {} ran differently from the version zptah checked ({}).",
+                short(&req.name, 64),
+                short(&req.site, 80),
+                short(&detail, 120)
+            ));
+        }
         self.after_state(id, &tab, &before, &after);
         let steps: Vec<&Value> = data["steps"].as_array().into_iter().flatten().collect();
         let failed = data["ok"] == false || steps.iter().any(|s| s["ok"] == false);
@@ -685,6 +891,52 @@ impl ArdiaUpstream {
         }
     }
 
+    /// How the reply of `flow run` differs from the flow that was checked and approved (`None`:
+    /// it does not). The flow and its site must be the same, the steps that ran must be the first
+    /// steps of the flow with the same `seq` and intent, and a run that says it went through must
+    /// have run all of them.
+    fn run_mismatch(req: &RunRequest, cls: &Classified, data: &Value) -> Option<String> {
+        if data["flow"].as_str() != Some(req.name.as_str()) {
+            return Some("the reply names another flow".into());
+        }
+        if data["site"].as_str() != Some(req.site.as_str()) {
+            return Some("the reply names another site".into());
+        }
+        let steps = match data["steps"].as_array() {
+            Some(steps) => steps,
+            // A flow that reads may answer with its data alone (not measured).
+            None if cls.flow.is_data() => return None,
+            None => return Some("the reply lists no steps".into()),
+        };
+        let approved = &cls.flow.steps;
+        if steps.len() > approved.len() {
+            return Some(format!(
+                "{} steps ran, the flow has {}",
+                steps.len(),
+                approved.len()
+            ));
+        }
+        for (ran, step) in steps.iter().zip(approved) {
+            if ran["seq"].as_i64() != step.seq {
+                return Some("a step has another number".into());
+            }
+            if ran["intent"].as_str().unwrap_or("") != step.intent {
+                return Some(format!(
+                    "step {} does something else",
+                    step.seq.map_or("?".to_owned(), |n| n.to_string())
+                ));
+            }
+        }
+        if data["ok"] != false && steps.len() != approved.len() {
+            return Some(format!(
+                "{} steps ran, the flow has {}",
+                steps.len(),
+                approved.len()
+            ));
+        }
+        None
+    }
+
     /// The tab's address after a flow: read, and checked against the origin lists. A page that
     /// can not be read counts as a hit.
     fn after_flow(&self, id: i64, tab: &str, before: &str) -> Result<String, String> {
@@ -750,26 +1002,62 @@ impl ArdiaUpstream {
                 None,
             );
         };
-        // The steps this conversation recorded (what `steps` shows).
+        // The steps this conversation recorded and has not saved yet (what `steps` shows): the
+        // ones after `savedThrough`.
         let recorded = self
             .flow_browse(id, &["flow", "steps"], &[], BROWSE_TIMEOUT)
             .map_err(|f| self.fail(id, f))?;
-        let count = recorded["steps"]
+        let all = recorded["steps"]
             .as_array()
-            .ok_or_else(|| unreadable("list of recorded steps", "no `steps` list"))?
-            .len();
+            .ok_or_else(|| unreadable("list of recorded steps", "no `steps` list"))?;
+        let saved_through = recorded["savedThrough"].as_i64().unwrap_or(0);
+        let pending: Vec<&Value> = all
+            .iter()
+            .filter(|s| s["seq"].as_i64().is_none_or(|n| n > saved_through))
+            .collect();
+        let count = pending.len();
         if count == 0 {
             fail_row("there are no recorded steps");
             return Err("There are no recorded steps in this conversation to save. Do the task in the browser first.".into());
         }
-        let listed = self
+        // Where the flow will be stored, and each step with what it types hidden.
+        let site = pending
+            .first()
+            .and_then(|s| s["url"].as_str())
+            .map(site_of)
+            .unwrap_or_default();
+        let listed: Vec<String> = pending
+            .iter()
+            .map(|s| {
+                let command: Vec<String> = s["command"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|w| w.as_str().map(str::to_owned))
+                    .collect();
+                format!(
+                    "{}: {}",
+                    s["seq"].as_i64().map_or("?".to_owned(), |n| n.to_string()),
+                    defense::redact_url_secrets(&short(
+                        &model::masked_command(&command).join(" "),
+                        120
+                    ))
+                )
+            })
+            .collect();
+        let listed_flows = self
             .flow_browse(id, &["flow", "list"], &[], BROWSE_TIMEOUT)
             .map_err(|f| self.fail(id, f))?;
-        let replaces = listed["flows"]
-            .as_array()
-            .ok_or_else(|| unreadable("list of flows", "no `flows` list"))?
-            .iter()
-            .any(|f| f["name"].as_str() == Some(name.as_str()));
+        // Only a flow of this name on this site is replaced.
+        let replaces = !site.is_empty()
+            && listed_flows["flows"]
+                .as_array()
+                .ok_or_else(|| unreadable("list of flows", "no `flows` list"))?
+                .iter()
+                .any(|f| {
+                    f["name"].as_str() == Some(name.as_str())
+                        && f["site"].as_str() == Some(site.as_str())
+                });
         let ev = Evaluation {
             decision: Decision::Ask(Vec::new()),
             tier: Tier::Always,
@@ -782,7 +1070,9 @@ impl ArdiaUpstream {
             &ev.site,
             ActionDesc::FlowSave {
                 name: name.clone(),
+                site: site.clone(),
                 steps: count,
+                listed,
                 replaces,
             },
             Vec::new(),

@@ -6,10 +6,14 @@
 //! `output`, `verified`, `steps[] {seq, command[], url, ok, requests, action {type, intent,
 //! candidates, fingerprint, value}}`, `kind` and `writes`.
 //!
+//! Measured on Ardia 0.7.0 (fixtures `flow_show_params.json`, `flow_steps_after.json`): `params`
+//! is `[{name, example, source}]` with `source` `typed` or `secret`; a step names a parameter as
+//! `{{name}}` in `command` and `action.value` (and only so); the step of a secret parameter has
+//! `<redacted>` in its `command`. A flow is told apart by `(site, name)`.
+//!
 //! NOT measured, so every reader here fails closed (an unknown shape is an error or a risk, never
-//! a pass): the shape of `params` (an array of names or objects with a `name`, or a map), `kind`
-//! values other than `actions`, the `requests[]` entries of a data flow, how a step names the
-//! parameter it uses, and the `--fields`, `--where` and `--limit` options of `flow run`.
+//! a pass): `kind` values other than `actions`, the `requests[]` entries of a data flow, and the
+//! `--fields`, `--where` and `--limit` options of `flow run`.
 use crate::mono::browser::ardia::runner::{literal_value, plain_value};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -148,16 +152,34 @@ impl RunOptions {
     }
 }
 
+/// A site as `flow list` names it (`example.com`, `127.0.0.1:8765`): never a leading `-`, so it can
+/// not be read as an option.
+pub fn site_name(raw: &str) -> Result<String, String> {
+    let bytes = raw.as_bytes();
+    let ok = !bytes.is_empty()
+        && bytes.len() <= 128
+        && (bytes[0].is_ascii_alphanumeric() || bytes[0] == b'[')
+        && bytes.iter().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, b'.' | b':' | b'_' | b'-' | b'[' | b']')
+        });
+    if ok {
+        Ok(raw.to_owned())
+    } else {
+        Err("`site` is a site as flow_list shows it, for example `example.com` or `localhost:8765`.".into())
+    }
+}
+
 /// The argv of `flow run`: `(command and options, values)`. Every option comes before the `--`,
-/// the name after it; `--yes` only when the caller says the gate's own check passed for a flow
-/// that writes.
+/// the name after it; the flow is always picked by `--site`; `--yes` only when the caller says the
+/// gate's own check passed for a flow that writes.
 pub fn run_argv(
     name: &str,
+    site: &str,
     yes: bool,
     params: &BTreeMap<String, String>,
     opts: &RunOptions,
 ) -> (Vec<String>, Vec<String>) {
-    let mut cmd: Vec<String> = vec!["flow".into(), "run".into()];
+    let mut cmd: Vec<String> = vec!["flow".into(), "run".into(), "--site".into(), site.into()];
     if yes {
         cmd.push("--yes".into());
     }
@@ -208,6 +230,8 @@ pub enum StepKind {
     History,
     Read,
     FillOtp,
+    /// `upload`: a file goes to the page.
+    Upload,
     /// `eval`, `script`, `cdp` and the like: code runs in the page or the browser.
     Script(String),
     Unknown(String),
@@ -231,6 +255,28 @@ pub struct Step {
     pub redacted: bool,
     /// The methods of the requests the step recorded (`GET`, `POST`, ...).
     pub methods: Vec<String>,
+    /// `action.value` as recorded (a literal, or `{{name}}`).
+    pub action_value: Option<String>,
+    /// A word of the command (or the recorded value) is a file path.
+    pub names_path: bool,
+}
+
+/// How a declared parameter gets its value when a flow is recorded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ParamSource {
+    /// Typed in a field (`typed`).
+    Typed,
+    /// A password field (`secret`): its value is never recorded, and a Mono never supplies it.
+    Secret,
+    /// A source this version does not know.
+    Other(String),
+}
+
+/// One declared parameter: `{name, example, source}`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Param {
+    pub name: String,
+    pub source: ParamSource,
 }
 
 #[derive(Clone, Debug)]
@@ -241,13 +287,19 @@ pub struct Flow {
     pub site: String,
     pub description: String,
     pub start_url: String,
-    pub params: Vec<String>,
+    pub params: Vec<Param>,
     pub kind: Kind,
     pub writes: Option<bool>,
     pub verified: Option<bool>,
     pub steps: Vec<Step>,
 }
 impl Flow {
+    pub fn declares(&self, key: &str) -> bool {
+        self.params.iter().any(|p| p.name == key)
+    }
+    pub fn param_names(&self) -> Vec<String> {
+        self.params.iter().map(|p| p.name.clone()).collect()
+    }
     /// A flow that only reads: no `kind` (or `data`) and an explicit `writes: false`.
     pub fn is_data(&self) -> bool {
         self.kind == Kind::Data && self.writes == Some(false)
@@ -258,22 +310,31 @@ fn text(v: &Value) -> String {
     v.as_str().unwrap_or("").to_owned()
 }
 
-pub fn param_names(v: &Value) -> Result<Vec<String>, String> {
+/// The declared parameters of `flow show`: `[{name, example, source}]`. Anything else is a shape
+/// zptah does not know, so the flow is not used.
+fn read_params(v: &Value) -> Result<Vec<Param>, String> {
     match v {
         Value::Null => Ok(Vec::new()),
         Value::Array(items) => items
             .iter()
-            .map(|item| match item {
-                Value::String(s) => Ok(s.clone()),
-                Value::Object(o) => o
+            .map(|item| {
+                let name = item
                     .get("name")
                     .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .ok_or_else(|| "a parameter has no name".to_owned()),
-                _ => Err("a parameter is not a name".to_owned()),
+                    .filter(|n| !n.is_empty())
+                    .ok_or_else(|| "a parameter has no name".to_owned())?;
+                let source = match item.get("source").and_then(Value::as_str) {
+                    Some("typed") => ParamSource::Typed,
+                    Some("secret") => ParamSource::Secret,
+                    Some(other) => ParamSource::Other(other.to_owned()),
+                    None => ParamSource::Other(String::new()),
+                };
+                Ok(Param {
+                    name: name.to_owned(),
+                    source,
+                })
             })
             .collect(),
-        Value::Object(map) => Ok(map.keys().cloned().collect()),
         _ => Err("`params` is not a list".to_owned()),
     }
 }
@@ -298,6 +359,7 @@ fn kind_of(command: &[String], action_type: &str) -> StepKind {
             "fill" => StepKind::Fill,
             "type" => StepKind::Type,
             "select" => StepKind::Select,
+            "upload" => StepKind::Upload,
             "press" | "key" => StepKind::Press(command.get(at + 1).cloned().unwrap_or_default()),
             other => StepKind::Unknown(format!("find {other}")),
         }
@@ -312,6 +374,7 @@ fn kind_of(command: &[String], action_type: &str) -> StepKind {
             "fill" => StepKind::Fill,
             "type" => StepKind::Type,
             "select" => StepKind::Select,
+            "upload" => StepKind::Upload,
             "press" => StepKind::Press(String::new()),
             other => StepKind::Unknown(other.to_owned()),
         },
@@ -333,6 +396,7 @@ fn kind_of(command: &[String], action_type: &str) -> StepKind {
             StepKind::Read
         }
         "fill-otp" => StepKind::FillOtp,
+        "upload" => StepKind::Upload,
         "eval" | "evaluate" | "js" | "script" | "addinitscript" | "removeinitscript" | "cdp"
         | "batch" | "pushstate" => StepKind::Script(head),
         other => StepKind::Unknown(other.to_owned()),
@@ -422,23 +486,18 @@ fn parse_step(v: &Value) -> Result<Step, String> {
         }
     }
     let value = match &kind {
-        StepKind::Fill | StepKind::Type => {
-            let at = if command.first().map(|c| c.as_str()) == Some("find") {
-                4
-            } else {
-                2
-            };
-            command
-                .get(at)
-                .cloned()
-                .or_else(|| action["value"].as_str().map(str::to_owned))
-        }
+        StepKind::Fill | StepKind::Type | StepKind::Select => command
+            .get(value_index(&command))
+            .cloned()
+            .or_else(|| action["value"].as_str().map(str::to_owned)),
         _ => action["value"].as_str().map(str::to_owned),
     };
+    let action_value = action["value"].as_str().map(str::to_owned);
     let redacted = command
         .iter()
         .map(String::as_str)
         .chain(value.as_deref())
+        .chain(action_value.as_deref())
         .any(|t| t.to_lowercase().contains("<redacted>"));
     let methods = v["requests"]
         .as_array()
@@ -446,6 +505,9 @@ fn parse_step(v: &Value) -> Result<Step, String> {
         .flatten()
         .map(|r| r["method"].as_str().unwrap_or("?").to_uppercase())
         .collect();
+    let names_path = command_names_path(&command)
+        || (!matches!(kind, StepKind::Open(_))
+            && action_value.as_deref().is_some_and(looks_like_path));
     Ok(Step {
         seq: obj.get("seq").and_then(Value::as_i64),
         command,
@@ -458,11 +520,62 @@ fn parse_step(v: &Value) -> Result<Step, String> {
         mismatch,
         redacted,
         methods,
+        action_value,
+        names_path,
     })
 }
 
-/// Reads the `data` of `flow show <wanted>`. `Err` is a flow zptah can not read: it is not run.
-pub fn parse_flow(data: &Value, wanted: &str) -> Result<Flow, String> {
+/// Where the typed or chosen value is in a command: `find <by> <value> <verb> VALUE ...` or
+/// `<verb> <target> VALUE`.
+fn value_index(command: &[String]) -> usize {
+    if command.first().map(|c| c.as_str()) == Some("find") {
+        4
+    } else {
+        2
+    }
+}
+
+/// Whether a word is a path to a file: absolute, home-relative, relative with a dot, a Windows
+/// drive or share, or a `file:` address.
+pub fn looks_like_path(word: &str) -> bool {
+    let w = word.trim();
+    let bytes = w.as_bytes();
+    let lower = w.to_lowercase();
+    (w.starts_with('/') && w.len() > 1 && !w.starts_with("//"))
+        || w == "~"
+        || w.starts_with("~/")
+        || w.starts_with("./")
+        || w.starts_with("../")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/'))
+        || w.starts_with("\\\\")
+        || lower.starts_with("file:")
+}
+
+/// Whether any word of a command (after the first, and not the text after `--name`) is a path.
+fn command_names_path(command: &[String]) -> bool {
+    let mut skip_next = false;
+    for word in command.iter().skip(1) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if word == "--name" {
+            skip_next = true;
+            continue;
+        }
+        if looks_like_path(word) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Reads the `data` of `flow show --site <site> <wanted>`. `Err` is a flow zptah can not read: it
+/// is not run. The flow must be the one asked for: the name and the site both.
+pub fn parse_flow(data: &Value, wanted: &str, site: &str) -> Result<Flow, String> {
     let raw = data
         .get("flow")
         .filter(|f| f.is_object())
@@ -473,6 +586,9 @@ pub fn parse_flow(data: &Value, wanted: &str) -> Result<Flow, String> {
     }
     if name != wanted {
         return Err("Ardia answered for another flow".into());
+    }
+    if text(&raw["site"]) != site {
+        return Err("Ardia answered for another site".into());
     }
     let kind = match &raw["kind"] {
         Value::Null => Kind::Data,
@@ -497,7 +613,7 @@ pub fn parse_flow(data: &Value, wanted: &str) -> Result<Flow, String> {
         site: text(&raw["site"]),
         description: text(&raw["description"]),
         start_url: text(&raw["startUrl"]),
-        params: param_names(&raw["params"])?,
+        params: read_params(&raw["params"])?,
         kind,
         writes,
         verified: raw["verified"].as_bool(),
@@ -545,9 +661,9 @@ fn write_canonical(v: &Value, out: &mut String) {
 }
 
 /// The content hash an approval and a grant are keyed by: sha256 of the canonical JSON of the
-/// `flow show` `data.flow` (`createdAt` kept) and the parameters.
-pub fn flow_hash(raw: &Value, params: &BTreeMap<String, String>) -> String {
-    let body = canonical(&json!({"flow": raw, "params": params}));
+/// `flow show` `data.flow` (`createdAt` kept), the site it was asked for and the parameters.
+pub fn flow_hash(raw: &Value, site: &str, params: &BTreeMap<String, String>) -> String {
+    let body = canonical(&json!({"flow": raw, "site": site, "params": params}));
     Sha256::digest(body.as_bytes())
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -647,35 +763,102 @@ pub fn urls_of(flow: &Flow) -> Vec<(String, String)> {
 
 // ---- parameters in steps ----
 
-fn placeholders(name: &str) -> [String; 6] {
-    [
-        format!("{{{{{name}}}}}"),
-        format!("{{{name}}}"),
-        format!("${{{name}}}"),
-        format!("${name}"),
-        format!("<{name}>"),
-        format!("%{name}%"),
-    ]
+/// How a step names a parameter: `{{name}}`, and only that (measured on Ardia 0.7.0).
+fn placeholder(name: &str) -> String {
+    format!("{{{{{name}}}}}")
 }
 
-/// Whether a step names parameter `name` (as `{name}`, `{{name}}`, `${name}`, `$name`, `<name>`
-/// or `%name%`) in its command or value. Not measured: how Ardia writes it.
+/// Whether a step names parameter `name` as `{{name}}` in its command, its value or its recorded
+/// `action.value`.
 pub fn uses_param(step: &Step, name: &str) -> bool {
-    let pats = placeholders(name);
+    let pattern = placeholder(name);
     step.command
         .iter()
         .map(String::as_str)
         .chain(step.value.as_deref())
-        .any(|t| pats.iter().any(|p| t.contains(p.as_str())))
+        .chain(step.action_value.as_deref())
+        .any(|t| t.contains(pattern.as_str()))
 }
 
-/// `text` with the placeholders of the given parameters replaced by their values.
+/// `text` with the `{{name}}` placeholders of the given parameters replaced by their values.
 pub fn substitute(text: &str, params: &BTreeMap<String, String>) -> String {
     let mut out = text.to_owned();
     for (key, value) in params {
-        for pattern in placeholders(key) {
-            out = out.replace(pattern.as_str(), value);
+        out = out.replace(placeholder(key).as_str(), value);
+    }
+    out
+}
+
+/// Whether a value is only a `{{name}}` placeholder.
+fn is_placeholder(value: &str) -> bool {
+    value
+        .strip_prefix("{{")
+        .and_then(|rest| rest.strip_suffix("}}"))
+        .is_some_and(|inner| {
+            !inner.is_empty()
+                && !inner.contains("{{")
+                && !inner.contains("}}")
+                && inner
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        })
+}
+
+/// A typed or chosen value as people are shown it: a `{{name}}` placeholder (or the `<redacted>`
+/// mark) stays, anything else becomes `<text, N characters>`.
+pub fn mask_value(value: &str) -> String {
+    if value.is_empty() || is_placeholder(value) || value.eq_ignore_ascii_case("<redacted>") {
+        value.to_owned()
+    } else {
+        format!("<text, {} characters>", value.chars().count())
+    }
+}
+
+/// A command with the typed or chosen value masked ([`mask_value`]).
+pub fn masked_command(command: &[String]) -> Vec<String> {
+    let mut out = command.to_vec();
+    if matches!(
+        kind_of(command, ""),
+        StepKind::Fill | StepKind::Type | StepKind::Select
+    ) {
+        if let Some(word) = out.get_mut(value_index(command)) {
+            *word = mask_value(word);
         }
     }
     out
+}
+
+/// A recorded intent with the literal typed or chosen value (when the step has one) masked.
+pub fn masked_text(text: &str, step: &Step) -> String {
+    match step.value.as_deref().filter(|v| {
+        !v.is_empty()
+            && !is_placeholder(v)
+            && !v.eq_ignore_ascii_case("<redacted>")
+            && matches!(
+                step.kind,
+                StepKind::Fill | StepKind::Type | StepKind::Select
+            )
+    }) {
+        Some(value) => text.replace(value, &mask_value(value)),
+        None => text.to_owned(),
+    }
+}
+
+/// What a step acts on, read from its command (not from the recorded intent): `role "Email"` or
+/// `text "Delete"`. `None` for a command that names no target.
+pub fn target_of(command: &[String]) -> Option<String> {
+    if command.first().map(String::as_str) != Some("find") {
+        return None;
+    }
+    let by = command.get(1)?;
+    let value = command.get(2)?;
+    let name = command
+        .iter()
+        .position(|w| w == "--name")
+        .and_then(|at| command.get(at + 1));
+    Some(match (by.as_str(), name) {
+        ("role", Some(name)) => format!("{value} \"{name}\""),
+        ("role", None) => value.clone(),
+        (by, _) => format!("{by} \"{value}\""),
+    })
 }

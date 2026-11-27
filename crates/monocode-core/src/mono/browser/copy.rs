@@ -113,20 +113,28 @@ pub enum ActionDesc {
     },
     /// An action the Mono described itself with `browser_request_approval`.
     Other,
-    /// Run an Ardia flow. `risky` are the steps that need the user's OK (one line each, already
-    /// cleaned), `params` the parameters as name and length (the values are never shown).
+    /// Run an Ardia flow on `site`. `risky` are the steps that need the user's OK (one line each,
+    /// already cleaned), `params` the parameters as name and the value as it is shown (clipped and
+    /// cleaned; only a card-number-like value is masked).
     FlowRun {
         name: String,
+        site: String,
         risky: Vec<String>,
-        params: Vec<(String, usize)>,
+        params: Vec<(String, String)>,
     },
     /// Save the session's recorded steps as a flow in Ardia's store (shared with the user and
-    /// every profile). `replaces`: a flow of that name exists.
+    /// every profile). `site`: where the flow will be stored (empty when it can not be told),
+    /// `steps`: how many steps it saves, `listed`: those steps as lines with every typed value
+    /// masked, `replaces`: a flow of that name exists on that site.
     FlowSave {
         name: String,
+        site: String,
         steps: usize,
+        listed: Vec<String>,
         replaces: bool,
     },
+    /// Reload the page.
+    Reload,
 }
 
 /// What the card needs to know. All text is what the page or the Mono said: it is clipped and
@@ -356,6 +364,8 @@ fn verb_phrase(lang: Lang, facts: &CardFacts) -> String {
         ),
         (ActionDesc::Other, Lang::En) => "do something that needs your OK".into(),
         (ActionDesc::Other, Lang::Vi) => "làm một việc cần bạn đồng ý".into(),
+        (ActionDesc::Reload, Lang::En) => "reload the page".into(),
+        (ActionDesc::Reload, Lang::Vi) => "tải lại trang".into(),
         (ActionDesc::FlowRun { name, .. }, Lang::En) => {
             format!("run the flow {}", quoted(name, MAX_LABEL))
         }
@@ -397,47 +407,87 @@ fn flow_lines(lang: Lang, facts: &CardFacts) -> Vec<String> {
                     });
                 }
             }
-            lines.push(if params.is_empty() {
-                match lang {
-                    Lang::En => "Parameters: none.".to_owned(),
-                    Lang::Vi => "Tham số: không có.".to_owned(),
-                }
+            if params.is_empty() {
+                lines.push(
+                    match lang {
+                        Lang::En => "Parameters: none.",
+                        Lang::Vi => "Tham số: không có.",
+                    }
+                    .to_owned(),
+                );
             } else {
-                let list: Vec<String> = params
-                    .iter()
-                    .take(10)
-                    .map(|(name, len)| match lang {
-                        Lang::En => format!("{} ({len} characters)", clean(name, 40)),
-                        Lang::Vi => format!("{} ({len} ký tự)", clean(name, 40)),
-                    })
-                    .collect();
-                match lang {
-                    Lang::En => {
-                        format!("Parameters: {}. The values are not shown.", list.join(", "))
+                lines.push(
+                    match lang {
+                        Lang::En => "Parameters:",
+                        Lang::Vi => "Tham số:",
                     }
-                    Lang::Vi => {
-                        format!("Tham số: {}. Giá trị không được hiển thị.", list.join(", "))
-                    }
+                    .to_owned(),
+                );
+                for (name, value) in params.iter().take(10) {
+                    lines.push(format!("- {}: {}", clean(name, 40), quoted(value, 80)));
                 }
-            });
+                let more = params.len().saturating_sub(10);
+                if more > 0 {
+                    lines.push(match lang {
+                        Lang::En => format!("- and {more} more"),
+                        Lang::Vi => format!("- và {more} tham số nữa"),
+                    });
+                }
+            }
         }
         ActionDesc::FlowSave {
-            steps, replaces, ..
+            site,
+            steps,
+            listed,
+            replaces,
+            ..
         } => {
+            const MAX_LISTED: usize = 12;
             lines.push(match lang {
                 Lang::En => "This writes a flow into Ardia's flow store, which you and every profile share.".to_owned(),
                 Lang::Vi => "Việc này ghi một luồng vào kho luồng của Ardia, nơi bạn và mọi hồ sơ dùng chung.".to_owned(),
             });
+            if !site.is_empty() {
+                lines.push(match lang {
+                    Lang::En => format!("Site: {}.", clean(site, 80)),
+                    Lang::Vi => format!("Trang: {}.", clean(site, 80)),
+                });
+            }
             lines.push(match lang {
                 Lang::En => format!("It saves the {steps} step(s) recorded in this conversation."),
                 Lang::Vi => format!("Nó lưu {steps} bước đã ghi trong cuộc trò chuyện này."),
             });
+            if !listed.is_empty() {
+                lines.push(
+                    match lang {
+                        Lang::En => "Steps (typed values are hidden here):",
+                        Lang::Vi => "Các bước (giá trị đã nhập được ẩn ở đây):",
+                    }
+                    .to_owned(),
+                );
+                for step in listed.iter().take(MAX_LISTED) {
+                    lines.push(format!("- {}", clean(step, 120)));
+                }
+                let more = listed.len().saturating_sub(MAX_LISTED);
+                if more > 0 {
+                    lines.push(match lang {
+                        Lang::En => format!("- and {more} more"),
+                        Lang::Vi => format!("- và {more} bước nữa"),
+                    });
+                }
+            }
+            lines.push(match lang {
+                Lang::En => "Values typed in these steps are stored in Ardia's shared flow store exactly as they were typed, unless Ardia masks them (it masks passwords only).".to_owned(),
+                Lang::Vi => "Các giá trị đã nhập trong những bước này được lưu trong kho luồng dùng chung của Ardia đúng như đã nhập, trừ khi Ardia che chúng (Ardia chỉ che mật khẩu).".to_owned(),
+            });
             if *replaces {
                 lines.push(match lang {
                     Lang::En => {
-                        "A flow with this name already exists and may be replaced.".to_owned()
+                        "A flow with this name already exists on this site and may be replaced."
+                            .to_owned()
                     }
-                    Lang::Vi => "Đã có một luồng cùng tên và nó có thể bị thay thế.".to_owned(),
+                    Lang::Vi => "Đã có một luồng cùng tên trên trang này và nó có thể bị thay thế."
+                        .to_owned(),
                 });
             }
         }
@@ -606,6 +656,12 @@ fn tail(lang: Lang, category: Category, facts: &CardFacts) -> Option<String> {
                 clean(&facts.mono, MAX_LABEL)
             ),
         },
+        (Category::Unclear, Lang::En) if matches!(facts.action, ActionDesc::Reload) => {
+            "Reloading may send the form again.".into()
+        }
+        (Category::Unclear, Lang::Vi) if matches!(facts.action, ActionDesc::Reload) => {
+            "Tải lại trang có thể gửi lại biểu mẫu.".into()
+        }
         (Category::Unclear, Lang::En) if matches!(facts.action, ActionDesc::FlowRun { .. }) => {
             "zptah could not tell what some steps of this flow do.".into()
         }

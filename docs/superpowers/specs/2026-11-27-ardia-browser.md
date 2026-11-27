@@ -300,6 +300,10 @@ Always blocked, even when inside an allowed folder: dotfiles and dot folders (`.
 (`~/Library/Keychains`, `*.keychain-db`) and the app's own data folders. Paths are checked after
 resolving symlinks.
 
+Where there is no private folder for the copies of uploaded files (Windows, and Linux without
+`XDG_RUNTIME_DIR`), `browser_upload` is not offered at all (left out of `tools/list`, disabled by name, left
+out of the prompt) and the Browser tab says "Uploads are not available on this system".
+
 ## 7. Flows
 
 Flows are recorded and replayed by Ardia. A replay runs inside Ardia, so the gate does not see each
@@ -320,6 +324,7 @@ step. Policy for `flow_run`:
    changed in between, it is classified, and approved if needed, again.
 6. After the run, the origin checks of section 5 (detected after) apply to the tab the flow used.
 7. Read-only Monos cannot run flows.
+8. A flow with an `upload` step, or any step that names a file path, is never run (`browser_upload` is the only way a Mono sends a file, and it always asks).
 
 `flow heal` is not exposed in v1; the user heals flows from a terminal.
 

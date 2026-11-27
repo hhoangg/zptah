@@ -1284,7 +1284,7 @@ fn shlex_quote(text: &str) -> String {
 /// app or from a scheduler or workflow brings none, and neither does a turn that only the app
 /// started: `None` there, so such a run does not lift a Stop either.
 fn user_words(settings: &Settings, prompt: &str) -> Option<String> {
-    (!settings.internal_message).then(|| prompt.to_owned())
+    (!settings.internal_message && !settings.automatic_resume).then(|| prompt.to_owned())
 }
 
 #[cfg(test)]
@@ -1306,6 +1306,23 @@ mod user_words_tests {
             user_words(&automated, "check the dashboard at status.example").as_deref(),
             Some("check the dashboard at status.example"),
             "the stored automation prompt is the user's own text"
+        );
+    }
+
+    #[test]
+    fn the_automatic_usage_limit_resume_is_not_the_users_words() {
+        let automatic = Settings {
+            automatic_resume: true,
+            ..Settings::default()
+        };
+        assert_eq!(
+            user_words(&automatic, "Continue from where you left off."),
+            None
+        );
+        // A resume the user clicks is typed: it is not marked.
+        assert_eq!(
+            user_words(&Settings::default(), "Continue from where you left off.").as_deref(),
+            Some("Continue from where you left off.")
         );
     }
 

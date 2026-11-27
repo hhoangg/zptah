@@ -51,6 +51,10 @@ use crate::mono::browser::trust::{
 use std::collections::BTreeSet;
 use std::time::Instant;
 /// How often a card's wait renews the holds on the conversation's tabs.
+/// What a Mono whose browser has no act settings loaded is told: nothing can be judged, so no page
+/// is opened or read.
+pub(super) const NO_ACT: &str =
+    "This browser has no settings loaded, so zptah can not check the page and nothing was done.";
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
 /// How often a card's wait looks at whether the turn was stopped.
 const STOP_POLL: Duration = Duration::from_millis(200);
@@ -861,6 +865,8 @@ impl ArdiaUpstream {
         if self.not_stopped(id).is_err() {
             return Err((STOPPED.into(), AuditDecision::Stopped, String::new()));
         }
+        // A card was shown in this call: a call that lost Ardia is not repeated (see `call_tool`).
+        self.conv(id, |c| c.carded = true);
         let categories: Vec<Category> = ev.categories.iter().copied().collect();
         let request = Request {
             mono_id: self.mono_id.clone(),
@@ -1050,6 +1056,14 @@ impl ArdiaUpstream {
             .map(str::to_owned)
             .unwrap_or_else(|| read.title.clone());
         let writes = fresh::writes_of(changes);
+        // A reload of a page an act posted to may send the form again.
+        self.conv(id, |c| {
+            if writes.is_empty() {
+                c.posted.remove(&read.tab);
+            } else {
+                c.posted.insert(read.tab.clone());
+            }
+        });
         let mut head = plan.summary.clone();
         if matches!(plan.op, Op::Type | Op::Fill) {
             head = head.replace(
@@ -1399,8 +1413,8 @@ impl ArdiaUpstream {
     /// as the extension's new tab): the shared classifier with the target address, so an address
     /// outside the task (UnrelatedDomain), one that carries what the Mono read on another site
     /// (Tainted) and the first entry to a sensitive site ask, at every level, exactly as the
-    /// extension backend did. A Mono with no act settings loaded has no card to show: nothing is
-    /// judged. `Err` is the text for the Mono (audited).
+    /// extension backend did. A Mono with no act settings loaded has no card to show and nothing
+    /// to judge with: the move is refused. `Err` is the text for the Mono (audited).
     pub(super) fn judge_navigation(
         &self,
         id: i64,
@@ -1410,7 +1424,7 @@ impl ArdiaUpstream {
         user_tab: bool,
     ) -> Result<(), String> {
         let Some(act) = self.config().act else {
-            return Ok(());
+            return Err(NO_ACT.into());
         };
         let page = self.conv(id, |c| c.page.clone());
         let mut action = TrustAction::new(tool, args, &page);
@@ -1424,7 +1438,7 @@ impl ArdiaUpstream {
                 &action,
             )
         }) else {
-            return Ok(());
+            return Err(NO_ACT.into());
         };
         let summary = if user_tab {
             format!("navigate the user's tab to {}", audit_url(url))
@@ -1509,7 +1523,7 @@ impl ArdiaUpstream {
     /// `browser_take_screenshot`) and `url` the page it read; `Err` withholds what was read.
     pub(super) fn guard_first_read(&self, id: i64, tool: &str, url: &str) -> Result<(), String> {
         let Some(act) = self.config().act else {
-            return Ok(());
+            return Err(format!("{NO_ACT} What was read was withheld."));
         };
         let args = json!({});
         let action = TrustAction::new(tool, &args, url);
@@ -1522,7 +1536,7 @@ impl ArdiaUpstream {
                 &action,
             )
         }) else {
-            return Ok(());
+            return Err(format!("{NO_ACT} What was read was withheld."));
         };
         let user_tab = self.conv(id, |c| c.bound.is_some() && c.user_tab == c.bound);
         let summary = format!("first read of {}", audit_url(url));
@@ -1584,6 +1598,69 @@ impl ArdiaUpstream {
                         Err(format!("{text} What was read was withheld."))
                     }
                 }
+            }
+        }
+    }
+
+    /// A reload of a tab whose last act sent a POST may send the form again: it asks first (an
+    /// unclear step, never granted for the conversation).
+    pub(super) fn ask_before_reload(&self, id: i64) -> Result<(), String> {
+        let Some(tab) = self.conv(id, |c| c.bound.clone()) else {
+            return Ok(());
+        };
+        if !self.conv(id, |c| c.posted.contains(&tab)) {
+            return Ok(());
+        }
+        let Some(act) = self.config().act else {
+            return Err(NO_ACT.into());
+        };
+        let page = self.conv(id, |c| c.page.clone());
+        let user_tab = self.is_user_tab(id, &tab);
+        let ev = Evaluation {
+            decision: Decision::Ask(vec![Category::Unclear]),
+            tier: Tier::Act,
+            categories: [Category::Unclear].into_iter().collect(),
+            site: registrable_domain_of(&page).unwrap_or_default(),
+            reason: "reloading may send the form again".into(),
+        };
+        let mut facts = CardFacts::new(
+            &act.mono_label,
+            &ev.site,
+            ActionDesc::Reload,
+            vec![Category::Unclear],
+        );
+        facts.url = page.clone();
+        facts.site_kind = site_category(&page);
+        let summary = format!("reload {}", audit_url(&page));
+        match self.ask_card(&act, id, "browser_reload", facts, &ev) {
+            Ok((_, card)) => {
+                self.conv(id, |c| c.posted.remove(&tab));
+                self.row(
+                    id,
+                    "browser_reload",
+                    &page,
+                    &summary,
+                    user_tab,
+                    Some(&ev),
+                    AuditDecision::AskedAllowedOnce,
+                    &ev.reason,
+                    Some(card),
+                );
+                Ok(())
+            }
+            Err((text, audit, card)) => {
+                self.row(
+                    id,
+                    "browser_reload",
+                    &page,
+                    &summary,
+                    user_tab,
+                    Some(&ev),
+                    audit,
+                    &text,
+                    Some(card).filter(|c| !c.is_empty()),
+                );
+                Err(text)
             }
         }
     }

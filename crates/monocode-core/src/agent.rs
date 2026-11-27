@@ -130,6 +130,11 @@ pub struct Settings {
     /// browser Stop (the gate is told it was not typed, see `Runtime::begin_turn`).
     #[serde(skip)]
     pub automated: bool,
+    /// The run is the app's own "Continue from where you left off." after a usage limit reset,
+    /// not words the user wrote: it brings no user words to the browser gate and never lifts a
+    /// Stop. A resume the user clicks is typed and leaves this false.
+    #[serde(skip)]
+    pub automatic_resume: bool,
     /// The text the user wrote for this turn: a typed message or an automation's stored prompt
     /// (`Some`), never a message from another Mono, from the app or from a scheduler or
     /// workflow (`None`), and never the assembled prompt (attachments, notes, Mono context,

@@ -916,6 +916,54 @@ mod usage_tests {
         });
     }
 
+    /// `automated` and `automatic_resume` belong to one run: they never stick to the conversation
+    /// and reach a message the user types next. Only the app's own resume at the reset is marked;
+    /// a resume the user clicks is typed.
+    #[gpui::test]
+    fn the_automated_and_automatic_resume_marks_belong_to_one_run(cx: &mut gpui::TestAppContext) {
+        let store = Arc::new(std::sync::Mutex::new(
+            monocode_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ));
+        let summary = locked(&store)
+            .unwrap()
+            .create("claude", "/fixture")
+            .unwrap();
+        let view = cx.new(|cx| Conversation::new(summary, store.clone(), cx));
+        cx.run_until_parked();
+        let limit = || {
+            Some(Limit {
+                resets_at: Some(usage::now_ms() + 60_000),
+                resume_at_reset: false,
+                no_wake: false,
+            })
+        };
+        view.update(cx, |v, cx| {
+            v.loaded = true;
+            // An automation's run is marked once, the next message is not.
+            v.settings.automated = true;
+            v.launch_prompt("check the status page".into(), cx);
+            assert!(!v.settings.automated, "taken by the run");
+            v.set_busy_for_test(false);
+            v.launch_prompt("hello".into(), cx);
+            assert_eq!(v.launched_marks, [(true, false), (false, false)]);
+            // The app's own resume at the reset is marked, and the mark does not stay.
+            v.set_busy_for_test(false);
+            v.settings.usage_limit = limit();
+            v.resume_usage_as(true, cx);
+            assert!(!v.settings.automatic_resume);
+            v.set_busy_for_test(false);
+            v.launch_prompt("and now me".into(), cx);
+            // A resume the user clicks is typed.
+            v.set_busy_for_test(false);
+            v.settings.usage_limit = limit();
+            v.resume_usage(cx);
+            assert_eq!(
+                v.launched_marks[2..],
+                [(false, true), (false, false), (false, false)]
+            );
+        });
+    }
+
     #[gpui::test]
     fn mobile_controls_persist_the_desktop_preference_and_use_its_mono_resume_and_scheduler(
         cx: &mut gpui::TestAppContext,

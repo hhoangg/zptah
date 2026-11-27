@@ -28,7 +28,8 @@ const FLOW_RUN_NO_YES: &str = include_str!("fixtures/flow_run_no_yes.json");
 const FLOW_RUN_MISSING: &str = include_str!("fixtures/flow_run_missing.json");
 const FLOW_STEPS: &str = include_str!("fixtures/flow_steps.json");
 const GONE: &str = include_str!("fixtures/browse_daemon_unreachable.json");
-const NAME: &str = "zptah-m0-test";
+pub(super) const NAME: &str = "zptah-m0-test";
+pub(super) const SITE: &str = "example.com";
 
 fn out(code: i32, stdout: String) -> Option<Result<Output, RunFailure>> {
     Some(Ok(Output {
@@ -39,15 +40,48 @@ fn out(code: i32, stdout: String) -> Option<Result<Output, RunFailure>> {
 }
 
 impl State {
+    /// `flow show` and `flow run` pick a flow by name and `--site`; a name saved on more than one
+    /// site fails without it (measured on Ardia 0.7.0).
+    fn flow_found(
+        &self,
+        flags: &[&str],
+        name: &str,
+        template: &str,
+    ) -> Option<Result<Output, RunFailure>> {
+        let site = flags
+            .iter()
+            .position(|f| *f == "--site")
+            .and_then(|at| flags.get(at + 1));
+        let same: Vec<&Value> = self.flows.iter().filter(|f| f["name"] == name).collect();
+        let hit = match site {
+            Some(site) => same.iter().find(|f| f["site"] == *site).copied(),
+            None if same.len() > 1 => {
+                let sites: Vec<&str> = same.iter().filter_map(|f| f["site"].as_str()).collect();
+                return out(
+                    1,
+                    json!({"success": false, "error": format!("{name} is saved for {}; pick one with --site <site>", sites.join(", ")), "code": "command_failed"}).to_string(),
+                );
+            }
+            None => same.first().copied(),
+        };
+        match hit {
+            Some(flow) => {
+                let mut reply = json_of(template);
+                reply["data"]["flow"] = flow.clone();
+                out(0, reply.to_string())
+            }
+            None => out(1, FLOW_RUN_MISSING.into()),
+        }
+    }
+
     /// The replies to `ardia browse flow ...`.
     pub(super) fn flow_reply(
         &mut self,
         rest: &[&str],
         values: &[&str],
     ) -> Option<Result<Output, RunFailure>> {
-        let find = |flows: &[Value], name: &str| flows.iter().find(|f| f["name"] == name).cloned();
         match (rest, values) {
-            (["list"], []) => {
+            (["list"], _) => {
                 let mut reply = json_of(if self.flows.is_empty() {
                     FLOW_LIST_EMPTY
                 } else {
@@ -56,6 +90,7 @@ impl State {
                 let listed: Vec<Value> = self
                     .flows
                     .iter()
+                    .filter(|f| values.first().is_none_or(|site| f["site"] == *site))
                     .map(|f| {
                         let mut item = json!({"site": f["site"], "name": f["name"], "description": f["description"], "params": f["params"], "itemFields": [], "verified": f["verified"], "writes": f["writes"]});
                         if !f["kind"].is_null() {
@@ -67,7 +102,7 @@ impl State {
                 reply["data"]["flows"] = json!(listed);
                 out(0, reply.to_string())
             }
-            (["show"], [name]) => {
+            (["show", flags @ ..], [name]) => {
                 self.flow_shows += 1;
                 if self
                     .on_flow_show
@@ -87,19 +122,15 @@ impl State {
                 if let Some(raw) = &self.flow_show_raw {
                     return out(0, raw.clone());
                 }
-                match find(&self.flows, name) {
-                    Some(flow) => {
-                        let mut reply = json_of(FLOW_SHOW);
-                        reply["data"]["flow"] = flow;
-                        out(0, reply.to_string())
-                    }
-                    None => out(1, FLOW_RUN_MISSING.into()),
-                }
+                self.flow_found(flags, name, FLOW_SHOW)
             }
             (["steps"], []) => {
                 let mut reply = json_of(FLOW_STEPS);
                 if let Some(steps) = &self.flow_steps {
                     reply["data"]["steps"] = steps.clone();
+                }
+                if let Some(through) = self.flow_saved_through {
+                    reply["data"]["savedThrough"] = json!(through);
                 }
                 out(0, reply.to_string())
             }
@@ -112,8 +143,9 @@ impl State {
                         .map(|s| s.to_string())
                         .collect(),
                 );
-                let Some(flow) = find(&self.flows, name) else {
-                    return out(1, FLOW_RUN_MISSING.into());
+                let flow = match self.flow_found(flags, name, FLOW_SHOW) {
+                    Some(Ok(o)) if o.code == 0 => json_of(&o.stdout)["data"]["flow"].clone(),
+                    other => return other,
                 };
                 if flow["writes"] == true && !flags.contains(&"--yes") {
                     return out(1, FLOW_RUN_NO_YES.into());
@@ -148,7 +180,9 @@ impl State {
                 }
                 let mut reply = json_of(FLOW_RUN_YES);
                 reply["data"]["flow"] = json!(name);
-                reply["data"]["steps"] = json!(steps);
+                reply["data"]["site"] = flow["site"].clone();
+                reply["data"]["steps"] =
+                    self.flow_run_steps.clone().unwrap_or_else(|| json!(steps));
                 if let Some(extra) = &self.flow_run_extra {
                     for (k, v) in extra.as_object().into_iter().flatten() {
                         reply["data"][k] = v.clone();
@@ -185,44 +219,59 @@ impl State {
 
 /// The flow of the recorded `flow show`: open the start page, click "Learn more" (which lands on
 /// iana.org).
-fn example_flow() -> Value {
+pub(super) fn example_flow() -> Value {
     json_of(FLOW_SHOW)["data"]["flow"].clone()
 }
 
 /// The same flow, staying on the task's site: no risk is found in it.
-fn quiet_flow() -> Value {
+pub(super) fn quiet_flow() -> Value {
     let mut flow = example_flow();
     flow["steps"][1]["url"] = json!("https://example.com/more");
     flow
 }
 
 /// A flow that only reads (not measured: `kind` absent, `writes: false`, GET requests).
-fn data_flow() -> Value {
+pub(super) fn data_flow() -> Value {
     let mut flow = quiet_flow();
     flow["kind"] = Value::Null;
     flow["writes"] = json!(false);
-    flow["params"] = json!(["q"]);
+    flow["params"] = params_of(&["q"]);
     flow["steps"] = json!([flow["steps"][0].clone()]);
     flow
 }
 
-fn step(seq: i64, command: &[&str], url: &str, intent: &str, name: &str, role: &str) -> Value {
+/// `params` as Ardia 0.7.0 writes them: `{name, example, source}`.
+pub(super) fn params_of(names: &[&str]) -> Value {
+    json!(names
+        .iter()
+        .map(|n| json!({"name": n, "example": null, "source": "typed"}))
+        .collect::<Vec<_>>())
+}
+
+pub(super) fn step(
+    seq: i64,
+    command: &[&str],
+    url: &str,
+    intent: &str,
+    name: &str,
+    role: &str,
+) -> Value {
     json!({"seq": seq, "command": command, "url": url, "ok": true, "requests": [],
         "action": {"type": command[0], "intent": intent,
             "candidates": [{"by": "role", "value": role, "name": name}],
             "fingerprint": {"role": role, "name": name}}})
 }
 
-fn with_step(mut flow: Value, step: Value) -> Value {
+pub(super) fn with_step(mut flow: Value, step: Value) -> Value {
     flow["steps"].as_array_mut().unwrap().push(step);
     flow
 }
 
-fn flow_act() -> Act {
+pub(super) fn flow_act() -> Act {
     flow_act_with(BrowserLevel::Act, no_limits(), quiet_flow())
 }
 
-fn flow_act_with(level: BrowserLevel, origins: Origins, flow: Value) -> Act {
+pub(super) fn flow_act_with(level: BrowserLevel, origins: Origins, flow: Value) -> Act {
     let a = act_with(level, origins);
     a.r.runner.lock().flows.push(flow);
     // The user named the site: opening it asks nothing.
@@ -230,19 +279,19 @@ fn flow_act_with(level: BrowserLevel, origins: Origins, flow: Value) -> Act {
     a
 }
 
-fn set_flows(a: &Act, flows: Vec<Value>) {
+pub(super) fn set_flows(a: &Act, flows: Vec<Value>) {
     a.r.runner.lock().flows = flows;
 }
 
-fn run(a: &Act, args: Value) -> (bool, String) {
+pub(super) fn run(a: &Act, args: Value) -> (bool, String) {
     a.call("flow_run", args)
 }
 
-fn runs(a: &Act) -> Vec<Vec<String>> {
+pub(super) fn runs(a: &Act) -> Vec<Vec<String>> {
     a.r.runner.lock().flow_runs.clone()
 }
 
-fn calls_with(a: &Act, needle: &str) -> Vec<usize> {
+pub(super) fn calls_with(a: &Act, needle: &str) -> Vec<usize> {
     a.r.runner
         .calls()
         .iter()
@@ -256,14 +305,14 @@ fn yes_count(argv: &[String]) -> usize {
     argv.iter().filter(|t| *t == "--yes").count()
 }
 
-fn card_lines(a: &Act, n: usize) -> Vec<String> {
+pub(super) fn card_lines(a: &Act, n: usize) -> Vec<String> {
     let text = a.cards()[n].text_in(Lang::En);
     let mut lines = vec![text.headline];
     lines.extend(text.lines);
     lines
 }
 
-fn risky_of(a: &Act, n: usize) -> Vec<String> {
+pub(super) fn risky_of(a: &Act, n: usize) -> Vec<String> {
     match &a.cards()[n].facts.action {
         ActionDesc::FlowRun { risky, .. } => risky.clone(),
         other => panic!("not a flow card: {other:?}"),
@@ -426,7 +475,7 @@ fn a_flow_with_no_risk_runs_in_the_sessions_own_tab_after_the_start_page_and_the
     let sent = runs(&a);
     assert_eq!(
         sent,
-        vec![vec!["flow", "run", "--yes", "--", NAME]],
+        vec![vec!["flow", "run", "--site", SITE, "--yes", "--", NAME]],
         "{sent:?}"
     );
     assert!(a
@@ -434,10 +483,10 @@ fn a_flow_with_no_risk_runs_in_the_sessions_own_tab_after_the_start_page_and_the
         .runner
         .calls()
         .iter()
-        .any(|c| c.ends_with("--json flow run --yes -- zptah-m0-test")));
+        .any(|c| c.ends_with("--json flow run --site example.com --yes -- zptah-m0-test")));
     // The order: the tab (the start page), the check, the run, the URL after.
     let tab = calls_with(&a, "tabs open https://example.com/");
-    let shows = calls_with(&a, "--json flow show -- zptah-m0-test");
+    let shows = calls_with(&a, "--json flow show --site example.com -- zptah-m0-test");
     let run_at = calls_with(&a, "flow run");
     assert_eq!(tab.len(), 1);
     assert_eq!(shows.len(), 2, "once to check, once right before the run");
@@ -453,7 +502,9 @@ fn a_flow_with_no_risk_runs_in_the_sessions_own_tab_after_the_start_page_and_the
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0].decision, "auto");
     assert!(
-        rows[0].summary.contains("flow zptah-m0-test #"),
+        rows[0]
+            .summary
+            .contains("flow zptah-m0-test on example.com #"),
         "{}",
         rows[0].summary
     );
@@ -504,6 +555,8 @@ fn a_flow_that_reads_data_never_gets_yes_and_its_data_is_cleaned_and_fenced() {
         vec![vec![
             "flow",
             "run",
+            "--site",
+            SITE,
             "--param",
             "q=tea",
             "--limit",
@@ -578,24 +631,33 @@ fn the_hash_covers_the_flow_and_the_parameters() {
     let flow = example_flow();
     let none = BTreeMap::new();
     let q = |v: &str| BTreeMap::from([("q".to_owned(), v.to_owned())]);
-    let base = model::flow_hash(&flow, &none);
-    assert_eq!(base, model::flow_hash(&flow, &none), "stable");
+    let base = model::flow_hash(&flow, SITE, &none);
+    assert_eq!(base, model::flow_hash(&flow, SITE, &none), "stable");
     assert_eq!(base.len(), 64);
     assert_ne!(
         base,
-        model::flow_hash(&flow, &q("a")),
+        model::flow_hash(&flow, SITE, &q("a")),
         "params are part of it"
     );
     assert_ne!(
-        model::flow_hash(&flow, &q("a")),
-        model::flow_hash(&flow, &q("b"))
+        model::flow_hash(&flow, SITE, &q("a")),
+        model::flow_hash(&flow, SITE, &q("b"))
+    );
+    assert_ne!(
+        base,
+        model::flow_hash(&flow, "other.example", &none),
+        "the site is part of it"
     );
     let mut moved = flow.clone();
     moved["createdAt"] = json!("2026-11-28T00:00:00Z");
-    assert_ne!(base, model::flow_hash(&moved, &none), "createdAt is kept");
+    assert_ne!(
+        base,
+        model::flow_hash(&moved, SITE, &none),
+        "createdAt is kept"
+    );
     let mut edited = flow.clone();
     edited["steps"][1]["action"]["intent"] = json!("click the \"Delete\" link");
-    assert_ne!(base, model::flow_hash(&edited, &none));
+    assert_ne!(base, model::flow_hash(&edited, SITE, &none));
     // The order of the keys does not matter.
     assert_eq!(
         model::canonical(&json!({"b": 1, "a": {"d": 1, "c": [2, {"y": 1, "x": 2}]}})),
@@ -626,7 +688,7 @@ fn a_risky_flow_asks_once_for_the_whole_run_listing_the_steps_and_the_parameter_
             "button",
         ),
     );
-    flow["params"] = json!(["q"]);
+    flow["params"] = params_of(&["q"]);
     flow["steps"].as_array_mut().unwrap().insert(
         1,
         step(
@@ -648,6 +710,7 @@ fn a_risky_flow_asks_once_for_the_whole_run_listing_the_steps_and_the_parameter_
     assert_eq!(card.tool, "flow_run");
     let ActionDesc::FlowRun {
         name,
+        site,
         risky,
         params,
     } = &card.facts.action
@@ -655,10 +718,11 @@ fn a_risky_flow_asks_once_for_the_whole_run_listing_the_steps_and_the_parameter_
         panic!("{:?}", card.facts.action);
     };
     assert_eq!(name, NAME);
+    assert_eq!(site, SITE);
     assert_eq!(
         params,
-        &vec![("q".to_owned(), 10)],
-        "the name and the length"
+        &vec![("q".to_owned(), "tea leaves".to_owned())],
+        "the name and the value"
     );
     assert!(
         risky.iter().any(|r| r.contains("Delete account")),
@@ -671,18 +735,14 @@ fn a_risky_flow_asks_once_for_the_whole_run_listing_the_steps_and_the_parameter_
     assert!(lines.contains("run the flow \"zptah-m0-test\""), "{lines}");
     assert!(lines.contains("Steps that need your OK:"), "{lines}");
     assert!(
-        lines.contains("Parameters: q (10 characters). The values are not shown."),
+        lines.contains("Parameters:") && lines.contains("- q: \"tea leaves\""),
         "{lines}"
-    );
-    assert!(
-        !lines.contains("tea leaves"),
-        "the value is never on the card: {lines}"
     );
     // The Vietnamese card has the same parts.
     let vi = card.text_in(Lang::Vi);
     assert!(
         vi.headline.contains("chạy luồng")
-            && vi.lines.iter().any(|l| l.contains("Tham số: q (10 ký tự)"))
+            && vi.lines.iter().any(|l| l.contains("- q: \"tea leaves\""))
     );
     // The parameter went to Ardia as one token, after the check and the approval.
     let sent = runs(&a);
@@ -692,6 +752,8 @@ fn a_risky_flow_asks_once_for_the_whole_run_listing_the_steps_and_the_parameter_
         vec![
             "flow",
             "run",
+            "--site",
+            SITE,
             "--yes",
             "--param",
             "q=tea leaves",
@@ -868,7 +930,7 @@ fn a_password_or_code_never_runs_and_no_card_can_override_it() {
         quiet_flow(),
         fill("{{password}}", "Field", "type into Field"),
     );
-    named["params"] = json!(["password"]);
+    named["params"] = params_of(&["password"]);
     cases.push((
         "a parameter called password",
         named,
@@ -879,17 +941,17 @@ fn a_password_or_code_never_runs_and_no_card_can_override_it() {
         quiet_flow(),
         fill("{{secret}}", "Password", "type into Password"),
     );
-    by_name["params"] = json!(["secret"]);
+    by_name["params"] = params_of(&["secret"]);
     cases.push(("a field named Password", by_name, json!({"secret": "x"})));
     // Vietnamese lexicon, and a one-time code by the intent.
     let mut vi = with_step(quiet_flow(), fill("{{v}}", "Mật khẩu", "nhập mật khẩu"));
-    vi["params"] = json!(["v"]);
+    vi["params"] = params_of(&["v"]);
     cases.push(("a Vietnamese password field", vi, json!({"v": "x"})));
     let mut otp = with_step(
         quiet_flow(),
         fill("{{c}}", "Code", "enter the one-time code"),
     );
-    otp["params"] = json!(["c"]);
+    otp["params"] = params_of(&["c"]);
     cases.push(("a one-time code", otp, json!({"c": "123456"})));
     // A value Ardia redacted when it recorded the flow (a typed password), with no parameter.
     cases.push((
@@ -940,7 +1002,7 @@ fn a_card_number_in_a_parameter_asks_every_time_and_a_parameter_the_flow_lacks_i
             "textbox",
         ),
     );
-    flow["params"] = json!(["q"]);
+    flow["params"] = params_of(&["q"]);
     let a = flow_act_with(BrowserLevel::Act, no_limits(), flow);
     a.answer(Some(UserAnswer::AllowConversation));
     let (error, text) = run(
@@ -990,7 +1052,7 @@ fn searchy_flow() -> Value {
             "textbox",
         ),
     );
-    flow["params"] = json!(["q"]);
+    flow["params"] = params_of(&["q"]);
     flow
 }
 
@@ -1142,7 +1204,18 @@ fn a_stop_kills_a_running_flow_and_says_it_may_have_run() {
         let up = a.up.clone();
         move || call(&up, "flow_run", json!({"name": NAME}))
     });
-    assert!(wait_until(|| a.r.runner.lock().hanging == 1));
+    // Before the run, the check of a flow reads the grant book (a sqlite file) for every step and
+    // address, and opens the tab: on a slow file system (Windows CI) that takes longer than the
+    // 1.5 seconds `wait_until` gives. The fake hangs for 20 seconds once it is reached.
+    let mut reached = false;
+    for _ in 0..1500 {
+        if a.r.runner.lock().hanging == 1 {
+            reached = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(reached, "the flow run never reached the fake");
     assert!(a.up.working(0));
     a.up.stop_turn(0);
     let (error, text) = worker.join().unwrap();
@@ -1177,7 +1250,7 @@ fn an_unknown_outcome_is_never_repeated() {
 #[test]
 fn a_value_never_becomes_an_option() {
     let mut flow = quiet_flow();
-    flow["params"] = json!(["q", "n"]);
+    flow["params"] = params_of(&["q", "n"]);
     let a = flow_act_with(BrowserLevel::Act, no_limits(), flow);
     let (error, text) = run(
         &a,
@@ -1187,7 +1260,10 @@ fn a_value_never_becomes_an_option() {
     let sent = runs(&a);
     assert_eq!(
         sent[0],
-        vec!["flow", "run", "--yes", "--param", "n=-5", "--param", "q=--yes", "--", NAME]
+        vec![
+            "flow", "run", "--site", SITE, "--yes", "--param", "n=-5", "--param", "q=--yes", "--",
+            NAME
+        ]
     );
     assert_eq!(yes_count(&sent[0]), 1, "the one --yes is the gate's");
     // The same values in a flow that reads: no standalone option at all.
@@ -1197,7 +1273,7 @@ fn a_value_never_becomes_an_option() {
     let sent = runs(&b);
     assert_eq!(
         sent[0],
-        vec!["flow", "run", "--param", "q=--yes", "--", NAME]
+        vec!["flow", "run", "--site", SITE, "--param", "q=--yes", "--", NAME]
     );
     assert_eq!(yes_count(&sent[0]), 0);
     // What can not be a name or a value is refused before any process runs.
@@ -1223,11 +1299,12 @@ fn a_value_never_becomes_an_option() {
     // The model: `--yes` is the caller's, every option is before `--`, the name after it.
     let (cmd, values) = model::run_argv(
         NAME,
+        SITE,
         false,
         &BTreeMap::from([("k".to_owned(), "-1".to_owned())]),
         &model::RunOptions::default(),
     );
-    assert_eq!(cmd, ["flow", "run", "--param", "k=-1"]);
+    assert_eq!(cmd, ["flow", "run", "--site", SITE, "--param", "k=-1"]);
     assert_eq!(values, [NAME]);
     assert!(matches!(model::flow_name("a.b_c-d").map(|_| ()), Ok(())));
     assert_eq!(model::param_key("_ok1").unwrap(), "_ok1");
@@ -1272,6 +1349,7 @@ fn flow_save_asks_validates_the_name_and_is_never_granted() {
         name,
         steps,
         replaces,
+        ..
     } = &card.facts.action
     else {
         panic!("{:?}", card.facts.action);
@@ -1318,7 +1396,10 @@ fn flow_save_needs_steps_says_when_it_replaces_and_reports_a_refusal() {
     let (error, text) = a.call("flow_save", json!({"name": "x"}));
     assert!(error && text.contains("no recorded steps"), "{text}");
     assert!(a.cards().is_empty() && a.r.runner.lock().flow_saves.is_empty());
-    recorded_steps(&a);
+    // The steps start on the flow's own site (a flow of that name and site is replaced).
+    a.r.runner.lock().flow_steps = Some(json!([
+        {"seq": 1, "command": ["open", "https://example.com/"], "url": "https://example.com/", "ok": true, "requests": [], "notKept": 0}
+    ]));
     // A flow of that name exists: the card says it may be replaced.
     let (error, text) = a.call("flow_save", json!({"name": NAME}));
     assert!(!error, "{text}");
@@ -1328,7 +1409,7 @@ fn flow_save_needs_steps_says_when_it_replaces_and_reports_a_refusal() {
     }
     assert!(card_lines(&a, 0)
         .iter()
-        .any(|l| l.contains("already exists and may be replaced")));
+        .any(|l| l.contains("already exists on this site and may be replaced")));
     // Ardia refuses the save: the Mono is told, nothing is repeated.
     a.r.runner.lock().flow_save_refused = Some("a flow with that name exists".into());
     let (error, text) = a.call("flow_save", json!({"name": "y"}));
@@ -1351,7 +1432,7 @@ fn the_flow_kinds_are_read_from_their_commands() {
         quiet_flow(),
         json!({"seq": 13, "command": ["find", "label", "Email", "fill", "a@b.c"], "url": "", "action": {"type": "click"}}),
     );
-    let parsed = model::parse_flow(&json!({"flow": flow}), NAME).unwrap();
+    let parsed = model::parse_flow(&json!({"flow": flow}), NAME, SITE).unwrap();
     assert_eq!(
         parsed.steps[0].kind,
         StepKind::Open("https://example.com/".into())
@@ -1362,18 +1443,21 @@ fn the_flow_kinds_are_read_from_their_commands() {
     assert_eq!(parsed.steps[2].names, vec!["Email".to_owned()]);
     assert!(!parsed.is_data());
     assert!(model::parse_flow(
-        &json!({"flow": {"name": NAME, "kind": 3, "steps": []}}),
-        NAME
+        &json!({"flow": {"name": NAME, "site": SITE, "kind": 3, "steps": []}}),
+        NAME,
+        SITE
     )
     .is_err());
     assert!(model::parse_flow(
-        &json!({"flow": {"name": NAME, "writes": "yes", "steps": []}}),
-        NAME
+        &json!({"flow": {"name": NAME, "site": SITE, "writes": "yes", "steps": []}}),
+        NAME,
+        SITE
     )
     .is_err());
     assert!(model::parse_flow(
-        &json!({"flow": {"name": NAME, "steps": [], "params": 5}}),
-        NAME
+        &json!({"flow": {"name": NAME, "site": SITE, "steps": [], "params": 5}}),
+        NAME,
+        SITE
     )
     .is_err());
 }

@@ -258,6 +258,11 @@ impl ArdiaUpstream {
     /// others are reported and left alone.
     fn close_popups(&self, id: i64, before: &Watch, loose: &[&Target], out: &mut Effects) {
         let openers = self.openers(id);
+        // Without the opener of the bound tab nothing can be told to be this page's: the popups
+        // are left alone and the window may have been left open.
+        if before.opener.is_none() {
+            out.unchecked = true;
+        }
         for target in loose {
             let shown = defense::redact_url_secrets(&one_line(&target.url));
             let ours = match (&openers, &before.opener) {

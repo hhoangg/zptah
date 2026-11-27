@@ -295,6 +295,9 @@ pub(crate) struct Conversation {
     /// For each run that started, whether it was marked no-wake.
     #[cfg(test)]
     pub(super) launched_no_wake: Vec<bool>,
+    /// For each run that started: whether its settings said `automated` and `automatic_resume`.
+    #[cfg(test)]
+    pub(super) launched_marks: Vec<(bool, bool)>,
     notification_cancelled: bool,
     /// The store's saved-draft flag, until the conversation loads its own.
     pub(crate) draft_hint: bool,
@@ -804,6 +807,8 @@ impl Conversation {
             launched: Vec::new(),
             #[cfg(test)]
             launched_no_wake: Vec::new(),
+            #[cfg(test)]
+            launched_marks: Vec::new(),
             notification_cancelled: false,
             draft_hint: false,
             model: std::env::var(format!(
@@ -1476,6 +1481,10 @@ impl Conversation {
             || self.settings.orchestrator
             || self.settings.access == AccessMode::ReadOnly;
         let mut settings = self.settings.clone();
+        // These two belong to this run only: taken, so they never stick to the conversation and
+        // reach the next message the user types.
+        settings.automated = std::mem::take(&mut self.settings.automated);
+        settings.automatic_resume = std::mem::take(&mut self.settings.automatic_resume);
         if let Some(model) = self.model_info() {
             for control in &model.controls {
                 settings
@@ -1581,7 +1590,11 @@ impl Conversation {
             self.mobile_no_wake_ids.remove(id);
         }
         #[cfg(test)]
-        self.launched_no_wake.push(no_wake);
+        {
+            self.launched_no_wake.push(no_wake);
+            self.launched_marks
+                .push((settings.automated, settings.automatic_resume));
+        }
         cx.background_executor()
             .spawn(async move {
                 crate::runtime::remote::run_without_waking(no_wake, || {

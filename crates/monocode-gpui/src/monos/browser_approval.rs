@@ -562,7 +562,11 @@ impl Monos {
             let target = site.clone();
             let row_id: SharedString = format!("mono-browser-grant-revoke-{ix}").into();
             grants_card = grants_card.child(setting(
-                &format!("{site}: {}", category_label(*category)),
+                &format!(
+                    "{}: {}",
+                    monocode_core::mono::browser::trust::grants::grant_label(site),
+                    category_label(*category)
+                ),
                 None,
                 crate::modal::ghost_button(row_id.clone(), "Revoke")
                     .debug_selector({

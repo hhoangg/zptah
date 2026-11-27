@@ -12,6 +12,27 @@ use super::super::{MonoBrowserStore, BROWSER_TABLES, UNAVAILABLE};
 use rusqlite::params;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// How a grant key is shown to the user. A site is shown as it is; a flow grant
+/// (`flow:<name>@<site>:<hash>`, see the flow tools) as `Flow <name> on <site>`, never as the key.
+pub fn grant_label(key: &str) -> String {
+    let flow = key
+        .strip_prefix("flow:")
+        .and_then(|rest| rest.rsplit_once(':'))
+        .and_then(|(who, _hash)| who.split_once('@'));
+    match flow {
+        Some((name, site)) => {
+            let clean = |t: &str| -> String {
+                t.chars()
+                    .map(|c| if c.is_control() { ' ' } else { c })
+                    .take(80)
+                    .collect()
+            };
+            format!("Flow {} on {}", clean(name), clean(site))
+        }
+        None => key.to_owned(),
+    }
+}
+
 /// Grants of one conversation of one Mono. With a store they live in the database and are read on
 /// every call, so a Stop or a revoke from another handle takes effect at once. Without one (no
 /// database) they live in memory.

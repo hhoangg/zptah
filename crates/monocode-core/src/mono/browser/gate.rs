@@ -184,6 +184,9 @@ pub struct Policy {
     /// The gate fronts Ardia (`browser_open`, `browser_snapshot`, ...), not the Playwright-style
     /// tool set of the extension.
     pub ardia: bool,
+    /// `browser_upload` can run: there is a private folder for the copies of uploaded files
+    /// ([`ardia::upstream::private_staging_dir`]). Without one the tool is not offered.
+    pub uploads: bool,
 }
 impl Policy {
     pub fn new(trust: BrowserLevel, blocked_origins: Vec<String>) -> Self {
@@ -192,7 +195,13 @@ impl Policy {
             blocked_origins,
             allowed_origins: Vec::new(),
             ardia: false,
+            uploads: true,
         }
+    }
+    /// The same rules for a system with (`true`) or without a private upload folder.
+    pub fn with_uploads(mut self, uploads: bool) -> Self {
+        self.uploads = uploads;
+        self
     }
     /// The same rules with the Mono's allowed origins.
     pub fn with_allowed_origins(mut self, allowed: Vec<String>) -> Self {
@@ -269,6 +278,9 @@ impl Policy {
         if !acts && !ardia::upstream::TOOLS.contains(&tool) {
             return Verdict::Deny(format!("{tool} is not an available browser tool."));
         }
+        if tool == "browser_upload" && !self.uploads {
+            return Verdict::Deny("browser_upload is not available on this system: there is no private folder for the copies of uploaded files.".into());
+        }
         let adopts = tool == "browser_tabs" && args["action"] == "adopt_active";
         if (acts || adopts) && self.trust == BrowserLevel::ReadOnly {
             return Verdict::Deny(format!(
@@ -286,7 +298,8 @@ impl Policy {
         if self.ardia {
             return ardia::upstream::TOOLS.contains(&tool)
                 || (self.trust != BrowserLevel::ReadOnly
-                    && ardia::upstream::ACT_TOOLS.contains(&tool));
+                    && ardia::upstream::ACT_TOOLS.contains(&tool)
+                    && (self.uploads || tool != "browser_upload"));
         }
         self.trust.offers(tool)
     }

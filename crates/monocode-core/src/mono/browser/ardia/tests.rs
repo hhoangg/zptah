@@ -171,6 +171,12 @@ pub(super) struct State {
     pub flows: Vec<Value>,
     /// What `flow steps` lists (`None`: the recorded fixture).
     pub flow_steps: Option<Value>,
+    /// The `steps` of a successful `flow run` reply (`None`: the flow's own).
+    pub flow_run_steps: Option<Value>,
+    /// The bind reply of an own tab carries no `targetId`.
+    pub bind_no_target: bool,
+    /// `savedThrough` of `flow steps` (`None`: the recorded fixture's).
+    pub flow_saved_through: Option<i64>,
     /// Runs when the n-th `flow show` arrives (1 is the first), before its answer.
     pub on_flow_show: Option<(usize, CloseHook)>,
     /// How many `flow show` the fake answered.
@@ -471,6 +477,11 @@ impl Runner for FakeRunner {
                         let mut reply = json_of(BIND);
                         reply["data"]["appTabId"] = json!(id);
                         reply["data"]["url"] = json!(st.url);
+                        if st.bind_no_target {
+                            if let Some(data) = reply["data"].as_object_mut() {
+                                data.remove("targetId");
+                            }
+                        }
                         ok(reply.to_string())
                     }
                     ["get", "url"] => {
@@ -704,6 +715,32 @@ impl Rig {
     }
 }
 
+/// The act settings of a Mono that only reads: a card queue that answers Allow once at once, so
+/// a read tool that asks (an address outside the task) goes through. Without act settings a
+/// browser has nothing to judge with and refuses to open or read a page.
+pub(super) fn quiet_act(mono: &str) -> crate::mono::browser::gate::ActConfig {
+    use crate::mono::browser::trust::approval::{ApprovalQueue, UserAnswer};
+    let queue = ApprovalQueue::new(mono);
+    let weak = Arc::downgrade(&queue);
+    // The subscription lives as long as the process: the queue is the test's own.
+    let sub = queue.subscribe(move || {
+        let Some(queue) = weak.upgrade() else { return };
+        for card in queue.pending() {
+            queue.answer(&card.id, UserAnswer::AllowOnce);
+        }
+    });
+    std::mem::forget(sub);
+    crate::mono::browser::gate::ActConfig {
+        level: BrowserLevel::ReadOnly,
+        rules: crate::mono::browser::soul_rules::Parsed::default(),
+        store: None,
+        mono_label: "Mono".into(),
+        profile: None,
+        approval_timeout: Duration::from_secs(10),
+        queue,
+    }
+}
+
 pub(super) fn upstream(
     rig: &Rig,
     origins: Origins,
@@ -724,6 +761,7 @@ pub(super) fn upstream_of(
         origins,
         output_dir: Some(std::env::temp_dir()),
         database,
+        act: Some(quiet_act(mono)),
         ..Config::default()
     });
     upstream
@@ -1396,6 +1434,7 @@ fn screenshots_go_into_the_output_folder() {
         origins: no_limits(),
         output_dir: Some(dir.path().to_path_buf()),
         database: None,
+        act: Some(quiet_act("mono-1")),
         ..Config::default()
     });
     call(&up, "browser_open", json!({"url": "https://example.com"}));
@@ -1452,15 +1491,30 @@ fn only_read_tools_are_offered_and_listed() {
         .map(|t| t["name"].as_str().unwrap().to_owned())
         .collect();
     // The upstream defines the read tools and the act tools; the gate lists the act tools only
-    // at the act level (see `act_tests`).
+    // at the act level (see `act_tests`). This Mono has no private folder for uploaded copies, so
+    // `browser_upload` is not listed (see `flow_fix_tests`).
     let expected: Vec<String> = TOOLS
         .iter()
         .chain(&ACT_TOOLS)
+        .filter(|t| **t != "browser_upload")
         .map(|t| t.to_string())
         .collect();
     assert_eq!(names, expected);
-    // A Mono with no act settings loaded runs no act tool.
+    // A Mono that only reads runs no act tool.
     let (error, text) = call(&up, "browser_click", json!({"ref": "e1"}));
+    assert!(error && text.contains("can only read"), "{text}");
+    // And one with no act settings loaded runs none either.
+    let r2 = rig(true);
+    let bare = ArdiaUpstream::with_bind_delay(
+        "mono-bare",
+        r2.controller.clone(),
+        Duration::from_millis(1),
+    );
+    bare.configure(Config {
+        profile: PROFILE.into(),
+        ..Config::default()
+    });
+    let (error, text) = call(&bare, "browser_click", json!({"ref": "e1"}));
     assert!(error && text.contains("no act settings"), "{text}");
     let (error, text) = call(&up, "browser_eval", json!({}));
     assert!(error && text.contains("not an available"));
@@ -1930,6 +1984,7 @@ fn changing_the_ardia_profile_closes_the_old_tabs_and_never_rebinds_them() {
         origins: no_limits(),
         output_dir: None,
         database: None,
+        act: Some(quiet_act("mono-1")),
         ..Config::default()
     });
     // A tab of the old profile is not this Mono's any more, whether or not it is closed yet.
@@ -2060,6 +2115,7 @@ fn only_a_browser_turned_off_or_a_new_profile_ends_sessions_not_an_origin_edit()
         origins: Origins::new(&[], &["https://x.example".to_owned()]),
         output_dir: None,
         database: None,
+        act: Some(quiet_act("mono-1")),
         ..Config::default()
     });
     std::thread::sleep(Duration::from_millis(50));
@@ -2204,6 +2260,8 @@ fn a_tab_opened_before_a_failed_bind_stays_tracked_so_it_is_closed_later() {
     let r = rig(false);
     launched(&r);
     let up = upstream(&r, no_limits(), None);
+    // The page is the task's own: no card is shown, so the open may be repeated.
+    up.note_user_domain(0, "https://example.com");
     // The bind finds Ardia gone (and the close can not reach it either).
     r.runner.lock().gone_on_next_browse = true;
     let (error, _) = call(&up, "browser_open", json!({"url": "https://example.com"}));
@@ -2378,6 +2436,7 @@ fn a_tab_on_a_page_the_mono_may_not_use_is_not_described_in_the_list() {
         origins: Origins::new(&[], &["https://example.com".to_owned()]),
         output_dir: None,
         database: None,
+        act: Some(quiet_act("mono-1")),
         ..Config::default()
     });
     let (error, text) = call(&up, "browser_tabs", json!({"action": "list"}));

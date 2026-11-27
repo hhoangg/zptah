@@ -127,6 +127,10 @@ pub(super) trait BrowserOps: Send + Sync {
     /// Whether a browser call of the conversation (the app session id) is running. A lock lookup,
     /// safe on the UI thread.
     fn browser_working(&self, conversation: i64) -> bool;
+    /// Whether this system can send files to a page: there is a private folder for the copies of
+    /// uploaded files (not Windows, and not Linux without `XDG_RUNTIME_DIR`). A cheap lookup, safe
+    /// on the UI thread.
+    fn uploads_available(&self) -> bool;
     /// Stop on the "Working in Ardia" row: ends the browser work of the conversation's turn.
     /// Non-blocking, safe on the UI thread.
     fn stop_browser(&self, mono_id: &str, conversation: i64);
@@ -162,6 +166,9 @@ impl BrowserOps for RealOps {
     }
     fn stop_browser(&self, mono_id: &str, conversation: i64) {
         monocode_core::mono::browser::stop_browser(mono_id, conversation);
+    }
+    fn uploads_available(&self) -> bool {
+        monocode_core::mono::browser::uploads_available()
     }
 }
 
@@ -199,6 +206,9 @@ impl BrowserOps for InertOps {
         false
     }
     fn stop_browser(&self, _mono_id: &str, _conversation: i64) {}
+    fn uploads_available(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

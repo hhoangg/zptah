@@ -489,6 +489,24 @@ fn the_staging_folder_is_outside_every_folder_a_mono_can_write_to() {
     }
 }
 
+/// Sets the modification time of a file or a folder. A folder is opened for its attributes only
+/// on Windows (`File::open` of a folder is refused there).
+pub(super) fn set_mtime(path: &std::path::Path, at: std::time::SystemTime) {
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_WRITE_ATTRIBUTES, and FILE_FLAG_BACKUP_SEMANTICS to open a folder.
+        std::fs::OpenOptions::new()
+            .access_mode(0x100)
+            .custom_flags(0x0200_0000)
+            .open(path)
+            .unwrap()
+    };
+    #[cfg(not(windows))]
+    let file = std::fs::File::open(path).unwrap();
+    file.set_modified(at).unwrap();
+}
+
 #[test]
 fn leftover_copies_are_swept_when_an_upstream_gets_its_settings() {
     let a = act();
@@ -518,12 +536,12 @@ fn leftover_copies_are_swept_when_an_upstream_gets_its_settings() {
         "nobody owns this folder"
     );
     assert!(!root.join("stray.txt").exists());
-    // Older than a day goes even when its conversation is live.
+    // Older than a day goes even when its conversation is live: by the newest thing inside it
+    // (the folder's own time alone does not count, see `flow_fix_tests`).
     let old = std::time::SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60);
-    std::fs::File::open(&live)
-        .unwrap()
-        .set_modified(old)
-        .unwrap();
+    for path in [live.join("1/cv.pdf"), live.join("1"), live.clone()] {
+        set_mtime(&path, old);
+    }
     let _third = configure("mono-sweep-3");
     assert!(!live.exists());
 }

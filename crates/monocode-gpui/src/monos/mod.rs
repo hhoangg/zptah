@@ -1129,14 +1129,16 @@ impl Monos {
                 let source = id.clone();
                 this.observations.push(cx.subscribe(
                     &view,
-                    move |this, _, _: &crate::conversation::UsageResumed, cx| {
+                    move |this, _, resumed: &crate::conversation::UsageResumed, cx| {
+                        let automatic = resumed.automatic;
                         let empty = this.roster.get(&source).is_none_or(|m| m.outbox.is_empty());
                         if empty {
                             this.enqueue(
                                 &source,
                                 "Continue from where you left off.".into(),
                                 Vec::new(),
-                                false,
+                                // Resumed by the app at the reset: not words the user wrote.
+                                automatic,
                                 cx,
                             );
                         } else {

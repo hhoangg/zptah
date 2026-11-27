@@ -9,11 +9,12 @@
 //! that is not enough the step asks with [`Category::Unclear`], which is never granted.
 //!
 //! What no approval overrides (the run is refused): an address that is blocked or is not a web
-//! page, a step that types into a field named like a password or a one-time code, a value Ardia
-//! redacted when it recorded the flow (a typed password), a `fill-otp` step, a parameter named like
-//! a password or code, a parameter the flow does not declare, a flow that says it only reads but
-//! has a step that writes, and a soul rule that blocks.
-use super::flow_model::{self as model, Flow, Kind, Step, StepKind};
+//! page, a step that types into a field named like a password or a one-time code, a flow with a
+//! `secret` parameter, a value Ardia redacted when it recorded the flow (a typed password), a
+//! `fill-otp` step, an `upload` step or any step that names a file path, a parameter named like a
+//! password or code, a parameter the flow does not declare, a flow that says it only reads but has
+//! a step that writes, and a soul rule that blocks.
+use super::flow_model::{self as model, Flow, Kind, ParamSource, Step, StepKind};
 use super::fresh::{self, Attrs};
 use super::*;
 use crate::mono::browser::gate::extension::act::looks_vietnamese;
@@ -112,16 +113,28 @@ fn quiet_key(key: &str) -> bool {
 /// A step as the card names it: its intent, else its command, on one line.
 fn describe(step: &Step) -> String {
     let base = if step.intent.trim().is_empty() {
-        step.command
+        model::masked_command(&step.command)
             .iter()
             .filter(|t| !t.to_lowercase().contains("<redacted>"))
             .cloned()
             .collect::<Vec<_>>()
             .join(" ")
     } else {
-        step.intent.clone()
+        model::masked_text(&step.intent, step)
     };
-    clean(&one_line(&base)).chars().take(100).collect()
+    let text: String = clean(&one_line(&base)).chars().take(100).collect();
+    // The target as the command names it, next to what the recording says it is: a recorded
+    // intent is only a note, the command is what Ardia replays.
+    match model::target_of(&step.command) {
+        Some(target) => format!(
+            "{text} [{}]",
+            clean(&one_line(&target))
+                .chars()
+                .take(60)
+                .collect::<String>()
+        ),
+        None => text,
+    }
 }
 
 fn seq_of(step: &Step, index: usize) -> String {
@@ -172,7 +185,7 @@ impl ArdiaUpstream {
         params: &BTreeMap<String, String>,
     ) -> Classified {
         let mut c = Classified {
-            hash: model::flow_hash(&flow.raw, params),
+            hash: model::flow_hash(&flow.raw, &flow.site, params),
             site: registrable_domain_of(&flow.start_url).unwrap_or_default(),
             risks: Vec::new(),
             categories: BTreeSet::new(),
@@ -248,8 +261,36 @@ impl ArdiaUpstream {
         }
 
         // ---- parameters ----
+        for p in &flow.params {
+            match &p.source {
+                ParamSource::Typed => {}
+                // A password field: its value is never recorded and a Mono never supplies one.
+                ParamSource::Secret => c.refuse_secret(
+                    format!("parameter {} is a password field of the flow", p.name),
+                    format!("Not run: this flow has a secret parameter (`{}`, a password field), which a Mono never supplies. Ask the user to run the flow themselves.", clean(&one_line(&p.name)).chars().take(40).collect::<String>()),
+                ),
+                ParamSource::Other(source) => c.risk(
+                    format!(
+                        "parameter `{}` comes from a source zptah does not know ({})",
+                        clean(&one_line(&p.name)).chars().take(40).collect::<String>(),
+                        clean(&one_line(source)).chars().take(20).collect::<String>()
+                    ),
+                    [Category::Unclear],
+                ),
+            }
+            // A parameter no step names: zptah can not tell where its value would go.
+            if !flow.steps.iter().any(|s| model::uses_param(s, &p.name)) {
+                c.risk(
+                    format!(
+                        "parameter `{}` is not named by any step, so zptah can not tell where it goes",
+                        clean(&one_line(&p.name)).chars().take(40).collect::<String>()
+                    ),
+                    [Category::Unclear],
+                );
+            }
+        }
         for key in params.keys() {
-            if !flow.params.contains(key) {
+            if !flow.declares(key) {
                 c.refuse(
                     AuditDecision::Blocked,
                     format!("the flow has no parameter {key}"),
@@ -258,7 +299,7 @@ impl ArdiaUpstream {
                         if flow.params.is_empty() {
                             "none".to_owned()
                         } else {
-                            flow.params
+                            flow.param_names()
                                 .iter()
                                 .map(|p| clean(&one_line(p)))
                                 .collect::<Vec<_>>()
@@ -288,7 +329,8 @@ impl ArdiaUpstream {
             );
             return;
         }
-        self.classify_urls(id, flow, params, &urls, c);
+        let sites = self.classify_urls(id, flow, params, &urls, c);
+        self.classify_param_values(id, params, &sites, c);
 
         // ---- the steps ----
         let unmapped: Vec<&String> = params
@@ -311,16 +353,18 @@ impl ArdiaUpstream {
         params: &BTreeMap<String, String>,
         urls: &[(String, String)],
         c: &mut Classified,
-    ) {
+    ) -> BTreeSet<String> {
         let origins = self.config().origins;
         let mut origins_seen: BTreeSet<String> = BTreeSet::new();
+        // Every site the flow can reach: where a parameter value may end up.
+        let mut sites: BTreeSet<String> = BTreeSet::new();
         for (url, label) in urls {
-            let mut candidates = vec![url.clone()];
+            let mut candidates = vec![(url.clone(), false)];
             let substituted = model::substitute(url, params);
             if substituted != *url {
-                candidates.push(substituted);
+                candidates.push((substituted, true));
             }
-            for candidate in candidates {
+            for (candidate, with_params) in candidates {
                 if candidate == "about:blank" {
                     continue;
                 }
@@ -360,11 +404,15 @@ impl ArdiaUpstream {
                     Ok(()) => {}
                 }
                 let domain = registrable_domain_of(&candidate).unwrap_or_default();
-                // One look per origin: the first address of it decides.
+                if !domain.is_empty() {
+                    sites.insert(domain.clone());
+                }
+                // One look per origin: the first address of it decides. An address a parameter
+                // went into is never skipped: the same origin can carry anything in its path.
                 let origin = url::Url::parse(&candidate)
                     .map(|u| u.origin().ascii_serialization())
                     .unwrap_or_default();
-                if !origins_seen.insert(origin) {
+                if !origins_seen.insert(origin) && !with_params {
                     continue;
                 }
                 // The navigation parity of the act tools: an address outside the task, a sensitive
@@ -397,6 +445,34 @@ impl ArdiaUpstream {
                 }
             }
         }
+        sites
+    }
+
+    /// The values the Mono supplies, on every site the flow reaches (whatever field they go
+    /// into): a card number, or something read on another site.
+    fn classify_param_values(
+        &self,
+        id: i64,
+        params: &BTreeMap<String, String>,
+        sites: &BTreeSet<String>,
+        c: &mut Classified,
+    ) {
+        for (key, value) in params {
+            for site in sites {
+                let found = self
+                    .with_trust(id, |state, _| state.value_categories(value, site))
+                    .unwrap_or_default();
+                if !found.is_empty() {
+                    c.risk(
+                        format!(
+                            "parameter `{}` on {site}",
+                            clean(&one_line(key)).chars().take(40).collect::<String>()
+                        ),
+                        found,
+                    );
+                }
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -413,6 +489,21 @@ impl ArdiaUpstream {
     ) {
         let n = seq_of(step, index);
         let what = format!("step {n}: {}", describe(step));
+        if step.redacted {
+            c.refuse_secret(
+                format!("step {n} carries a value Ardia redacted when it recorded it"),
+                format!("Not run: step {n} carries a secret (Ardia redacted it when the flow was recorded), which a Mono never supplies. Ask the user to run the flow themselves."),
+            );
+            return;
+        }
+        if step.kind == StepKind::Upload || step.names_path {
+            c.refuse(
+                AuditDecision::Blocked,
+                format!("step {n} uploads a file or names a file path"),
+                format!("Not run: step {n} uploads a file or names a file path, which a flow may not do (browser_upload is the only way a Mono sends a file). Ask the user to run the flow themselves."),
+            );
+            return;
+        }
         if step.mismatch {
             c.risk(
                 format!("{what} (the recorded command and action do not agree)"),
@@ -435,6 +526,8 @@ impl ArdiaUpstream {
                     );
                 }
             }
+            // Refused above (an upload is never part of a flow).
+            StepKind::Upload => {}
             StepKind::Scroll
             | StepKind::Wait
             | StepKind::History
@@ -486,13 +579,6 @@ impl ArdiaUpstream {
         c: &mut Classified,
     ) {
         let typing = matches!(step.kind, StepKind::Fill | StepKind::Type);
-        if step.redacted {
-            c.refuse_secret(
-                format!("step {n} types a value Ardia redacted when it recorded it"),
-                format!("Not run: step {n} types a secret (Ardia redacted it when the flow was recorded), which a Mono never supplies. Ask the user to enter it themselves, then continue."),
-            );
-            return;
-        }
         let names: Vec<String> = step
             .names
             .iter()
