@@ -155,7 +155,21 @@ pub(super) struct State {
     /// Page targets `tab list` shows that DO have an `appTabId` (a tab, never closed by the
     /// gate): `(targetId, appTabId, url)`.
     pub new_tabs: Vec<(String, String, String)>,
+    /// The `openerId` `Target.getTargets` reports for a popup (by target id); a popup not listed
+    /// here was opened by the bound tab ([`BOUND_TARGET`]).
+    pub popup_openers: HashMap<String, String>,
+    /// `Target.getTargets` is refused.
+    pub targets_fail: bool,
+    /// `browse tab list` is refused.
+    pub tab_list_fails: bool,
+    /// How many page targets `tab list` shows with no `targetId` at all.
+    pub nameless_popups: usize,
+    /// The first this many `ardia call windows` are refused.
+    pub windows_fail_first: usize,
 }
+
+/// The `targetId` the bind reply gives the bound tab (the recorded one).
+pub(super) const BOUND_TARGET: &str = "E953865F9A012080E108AF815EA0A329";
 
 pub(super) struct FakeRunner {
     pub state: Mutex<State>,
@@ -264,6 +278,14 @@ impl Runner for FakeRunner {
                     ok(Value::Array(list).to_string())
                 }
                 "windows" => {
+                    if st.windows_fail_first > 0 {
+                        st.windows_fail_first -= 1;
+                        return Ok(Output {
+                            code: 1,
+                            stdout: String::new(),
+                            stderr: "windows unavailable".into(),
+                        });
+                    }
                     if st.windows_fail {
                         return Ok(Output {
                             code: 1,
@@ -370,6 +392,13 @@ impl Runner for FakeRunner {
                 }
                 match cmd.as_slice() {
                     ["tab", "list"] => {
+                        if st.tab_list_fails {
+                            return Ok(Output {
+                                code: 1,
+                                stdout: r#"{"success":false,"data":null,"error":"tab list is unavailable","code":"command_failed"}"#.into(),
+                                stderr: String::new(),
+                            });
+                        }
                         // The recorded list: the first entry is the tab the session is bound to.
                         let mut reply = json_of(TAB_LIST);
                         if let Some(id) = st.tabs.last() {
@@ -387,6 +416,9 @@ impl Runner for FakeRunner {
                         }
                         for (target, url) in &st.popups {
                             reply["data"]["tabs"].as_array_mut().unwrap().push(json!({"tabId": format!("t-{target}"), "appTabId": null, "label": null, "targetId": target, "title": "Popup", "url": url, "type": "page", "active": false, "openedBySession": false, "openedBy": null, "usedBy": []}));
+                        }
+                        for n in 0..st.nameless_popups {
+                            reply["data"]["tabs"].as_array_mut().unwrap().push(json!({"tabId": format!("t-nameless-{n}"), "appTabId": null, "label": null, "title": "Popup", "url": "https://nameless.example/", "type": "page", "active": false, "openedBySession": false, "openedBy": null, "usedBy": []}));
                         }
                         ok(reply.to_string())
                     }
@@ -1432,7 +1464,7 @@ fn only_read_tools_are_offered_and_listed() {
 
 // ---- the launch path ----
 
-fn launch_context(
+pub(super) fn launch_context(
     dir: &std::path::Path,
     profile: &str,
 ) -> (crate::store::Store, crate::agent::MonoContext) {

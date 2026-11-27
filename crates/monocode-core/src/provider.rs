@@ -1596,7 +1596,12 @@ fn run_operation(
     if let Some(runtime) = &browser {
         // Never `request.prompt`: that is the assembled prompt (Mono context, attachments, note
         // bodies, earlier assistant text, handoff briefs) and can carry words the user never wrote.
-        runtime.begin_turn(request.settings.user_prompt.as_deref().unwrap_or(""));
+        // An automation's stored prompt is the user's text (task words) but was not typed in this
+        // turn: it never lifts a Stop, only a message the user typed does (spec section 9).
+        runtime.begin_turn(
+            request.settings.user_prompt.as_deref().unwrap_or(""),
+            !request.settings.automated,
+        );
         // The extension backend asks through its own cards (`mono::browser::trust::approval`):
         // nobody can answer one in a plan run, at read-only access or without controls.
         runtime.set_can_answer(

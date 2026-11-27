@@ -552,11 +552,8 @@ impl ArdiaUpstream {
 
     /// The folder of a conversation's copies: `<staging>/<hash of the session name>`.
     fn staging_folder(&self, conversation: i64) -> Option<PathBuf> {
-        use sha2::{Digest, Sha256};
         let root = self.config().staging_dir?;
-        let digest = Sha256::digest(self.session(conversation).as_bytes());
-        let hash: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
-        Some(root.join(hash))
+        Some(root.join(staging_name(&self.session(conversation))))
     }
 
     /// Copies each approved file into its own folder, `<staging>/<session hash>/<n>/<basename>`.
@@ -570,7 +567,9 @@ impl ArdiaUpstream {
                 c.upload_seq += 1;
                 c.upload_seq
             });
-            staged.push(file.stage(&folder.join(n.to_string()))?);
+            // A Stop of the turn ends the copy of a large file.
+            let stopped = || self.not_stopped(id).is_err();
+            staged.push(file.stage(&folder.join(n.to_string()), &stopped)?);
         }
         Ok(staged)
     }
@@ -949,7 +948,10 @@ impl ArdiaUpstream {
         let reason = ev.reason.clone();
         // What the act may do outside the tab (a new window, the window's profile).
         let watch = (in_this_tab.is_none()
-            && matches!(plan.op, Op::Click | Op::Press | Op::Select | Op::Check))
+            && matches!(
+                plan.op,
+                Op::Click | Op::Press | Op::Select | Op::Check | Op::Type | Op::Fill | Op::Hover
+            ))
         .then(|| self.watch_before(id, &read.tab));
         let data = match self.browse(id, &cmd, &value_refs) {
             Ok(data) => data,
@@ -985,10 +987,12 @@ impl ArdiaUpstream {
                 // Unreachable after the command was sent, a timeout, an unreadable reply, a
                 // Stop: nobody knows whether it ran. Never repeated (see `call_tool`).
                 let stopped = matches!(other, Failure::Cancelled);
-                if let Some(watch) = watch {
-                    // A window the act may have opened is closed all the same.
-                    let _ = self.watch_after(id, &read.tab, watch);
-                }
+                // A window the act may have opened is closed all the same, also after a Stop
+                // (the cleanup ignores it), and what could not be undone is told.
+                let cleanup = watch
+                    .map(|watch| self.watch_after(id, &read.tab, watch))
+                    .unwrap_or_default()
+                    .lines();
                 let unreachable = matches!(other, Failure::Unreachable(_));
                 let _ = self.fail(id, other);
                 if unreachable {
@@ -1007,9 +1011,9 @@ impl ArdiaUpstream {
                     approval_id,
                 );
                 return Err(if stopped {
-                    format!("{STOPPED} The last action may or may not have run: look at the page before trying anything again.")
+                    format!("{STOPPED} The last action may or may not have run: look at the page before trying anything again.\n{cleanup}")
                 } else {
-                    "The result of this action is unknown: Ardia stopped answering after the command was sent, so it may or may not have run. It was NOT repeated. Look at the page (browser_snapshot) before trying again.".into()
+                    format!("The result of this action is unknown: Ardia stopped answering after the command was sent, so it may or may not have run. It was NOT repeated. Look at the page (browser_snapshot) before trying again.\n{cleanup}")
                 });
             }
         };
@@ -1093,6 +1097,9 @@ impl ArdiaUpstream {
         if effects.profile_restored {
             summary = format!("{summary}; put the window back on its profile");
         }
+        if effects.needs_attention() {
+            summary = format!("{summary}; a window the page opened may have been left open");
+        }
         self.row(
             id,
             &plan.tool,
@@ -1166,19 +1173,7 @@ impl ArdiaUpstream {
                 defense::redact_url_secrets(&one_line(url))
             ));
         }
-        for url in &effects.closed {
-            body.push_str(&format!(
-                "- The page opened a new window ({url}); zptah closed it. Use browser_navigate with that address if you need it (it is checked like any address).\n"
-            ));
-        }
-        for url in &effects.left_open {
-            body.push_str(&format!(
-                "- The page opened a new window ({url}) that zptah could not close. Tell the user.\n"
-            ));
-        }
-        if effects.profile_restored {
-            body.push_str("- The click had switched the user's window to another profile; zptah put it back.\n");
-        }
+        body.push_str(&effects.lines());
         if let Some(files) = files {
             body.push_str(&format!("- Attached {} file(s).\n", files.len()));
         }
@@ -1355,6 +1350,8 @@ impl ArdiaUpstream {
         self.not_stopped(id)?;
         // Only now is that exact id bound, and the reply must say it is the one that was bound.
         let bound = self.bind(id, &tab)?;
+        // The user handed this tab over: its site is part of the task.
+        self.note_user_domain(id, &url);
         self.conv(id, |c| {
             c.user_tab = Some(tab.clone());
             c.approved_user_tabs.insert(approved_key.clone());
@@ -1390,33 +1387,58 @@ impl ArdiaUpstream {
     }
 
     /// `browser_navigate` in the user's own tab: judged like any navigation by the shared
-    /// classifier (an address outside the task, a sensitive site) and asked when it says so.
+    /// classifier (an address outside the task, a sensitive site) and asked when it says so. Only
+    /// at the act level.
     pub(super) fn user_tab_navigation(&self, id: i64, url: &str, tab: &str) -> Result<(), String> {
-        let act = self.act_allowed(id, "browser_navigate")?;
+        self.act_allowed(id, "browser_navigate")?;
+        let _ = tab;
+        self.judge_navigation(id, "browser_navigate", &json!({"url": url}), url, true)
+    }
+
+    /// The decision for an address the Mono moves a tab to (`browser_navigate`, `browser_open`
+    /// as the extension's new tab): the shared classifier with the target address, so an address
+    /// outside the task (UnrelatedDomain), one that carries what the Mono read on another site
+    /// (Tainted) and the first entry to a sensitive site ask, at every level, exactly as the
+    /// extension backend did. A Mono with no act settings loaded has no card to show: nothing is
+    /// judged. `Err` is the text for the Mono (audited).
+    pub(super) fn judge_navigation(
+        &self,
+        id: i64,
+        tool: &str,
+        args: &Value,
+        url: &str,
+        user_tab: bool,
+    ) -> Result<(), String> {
+        let Some(act) = self.config().act else {
+            return Ok(());
+        };
         let page = self.conv(id, |c| c.page.clone());
-        let args = json!({"url": url});
-        let mut action = TrustAction::new("browser_navigate", &args, &page);
+        let mut action = TrustAction::new(tool, args, &page);
         action.target_url = Some(url);
-        let ev = self
-            .with_trust(id, |state, cfg| {
-                state.evaluate(
-                    &TrustConfig {
-                        level: self.level_now(cfg),
-                        rules: &cfg.rules,
-                    },
-                    &action,
-                )
-            })
-            .ok_or("This browser has no act settings loaded.")?;
-        let summary = format!("navigate the user's tab to {}", audit_url(url));
+        let Some(ev) = self.with_trust(id, |state, cfg| {
+            state.evaluate(
+                &TrustConfig {
+                    level: self.level_now(cfg),
+                    rules: &cfg.rules,
+                },
+                &action,
+            )
+        }) else {
+            return Ok(());
+        };
+        let summary = if user_tab {
+            format!("navigate the user's tab to {}", audit_url(url))
+        } else {
+            format!("{} {}", tool.trim_start_matches("browser_"), audit_url(url))
+        };
         match &ev.decision {
             Decision::Deny(reason) => {
                 self.row(
                     id,
-                    "browser_navigate",
+                    tool,
                     &page,
                     &summary,
-                    true,
+                    user_tab,
                     Some(&ev),
                     AuditDecision::Blocked,
                     reason,
@@ -1434,30 +1456,41 @@ impl ArdiaUpstream {
                 facts.url = url.to_owned();
                 facts.site_kind = site_category(url);
                 facts.rule = ev.reason.strip_prefix("soul rule: ").map(str::to_owned);
-                match self.ask_card(&act, id, "browser_navigate", facts, &ev) {
+                facts.purpose = args["purpose"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_owned);
+                match self.ask_card(&act, id, tool, facts, &ev) {
                     Ok((answer, card)) => {
-                        self.with_trust(id, |state, _| state.commit(&ev, answer));
+                        let granted = self
+                            .with_trust(id, |state, _| state.commit(&ev, answer))
+                            .unwrap_or_default();
+                        let how = if answer == Answer::AllowedTask && !granted.is_empty() {
+                            AuditDecision::AskedAllowedTask
+                        } else {
+                            AuditDecision::AskedAllowedOnce
+                        };
                         self.row(
                             id,
-                            "browser_navigate",
+                            tool,
                             &page,
                             &summary,
-                            true,
+                            user_tab,
                             Some(&ev),
-                            AuditDecision::AskedAllowedOnce,
+                            how,
                             &ev.reason,
                             Some(card),
                         );
-                        let _ = tab;
                         Ok(())
                     }
                     Err((text, audit, card)) => {
                         self.row(
                             id,
-                            "browser_navigate",
+                            tool,
                             &page,
                             &summary,
-                            true,
+                            user_tab,
                             Some(&ev),
                             audit,
                             &text,
@@ -1468,6 +1501,90 @@ impl ArdiaUpstream {
                 }
             }
             Decision::Allow | Decision::AllowByGrant(_) => Ok(()),
+        }
+    }
+
+    /// The first read of a sensitive site (a bank, a mail or payment page ...) asks once, as for
+    /// the extension. `tool` is the read tool (`browser_snapshot`, `browser_read`,
+    /// `browser_take_screenshot`) and `url` the page it read; `Err` withholds what was read.
+    pub(super) fn guard_first_read(&self, id: i64, tool: &str, url: &str) -> Result<(), String> {
+        let Some(act) = self.config().act else {
+            return Ok(());
+        };
+        let args = json!({});
+        let action = TrustAction::new(tool, &args, url);
+        let Some(ev) = self.with_trust(id, |state, cfg| {
+            state.evaluate(
+                &TrustConfig {
+                    level: self.level_now(cfg),
+                    rules: &cfg.rules,
+                },
+                &action,
+            )
+        }) else {
+            return Ok(());
+        };
+        let user_tab = self.conv(id, |c| c.bound.is_some() && c.user_tab == c.bound);
+        let summary = format!("first read of {}", audit_url(url));
+        match &ev.decision {
+            Decision::Allow | Decision::AllowByGrant(_) => Ok(()),
+            Decision::Deny(reason) => {
+                self.row(
+                    id,
+                    tool,
+                    url,
+                    &summary,
+                    user_tab,
+                    Some(&ev),
+                    AuditDecision::Blocked,
+                    reason,
+                    None,
+                );
+                Err(format!(
+                    "Not allowed: {reason}. What was read was withheld."
+                ))
+            }
+            Decision::Ask(_) => {
+                let mut facts = CardFacts::new(
+                    &act.mono_label,
+                    &ev.site,
+                    ActionDesc::Navigate,
+                    ev.categories.iter().copied().collect(),
+                );
+                facts.url = url.to_owned();
+                facts.site_kind = site_category(url);
+                match self.ask_card(&act, id, tool, facts, &ev) {
+                    Ok((answer, card)) => {
+                        self.with_trust(id, |state, _| state.commit(&ev, answer));
+                        self.row(
+                            id,
+                            tool,
+                            url,
+                            &summary,
+                            user_tab,
+                            Some(&ev),
+                            AuditDecision::AskedAllowedOnce,
+                            &ev.reason,
+                            Some(card),
+                        );
+                        Ok(())
+                    }
+                    Err((text, audit, card)) => {
+                        self.row(
+                            id,
+                            tool,
+                            url,
+                            &summary,
+                            user_tab,
+                            Some(&ev),
+                            audit,
+                            &text,
+                            Some(card).filter(|c| !c.is_empty()),
+                        );
+                        Err(format!("{text} What was read was withheld."))
+                    }
+                }
+            }
         }
     }
 

@@ -137,6 +137,8 @@ impl Act {
     }
     pub(super) fn on_at(&self, page: Page, url: &str) {
         self.set_page(page);
+        // The page is the task's own (the user named it): opening it asks nothing.
+        self.up.note_user_domain(0, url);
         let (error, text) = self.call("browser_open", json!({"url": url}));
         assert!(!error, "{text}");
         self.snapshot();
@@ -1393,15 +1395,23 @@ fn the_users_tab_is_not_navigated_away_without_the_normal_rules() {
     );
     assert!(error && text.contains("Denied"), "{text}");
     assert_eq!(a.r.runner.count("--json open"), before);
-    // One of the Mono's own tabs moves without asking.
+    // One of the Mono's own tabs is judged by the same rules (an address outside the task
+    // asks, as in the extension backend) and moves without asking when the task names it.
     let b = act();
     b.on_login();
+    b.up.note_user_domain(0, "https://elsewhere.example/");
     let (error, text) = b.call(
         "browser_navigate",
         json!({"url": "https://elsewhere.example/x"}),
     );
     assert!(!error, "{text}");
     assert!(b.cards().is_empty());
+    let (error, text) = b.call(
+        "browser_navigate",
+        json!({"url": "https://unnamed.example/x"}),
+    );
+    assert!(!error, "{text}");
+    assert_eq!(b.cards().len(), 1);
 }
 
 #[test]

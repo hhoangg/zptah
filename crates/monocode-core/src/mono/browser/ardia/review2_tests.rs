@@ -92,6 +92,8 @@ fn what_was_read_on_one_site_still_asks_when_typed_on_another() {
     page.elements
         .push(El::new("e3", "text", "Order orderreference1234567890"));
     a.on_at(page, "https://shop.example/orders");
+    // The task names the other site too, so the only question left is the carried data.
+    a.up.note_user_domain(0, "https://notes.example/new");
     a.call(
         "browser_navigate",
         json!({"url": "https://notes.example/new"}),
@@ -113,6 +115,7 @@ fn a_declared_intent_never_makes_a_card_on_the_ardia_gate() {
     let a = act();
     a.set_page(delete_page());
     let (gate, route) = gate_for(&a, session, BrowserLevel::Act);
+    a.up.note_user_domain(session, LOGIN_URL);
     gate.begin_turn(&route, "look at my account");
     gate_tool(&gate, &route, "browser_open", json!({"url": LOGIN_URL}));
     gate_tool(
@@ -289,7 +292,7 @@ fn a_named_dialog_with_an_escaped_quote_in_a_name_is_read_whole() {
 
 // ---- popups ----
 
-fn page_with_links() -> Page {
+pub(super) fn page_with_links() -> Page {
     let mut page = login_page();
     page.elements.push(
         El::new("e50", "link", "Docs")
@@ -412,7 +415,7 @@ fn the_close_call_has_its_options_before_the_dashes_and_the_method_after() {
             .lock()
             .calls
             .iter()
-            .find(|c| c.iter().any(|w| w == "cdp"))
+            .find(|c| c.iter().any(|w| w == "Target.closeTarget"))
             .cloned()
             .expect("the close ran");
     let tail: Vec<&str> = argv
@@ -934,7 +937,7 @@ fn the_policy_level_reaches_the_upstream_through_the_trait() {
     a.on_login();
     let (error, _) = a.call("browser_click", json!({"ref": "e9"}));
     assert!(error, "read only at launch");
-    a.up.policy_changed(BrowserLevel::Act);
+    a.up.policy_changed(&Policy::ardia(BrowserLevel::Act, vec![]));
     let (error, text) = a.call("browser_click", json!({"ref": "e9"}));
     assert!(!error, "{text}");
 }

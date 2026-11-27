@@ -18,7 +18,7 @@
 //!   `defend`, as for every upstream.
 use super::super::defense;
 use super::super::gate::extension::refusal_text as tabs_origin_refusal;
-use super::super::gate::{audit_url, Origins, RunContext, Upstream};
+use super::super::gate::{audit_url, Origins, Policy, RunContext, Upstream};
 use super::controller::{controller, Controller, Readiness};
 use super::runner::{plain_value, web_url, CancelToken, Failure, BROWSE_TIMEOUT};
 use crate::mono::browser::gate::{ActConfig, APPROVAL_TOOL};
@@ -39,12 +39,13 @@ mod judge;
 mod page;
 mod popups;
 mod read;
-mod uploads;
+pub(super) mod uploads;
 mod user_tab;
 
 #[cfg(test)]
 pub(super) use focus::FOCUS_SCRIPT;
 pub use fresh::CHANGED;
+pub use uploads::private_staging_dir;
 
 /// Tabs one conversation keeps open at most.
 pub const MAX_TABS: usize = 8;
@@ -99,8 +100,8 @@ pub struct Config {
     pub project_dirs: Vec<PathBuf>,
     /// The user's home folder (where credentials live). `None`: the process's own.
     pub home: Option<PathBuf>,
-    /// Where the gate keeps the private copies of the files an upload sends (`<monos
-    /// root>/_ardia/uploads`). `None`: no upload runs.
+    /// Where the gate keeps the private copies of the files an upload sends: a folder no Mono can
+    /// write to ([`private_staging_dir`]). `None`: no upload runs.
     pub staging_dir: Option<PathBuf>,
 }
 impl std::fmt::Debug for Config {
@@ -165,6 +166,9 @@ struct Conv {
     in_flight: usize,
     /// The refs of the last snapshots the Mono took, per tab: an act tool only runs on these.
     seen: HashMap<String, fresh::SeenRefs>,
+    /// The `targetId` of every tab this conversation bound, from the bind reply (the `openerId` a
+    /// popup of that tab names).
+    targets: HashMap<String, String>,
     /// The user's own tab the Mono asked for and the user approved (never closed, only unbound).
     user_tab: Option<String>,
     /// The user's tabs already approved in this conversation, by tab id and the site the tab
@@ -193,6 +197,15 @@ pub struct ArdiaUpstream {
     level: Mutex<Option<BrowserLevel>>,
     shots: AtomicU64,
     bind_delay: Duration,
+    /// The staging folder already swept of leftovers (see `sweep_staging`).
+    swept: Mutex<Option<PathBuf>>,
+}
+
+/// The folder name of a conversation's private copies: a short hash of its session name.
+pub fn staging_name(session: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(session.as_bytes());
+    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
 /// The `ardia browse` session name of a conversation: `zptah-<mono>-<conversation>` when it fits
@@ -279,6 +292,7 @@ impl ArdiaUpstream {
             level: Mutex::new(None),
             shots: AtomicU64::new(0),
             bind_delay,
+            swept: Mutex::new(None),
         });
         let mut all = registry().lock().unwrap_or_else(|e| e.into_inner());
         all.retain(|w| w.strong_count() > 0);
@@ -297,6 +311,7 @@ impl ArdiaUpstream {
         };
         // A new launch carries the level of the setting as it is now.
         *self.level.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.sweep_staging();
         if let Some(old_profile) = changed {
             // The tabs belong to the old profile: closed by the controller, which keeps the tab
             // book, and forgotten here.
@@ -309,12 +324,76 @@ impl ArdiaUpstream {
                 .end_mono_in_background(&self.mono_id, Some(&old_profile));
         }
     }
+    /// Deletes the leftover private copies in the staging folder, once per folder: a conversation
+    /// that ended while the app was closed, or crashed, never removed its copies. Kept: the
+    /// folder of a conversation that is live in any upstream and less than a day old.
+    fn sweep_staging(&self) {
+        let Some(root) = self.config().staging_dir else {
+            return;
+        };
+        {
+            let mut done = self.swept.lock().unwrap_or_else(|e| e.into_inner());
+            if done.as_deref() == Some(root.as_path()) {
+                return;
+            }
+            *done = Some(root.clone());
+        }
+        let upstreams: Vec<Arc<ArdiaUpstream>> = registry()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect();
+        let live: HashSet<String> = upstreams
+            .iter()
+            .flat_map(|u| {
+                let ids: Vec<i64> = u.convs().keys().copied().collect();
+                ids.into_iter()
+                    .map(|c| staging_name(&session_name(&u.mono_id, c)))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            return;
+        };
+        let day = Duration::from_secs(24 * 60 * 60);
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            let old = meta
+                .modified()
+                .ok()
+                .and_then(|at| at.elapsed().ok())
+                .is_some_and(|age| age > day);
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if meta.is_dir() && !old && live.contains(&name) {
+                continue;
+            }
+            // A link is removed itself, never followed.
+            let _ = if meta.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+        }
+    }
+    /// A domain the user referenced (their own tab they handed over, a page they named) is part of
+    /// the task: opening it does not ask as an unrelated site.
+    pub fn note_user_domain(&self, conversation: i64, url: &str) {
+        self.with_trust(conversation, |state, _| state.note_user_domain(url));
+    }
     /// Closes the tabs and releases the holds of every conversation of this Mono.
     pub fn end_all(&self) {
         let ids: Vec<i64> = self.convs().keys().copied().collect();
         for id in ids {
             self.end_conversation(id);
         }
+    }
+    /// The folder of this Mono's private upload copies (`None`: uploads are not available).
+    pub fn staging_dir(&self) -> Option<PathBuf> {
+        self.config().staging_dir
     }
     /// The controller this upstream runs on.
     pub fn controller(&self) -> &Arc<Controller> {
@@ -585,6 +664,10 @@ impl ArdiaUpstream {
                     self.conv(id, |c| {
                         c.bound = Some(tab.to_owned());
                         c.page = data["url"].as_str().unwrap_or("").to_owned();
+                        match data["targetId"].as_str().filter(|t| !t.is_empty()) {
+                            Some(target) => c.targets.insert(tab.to_owned(), target.to_owned()),
+                            None => c.targets.remove(tab),
+                        };
                     });
                     return Ok(data);
                 }
@@ -797,6 +880,15 @@ impl ArdiaUpstream {
 
     fn open(&self, id: i64, url: &str) -> Result<String, String> {
         self.precheck(url)?;
+        // As the extension's new tab: an address outside the task, a sensitive site and an
+        // address that carries what was read all ask, at every level.
+        self.judge_navigation(
+            id,
+            "browser_tabs",
+            &json!({"action": "new", "url": url}),
+            url,
+            false,
+        )?;
         let (tab, data) = self.open_tab(id, url)?;
         let shown = data["url"]
             .as_str()
@@ -805,7 +897,9 @@ impl ArdiaUpstream {
         let title = data["title"].as_str().unwrap_or("");
         let body =
             format!("### Result\nOpened a new tab {tab} and made it this conversation's tab.\n");
-        self.page_reply(id, &tab, "browser_open", shown, title, body)
+        let reply = self.page_reply(id, &tab, "browser_open", shown, title, body)?;
+        self.with_trust(id, |state, _| state.note_link_followed(shown));
+        Ok(reply)
     }
 
     fn navigate(&self, id: i64, url: &str) -> Result<String, String> {
@@ -815,7 +909,9 @@ impl ArdiaUpstream {
             Err(_) => return self.open(id, url),
             // The user's own tab is never moved without the normal rules (spec section 4).
             Ok(tab) if self.is_user_tab(id, &tab) => self.user_tab_navigation(id, url, &tab)?,
-            Ok(_) => {}
+            Ok(_) => {
+                self.judge_navigation(id, "browser_navigate", &json!({"url": url}), url, false)?
+            }
         }
         let (data, tab) = self.in_tab(id, &["open"], &[url])?;
         let shown = data["url"].as_str().unwrap_or(url);
@@ -831,7 +927,9 @@ impl ArdiaUpstream {
         } else {
             format!("### Text\n{}\n", cap(&lines.join("\n")))
         };
-        self.page_reply(id, &tab, "browser_navigate", shown, title, body)
+        let reply = self.page_reply(id, &tab, "browser_navigate", shown, title, body)?;
+        self.with_trust(id, |state, _| state.note_link_followed(shown));
+        Ok(reply)
     }
 
     fn history(&self, id: i64, command: &str) -> Result<String, String> {
@@ -860,6 +958,8 @@ impl ArdiaUpstream {
             self.after(id, &tab, origin, "browser_snapshot")?;
         }
         let url = self.current_url(id)?;
+        // The first read of a sensitive site asks, as for the extension.
+        self.guard_first_read(id, "browser_snapshot", &url)?;
         // The refs the Mono now holds: an act tool runs only on one of these (spec section 6).
         let (refs, epoch) = (fresh::refs_of(&data), data["epoch"].as_u64());
         self.conv(id, |c| {
@@ -885,6 +985,7 @@ impl ArdiaUpstream {
             .filter(|u| !u.is_empty())
             .map(str::to_owned)
             .map_or_else(|| self.current_url(id), Ok)?;
+        self.guard_first_read(id, "browser_read", &url)?;
         let mut body = format!(
             "### Content\n{}\n",
             cap(data["content"].as_str().unwrap_or(""))
@@ -909,7 +1010,10 @@ impl ArdiaUpstream {
         let shown = path.to_string_lossy().into_owned();
         let (_, tab) = self.in_tab(id, &["screenshot"], &[&shown])?;
         let url = self.current_url(id)?;
-        if let Err(error) = self.after(id, &tab, &url, "browser_screenshot") {
+        if let Err(error) = self
+            .after(id, &tab, &url, "browser_screenshot")
+            .and_then(|()| self.guard_first_read(id, "browser_take_screenshot", &url))
+        {
             let _ = std::fs::remove_file(&path);
             return Err(error);
         }
@@ -1125,16 +1229,22 @@ impl Upstream for ArdiaUpstream {
         true
     }
     fn run_started(&self, session: i64, user_message: &str) {
-        let typed = !user_message.trim().is_empty();
+        self.run_started_by(session, user_message, true);
+    }
+    fn run_started_by(&self, session: i64, user_message: &str, typed_by_user: bool) {
+        let words = !user_message.trim().is_empty();
         self.conv(session, |c| {
             c.halted.clear();
             c.active = false;
-            // Only a message the user wrote (or an automation's stored prompt, which is the
-            // user's own text) ends a Stop. A scheduler, workflow, internal or Mono-to-Mono run
-            // brings no words of the user's and leaves the browser stopped.
-            if typed {
+            // Only a message the user typed ends a Stop. An automation's stored prompt is the
+            // user's own text and counts as the words of the task, but nobody typed it in this
+            // turn; a scheduler, workflow, internal or Mono-to-Mono run brings no words at all.
+            // Neither leaves a Stop.
+            if words && typed_by_user {
                 c.stopped = false;
                 c.cancel = CancelToken::new();
+            }
+            if words {
                 c.user_messages.push(user_message.to_owned());
                 let extra = c.user_messages.len().saturating_sub(50);
                 c.user_messages.drain(..extra);
@@ -1151,8 +1261,14 @@ impl Upstream for ArdiaUpstream {
     fn injection_found(&self, session: i64) {
         self.flag_injection(session);
     }
-    fn policy_changed(&self, level: BrowserLevel) {
-        *self.level.lock().unwrap_or_else(|e| e.into_inner()) = Some(level);
+    fn policy_changed(&self, policy: &Policy) {
+        *self.level.lock().unwrap_or_else(|e| e.into_inner()) = Some(policy.trust);
+        // The Mono's blocked and allowed origins follow the setting mid-run: the next call is
+        // checked against them.
+        self.config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .origins = Origins::new(&policy.allowed_origins, &policy.blocked_origins);
     }
 }
 

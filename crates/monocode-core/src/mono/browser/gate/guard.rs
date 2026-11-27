@@ -28,12 +28,12 @@ impl Inner {
     }
 
     /// A new agent turn on `route`: nothing read, declared or suggested yet.
-    pub(super) fn begin_turn(&self, route: &str, request: &str) {
+    pub(super) fn begin_turn(&self, route: &str, request: &str, typed_by_user: bool) {
         let (page, upstream) = {
             let state = self.lock_state();
             (state.page.clone(), state.upstream.clone())
         };
-        upstream.run_started(self.session_of(route), request);
+        upstream.run_started_by(self.session_of(route), request, typed_by_user);
         self.turns
             .lock()
             .unwrap_or_else(|e| e.into_inner())

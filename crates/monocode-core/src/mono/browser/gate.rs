@@ -179,6 +179,8 @@ pub struct Policy {
     pub trust: BrowserLevel,
     /// The Mono's blocked origins (recipes ask before a step on one, as on a finance page).
     pub blocked_origins: Vec<String>,
+    /// When not empty, only these origins may be used (the Mono's allowed list).
+    pub allowed_origins: Vec<String>,
     /// The gate fronts Ardia (`browser_open`, `browser_snapshot`, ...), not the Playwright-style
     /// tool set of the extension.
     pub ardia: bool,
@@ -188,8 +190,14 @@ impl Policy {
         Self {
             trust,
             blocked_origins,
+            allowed_origins: Vec::new(),
             ardia: false,
         }
+    }
+    /// The same rules with the Mono's allowed origins.
+    pub fn with_allowed_origins(mut self, allowed: Vec<String>) -> Self {
+        self.allowed_origins = allowed;
+        self
     }
     /// The rules of a gate in front of Ardia.
     pub fn ardia(trust: BrowserLevel, blocked_origins: Vec<String>) -> Self {
@@ -598,6 +606,13 @@ pub trait Upstream: Send + Sync {
     /// A run of app session `session` starts with the user's own message (never page content).
     /// Only the extension upstream uses it: task domains and named recipients come from it.
     fn run_started(&self, _session: i64, _user_message: &str) {}
+    /// [`Upstream::run_started`] that also says whether `user_message` was typed by the user.
+    /// An automation's stored prompt is the user's own text (it counts as the words of the task)
+    /// but was not typed in this turn, so it does not lift a Stop (design spec section 9). The
+    /// default ignores the difference (the extension upstream does not use it).
+    fn run_started_by(&self, session: i64, user_message: &str, _typed_by_user: bool) {
+        self.run_started(session, user_message);
+    }
     /// The run of app session `session` ended (its approval channel was dropped).
     fn run_ended(&self, _session: i64) {}
     /// A page read in app session `session` carried an injection pattern.
@@ -605,10 +620,10 @@ pub trait Upstream: Send + Sync {
     /// The Mono declared an intent (`browser_declare_intent`) in app session `session`; `approved`
     /// is false for one declared after a read that the user did not approve.
     fn intent_declared(&self, _session: i64, _intent: &defense::Intent, _approved: bool) {}
-    /// The gate's policy was set or changed: `level` is the trust level it enforces now. An
-    /// upstream that judges actions itself follows it on its next call, and an open card checks
-    /// it again after the user answered.
-    fn policy_changed(&self, _level: BrowserLevel) {}
+    /// The gate's policy was set or changed: its trust level and its blocked and allowed origins
+    /// are the ones enforced now. An upstream that judges actions itself follows them on its next
+    /// call, and an open card checks the level again after the user answered.
+    fn policy_changed(&self, _policy: &Policy) {}
 }
 
 thread_local! {
@@ -878,23 +893,22 @@ impl Gate {
 
     /// Applies a new policy to the calls that follow, keeping the server.
     pub fn set_policy(&self, policy: Policy) {
-        let level = policy.trust;
         let upstream = {
             let mut state = self.inner.lock_state();
-            state.policy = policy;
+            state.policy = policy.clone();
             state.upstream.clone()
         };
-        // An upstream that judges actions itself follows the level at once, also while a card is open.
-        upstream.policy_changed(level);
+        // An upstream that judges actions itself follows the level and the origin lists at once,
+        // also while a card is open.
+        upstream.policy_changed(&policy);
     }
 
     /// Applies the Mono's current trust level and blocked origins, and which backend is behind the
     /// gate (a new one gives a new key). Takes effect on the next call.
     pub fn configure(&self, policy: Policy, upstream_key: &str, upstream: Arc<dyn Upstream>) {
-        let level = policy.trust;
         let current = {
             let mut state = self.inner.lock_state();
-            state.policy = policy;
+            state.policy = policy.clone();
             if state.upstream_key != upstream_key {
                 state.upstream_key = upstream_key.to_owned();
                 state.upstream = upstream;
@@ -903,7 +917,7 @@ impl Gate {
             }
             state.upstream.clone()
         };
-        current.policy_changed(level);
+        current.policy_changed(&policy);
     }
 
     /// Routes the approval requests of `route` to the calling run until the result is dropped.
@@ -927,7 +941,13 @@ impl Gate {
     /// A new agent turn starts on `route` with the user's own request text: what was read,
     /// declared and suggested in the turn before is forgotten (see [`defense`]).
     pub fn begin_turn(&self, route: &str, request: &str) {
-        self.inner.begin_turn(route, request);
+        self.inner.begin_turn(route, request, true);
+    }
+
+    /// [`Gate::begin_turn`] that says whether `request` was typed by the user in this turn (false
+    /// for an automation's stored prompt: its words count for the task but do not lift a Stop).
+    pub fn begin_turn_as(&self, route: &str, request: &str, typed_by_user: bool) {
+        self.inner.begin_turn(route, request, typed_by_user);
     }
 
     /// Tests that stand in for the extension upstream (which asks through the approval queue):

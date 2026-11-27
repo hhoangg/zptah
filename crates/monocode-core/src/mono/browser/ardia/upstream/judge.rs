@@ -19,6 +19,7 @@
 use super::act::{classifier_name, is_checkable_role, is_field_role, Op, Plan};
 use super::focus::Focus;
 use super::fresh::{self, Attrs, ElementInput};
+use super::page::PageContext;
 use super::read::{press_effect, PressEffect, Read};
 use super::uploads;
 use super::*;
@@ -49,6 +50,8 @@ pub(super) struct Sig {
     complete: bool,
     dialog: (bool, String),
     focus: Option<Focus>,
+    /// What the page said around the submit buttons an Enter presses, by label.
+    submit_ctx: Vec<(String, PageContext)>,
     categories: BTreeSet<Category>,
 }
 
@@ -73,6 +76,16 @@ fn scope_of(read: &Read) -> Scope {
         },
         _ if read.actions.per_form.len() == 1 => Scope::Own(0),
         _ => Scope::Any,
+    }
+}
+
+/// The labels of the submit buttons an Enter (or a line break in typed text) presses: the focused
+/// element's own default button when the page says which form it belongs to, else every submit
+/// button of the page's form read.
+pub(super) fn submit_labels(read: &Read) -> Vec<String> {
+    match (&read.focus, scope_of(read)) {
+        (Some(Focus::Element(el)), Scope::Own(_)) => el.default_submit.iter().cloned().collect(),
+        _ => read.form.submits.iter().map(|(_, l)| l.clone()).collect(),
     }
 }
 
@@ -391,25 +404,31 @@ impl ArdiaUpstream {
         }
         if submits_labels {
             // The submit buttons in scope, each judged as a click on it.
-            let labels: Vec<String> = match (&read.focus, scope) {
-                (Some(Focus::Element(el)), Scope::Own(_)) => el
-                    .default_submit
-                    .iter()
-                    .map(|l| clean(l))
-                    .collect::<Vec<_>>(),
-                _ => read.form.submits.iter().map(|(_, l)| clean(l)).collect(),
-            };
+            let labels: Vec<String> = submit_labels(read).iter().map(|l| clean(l)).collect();
             let labels = if labels.is_empty() {
                 vec![String::new()]
             } else {
                 labels
             };
             for label in labels {
-                if lex.takes_context(&label, ControlKind::Submit, vi) && !ctx.readable() {
+                // What the page says around this button, read like a click on it reads it.
+                let around = read.submit_ctx.get(&label).filter(|c| c.found);
+                let readable = around.is_some_and(PageContext::readable) || ctx.readable();
+                if lex.takes_context(&label, ControlKind::Submit, vi) && !readable {
                     unclear.get_or_insert("a bare word with no dialog or page text to explain it");
                 }
                 let mut b = button(&label);
                 b.in_dialog = element.in_dialog;
+                if let Some(around) = around {
+                    b.in_dialog |= around.in_dialog;
+                    if around.in_dialog {
+                        b.dialog_text = Some(clean(&around.dialog_text)).filter(|t| !t.is_empty());
+                        b.dialog_has_primary = !around.dialog_buttons.is_empty();
+                        b.dialog_primary_names =
+                            around.dialog_buttons.iter().map(|n| clean(n)).collect();
+                    }
+                    b.nearby_text = clean(&around.nearby_text);
+                }
                 cands.push(Cand {
                     kind: Some(ActionKind::Click),
                     element: b,
@@ -435,11 +454,19 @@ impl ArdiaUpstream {
             declared.insert(Category::CredentialEntry);
         }
 
+        let new_window_load: Option<String> = read
+            .new_window
+            .clone()
+            .filter(|_| plan.op == Op::Click || effect == Some(PressEffect::Presses));
         let evaluate_one =
             |cand: &Cand, extra: &BTreeSet<Category>| -> Result<Evaluation, String> {
                 let legacy = classifier_name(&plan.tool);
                 let mut action = TrustAction::new(legacy, &plan.args, page);
                 action.kind = cand.kind;
+                // A link that opens a window of its own is loaded in this tab: judged as the
+                // navigation it is too (an address outside the task, a sensitive site, data
+                // read elsewhere carried in the address).
+                action.target_url = new_window_load.as_deref();
                 action.form = read.form.signals();
                 action.element = cand.element.clone();
                 action.page_title = &read.title;
@@ -531,6 +558,15 @@ impl ArdiaUpstream {
             complete: read.actions.complete,
             dialog: (element.in_dialog, ctx.dialog_text.clone()),
             focus: read.focus.clone(),
+            submit_ctx: {
+                let mut all: Vec<(String, PageContext)> = read
+                    .submit_ctx
+                    .iter()
+                    .map(|(l, c)| (l.clone(), c.clone()))
+                    .collect();
+                all.sort_by(|a, b| a.0.cmp(&b.0));
+                all
+            },
             categories: ev.categories.clone(),
         };
         Ok(Judged { ev, sig })

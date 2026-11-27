@@ -15,6 +15,7 @@
 use super::act::{is_field_role, is_stale_code, Op, Plan, NEVER_SEEN};
 use super::focus::{self, Focus};
 use super::fresh::{self, AttrRead, Attrs, FormActions, FormRead, CHANGED, MAX_FORMS};
+use super::judge;
 use super::page::{self, PageContext};
 use super::*;
 use crate::mono::browser::gate::extension::act::looks_vietnamese;
@@ -36,6 +37,10 @@ pub(super) struct Read {
     pub actions: FormActions,
     /// What the full snapshot says around the target (asked for only when it matters).
     pub ctx: PageContext,
+    /// What the full snapshot says around the submit buttons an Enter (or a line break in typed
+    /// text) would press, by cleaned label: asked for when a label is a bare word (Continue, OK,
+    /// Confirm, Xác nhận ...) that takes its meaning from its surroundings.
+    pub submit_ctx: HashMap<String, PageContext>,
     /// The `snapshot -i` was scoped to an open dialog.
     pub modal: bool,
     /// For a key with no ref: what has the focus (`None`: not asked).
@@ -533,6 +538,12 @@ impl ArdiaUpstream {
     /// `snapshot -i` was scoped to a dialog, or when the control's name is a bare word that takes
     /// its meaning from its surroundings (Confirm, OK, Yes, Continue, Xác nhận ...).
     fn read_context(&self, id: i64, plan: &Plan, read: &mut Read) -> Result<(), String> {
+        let effect = (plan.op == Op::Press).then(|| press_effect(plan, read));
+        let submits_by_key = matches!(effect, Some(PressEffect::Submits | PressEffect::Unknown))
+            || (matches!(plan.op, Op::Type | Op::Fill) && plan.newline && !read.multiline);
+        if submits_by_key {
+            return self.read_submit_context(id, read);
+        }
         let clicks = plan.op == Op::Click
             || (plan.op == Op::Press
                 && plan.ref_.is_some()
@@ -564,6 +575,48 @@ impl ArdiaUpstream {
         // The page says it is modal but no dialog around the control was found (or the line was
         // not the control's): the text read does not describe it.
         read.ctx_unreliable = read.ctx.mismatch || (read.modal && !read.ctx.in_dialog);
+        Ok(())
+    }
+
+    /// The text around the submit buttons an Enter (or a line break in typed text) presses, for
+    /// the labels that take their meaning from it, read like a click on the button reads it. A
+    /// label that names no button of the page's forms exactly once is left unread (it then asks).
+    fn read_submit_context(&self, id: i64, read: &mut Read) -> Result<(), String> {
+        let vi = looks_vietnamese(&read.title);
+        let lex = lexicon();
+        let labels: Vec<String> = judge::submit_labels(read)
+            .into_iter()
+            .map(|l| clean(&l))
+            .filter(|l| lex.takes_context(l, ControlKind::Submit, vi))
+            .collect();
+        if labels.is_empty() {
+            return Ok(());
+        }
+        let text = match self.browse(id, &["snapshot"], &[]) {
+            Ok(data) => data["snapshot"].as_str().unwrap_or("").to_owned(),
+            Err(Failure::Refused { code, .. }) if is_stale_code(code.as_deref()) => {
+                return Err(CHANGED.to_owned())
+            }
+            // Unreadable: the context stays empty, and a bare word then asks.
+            Err(Failure::Refused { .. }) => return Ok(()),
+            Err(other) => return Err(self.fail(id, other)),
+        };
+        for label in labels {
+            let same = |l: &str| one_line(&clean(l)) == one_line(&label);
+            let refs: Vec<&str> = read
+                .form
+                .submits
+                .iter()
+                .filter(|(_, l)| same(l))
+                .map(|(r, _)| r.as_str())
+                .collect();
+            let [target] = refs.as_slice() else {
+                continue;
+            };
+            let ctx = page::context_of(&text, target, "button", &label);
+            read.ctx_unreliable |= ctx.mismatch;
+            read.submit_ctx.insert(label, ctx);
+        }
         Ok(())
     }
 }

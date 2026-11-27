@@ -996,6 +996,7 @@ fn a_benign_click_after_a_read_does_not_ask() {
     let a = act();
     a.set_page(save_page());
     let (gate, route) = gate_for(&a, session, BrowserLevel::Act);
+    a.up.note_user_domain(session, LOGIN_URL);
     gate.begin_turn(&route, "look around");
     gate_tool(&gate, &route, "browser_open", json!({"url": LOGIN_URL}));
     gate_tool(
@@ -1118,6 +1119,7 @@ fn an_injection_in_an_error_text_is_found_like_one_in_a_page() {
     let a = act();
     a.set_page(delete_page());
     let (gate, route) = gate_for(&a, session, BrowserLevel::Act);
+    a.up.note_user_domain(session, LOGIN_URL);
     gate.begin_turn(&route, "look around");
     gate_tool(&gate, &route, "browser_open", json!({"url": LOGIN_URL}));
     gate_tool(

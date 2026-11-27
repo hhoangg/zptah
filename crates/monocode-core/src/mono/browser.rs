@@ -200,6 +200,7 @@ impl MonoBrowser {
     /// The gate's rules for this setting: the one place the setting becomes a [`gate::Policy`].
     pub fn policy(&self) -> gate::Policy {
         gate::Policy::ardia(self.trust, self.blocked_origins.clone())
+            .with_allowed_origins(self.allowed_origins.clone())
     }
     /// A migrated Mono that has a saved profile but is not bound to a paired connection yet.
     pub fn needs_reconnect(&self) -> bool {
@@ -863,9 +864,11 @@ impl Runtime {
         self.approvals.set_can_answer(can);
     }
     /// Tells the gate a new turn starts on this run's route, with the user's own request text
-    /// (never page content): taint and intents are tracked per turn.
-    pub fn begin_turn(&self, request: &str) {
-        self.gate.begin_turn(&self.route, request);
+    /// (never page content): taint and intents are tracked per turn. `typed_by_user` is false for
+    /// an automation's stored prompt: it is the user's text but was not typed in this turn, so it
+    /// does not lift a Stop.
+    pub fn begin_turn(&self, request: &str, typed_by_user: bool) {
+        self.gate.begin_turn_as(&self.route, request, typed_by_user);
     }
     /// The `-c` overrides for Codex (`key`, TOML value).
     pub fn codex_overrides(&self) -> Vec<(String, String)> {
@@ -1022,8 +1025,10 @@ fn attach_ardia(
         }),
         project_dirs: ctx.mono.projects.iter().map(PathBuf::from).collect(),
         home: None,
-        // The private copies of uploaded files: deleted when the conversation ends.
-        staging_dir: Some(ctx.root.join("_ardia").join("uploads")),
+        // The private copies of uploaded files: deleted when the conversation ends. Never inside
+        // the app's data folder: a Mono chat runs with the user's home folder as its working
+        // folder, so everything under it is writable by the Mono (see `private_staging_dir`).
+        staging_dir: ardia::upstream::private_staging_dir(),
     });
     let gate = match servers.gate_for_ardia(&ctx.mono.id, upstream, browser.policy()) {
         Ok(gate) => gate,

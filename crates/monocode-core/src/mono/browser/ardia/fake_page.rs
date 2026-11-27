@@ -232,6 +232,31 @@ impl State {
                     json!({"success": true, "data": {"origin": "file://", "result": result}, "error": null}),
                 ))
             }
+            (["cdp", "--target", "browser"], ["Target.getTargets"]) => {
+                if self.targets_fail {
+                    return Some(refused(
+                        r#"{"success":false,"data":null,"error":"cdp is unavailable","code":"command_failed"}"#,
+                    ));
+                }
+                // The shape measured on Ardia 0.7.0: `data.result.targetInfos[]`.
+                let mut infos = vec![
+                    json!({"targetId": super::tests::BOUND_TARGET, "type": "page", "title": "Page", "url": self.url, "attached": true}),
+                    json!({"targetId": "BACKGROUNDPAGE0001", "type": "background_page", "title": "Extension", "url": "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bg.html", "attached": false}),
+                ];
+                for (target, url) in &self.popups {
+                    let opener = self
+                        .popup_openers
+                        .get(target)
+                        .map_or(super::tests::BOUND_TARGET, String::as_str);
+                    infos.push(json!({"targetId": target, "type": "page", "title": "Popup", "url": url, "attached": false, "openerId": opener, "canAccessOpener": true}));
+                }
+                for (target, _, url) in &self.new_tabs {
+                    infos.push(json!({"targetId": target, "type": "page", "title": "Tab", "url": url, "attached": false, "openerId": super::tests::BOUND_TARGET}));
+                }
+                Some(ok(
+                    json!({"success": true, "data": {"method": "Target.getTargets", "target": "browser", "session": "attached", "result": {"targetInfos": infos}}, "error": null}),
+                ))
+            }
             (["cdp", "--param", param, "--target", "browser"], ["Target.closeTarget"]) => {
                 let target = param.strip_prefix("targetId=").unwrap_or("").to_owned();
                 self.target_closes.push(target.clone());

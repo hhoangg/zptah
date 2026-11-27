@@ -126,14 +126,15 @@ pub struct Settings {
     #[serde(skip)]
     pub internal_message: bool,
     /// The run was started by an automation, not by a message the user typed. Its stored prompt
-    /// is still the user's own text, so it counts as `user_prompt` below.
+    /// is still the user's own text, so it counts as `user_prompt` below, but it does not lift a
+    /// browser Stop (the gate is told it was not typed, see `Runtime::begin_turn`).
     #[serde(skip)]
     pub automated: bool,
     /// The text the user wrote for this turn: a typed message or an automation's stored prompt
     /// (`Some`), never a message from another Mono, from the app or from a scheduler or
     /// workflow (`None`), and never the assembled prompt (attachments, notes, Mono context,
     /// earlier assistant text). The browser gate starts its task tracking from it and lifts a
-    /// Stop only when it is non-empty, so only what the user wrote counts as the user's word.
+    /// Stop only when it is non-empty and typed in this turn (`automated` is false).
     #[serde(skip)]
     pub user_prompt: Option<String>,
     #[serde(skip)]
