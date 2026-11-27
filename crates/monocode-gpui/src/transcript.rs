@@ -21,6 +21,7 @@ mod mascot;
 mod measurements;
 mod mono_divider;
 mod outline;
+pub(crate) mod patch_perf;
 mod perf_scroll;
 pub(crate) mod phases;
 mod provider_switch;
@@ -3192,6 +3193,7 @@ impl TranscriptView {
             start <= self.source.len(),
             "transcript patches must be contiguous"
         );
+        let measured = patch_perf::begin(start, &rows, self.streaming);
         let known = self.source.len();
         for (ix, row) in rows.into_iter().enumerate() {
             let ix = start + ix;
@@ -3364,6 +3366,7 @@ impl TranscriptView {
             start
         };
         self.rebuild(start, cx);
+        patch_perf::finish(measured);
     }
     fn rebuild(&mut self, start: usize, cx: &mut Context<Self>) {
         self.rebuild_rows(start, cx);
@@ -3464,15 +3467,23 @@ impl TranscriptView {
             && (self.source[current_turn..current_end].iter().any(|row| {
                 row.role == "tool"
                     && row.first
-                    && serde_json::from_str::<ToolCall>(&row.text)
-                        .is_ok_and(|call| matches!(call.panel(), Some(Panel::Agent(_))))
+                    && patch_perf::parse(patch_perf::Site::Agent, &row.text).is_ok_and(|call| {
+                        matches!(
+                            patch_perf::panel(patch_perf::Site::Agent, &call),
+                            Some(Panel::Agent(_))
+                        )
+                    })
             }) || self.rows.iter().any(|row| {
                 self.messages
                     .get(row.message)
                     .is_some_and(|message| message.turn == current_turn)
                     && matches!(
                         &row.body,
-                        Body::Tool { call, .. } if matches!(call.panel(), Some(Panel::Agent(_)))
+                        Body::Tool { call, .. }
+                            if matches!(
+                                patch_perf::panel(patch_perf::Site::Agent, call),
+                                Some(Panel::Agent(_))
+                            )
                     )
             }))
         {
@@ -3855,7 +3866,7 @@ impl TranscriptView {
                 }
                 // WorkFoldLine puts earlier commentary and work behind its receipt.
             } else if role == "tool"
-                && let Ok(tool) = serde_json::from_str::<ToolCall>(&text)
+                && let Ok(tool) = patch_perf::parse(patch_perf::Site::Row, &text)
             {
                 self.rows.push(UiRow {
                     key: (0, 0),
@@ -4260,6 +4271,13 @@ impl TranscriptView {
                 next_work_sibling = row.work;
             }
         }
+        patch_perf::rebuilt(
+            source_start,
+            self.source.len(),
+            display_start,
+            self.rows.len(),
+            pinned_answers.len(),
+        );
         let target = self.rows.split_off(display_start);
         let merged = if self.visible && !cx.reduce_motion() {
             let replaced_work = self
