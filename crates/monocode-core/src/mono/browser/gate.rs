@@ -22,7 +22,7 @@
 //! that is attached ([`Gate::attach`]), the provider loop turns it into an `Event::Approval` and
 //! answers it from the user's decision.
 use super::recipe::{self, record::Trace, runner};
-use super::{defense, output, AuditEntry, BrowserLevel, MonoBrowserStore};
+use super::{ardia, defense, output, AuditEntry, BrowserLevel, MonoBrowserStore};
 use super::{is_scroll_key, ALWAYS_BLOCKED_TOOLS, KNOWN_TOOLS, READ_ONLY_TOOLS, SCROLL_KEYS};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -35,8 +35,16 @@ mod guard;
 mod http;
 mod refs;
 pub mod tabs;
-pub use extension::act::{end_conversation_everywhere, upstream_for, ActConfig, ExtensionStatus};
+pub use extension::act::end_conversation_everywhere as end_extension_conversations;
+pub use extension::act::{upstream_for, ActConfig, ExtensionStatus};
 pub use extension::{ExtensionUpstream, Origins};
+
+/// A conversation (an app session) was closed, cleared or deleted: its grants and open cards end
+/// and the Ardia tabs it opened close.
+pub fn end_conversation_everywhere(session: i64) {
+    end_extension_conversations(session);
+    ardia::end_conversation_everywhere(session);
+}
 
 /// A stand-in route name for code that builds a [`Runtime`](super::Runtime) without a gate.
 pub const SHARED_ROUTE: &str = "shared";
@@ -169,12 +177,23 @@ pub struct Policy {
     pub trust: BrowserLevel,
     /// The Mono's blocked origins (recipes ask before a step on one, as on a finance page).
     pub blocked_origins: Vec<String>,
+    /// The gate fronts Ardia (`browser_open`, `browser_snapshot`, ...), not the Playwright-style
+    /// tool set of the extension.
+    pub ardia: bool,
 }
 impl Policy {
     pub fn new(trust: BrowserLevel, blocked_origins: Vec<String>) -> Self {
         Self {
             trust,
             blocked_origins,
+            ardia: false,
+        }
+    }
+    /// The rules of a gate in front of Ardia.
+    pub fn ardia(trust: BrowserLevel, blocked_origins: Vec<String>) -> Self {
+        Self {
+            ardia: true,
+            ..Self::new(trust, blocked_origins)
         }
     }
 
@@ -185,6 +204,9 @@ impl Policy {
     pub fn evaluate(&self, tool: &str, args: &Value) -> Verdict {
         if ALWAYS_BLOCKED_TOOLS.contains(&tool) {
             return Verdict::Deny(format!("{tool} is never available in this browser."));
+        }
+        if self.ardia {
+            return self.evaluate_ardia(tool, args);
         }
         if tool == APPROVAL_TOOL {
             // The upstream words the card and asks (tier K: always).
@@ -229,8 +251,23 @@ impl Policy {
         Verdict::Allow
     }
 
+    /// The decision for one call on an Ardia gate (M1: the read tools only, each allowed at
+    /// every level; addresses are limited to http and https).
+    fn evaluate_ardia(&self, tool: &str, args: &Value) -> Verdict {
+        if !ardia::upstream::TOOLS.contains(&tool) {
+            return Verdict::Deny(format!("{tool} is not an available browser tool."));
+        }
+        match unsafe_address(tool, args) {
+            Some(reason) => Verdict::Deny(reason),
+            None => Verdict::Allow,
+        }
+    }
+
     /// Whether the gate lists `tool` to the agent.
     pub fn offers(&self, tool: &str) -> bool {
+        if self.ardia {
+            return ardia::upstream::TOOLS.contains(&tool);
+        }
         self.trust.offers(tool)
     }
 }
@@ -239,7 +276,7 @@ impl Policy {
 /// `javascript:`, `data:`, `file:` and the rest are refused.
 fn unsafe_address(tool: &str, args: &Value) -> Option<String> {
     let target = match tool {
-        "browser_navigate" => args["url"].as_str().unwrap_or(""),
+        "browser_navigate" | "browser_open" => args["url"].as_str().unwrap_or(""),
         "browser_tabs" if args["action"] == "new" => args["url"].as_str().unwrap_or(""),
         _ => return None,
     };
@@ -257,7 +294,7 @@ fn unsafe_address(tool: &str, args: &Value) -> Option<String> {
 /// The address a call is about to open, if it opens one.
 fn opened_address(tool: &str, args: &Value) -> Option<String> {
     let target = match tool {
-        "browser_navigate" => args["url"].as_str(),
+        "browser_navigate" | "browser_open" => args["url"].as_str(),
         "browser_tabs" if args["action"] == "new" => args["url"].as_str(),
         _ => None,
     }?;
@@ -932,6 +969,16 @@ impl Inner {
     fn list_tools(&self) -> Result<Vec<Value>, String> {
         let policy = self.lock_state().policy.clone();
         let upstream = self.upstream_rpc("tools/list", json!({}))?;
+        if policy.ardia {
+            // M1 offers the Ardia read tools only: no approval, intent or recipe tools yet.
+            return Ok(upstream["tools"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|tool| tool["name"].as_str().is_some_and(|n| policy.offers(n)))
+                .cloned()
+                .collect());
+        }
         let mut tools: Vec<Value> = upstream["tools"]
             .as_array()
             .into_iter()
@@ -1057,6 +1104,9 @@ impl Inner {
             route: route.to_owned(),
             session_id: self.session_of(route),
         });
+        if self.lock_state().policy.ardia {
+            return self.call_ardia_tool(route, name, args);
+        }
         if name == defense::DECLARE_TOOL {
             return self.declare_intent(route, &args);
         }
@@ -1112,6 +1162,19 @@ impl Inner {
             parts.push(json!({"type": "text", "text": note}));
         }
         result
+    }
+
+    /// A call on an Ardia gate: authorized by the policy, run by the upstream (which keeps its own
+    /// tabs and checks origins), then fenced, scanned and tainted like any page read.
+    fn call_ardia_tool(&self, route: &str, name: &str, args: Value) -> Value {
+        if let Err(reply) = self.authorize(name, &args) {
+            return reply;
+        }
+        let result = {
+            let _one_at_a_time = self.run.lock().unwrap_or_else(|e| e.into_inner());
+            self.forward(name, &args)
+        };
+        self.defend(route, name, result)
     }
 
     /// The tabs the browser has now, or none when the list could not be read.

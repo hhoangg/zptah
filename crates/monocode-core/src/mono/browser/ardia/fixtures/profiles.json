@@ -1,0 +1,28 @@
+[
+  {
+    "id": "default",
+    "name": "Main",
+    "color": "plum",
+    "icon": "😄",
+    "theme": null,
+    "default": true,
+    "sharesDataWith": [],
+    "shareTopApps": false,
+    "syncTabs": false,
+    "pinnedCollapsed": false,
+    "createdAt": 0
+  },
+  {
+    "id": "p-mwz3kap1pqq0-8",
+    "name": "Secondary",
+    "color": "yellow",
+    "icon": "🤑",
+    "theme": null,
+    "default": false,
+    "sharesDataWith": [],
+    "shareTopApps": false,
+    "syncTabs": false,
+    "pinnedCollapsed": false,
+    "createdAt": 1795792130328
+  }
+]

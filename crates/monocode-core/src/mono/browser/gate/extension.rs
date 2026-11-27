@@ -139,7 +139,7 @@ fn is_web_store(url: &str) -> bool {
         || (host == "microsoftedge.microsoft.com" && path.starts_with("/addons"))
 }
 
-fn refusal_text(refusal: ReadRefusal) -> &'static str {
+pub(crate) fn refusal_text(refusal: ReadRefusal) -> &'static str {
     match refusal {
         ReadRefusal::Restricted => "This is a browser page (or a file): zptah Browser never reads it.",
         ReadRefusal::Blocked => "This site is on this Mono's blocked list, so zptah Browser does not read it.",
@@ -191,6 +191,7 @@ impl ExtensionUpstream {
     /// The link of the paired profile whose Chrome profile directory is `profile_dir`: found
     /// through `manager` for every request (the browser may connect after the Mono starts), and
     /// remembered while it stays connected.
+    #[cfg(test)]
     pub(crate) fn for_profile(
         mono_id: impl Into<String>,
         manager: LinkManager,

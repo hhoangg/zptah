@@ -117,6 +117,16 @@ impl BrowserLevel {
         }
     }
 
+    /// The tools a harness must not offer on an Ardia gate at this level: at read only the act
+    /// tools (not offered yet), always the tools no level allows.
+    pub fn disabled_tools_ardia(self) -> Vec<&'static str> {
+        let mut tools = ALWAYS_BLOCKED_TOOLS.to_vec();
+        if self == Self::ReadOnly {
+            tools.extend(super::ardia::upstream::ACT_TOOLS);
+        }
+        tools
+    }
+
     /// Whether the gate lists `tool` to the agent at this level.
     pub fn offers(self, tool: &str) -> bool {
         KNOWN_TOOLS.contains(&tool) && !self.disabled_tools().contains(&tool)

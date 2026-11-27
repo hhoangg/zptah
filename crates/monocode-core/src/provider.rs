@@ -2233,8 +2233,7 @@ mod tests {
                 mono: crate::mono::Mono {
                     browser: Some(crate::mono::browser::MonoBrowser {
                         enabled: true,
-                        ready: true,
-                        profile_dir: "Default".into(),
+                        ardia_profile: "default".into(),
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -2259,8 +2258,7 @@ mod tests {
             mono: crate::mono::Mono {
                 browser: Some(crate::mono::browser::MonoBrowser {
                     enabled: true,
-                    ready: false,
-                    profile_dir: "Default".into(),
+                    ardia_profile: "default".into(),
                     ..Default::default()
                 }),
                 ..Default::default()

@@ -1,0 +1,1 @@
+{"success":false,"data":null,"error":"Stale ref @e19: the element was removed from the page. Run `ardia browse snapshot -i` again and use the new refs","code":"stale_ref","remedy":"ardia browse snapshot -i"}

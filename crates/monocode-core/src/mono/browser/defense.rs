@@ -201,6 +201,12 @@ pub fn returns_content(tool: &str, text: &str) -> bool {
     matches!(
         tool,
         "browser_snapshot"
+            | "browser_open"
+            | "browser_back"
+            | "browser_forward"
+            | "browser_reload"
+            | "browser_console"
+            | "browser_errors"
             | "browser_find"
             | "browser_read"
             | "browser_tabs"

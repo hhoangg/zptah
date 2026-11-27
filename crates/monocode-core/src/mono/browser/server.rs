@@ -36,6 +36,7 @@ impl BrowserServers {
     }
     /// This Mono's gate in front of the zptah Browser extension: the one it has (updated to the
     /// current policy and upstream), or a new one.
+    #[cfg(test)]
     pub(crate) fn gate_for_extension(
         &self,
         mono_id: &str,
@@ -43,6 +44,16 @@ impl BrowserServers {
         policy: gate::Policy,
     ) -> Result<Arc<Gate>, String> {
         let key = format!("extension-{:p}", Arc::as_ptr(&upstream));
+        self.gate_for(mono_id, &key, upstream, policy)
+    }
+    /// This Mono's gate in front of Ardia.
+    pub(crate) fn gate_for_ardia(
+        &self,
+        mono_id: &str,
+        upstream: Arc<super::ardia::ArdiaUpstream>,
+        policy: gate::Policy,
+    ) -> Result<Arc<Gate>, String> {
+        let key = format!("ardia-{:p}", Arc::as_ptr(&upstream));
         self.gate_for(mono_id, &key, upstream, policy)
     }
     /// This Mono's gate in front of `upstream` (named `key`; a new key means a new backend): the
