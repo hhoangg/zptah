@@ -49,6 +49,8 @@ pub(super) struct Fake {
     pub(super) quit_calls: StdMutex<u32>,
     pub(super) idle: StdMutex<Vec<u32>>,
     pub(super) reports_for: StdMutex<Vec<String>>,
+    pub(super) working: StdMutex<bool>,
+    pub(super) stops: StdMutex<Vec<(String, i64)>>,
 }
 impl Default for Fake {
     fn default() -> Self {
@@ -62,6 +64,8 @@ impl Default for Fake {
             quit_calls: StdMutex::new(0),
             idle: StdMutex::new(Vec::new()),
             reports_for: StdMutex::new(Vec::new()),
+            working: StdMutex::new(false),
+            stops: StdMutex::new(Vec::new()),
         }
     }
 }
@@ -107,6 +111,17 @@ impl BrowserOps for Fake {
     }
     fn ardia_set_idle_minutes(&self, minutes: u32) {
         self.idle.lock().unwrap().push(minutes);
+    }
+    fn browser_working(&self, _conversation: i64) -> bool {
+        *self.working.lock().unwrap()
+    }
+    fn stop_browser(&self, mono_id: &str, conversation: i64) {
+        self.stops
+            .lock()
+            .unwrap()
+            .push((mono_id.to_owned(), conversation));
+        // Stop ends the call in flight.
+        *self.working.lock().unwrap() = false;
     }
 }
 

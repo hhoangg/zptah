@@ -129,7 +129,7 @@ impl BrowserServers {
             .get(mono_id)
             .cloned();
         if let Some(controller) = controller {
-            controller.end_mono_in_background(mono_id);
+            controller.end_mono_in_background(mono_id, None);
         }
     }
     /// Drops every gate (the app quits).

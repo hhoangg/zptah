@@ -23,6 +23,8 @@ pub const HOLD_SECONDS: u64 = 120;
 const RESTORE_GRACE_MS: u64 = 5_000;
 /// How many times the event stream is started before it counts as lost.
 const WATCH_RETRIES: u32 = 3;
+/// How many times ending a session looks again for tabs opened while it was closing them.
+const MAX_END_ROUNDS: usize = 5;
 
 // ---- readiness ----
 
@@ -572,8 +574,9 @@ impl Controller {
             if inner.watch_running {
                 return;
             }
+            // `watch_lost` stays: a restarted stream does not prove the user is watched again,
+            // only a confirmed closed Ardia (`lose_ardia`) or a new launch resets it.
             inner.watch_running = true;
-            inner.watch_lost = false;
             inner.watch_generation += 1;
             inner.watch_generation
         };
@@ -802,11 +805,13 @@ impl Controller {
         self.quit_done.notify_all();
         result.map_err(QuitRefused::Failed)
     }
+    /// Asks the platform to quit first (like [`Controller::shutdown`]), so the whole quit stays
+    /// below `begin_call`'s wait: nothing here runs `ardia` per tab. The tabs zptah opened stay in
+    /// the tab file (Ardia restores them) and the next live check closes them.
     fn quit_locked(&self) -> Result<(), String> {
-        self.close_all_tabs();
         self.platform.quit()?;
         // Ardia needs a few seconds to go (about 7 s measured): wait, so a late `hello` is not
-        // mistaken for a user's Ardia.
+        // mistaken for a user's Ardia. Bounded by `launch_wait`.
         let started = std::time::Instant::now();
         while started.elapsed() < self.launch_wait {
             if matches!(self.hello(), Err(Failure::Unreachable(_))) {
@@ -814,8 +819,18 @@ impl Controller {
             }
             std::thread::sleep(self.poll_every);
         }
+        self.forget_sessions();
         self.lose_ardia();
         Ok(())
+    }
+
+    /// Ardia was quit: its tabs are not ours to use any more. The ids stay in the tab file, and
+    /// the next live check closes them (`cleanup_due`).
+    fn forget_sessions(&self) {
+        let mut inner = self.lock();
+        inner.sessions.clear();
+        inner.session_monos.clear();
+        inner.cleanup_due = true;
     }
 
     /// The app quits. An Ardia zptah started is asked to quit first (instant): its tabs stay in
@@ -909,9 +924,10 @@ impl Controller {
         self.lock().sessions.keys().cloned().collect()
     }
     /// Ends every session of one Mono (its browser was turned off, its profile changed or it was
-    /// removed): closes the tabs zptah opened and releases the holds. It needs no upstream, so it
-    /// works after the gate and the upstream are gone.
-    pub fn end_mono(&self, mono_id: &str) {
+    /// removed): closes the tabs zptah opened and releases the holds. `profile: Some(old)` closes
+    /// only the tabs of that profile (a profile change: tabs of the new one stay), `None` closes
+    /// them all. It needs no upstream, so it works after the gate and the upstream are gone.
+    pub fn end_mono(&self, mono_id: &str, profile: Option<&str>) {
         let sessions: Vec<String> = {
             let inner = self.lock();
             inner
@@ -924,14 +940,15 @@ impl Controller {
                 .collect()
         };
         for session in sessions {
-            self.end_session(&session);
+            self.end_session_in(&session, profile);
         }
     }
     /// [`Controller::end_mono`] on a thread, so a caller on the UI thread never waits for `ardia`.
-    pub fn end_mono_in_background(&self, mono_id: &str) {
+    pub fn end_mono_in_background(&self, mono_id: &str, profile: Option<&str>) {
         if let Some(me) = self.me.upgrade() {
             let mono_id = mono_id.to_owned();
-            std::thread::spawn(move || me.end_mono(&mono_id));
+            let profile = profile.map(str::to_owned);
+            std::thread::spawn(move || me.end_mono(&mono_id, profile.as_deref()));
         }
     }
     /// Closes one tab zptah opened. A tab Ardia no longer knows counts as closed.
@@ -947,17 +964,42 @@ impl Controller {
 
     /// Ends one browse session: releases its holds and closes the tabs zptah opened for it.
     pub fn end_session(&self, session: &str) {
-        let tabs = self.session_tabs(session);
+        self.end_session_in(session, None);
+    }
+
+    /// The tabs of `session` in `profile` (`None`: any profile).
+    fn tabs_to_end(&self, session: &str, profile: Option<&str>) -> Vec<String> {
+        match profile {
+            Some(profile) => self.session_tabs_in(session, profile),
+            None => self.session_tabs(session),
+        }
+    }
+
+    /// [`Controller::end_session`], limited to one profile's tabs when `profile` is given. A tab
+    /// opened while this runs is closed too: the tabs are read again after each round, a few
+    /// rounds at most.
+    fn end_session_in(&self, session: &str, profile: Option<&str>) {
+        let mut tabs = self.tabs_to_end(session, profile);
         if tabs.is_empty() {
             return;
         }
-        let _ = self.cli.browse(session, &["close"], &[]);
-        let _ = self
-            .cli
-            .call("tabs.release", &session_params(session, json!({})));
-        for id in tabs {
-            if self.close_tab(session, &id).is_err() {
-                // Ardia is gone: the ids stay in the file for the next live check.
+        // The browse session and its holds go only when the whole session ends: a profile change
+        // leaves the new profile's tabs working.
+        if profile.is_none() {
+            let _ = self.cli.browse(session, &["close"], &[]);
+            let _ = self
+                .cli
+                .call("tabs.release", &session_params(session, json!({})));
+        }
+        for _ in 0..MAX_END_ROUNDS {
+            for id in &tabs {
+                if self.close_tab(session, id).is_err() {
+                    // Ardia is gone: the ids stay in the file for the next live check.
+                    return;
+                }
+            }
+            tabs = self.tabs_to_end(session, profile);
+            if tabs.is_empty() {
                 break;
             }
         }

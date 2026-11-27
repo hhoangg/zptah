@@ -107,7 +107,7 @@ const AUDIT_ROWS: usize = 20;
 pub(super) const SUBTITLE: &str = "Let this Mono use Ardia, with the sessions you are signed in to in the chosen Ardia profile. Off by default.";
 
 /// What runs or looks up Ardia. The real one asks the process-wide Ardia controller; every method
-/// except the two `ardia_owned` and `ardia_can_launch` lookups blocks on an `ardia` process, so the
+/// except the lookups (`ardia_owned`, `ardia_can_launch`, `browser_working`) and `stop_browser` blocks on an `ardia` process, so the
 /// page calls them off the UI thread.
 pub(super) trait BrowserOps: Send + Sync {
     /// The readiness of the Mono's profile (see `Controller::report`). Never launches Ardia.
@@ -124,6 +124,12 @@ pub(super) trait BrowserOps: Send + Sync {
     fn ardia_owned(&self) -> bool;
     /// The minutes of idleness after which zptah quits an Ardia it started (0 = never).
     fn ardia_set_idle_minutes(&self, minutes: u32);
+    /// Whether a browser call of the conversation (the app session id) is running. A lock lookup,
+    /// safe on the UI thread.
+    fn browser_working(&self, conversation: i64) -> bool;
+    /// Stop on the "Working in Ardia" row: ends the browser work of the conversation's turn.
+    /// Non-blocking, safe on the UI thread.
+    fn stop_browser(&self, mono_id: &str, conversation: i64);
 }
 #[cfg(not(test))]
 struct RealOps;
@@ -150,6 +156,12 @@ impl BrowserOps for RealOps {
     }
     fn ardia_set_idle_minutes(&self, minutes: u32) {
         ardia::controller().set_idle_minutes(minutes);
+    }
+    fn browser_working(&self, conversation: i64) -> bool {
+        monocode_core::mono::browser::browser_working(conversation)
+    }
+    fn stop_browser(&self, mono_id: &str, conversation: i64) {
+        monocode_core::mono::browser::stop_browser(mono_id, conversation);
     }
 }
 
@@ -183,6 +195,10 @@ impl BrowserOps for InertOps {
         false
     }
     fn ardia_set_idle_minutes(&self, _minutes: u32) {}
+    fn browser_working(&self, _conversation: i64) -> bool {
+        false
+    }
+    fn stop_browser(&self, _mono_id: &str, _conversation: i64) {}
 }
 
 #[cfg(test)]

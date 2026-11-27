@@ -45,6 +45,8 @@ pub(super) fn json_of(text: &str) -> Value {
 
 // ---- the fakes ----
 
+pub(super) type CloseHook = Box<dyn FnOnce(&mut State) + Send>;
+
 #[derive(Default)]
 pub(super) struct State {
     pub up: bool,
@@ -106,6 +108,10 @@ pub(super) struct State {
     pub act_sent: Vec<Vec<String>>,
     /// The user's own active tab: id, address, title.
     pub user_tab: Option<(String, String, String)>,
+    /// What the first entry of `browse tab list` reports as its address.
+    pub listed_url: Option<String>,
+    /// Runs once, inside the first `tabs close` (a tab is opened while tabs are being closed).
+    pub on_close: Option<CloseHook>,
 }
 
 pub(super) struct FakeRunner {
@@ -238,6 +244,9 @@ impl Runner for FakeRunner {
                 ok(reply.to_string())
             }
             "tabs" if arg(1) == "close" => {
+                if let Some(hook) = st.on_close.take() {
+                    hook(&mut st);
+                }
                 let id = arg(2).to_owned();
                 if !st.tabs.contains(&id) {
                     return Ok(Output {
@@ -285,6 +294,9 @@ impl Runner for FakeRunner {
                         let mut reply = json_of(TAB_LIST);
                         if let Some(id) = st.tabs.last() {
                             reply["data"]["tabs"][0]["appTabId"] = json!(id);
+                        }
+                        if let Some(url) = &st.listed_url {
+                            reply["data"]["tabs"][0]["url"] = json!(url);
                         }
                         ok(reply.to_string())
                     }
@@ -448,6 +460,8 @@ pub(super) struct FakePlatform {
     pub on_hidden: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// How long a quit takes.
     pub quit_delay: Duration,
+    /// A quit is asked but Ardia keeps running (it never goes away).
+    pub stays_up: bool,
 }
 impl FakePlatform {
     pub fn new(runner: &Arc<FakeRunner>) -> Arc<Self> {
@@ -461,6 +475,7 @@ impl FakePlatform {
             quits: AtomicUsize::new(0),
             on_hidden: Mutex::new(None),
             quit_delay: Duration::ZERO,
+            stays_up: false,
         })
     }
 }
@@ -481,7 +496,9 @@ impl Platform for FakePlatform {
     fn quit(&self) -> Result<(), String> {
         std::thread::sleep(self.quit_delay);
         self.quits.fetch_add(1, Ordering::SeqCst);
-        self.runner.lock().up = false;
+        if !self.stays_up {
+            self.runner.lock().up = false;
+        }
         Ok(())
     }
     fn is_hidden(&self) -> Option<bool> {
@@ -718,13 +735,13 @@ fn the_tab_gate_launches_before_the_first_tool_call_only_when_needed() {
 
 // ---- idle quit and who owns Ardia ----
 
-fn launched(r: &Rig) {
+pub(super) fn launched(r: &Rig) {
     r.controller.ensure_live(PROFILE).unwrap();
     assert_eq!(r.controller.owner(), Owner::Zptah);
 }
 
 #[test]
-fn idle_quit_waits_for_the_timeout_then_closes_tabs_and_quits() {
+fn idle_quit_waits_for_the_timeout_then_quits_and_leaves_tabs_for_the_next_check() {
     let r = rig(false);
     launched(&r);
     let up = upstream(&r, no_limits(), None);
@@ -737,14 +754,16 @@ fn idle_quit_waits_for_the_timeout_then_closes_tabs_and_quits() {
     r.minutes(2);
     assert_eq!(r.controller.idle_tick(), IdleOutcome::Quit);
     assert_eq!(r.platform.quits.load(Ordering::SeqCst), 1);
-    assert!(r.runner.lock().tabs.is_empty(), "session tabs closed first");
-    let calls = r.runner.calls();
-    let closed = calls
-        .iter()
-        .position(|c| c.starts_with("tabs close"))
-        .unwrap();
-    assert!(closed < calls.len() - 1);
+    assert_eq!(
+        r.runner.count("tabs close"),
+        0,
+        "Ardia restores the tabs, the next live check closes them"
+    );
     assert_eq!(r.controller.owner(), Owner::Nobody);
+    // The next live check starts Ardia again and closes what it restored.
+    r.controller.ensure_live(PROFILE).unwrap();
+    assert!(r.runner.lock().tabs.is_empty(), "closed by the next check");
+    assert_eq!(r.runner.count("tabs close"), 1);
 }
 
 #[test]
@@ -842,15 +861,17 @@ fn the_event_watcher_marks_the_user_when_ardia_is_activated() {
 }
 
 #[test]
-fn the_quit_button_closes_session_tabs_and_quits_a_zptah_ardia() {
+fn the_quit_button_quits_a_zptah_ardia_and_the_next_check_closes_its_tabs() {
     let r = rig(false);
     launched(&r);
     let up = upstream(&r, no_limits(), None);
     call(&up, "browser_open", json!({"url": "https://example.com"}));
     r.controller.quit_now().unwrap();
-    assert!(r.runner.lock().tabs.is_empty());
     assert_eq!(r.platform.quits.load(Ordering::SeqCst), 1);
+    assert_eq!(r.runner.count("tabs close"), 0);
     assert_eq!(r.controller.owner(), Owner::Nobody);
+    r.controller.ensure_live(PROFILE).unwrap();
+    assert!(r.runner.lock().tabs.is_empty());
 }
 
 // ---- tools ----
@@ -2056,11 +2077,16 @@ fn urls_in_the_tab_list_are_masked_like_page_urls() {
     let r = rig(true);
     let up = upstream(&r, no_limits(), None);
     call(&up, "browser_open", json!({"url": "https://example.com"}));
-    // The recorded list holds the page address; the fake reports a callback with a code.
-    let (_, text) = call(&up, "browser_tabs", json!({"action": "list"}));
-    assert!(text.contains("- tab-fake-1"));
-    let masked = crate::mono::browser::defense::redact_url_secrets("https://a.example/cb?code=abc");
-    assert!(masked.contains("code=[redacted]"));
+    r.runner.lock().listed_url = Some("https://app.example/cb?code=abc123&lang=en".into());
+    let (error, text) = call(&up, "browser_tabs", json!({"action": "list"}));
+    assert!(!error, "{text}");
+    let line = text
+        .lines()
+        .find(|l| l.contains("tab-fake-1"))
+        .unwrap_or_else(|| panic!("no tab line in {text}"));
+    assert!(line.contains("code=[redacted]"), "{line}");
+    assert!(line.contains("lang=en"), "{line}");
+    assert!(!line.contains("abc123"), "{line}");
 }
 
 #[test]

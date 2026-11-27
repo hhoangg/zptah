@@ -1,19 +1,19 @@
 //! The approval side of the zptah Browser extension in the Mono manager (spec 8.2, 8.3, 7.5, 7.6).
 //!
 //! The act tools of a Mono park on its approval queue until the user answers. This file keeps one
-//! subscription per Mono (a queue nobody listens to denies at once), turns the queue, the stop flag
-//! and the rule status into the `Surface` the Mono's conversation shows, and answers what that
-//! surface emits (Resume, the rule prompt). The Settings > Browser cards live here too: the preview
+//! subscription per Mono (a queue nobody listens to denies at once), turns the queue, the running
+//! browser call and the rule status into the `Surface` the Mono's conversation shows, and answers
+//! what that surface emits (Stop, Quit, the rule prompt). The Settings > Browser cards live here too: the preview
 //! switch, the conversation grants, the soul rule confirmation and the app language.
 use super::browser_ui::{action, note};
 use super::panels::{card, setting};
 use super::*;
 use crate::conversation::browser_cards::{BrowserAction, ReviewPrompt, Surface};
+use monocode_core::mono::browser::MonoBrowser;
 use monocode_core::mono::browser::copy::{self, Lang};
 use monocode_core::mono::browser::risk::Category;
 use monocode_core::mono::browser::trust::approval::{self, Subscription};
 use monocode_core::mono::browser::trust::rules::{self, RuleStatus};
-use monocode_core::mono::browser::{MonoBrowser, gate};
 use std::time::Duration;
 
 /// The saved language choice.
@@ -288,10 +288,11 @@ impl Monos {
                 mono_label: label,
                 changed_lines,
             });
+        let conversation = self.chats.get(mono_id).map(|chat| chat.read(cx).summary.id);
         let surface = Surface {
             cards: queue.pending(),
             notices: queue.notices(),
-            stopped: uses && gate::upstream_for(mono_id).is_some_and(|u| u.stopped()),
+            working: uses && conversation.is_some_and(|id| self.browser_ui.ops.browser_working(id)),
             review,
             ardia_running: uses && self.browser_ui.ops.ardia_owned(),
         };
@@ -299,7 +300,7 @@ impl Monos {
             "{:?}|{:?}|{}|{:?}|{}",
             surface.cards.iter().map(|c| &c.id).collect::<Vec<_>>(),
             surface.notices.iter().map(|n| &n.id).collect::<Vec<_>>(),
-            surface.stopped,
+            surface.working,
             surface.review,
             surface.ardia_running
         );
@@ -340,7 +341,7 @@ impl Monos {
         self.browser_ui.approval.keys.remove(mono_id);
     }
 
-    /// Resume, Confirm or Keep from a conversation's surface.
+    /// Stop, Quit, Confirm or Keep from a conversation's surface.
     pub(super) fn browser_action(
         &mut self,
         mono_id: &str,
@@ -348,22 +349,13 @@ impl Monos {
         cx: &mut Context<Self>,
     ) {
         match event {
-            BrowserAction::Resume => {
-                if let Some(upstream) = gate::upstream_for(mono_id) {
-                    let id = mono_id.to_owned();
-                    cx.spawn(async move |this, cx| {
-                        // The request goes over the link and can take a moment.
-                        let result = cx
-                            .background_executor()
-                            .spawn(async move { upstream.resume() })
-                            .await;
-                        let _ = this.update(cx, |this, cx| {
-                            this.browser_ui.approval.error = result.err();
-                            this.browser_approval_refresh(&id, false, cx);
-                        });
-                    })
-                    .detach();
+            BrowserAction::StopBrowser => {
+                let conversation = self.chats.get(mono_id).map(|chat| chat.read(cx).summary.id);
+                if let Some(conversation) = conversation {
+                    // Non-blocking: the process is killed and the holds are released on a thread.
+                    self.browser_ui.ops.stop_browser(mono_id, conversation);
                 }
+                self.browser_approval_refresh(mono_id, false, cx);
             }
             BrowserAction::QuitArdia => self.browser_ardia_quit(cx),
             BrowserAction::ConfirmRules => self.browser_rules_confirm(mono_id, cx),

@@ -56,6 +56,7 @@ fn substitutions(line: &str) -> Vec<String> {
     let chars: Vec<char> = line.chars().collect();
     let mut out = Vec::new();
     let mut single = false;
+    let mut double = false;
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
@@ -63,7 +64,10 @@ fn substitutions(line: &str) -> Vec<String> {
             i += 2;
             continue;
         }
-        if c == '\'' {
+        if c == '"' && !single {
+            double = !double;
+        } else if c == '\'' && !double {
+            // A single quote inside double quotes is a plain character.
             single = !single;
         } else if !single && c == '$' && chars.get(i + 1) == Some(&'(') {
             let mut depth = 1;
@@ -168,6 +172,18 @@ pub fn words_run_ardia(words: &[String], depth: usize) -> bool {
             if wrapper == "command" && matches!(option.as_str(), "-v" | "-V") {
                 return false;
             }
+            // `env -S "ardia call hello"`: the value is a command line.
+            if wrapper == "env" {
+                let split = match option.as_str() {
+                    "-S" | "--split-string" => words.get(i + 1).map(String::as_str),
+                    o if o.starts_with("--split-string=") => o.strip_prefix("--split-string="),
+                    o if o.starts_with("-S") && !o.starts_with("--") => Some(&o[2..]),
+                    _ => None,
+                };
+                if split.is_some_and(|line| runs_ardia_depth(line, depth + 1)) {
+                    return true;
+                }
+            }
             i += if takes_value(wrapper, option) { 2 } else { 1 };
         }
         // `timeout 5 cmd` has a duration before the command.
@@ -271,5 +287,30 @@ impl ShellAudit {
         }
         self.seen.insert(tool.id.clone());
         let _ = MonoBrowserStore::at(database.clone()).record(mono_id, &entry(self.session));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_split_string_is_a_command_line() {
+        assert!(runs_ardia(r#"env -S "ardia call hello""#));
+        assert!(runs_ardia(r#"env -i -S 'FOO=1 ardia call hello'"#));
+        assert!(runs_ardia(r#"env --split-string="ardia call hello""#));
+        assert!(!runs_ardia(r#"env -S "echo ardia""#));
+        assert!(!runs_ardia(r#"env -S "grep ardia file""#));
+    }
+
+    #[test]
+    fn a_single_quote_inside_double_quotes_is_a_plain_character() {
+        assert!(runs_ardia(r#"echo "it's"; ardia call hello"#));
+        assert!(runs_ardia(r#"echo "it's $(ardia call hello)""#));
+        assert!(runs_ardia(r#"echo "it's" && echo "$(ardia call x)""#));
+        assert!(!runs_ardia(r#"echo "it's ardia""#));
+        assert!(!runs_ardia(r#"echo "it's"; echo 'ardia'"#));
+        // Inside real single quotes a substitution is not run.
+        assert!(!runs_ardia("echo '$(ardia call x)'"));
     }
 }

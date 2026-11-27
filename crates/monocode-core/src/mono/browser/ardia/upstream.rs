@@ -267,15 +267,17 @@ impl ArdiaUpstream {
     pub fn configure(self: &Arc<Self>, config: Config) {
         let changed = {
             let mut current = self.config.lock().unwrap_or_else(|e| e.into_inner());
-            let changed = !current.profile.is_empty() && current.profile != config.profile;
+            let changed = (!current.profile.is_empty() && current.profile != config.profile)
+                .then(|| current.profile.clone());
             *current = config;
             changed
         };
-        if changed {
+        if let Some(old_profile) = changed {
             // The tabs belong to the old profile: closed by the controller, which keeps the tab
             // book, and forgotten here.
             self.convs().clear();
-            self.controller.end_mono_in_background(&self.mono_id);
+            self.controller
+                .end_mono_in_background(&self.mono_id, Some(&old_profile));
         }
     }
     /// Closes the tabs and releases the holds of every conversation of this Mono.

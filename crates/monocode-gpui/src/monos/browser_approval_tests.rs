@@ -1,5 +1,5 @@
 //! The approval surface of the zptah Browser extension: the card in the conversation, how answers
-//! reach the queue, the timeout, the stopped banner, the grants list and the rule confirmation.
+//! reach the queue, the timeout, the "Working in Ardia" row, the grants list and the rule confirmation.
 //! Nothing here touches a browser: the Mono's side is a thread that asks the queue the way the gate
 //! does.
 use super::browser_tests::{Fake, closed, running, tap};
@@ -408,6 +408,43 @@ fn the_conversation_hides_the_indicator_for_an_ardia_the_user_started_or_a_close
     assert!(!ardia_row_flag(&mut rig));
     with_ardia(&mut rig, closed());
     assert!(!ardia_row_flag(&mut rig));
+}
+
+#[gpui::test]
+fn the_working_row_follows_the_running_call_and_stop_stops_it_once(cx: &mut TestAppContext) {
+    let mut rig = open(cx, Lang::En);
+    let ops = with_ardia(&mut rig, closed());
+    let id = rig.mono();
+    let conversation = rig
+        .s
+        .manager
+        .read_with(&rig.visual, |m, cx| m.chats[&id].read(cx).summary.id);
+    let working = |rig: &mut Rig| {
+        let id = rig.mono();
+        rig.s.manager.read_with(&rig.visual, |m, cx| {
+            m.chats[&id].read(cx).browser_surface().working
+        })
+    };
+    assert!(!working(&mut rig));
+    assert!(!rig.on("browser-working"));
+    *ops.working.lock().unwrap() = true;
+    rig.s.manager.update(&mut rig.visual, |m, cx| {
+        m.browser_surfaces_refresh(false, cx)
+    });
+    rig.settle();
+    assert!(working(&mut rig));
+    assert_eq!(
+        rig.surface_cards(),
+        0,
+        "it is an indicator, not a card waiting for an answer"
+    );
+    // The conversation's Stop button emits this action; the manager answers it.
+    rig.s.manager.update(&mut rig.visual, |m, cx| {
+        m.browser_action(&id, BrowserAction::StopBrowser, cx)
+    });
+    rig.settle();
+    assert_eq!(*ops.stops.lock().unwrap(), vec![(id.clone(), conversation)]);
+    assert!(!working(&mut rig), "the row goes after the refresh");
 }
 
 #[test]
