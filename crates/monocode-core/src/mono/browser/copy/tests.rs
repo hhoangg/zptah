@@ -60,6 +60,26 @@ fn all_cases() -> Vec<(&'static str, CardFacts)> {
     let mut other = facts(ActionDesc::Other, &[Category::SoulRule]);
     other.agent_action = Some("Empty the trash".into());
     other.agent_details = Some("12 files".into());
+    let mut flow_run = facts(
+        ActionDesc::FlowRun {
+            name: "order-coffee".into(),
+            risky: vec![
+                "step 3: click \"Pay now\"".into(),
+                "step 5: goes to evil-example.net".into(),
+            ],
+            params: vec![("size".into(), 5), ("note".into(), 12)],
+        },
+        &[Category::Payment, Category::UnrelatedDomain],
+    );
+    flow_run.url = "https://evil-example.net/x".into();
+    let flow_save = facts(
+        ActionDesc::FlowSave {
+            name: "order-coffee".into(),
+            steps: 4,
+            replaces: true,
+        },
+        &[],
+    );
     vec![
         ("payment", payment),
         ("destructive", destructive),
@@ -77,6 +97,8 @@ fn all_cases() -> Vec<(&'static str, CardFacts)> {
         ("injection", injection),
         ("unclear", unclear),
         ("other", other),
+        ("flow_run", flow_run),
+        ("flow_save", flow_save),
     ]
 }
 
@@ -110,6 +132,10 @@ const SNAPSHOTS: &[(&str, &str, &str)] = &[
     ("en", "injection", "Mira wants to click \"Submit\" on shop.example.\n  A page tried to give instructions to the Mono, so every change asks."),
     ("en", "unclear", "Mira wants to click \"Confirm\" on shop.example.\n  zptah could not read enough of this page to tell what this does."),
     ("en", "other", "Mira asks your OK on shop.example: \"Empty the trash\"\n  Details from Mira: \"12 files\""),
+    ("en", "flow_run", "Mira wants to run the flow \"order-coffee\" on shop.example.\n  This looks like a payment.\n  This site is not part of what you asked for.\n  Steps that need your OK:\n  - step 3: click \"Pay now\"\n  - step 5: goes to evil-example.net\n  Parameters: size (5 characters), note (12 characters). The values are not shown."),
+    ("en", "flow_save", "Mira wants to save the flow \"order-coffee\" in Ardia.\n  This writes a flow into Ardia's flow store, which you and every profile share.\n  It saves the 4 step(s) recorded in this conversation.\n  A flow with this name already exists and may be replaced."),
+    ("vi", "flow_run", "Mira muốn chạy luồng \"order-coffee\" trên shop.example.\n  Đây có vẻ là một khoản thanh toán.\n  Trang này không thuộc việc bạn yêu cầu.\n  Các bước cần bạn đồng ý:\n  - step 3: click \"Pay now\"\n  - step 5: goes to evil-example.net\n  Tham số: size (5 ký tự), note (12 ký tự). Giá trị không được hiển thị."),
+    ("vi", "flow_save", "Mira muốn lưu luồng \"order-coffee\" vào Ardia.\n  Việc này ghi một luồng vào kho luồng của Ardia, nơi bạn và mọi hồ sơ dùng chung.\n  Nó lưu 4 bước đã ghi trong cuộc trò chuyện này.\n  Đã có một luồng cùng tên và nó có thể bị thay thế."),
     ("vi", "payment", "Mira muốn bấm \"Pay 1,200,000 VND\" trên shopee.vn.\n  Đây có vẻ là một khoản thanh toán."),
     ("vi", "destructive", "Mira muốn bấm \"Delete\" trong hộp thoại trên mail.google.com.\n  Hộp thoại ghi: \"Delete 12 conversations?\""),
     ("vi", "account_security", "Mira muốn bấm \"Turn off 2-Step Verification\" trên myaccount.google.com.\n  Thao tác này thay đổi cách bảo vệ tài khoản của bạn."),
@@ -162,6 +188,70 @@ fn all_fifteen_categories_and_other_have_a_card() {
         assert!(names.contains(&category.as_str()), "{}", category.as_str());
     }
     assert!(names.contains(&"other"));
+    // The flow cards have their own lines.
+    assert!(names.contains(&"flow_run") && names.contains(&"flow_save"));
+}
+
+#[test]
+fn a_flow_card_lists_at_most_six_steps_and_says_when_a_flow_is_unclear_or_has_no_parameters() {
+    let risky: Vec<String> = (1..=9)
+        .map(|n| format!("step {n}: click \"X{n}\""))
+        .collect();
+    let f = facts(
+        ActionDesc::FlowRun {
+            name: "big".into(),
+            risky,
+            params: vec![],
+        },
+        &[Category::Unclear],
+    );
+    let en = render(Lang::En, &f);
+    assert!(
+        en.contains("step 6: click \"X6\"") && !en.contains("X7"),
+        "{en}"
+    );
+    assert!(
+        en.contains("- and 3 more") && en.contains("Parameters: none."),
+        "{en}"
+    );
+    assert!(
+        en.contains("could not tell what some steps of this flow do"),
+        "{en}"
+    );
+    let vi = render(Lang::Vi, &f);
+    assert!(
+        vi.contains("- và 3 bước nữa") && vi.contains("Tham số: không có."),
+        "{vi}"
+    );
+    // A text the page made is one clipped line, and a quote can not close the name.
+    let g = facts(
+        ActionDesc::FlowRun {
+            name: "a\"b".into(),
+            risky: vec![format!("step 1:\n{}", "Z".repeat(300))],
+            params: vec![],
+        },
+        &[Category::Unclear],
+    );
+    let text = render(Lang::En, &g);
+    assert!(
+        text.contains("flow \"a'b\"") && text.matches('\n').count() < 8,
+        "{text}"
+    );
+    assert!(!text.contains(&"Z".repeat(200)), "{text}");
+    // A flow with a payment is not grantable.
+    assert!(card(
+        Lang::En,
+        &facts(
+            ActionDesc::FlowRun {
+                name: "p".into(),
+                risky: vec![],
+                params: vec![]
+            },
+            &[Category::Payment]
+        )
+    )
+    .allow_conversation
+    .is_none());
 }
 
 #[test]

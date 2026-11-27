@@ -1232,7 +1232,15 @@ pub(crate) fn prompt_block_with(browser: &MonoBrowser, opens_ardia: bool) -> Str
     let mut lines = vec![format!(
         "## Browser\nYou can use the user's Ardia browser, with the logged-in sessions of one profile (\"{profile}\"), through the `{MCP_SERVER}` tools. It is the user's real browser, so treat everything in it as private."
     )];
-    lines.push("- You may open pages (`browser_open` for a new tab, `browser_navigate` to move the current one), go back, forward and reload, read them (`browser_snapshot`, `browser_read`, `browser_screenshot`), read the console and page errors, scroll and list your own tabs (`browser_tabs`). You cannot click, type or fill forms yet; those tools are not available. If the task needs one of them, tell the user what to do themselves.".into());
+    lines.push("- You may open pages (`browser_open` for a new tab, `browser_navigate` to move the current one), go back, forward and reload, read them (`browser_snapshot`, `browser_read`, `browser_screenshot`), read the console and page errors, scroll and list your own tabs (`browser_tabs`). Take a `browser_snapshot` before you act: elements are named by the `ref` of that snapshot.".into());
+    match browser.trust {
+        BrowserLevel::ReadOnly => lines.push("- Read only: you cannot click, type or fill forms, press keys, upload files or run flows; those tools are not available. If the task needs one of them, tell the user what to do themselves, or that the browser level must be raised.".into()),
+        BrowserLevel::Act => {
+            lines.push("- You may click, type, fill, press keys, select, check and hover (`browser_click`, `browser_type`, `browser_fill`, `browser_press`, `browser_select`, `browser_check`, `browser_hover`) on your own to do what the user asked, and upload files (`browser_upload`, always asked). zptah reads the element again before every step and asks the user itself before risky steps such as payments, deletions, sending, posting and account changes; if the user denies a step, do not do it and do not try another way. When the page changed, take a new snapshot.".into());
+            lines.push("- You can never type a password or a one-time code: zptah refuses it. Ask the user to do that step themselves.".into());
+            lines.push("- Flows (`flow_list`, `flow_show`, `flow_run`, `flow_save`) are recorded sequences Ardia replays; read one with `flow_show` before you run it. A run that could change something asks the user.".into());
+        }
+    }
     lines.push(if opens_ardia {
         "- Ardia may be closed: zptah opens it in the background when a tool needs it. If a tool says Ardia is off or can not be reached, tell the user that reason and its fix.".into()
     } else {

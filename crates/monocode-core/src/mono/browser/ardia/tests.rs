@@ -166,6 +166,30 @@ pub(super) struct State {
     pub nameless_popups: usize,
     /// The first this many `ardia call windows` are refused.
     pub windows_fail_first: usize,
+    // ---- flows (see `flow_tests`) ----
+    /// The flows Ardia has saved, each as `data.flow` of `flow show`.
+    pub flows: Vec<Value>,
+    /// What `flow steps` lists (`None`: the recorded fixture).
+    pub flow_steps: Option<Value>,
+    /// Runs when the n-th `flow show` arrives (1 is the first), before its answer.
+    pub on_flow_show: Option<(usize, CloseHook)>,
+    /// How many `flow show` the fake answered.
+    pub flow_shows: usize,
+    /// Every `flow run` and `flow save` that reached the fake: its words, a `--` and its values.
+    pub flow_runs: Vec<Vec<String>>,
+    pub flow_saves: Vec<Vec<String>>,
+    /// The address the tab is on after a `flow run` (`None`: the flow's last step address).
+    pub flow_ends_on: Option<String>,
+    /// Keys added to the `data` of a successful `flow run` (`list`, `items` ...).
+    pub flow_run_extra: Option<Value>,
+    /// The next `flow run` fails like this (after it was sent).
+    pub flow_run_fails: Option<super::fake_page::FailKind>,
+    /// `flow show` answers this text as it is (an unreadable reply).
+    pub flow_show_raw: Option<String>,
+    /// Every `flow show` finds a changed flow (its `createdAt` moves).
+    pub flow_changes_each_show: bool,
+    /// A `flow save` is refused with this message.
+    pub flow_save_refused: Option<String>,
 }
 
 /// The `targetId` the bind reply gives the bound tab (the recorded one).

@@ -113,6 +113,20 @@ pub enum ActionDesc {
     },
     /// An action the Mono described itself with `browser_request_approval`.
     Other,
+    /// Run an Ardia flow. `risky` are the steps that need the user's OK (one line each, already
+    /// cleaned), `params` the parameters as name and length (the values are never shown).
+    FlowRun {
+        name: String,
+        risky: Vec<String>,
+        params: Vec<(String, usize)>,
+    },
+    /// Save the session's recorded steps as a flow in Ardia's store (shared with the user and
+    /// every profile). `replaces`: a flow of that name exists.
+    FlowSave {
+        name: String,
+        steps: usize,
+        replaces: bool,
+    },
 }
 
 /// What the card needs to know. All text is what the page or the Mono said: it is clipped and
@@ -342,7 +356,94 @@ fn verb_phrase(lang: Lang, facts: &CardFacts) -> String {
         ),
         (ActionDesc::Other, Lang::En) => "do something that needs your OK".into(),
         (ActionDesc::Other, Lang::Vi) => "làm một việc cần bạn đồng ý".into(),
+        (ActionDesc::FlowRun { name, .. }, Lang::En) => {
+            format!("run the flow {}", quoted(name, MAX_LABEL))
+        }
+        (ActionDesc::FlowRun { name, .. }, Lang::Vi) => {
+            format!("chạy luồng {}", quoted(name, MAX_LABEL))
+        }
+        (ActionDesc::FlowSave { name, .. }, Lang::En) => {
+            format!("save the flow {}", quoted(name, MAX_LABEL))
+        }
+        (ActionDesc::FlowSave { name, .. }, Lang::Vi) => {
+            format!("lưu luồng {}", quoted(name, MAX_LABEL))
+        }
     }
+}
+
+/// The lines only a flow card has: the steps that ask and the parameters (names and lengths, never
+/// values), or what a save writes.
+fn flow_lines(lang: Lang, facts: &CardFacts) -> Vec<String> {
+    const MAX_STEPS: usize = 6;
+    let mut lines = Vec::new();
+    match &facts.action {
+        ActionDesc::FlowRun { risky, params, .. } => {
+            if !risky.is_empty() {
+                lines.push(
+                    match lang {
+                        Lang::En => "Steps that need your OK:",
+                        Lang::Vi => "Các bước cần bạn đồng ý:",
+                    }
+                    .to_owned(),
+                );
+                for step in risky.iter().take(MAX_STEPS) {
+                    lines.push(format!("- {}", clean(step, 120)));
+                }
+                let more = risky.len().saturating_sub(MAX_STEPS);
+                if more > 0 {
+                    lines.push(match lang {
+                        Lang::En => format!("- and {more} more"),
+                        Lang::Vi => format!("- và {more} bước nữa"),
+                    });
+                }
+            }
+            lines.push(if params.is_empty() {
+                match lang {
+                    Lang::En => "Parameters: none.".to_owned(),
+                    Lang::Vi => "Tham số: không có.".to_owned(),
+                }
+            } else {
+                let list: Vec<String> = params
+                    .iter()
+                    .take(10)
+                    .map(|(name, len)| match lang {
+                        Lang::En => format!("{} ({len} characters)", clean(name, 40)),
+                        Lang::Vi => format!("{} ({len} ký tự)", clean(name, 40)),
+                    })
+                    .collect();
+                match lang {
+                    Lang::En => {
+                        format!("Parameters: {}. The values are not shown.", list.join(", "))
+                    }
+                    Lang::Vi => {
+                        format!("Tham số: {}. Giá trị không được hiển thị.", list.join(", "))
+                    }
+                }
+            });
+        }
+        ActionDesc::FlowSave {
+            steps, replaces, ..
+        } => {
+            lines.push(match lang {
+                Lang::En => "This writes a flow into Ardia's flow store, which you and every profile share.".to_owned(),
+                Lang::Vi => "Việc này ghi một luồng vào kho luồng của Ardia, nơi bạn và mọi hồ sơ dùng chung.".to_owned(),
+            });
+            lines.push(match lang {
+                Lang::En => format!("It saves the {steps} step(s) recorded in this conversation."),
+                Lang::Vi => format!("Nó lưu {steps} bước đã ghi trong cuộc trò chuyện này."),
+            });
+            if *replaces {
+                lines.push(match lang {
+                    Lang::En => {
+                        "A flow with this name already exists and may be replaced.".to_owned()
+                    }
+                    Lang::Vi => "Đã có một luồng cùng tên và nó có thể bị thay thế.".to_owned(),
+                });
+            }
+        }
+        _ => {}
+    }
+    lines
 }
 
 fn file_list(names: &[String]) -> String {
@@ -505,6 +606,12 @@ fn tail(lang: Lang, category: Category, facts: &CardFacts) -> Option<String> {
                 clean(&facts.mono, MAX_LABEL)
             ),
         },
+        (Category::Unclear, Lang::En) if matches!(facts.action, ActionDesc::FlowRun { .. }) => {
+            "zptah could not tell what some steps of this flow do.".into()
+        }
+        (Category::Unclear, Lang::Vi) if matches!(facts.action, ActionDesc::FlowRun { .. }) => {
+            "zptah không biết một số bước của luồng này làm gì.".into()
+        }
         (Category::Unclear, Lang::En) => {
             "zptah could not read enough of this page to tell what this does.".into()
         }
@@ -609,6 +716,12 @@ pub fn card(lang: Lang, facts: &CardFacts) -> CardText {
                 None => format!("{mono} xin bạn đồng ý trên {site}."),
             }
         }
+        (Lang::En, _, _) if matches!(facts.action, ActionDesc::FlowSave { .. }) => {
+            format!("{mono} wants to {phrase} in Ardia.")
+        }
+        (Lang::Vi, _, _) if matches!(facts.action, ActionDesc::FlowSave { .. }) => {
+            format!("{mono} muốn {phrase} vào Ardia.")
+        }
         (Lang::En, _, _) => match &facts.action {
             ActionDesc::Upload { .. } => format!("{mono} wants to {phrase} to {site}."),
             _ => format!("{mono} wants to {phrase} on {site}."),
@@ -641,6 +754,7 @@ pub fn card(lang: Lang, facts: &CardFacts) -> CardText {
             }
         }
     }
+    lines.extend(flow_lines(lang, facts));
     // The user's own tab: the card says which page is being handed over.
     if matches!(facts.action, ActionDesc::TabTransfer { .. }) && !facts.url.is_empty() {
         let url = clean(&facts.url, 300);

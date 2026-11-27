@@ -18,6 +18,10 @@
 //   `browse --session S --json <cmd> [flags] -- <values...>` (nothing after the values).
 // - It closes every tab it opens and releases its session on exit (also on SIGINT/SIGTERM).
 // - `back` and `forward` are skipped: example.com has no history to go back to.
+// - The flow commands are READ ONLY here: `flow list`, and `flow show` of the first saved flow if
+//   there is one (skipped otherwise). The script never runs, saves or removes a flow and never
+//   creates one in the user's store; `flow run`, `flow save` and the data flows' output are
+//   unmeasured and have no fixture.
 // - `check`, `hover` (success) and `get attr` of a later form are not recorded in the
 //   fixtures (unmeasured): the script only prints what they answered, for the next fixture.
 //
@@ -225,6 +229,35 @@ async function actCommands() {
   else report("act: unknown ref", diffShapes(fixture("act_unknown_ref"), unknown.json));
 }
 
+// ---- the flow commands (read only) ----
+
+// `kind` is absent on a data flow: compare the shapes without it.
+const withoutKind = (j) => {
+  const copy = JSON.parse(JSON.stringify(j));
+  if (Array.isArray(copy?.data?.flows)) for (const f of copy.data.flows) delete f.kind;
+  if (copy?.data?.flow) delete copy.data.flow.kind;
+  return copy;
+};
+
+function flowCommands() {
+  // `flow list` needs no page; the session is bound to the script's own local page here.
+  const listed = runJson(browse(["flow", "list"]));
+  if (listed.error) return report("flow: list", [], listed.error);
+  const flows = listed.json?.data?.flows;
+  if (!Array.isArray(flows)) return report("flow: list", [], "no data.flows list in the reply");
+  report("flow: list", diffShapes(withoutKind(fixture(flows.length ? "flow_list" : "flow_list_empty")), withoutKind(listed.json)));
+  // `flow show` only when a flow exists; never create one. The name is checked like zptah checks it
+  // before it goes after `--`.
+  const first = flows.map((f) => f.name).find((n) => typeof n === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(n));
+  if (!first) {
+    console.log("INFO flow: no saved flow with a plain name: `flow show` skipped");
+    return;
+  }
+  const shown = runJson(browse(["flow", "show"], [first]));
+  if (shown.error) return report("flow: show", [], shown.error);
+  report("flow: show", diffShapes(withoutKind(fixture("flow_show")), withoutKind(shown.json)));
+}
+
 // ---- main ----
 if (!profile) {
   console.error("Usage: node scripts/ardia-shapes-check.mjs --profile <ardia-profile-id> [--ardia <path>] [--keep-going]");
@@ -349,6 +382,7 @@ try {
   for (const [name, cmd, values, fx] of cmds) step(`browse ${name}`, browse(cmd, values), fx);
 
   await actCommands();
+  flowCommands();
   if (watchSeconds > 0) {
     console.log(`INFO bring Ardia to the front and open a window within ${watchSeconds} s`);
   }

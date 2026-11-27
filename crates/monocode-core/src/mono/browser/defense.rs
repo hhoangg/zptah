@@ -250,6 +250,9 @@ pub fn returns_content(tool: &str, text: &str) -> bool {
             | "browser_navigate"
             | "browser_navigate_back"
             | "browser_wait_for"
+            | "flow_list"
+            | "flow_show"
+            | "flow_run"
     ) || text.contains("```yaml")
         || text.contains("### Page")
         || text.contains("### Snapshot")

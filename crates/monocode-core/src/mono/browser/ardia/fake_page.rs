@@ -268,6 +268,7 @@ impl State {
                 self.popups.retain(|(id, _)| *id != target);
                 Some(ok(json_of(CDP_CLOSE)))
             }
+            (["flow", rest @ ..], _) => self.flow_reply(rest, values),
             (["get", "count"], ["form"]) => Some(ok(
                 json!({"success": true, "data": {"count": self.page.forms.len(), "selector": "form"}, "error": null}),
             )),

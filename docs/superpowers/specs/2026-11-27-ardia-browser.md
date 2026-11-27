@@ -323,6 +323,13 @@ step. Policy for `flow_run`:
 
 `flow heal` is not exposed in v1; the user heals flows from a terminal.
 
+Command form: a flow name matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` and goes after the `--`; a
+parameter is `--param`, `k=v` (two arguments before the `--`, `k` matching `^[A-Za-z_][A-Za-z0-9_]{0,63}$`
+so the `k=v` token can never be read as an option, whatever `v` says); `--yes` is the gate's and only
+for a flow with `writes: true`. A conversation grant for a flow is stored under `flow:<name>:<hash>`
+and covers that content only; `flow_save` always asks (never granted), and refuses a name that is not
+a flow name.
+
 Open: the format of `flow show` output and whether a flow is tied to a profile. The M0 spike
 records one flow and reads it back.
 

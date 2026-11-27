@@ -342,7 +342,7 @@ fn the_prompt_block_carries_the_safety_rules_only_when_the_browser_is_active() {
         "profile (\"Work\")",
         "`browser_open`",
         "`browser_snapshot`",
-        "You cannot click, type or fill forms yet",
+        "You may click, type, fill",
         "Never run the `ardia` command in a shell",
         "Never enter a one-time code (OTP)",
         "Enter a password only when the user explicitly asked",
