@@ -251,6 +251,11 @@ impl Notes {
     }
 
     fn edited(&mut self, cx: &mut Context<Self>) {
+        // Programmatic resets while nothing is selected are not edits: `dirty`
+        // would never clear and would block creating, selecting and refreshing.
+        if self.selected.is_none() {
+            return;
+        }
         self.dirty = true;
         self.revision = self.revision.wrapping_add(1);
         self.error = None;
@@ -273,6 +278,7 @@ impl Notes {
     fn persist(&mut self, finalize: bool, cx: &mut Context<Self>) {
         self.debounce = None;
         let Some(mut draft) = self.draft(cx) else {
+            self.dirty = false;
             return;
         };
         let saved_title = self
@@ -1028,7 +1034,7 @@ impl gpui::Render for Notes {
         let list = div().relative().w(px(self.list_width)).h_full().flex_shrink_0().min_h_0().flex().flex_col().border_r_1().border_color(content(0.07))
             .child(div().h(px(36.)).flex_shrink_0().px_2().flex().items_center().gap_1().border_b_1().border_color(content(0.07)).child(icon("search", 12.))
                 .child(div().flex_1().min_w_0().child(self.query.clone()))
-                .child(icon_button("create-note", "New note", "plus").on_click(cx.listener(|this, _, window, cx| this.create(window, cx)))))
+                .child(icon_button("create-note", "New note", "plus").debug_selector(|| "create-note".into()).on_click(cx.listener(|this, _, window, cx| this.create(window, cx)))))
             .child(div().id("notes-list").role(Role::ListBox).aria_label("Saved notes").flex_1().min_h_0().overflow_y_scroll().p(px(6.))
                 .when(visible.is_empty(), |d| d.child(div().px_1p5().py_2().text_size(px(12.)).text_color(content(0.5)).child(if self.loading { "Loading notes…" } else if !query.trim().is_empty() { "No matching notes" } else { "No notes yet. Save a turn from the transcript, or create one here." })))
                 .children(visible.iter().enumerate().map(|(ix, note)| {
@@ -1174,5 +1180,139 @@ fn relative_time(at: i64) -> String {
         _ => chrono::DateTime::from_timestamp_millis(at)
             .map(|date| date.format("%b %-d").to_string())
             .unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{TestAppContext, VisualTestContext, WindowHandle};
+    use monocode_core::store::Store;
+
+    fn store() -> Database {
+        std::sync::Arc::new(std::sync::Mutex::new(
+            Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ))
+    }
+
+    fn open(cx: &mut TestAppContext, store: Database) -> WindowHandle<Notes> {
+        let window = cx.update(|cx| {
+            input::bind(cx);
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| Notes::new(store, cx))
+            })
+            .unwrap()
+        });
+        window
+            .update(cx, |notes, window, cx| {
+                notes.refresh(cx);
+                window.focus(&notes.query.focus_handle(cx), cx);
+            })
+            .unwrap();
+        settle(cx);
+        window
+    }
+
+    fn settle(cx: &mut TestAppContext) {
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+    }
+
+    fn count(store: &Database) -> usize {
+        locked(store).unwrap().list_notes().unwrap().len()
+    }
+
+    fn assert_created(cx: &mut TestAppContext, window: WindowHandle<Notes>, store: &Database) {
+        settle(cx);
+        assert_eq!(count(store), 1);
+        window
+            .update(cx, |notes, window, cx| {
+                assert_eq!(notes.notes.len(), 1);
+                assert_eq!(notes.selected.as_ref(), Some(&notes.notes[0].id));
+                assert!(notes.body.focus_handle(cx).is_focused(window));
+                assert!(notes.query.read(cx).content.is_empty());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn clicking_new_note_on_an_empty_list_creates_one(cx: &mut TestAppContext) {
+        let store = store();
+        let window = open(cx, store.clone());
+        window
+            .update(cx, |notes, _, _| assert!(!notes.dirty))
+            .unwrap();
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        let button = visual.debug_bounds("create-note").unwrap();
+        visual.simulate_click(button.center(), Default::default());
+        assert_created(cx, window, &store);
+    }
+
+    #[gpui::test]
+    fn secondary_n_on_an_empty_list_creates_a_note(cx: &mut TestAppContext) {
+        let store = store();
+        let window = open(cx, store.clone());
+        cx.simulate_keystrokes(window.into(), "secondary-n");
+        assert_created(cx, window, &store);
+    }
+
+    #[gpui::test]
+    fn new_note_works_when_the_filter_matches_nothing(cx: &mut TestAppContext) {
+        let store = store();
+        let existing = locked(&store)
+            .unwrap()
+            .create_note(Some(String::new()))
+            .unwrap()
+            .id;
+        let window = open(cx, store.clone());
+        window
+            .update(cx, |notes, _, cx| {
+                notes
+                    .query
+                    .update(cx, |input, cx| input.set_text("zzz-no-match".into(), cx));
+            })
+            .unwrap();
+        settle(cx);
+        cx.simulate_keystrokes(window.into(), "secondary-n");
+        settle(cx);
+        assert_eq!(count(&store), 2);
+        window
+            .update(cx, |notes, window, cx| {
+                assert_eq!(notes.notes.len(), 2);
+                let selected = notes.selected.as_ref().expect("a note is selected");
+                assert_ne!(selected, &existing);
+                assert!(notes.notes.iter().any(|note| &note.id == selected));
+                assert!(notes.query.read(cx).content.is_empty());
+                assert!(notes.body.focus_handle(cx).is_focused(window));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn new_note_works_after_deleting_the_last_note(cx: &mut TestAppContext) {
+        let store = store();
+        locked(&store)
+            .unwrap()
+            .create_note(Some(String::new()))
+            .unwrap();
+        let window = open(cx, store.clone());
+        window
+            .update(cx, |notes, _, cx| {
+                assert!(notes.selected.is_some());
+                notes.delete(cx);
+            })
+            .unwrap();
+        settle(cx);
+        assert_eq!(count(&store), 0);
+        window
+            .update(cx, |notes, _, _| {
+                assert!(notes.selected.is_none());
+                assert!(!notes.dirty);
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "secondary-n");
+        assert_created(cx, window, &store);
     }
 }
