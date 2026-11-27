@@ -88,7 +88,7 @@ impl Monos {
             };
         };
         let mono_kind = self.board_mono_kind(cx);
-        let mono_model = self.chat().and_then(|c| c.read(cx).mono_model());
+        let mono_model = self.wf.scope.default_model.clone();
         let from_model = model
             .as_deref()
             .and_then(|m| m.split_once(':'))
@@ -117,7 +117,7 @@ impl Monos {
 
     pub(super) fn board_inspector(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         view: InspectorView,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -175,7 +175,7 @@ impl Monos {
                     .child(title),
             );
         let body = match &node {
-            None => self.board_settings(mono, &w, window, cx),
+            None => self.board_settings(scope, &w, window, cx),
             Some(n) => {
                 let id = n.id.clone();
                 header = header.child(
@@ -183,7 +183,7 @@ impl Monos {
                         .debug_selector(|| "wf-inspector-delete".into())
                         .on_click(cx.listener(move |this, _, _, cx| this.board_remove(&id, cx))),
                 );
-                self.board_node_body(mono, &w, n, window, cx)
+                self.board_node_body(scope, &w, n, window, cx)
             }
         };
         div()
@@ -413,7 +413,7 @@ impl Monos {
 
     pub(super) fn board_node_body(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         w: &Workflow,
         node: &Node,
         window: &mut Window,
@@ -449,7 +449,7 @@ impl Monos {
             node.kind,
             NodeKind::Session { .. } | NodeKind::Command { .. }
         );
-        let fields = self.board_node_fields(mono, w, node, window, cx);
+        let fields = self.board_node_fields(scope, w, node, window, cx);
         let loop_out = w
             .edges
             .iter()
@@ -558,7 +558,7 @@ impl Monos {
 
     pub(super) fn board_node_fields(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         w: &Workflow,
         node: &Node,
         window: &mut Window,
@@ -590,7 +590,7 @@ impl Monos {
                 .line_height(px(20.))
                 .text_color(content(0.55))
                 .child(
-                    "Starts when you use Run now, or when the Mono runs it. Values it needs are set under Workflow settings.",
+                    "Starts when you use Run now, or when a Mono runs it. Values it needs are set under Workflow settings.",
                 )
                 .into_any_element(),
             NodeKind::Session {
@@ -604,7 +604,7 @@ impl Monos {
                 account,
                 ..
             } => {
-                let project_row = self.board_project_row(mono, w, &id, cx);
+                let project_row = self.board_project_row(scope, w, &id, cx);
                 let model = self.board_model_rows(node, cx);
                 // Read-only: the target is edited in the workflow's file or through the Mono.
                 let target_row = target.as_ref().map(|target| {
@@ -702,7 +702,7 @@ impl Monos {
                 timeout_minutes,
                 ..
             } => {
-                let project_row = self.board_project_row(mono, w, &id, cx);
+                let project_row = self.board_project_row(scope, w, &id, cx);
                 let mut runs = choices(&[("root", "Project folder")]);
                 runs.extend(sessions_except(w, &id).iter().map(|s| {
                     (format!("worktree:{}", s.id), format!("Worktree of {}", node_title(s)))
@@ -893,14 +893,14 @@ impl Monos {
 
     pub(super) fn board_project_row(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         w: &Workflow,
         id: &str,
         cx: &mut Context<Self>,
     ) -> Div {
         let node = w.node(id);
         let current = node.and_then(|n| project_path(w, n)).unwrap_or_default();
-        let mut options: Vec<(String, String)> = mono
+        let mut options: Vec<(String, String)> = scope
             .projects
             .iter()
             .map(|p| (p.clone(), basename(p)))

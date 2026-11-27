@@ -1,7 +1,7 @@
 //! Capability-checked app actions used by Mono provider subprocesses.
 use super::*;
 use crate::shell::FilesOutcome;
-use monocode_core::mono::workflows::cli::{LEGACY_ID_ERROR, MonoCaller, StoreHost, handle_value};
+use monocode_core::mono::workflows::cli::{LEGACY_ID_ERROR, MonoCaller, handle_value};
 use monocode_core::mono::{
     Document, Launch,
     bridge::Call,
@@ -1719,19 +1719,12 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.set_enabled
                 // thread. run/stop/resumeRun then only write their request into the file.
                 // The files are the global store; the Mono is only the caller, whose projects
                 // bound what it may add, change and run.
-                let mut host =
-                    StoreHost::new(self.workflow_dir.clone(), self.workflow_signals.clone())
-                        .with_probe(self.workflow_live.probe())
-                        .with_preflight(self.workflow_live.preflight())
-                        .with_legacy_root(root);
+                let mut host = self.workflow_store(cx).with_legacy_root(root);
                 if let Some(m) = self.roster.get(&target) {
                     host = host.with_caller(MonoCaller {
                         id: m.id.clone(),
                         projects: m.projects.clone(),
                     });
-                }
-                if let Some(check) = workflow_account_check(cx) {
-                    host = host.with_accounts(check);
                 }
                 let name = action.clone();
                 self.call_work(

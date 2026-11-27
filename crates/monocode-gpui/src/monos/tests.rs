@@ -22,6 +22,19 @@ pub(crate) fn check_workflows<C: gpui::AppContext>(s: &Setup, cx: &mut C) {
     workflows.update(cx, |w, cx| w.check_workflows(cx));
 }
 
+/// Changes how the app probes workflows (the model catalog and the requirements).
+pub(crate) fn set_probes<C: gpui::AppContext>(
+    s: &Setup,
+    cx: &mut C,
+    change: impl FnOnce(&mut crate::workflows::Probes),
+) {
+    let workflows = s
+        .window
+        .update(cx, |shell, _, _| shell.workflows().expect("workflows"))
+        .unwrap();
+    workflows.update(cx, |w, _| change(w.probes_mut()));
+}
+
 impl Setup {
     /// The global workflow files, where the app keeps them.
     pub(crate) fn workflows_dir(&self) -> monocode_core::mono::workflows::global::WorkflowsDir {
@@ -5287,10 +5300,7 @@ fn a_habit_run_starts_a_workflow_with_values_for_one_run_and_meets_its_requireme
     definition["requires"] = json!([{"cli": "gh"}]);
     let id = add_workflow(&s, "add-0", definition, cx);
     from_chat(&s, "resume-0", "workflows.resume", json!({"id": id}), cx);
-    cx.update(|cx| {
-        s.manager
-            .update(cx, |m, _| m.workflow_live.set_preflight(nothing_found))
-    });
+    set_probes(&s, cx, |p| p.set_preflight(nothing_found));
     let missing = call_from(&s, run, "r1", "workflows.run", json!({"id": id}), cx)
         .try_recv()
         .unwrap()
@@ -5298,23 +5308,19 @@ fn a_habit_run_starts_a_workflow_with_values_for_one_run_and_meets_its_requireme
     assert!(missing.contains("Missing requirements:"), "{missing}");
     assert!(!saved_workflows(&s)[0].run_requested);
     // Met again: the per-run value reaches that run only.
-    cx.update(|cx| {
-        s.manager.update(cx, |m, _| {
-            m.workflow_live.set_preflight(|w| {
-                monocode_core::mono::workflows::preflight::Preflight {
-                    statuses: w
-                        .requires
-                        .iter()
-                        .map(
-                            |r| monocode_core::mono::workflows::preflight::RequirementStatus {
-                                requirement: r.clone(),
-                                met: true,
-                                detail: None,
-                            },
-                        )
-                        .collect(),
-                }
-            })
+    set_probes(&s, cx, |p| {
+        p.set_preflight(|w| monocode_core::mono::workflows::preflight::Preflight {
+            statuses: w
+                .requires
+                .iter()
+                .map(
+                    |r| monocode_core::mono::workflows::preflight::RequirementStatus {
+                        requirement: r.clone(),
+                        met: true,
+                        detail: None,
+                    },
+                )
+                .collect(),
         })
     });
     call_from(

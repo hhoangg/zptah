@@ -12,6 +12,7 @@ pub(crate) enum AppView {
     Inbox,
     Notes,
     Automations,
+    Workflows,
     Contributors,
 }
 impl AppView {
@@ -21,6 +22,7 @@ impl AppView {
             Self::Inbox => "Inbox",
             Self::Notes => "Notes",
             Self::Automations => "Automations",
+            Self::Workflows => "Workflows",
             Self::Contributors => "Contributors",
         }
     }
@@ -29,7 +31,8 @@ impl AppView {
             Self::Today => "clock",
             Self::Inbox => "inbox",
             Self::Notes => "note",
-            Self::Automations => "zap",
+            Self::Automations => "refresh-cw",
+            Self::Workflows => "zap",
             Self::Contributors => "chart-square",
         }
     }

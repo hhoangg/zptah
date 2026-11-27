@@ -68,10 +68,7 @@ pub(super) fn local(started: &StartedSession) -> i64 {
 }
 
 fn probe_with(s: &Setup, cx: &mut TestAppContext, probe: fn(Kind) -> Probe) {
-    cx.update(|cx| {
-        s.manager
-            .update(cx, |m, _| m.workflow_live = Probes::new().with_probe(probe))
-    });
+    crate::monos::tests::set_probes(s, cx, |p| *p = Probes::new().with_probe(probe));
 }
 
 fn catalog_model(id: &str, efforts: &[&str]) -> Model {

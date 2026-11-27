@@ -132,7 +132,7 @@ impl Workflows {
         let sweep = !self.checks.swept;
         let signals = self.signals.clone();
         let dir = self.dir.clone();
-        let probes = self.probes(cx);
+        let probes = self.probes();
         let work = cx.background_executor().spawn(async move {
             look_at(
                 &dir,

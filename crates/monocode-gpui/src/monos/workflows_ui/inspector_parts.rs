@@ -72,14 +72,14 @@ impl Monos {
                 .pb_0p5()
                 .text_size(px(11.))
                 .text_color(content(0.35))
-                .child("Mono default")
+                .child("App default")
                 .into_any_element()
         } else {
             div()
                 .id("wf-model-default")
                 .debug_selector(|| "wf-model-default".into())
                 .role(Role::Button)
-                .aria_label("Use Mono default")
+                .aria_label("Use app default")
                 .cursor_pointer()
                 .rounded_sm()
                 .px_1p5()
@@ -87,7 +87,7 @@ impl Monos {
                 .text_size(px(11.))
                 .text_color(content(0.55))
                 .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                .child("Use Mono default")
+                .child("Use app default")
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.board_node_edit(
                         &reset_id,
@@ -193,16 +193,14 @@ impl Monos {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(chat) = self.chat() else {
-            return;
-        };
         let Some(step) = self.wf.board.as_ref().and_then(|b| b.node(node).cloned()) else {
             return;
         };
         let state = self.board_model_state(&step, cx);
-        let view = chat.read(cx);
-        let (project, account) = (view.summary.cwd.clone(), view.settings.account.clone());
-        let list = cx.new(|cx| ModelList::new_for(state.kind, state.native, &project, account, cx));
+        let project = self.wf.scope.project.clone();
+        let list = cx.new(|cx| {
+            ModelList::new_for(state.kind, state.native, &project, Default::default(), cx)
+        });
         let focus = list.read(cx).search_focus(cx);
         let id = node.to_string();
         let picked = cx.subscribe(&list, move |this, _, picked: &ModelPicked, cx| {
@@ -559,7 +557,7 @@ impl Monos {
 
     pub(super) fn board_settings(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         w: &Workflow,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -584,7 +582,7 @@ impl Monos {
         let problem = self.wf.board.as_ref().and_then(|b| b.input_problem.clone());
         let mut rows = div().px_2().flex().flex_col().gap_0p5();
         for (name, input) in w.inputs.iter() {
-            let field = self.board_input_value(mono, w, name, input, window, cx);
+            let field = self.board_input_value(scope, w, name, input, window, cx);
             let remove = name.clone();
             let selector = format!("wf-input-remove-{name}");
             rows = rows.child(property(
@@ -776,7 +774,7 @@ impl Monos {
 
     pub(super) fn board_input_value(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         w: &Workflow,
         name: &str,
         input: &WorkflowInput,
@@ -791,7 +789,7 @@ impl Monos {
                     Some(InputValue::String(p)) => p.clone(),
                     _ => String::new(),
                 };
-                let mut options: Vec<(String, String)> = mono
+                let mut options: Vec<(String, String)> = scope
                     .projects
                     .iter()
                     .map(|p| (p.clone(), basename(p)))

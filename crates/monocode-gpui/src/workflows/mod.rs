@@ -25,6 +25,29 @@ mod summary;
 pub(crate) use runner::{Live, WorkflowRunner};
 pub(crate) use schedule::begin_quit;
 
+/// The persisted ids of every session the run files name, for the zap badge. Blocks (reads the
+/// files): use it off the UI thread.
+pub(crate) fn run_session_ids(dir: &WorkflowsDir) -> Vec<String> {
+    use monocode_core::mono::workflows::store::{load_runs, load_workflows};
+    let Ok(loaded) = load_workflows(dir) else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for workflow in &loaded.workflows {
+        for run in load_runs(dir, &workflow.id).unwrap_or_default() {
+            for node in &run.nodes {
+                ids.extend(node.session_id.clone());
+                for round in node.history.iter().flatten() {
+                    ids.extend(round.session_id.clone());
+                }
+            }
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
 /// How the app judges what a workflow needs, injected so tests never reach real CLIs, shells or
 /// MCP servers.
 #[derive(Clone, Copy)]
@@ -90,6 +113,8 @@ pub(crate) struct Workflows {
     pub(in crate::workflows) runner: WorkflowRunner,
     pub(in crate::workflows) live: Live,
     pub(in crate::workflows) checks: schedule::Checks,
+    /// How workflows are judged (model catalog and requirements); a test swaps it in one place.
+    probes: Probes,
 }
 
 impl Workflows {
@@ -110,7 +135,10 @@ impl Workflows {
             )
         };
         let monos_weak = monos.downgrade();
-        cx.new(|cx| Self::new(store, shell, monos_weak, signals, runner, dir, cx))
+        let this = cx.new(|cx| Self::new(store, shell, monos_weak, signals, runner, dir, cx));
+        let weak = this.downgrade();
+        monos.update(cx, |monos, _| monos.workflows_entity = Some(weak));
+        this
     }
 
     fn new(
@@ -131,27 +159,28 @@ impl Workflows {
             signals,
             live: Live::new(),
             checks: Default::default(),
+            probes: Probes::new(),
         };
         cx.set_global(schedule::QuitTarget(this.runner.clone()));
         this.start_workflow_checks(cx);
         this
     }
 
-    /// What the app judges workflows with (the Monos hold it so tests can swap it in one place).
-    pub(in crate::workflows) fn probes(&self, cx: &App) -> Probes {
-        self.monos
-            .upgrade()
-            .map(|monos| monos.read(cx).workflow_live)
-            .unwrap_or_default()
+    /// What the app judges workflows with.
+    pub(crate) fn probes(&self) -> Probes {
+        self.probes
     }
 
-    // The next four are the seam the global Workflows page uses (the pages in `monos` still read
-    // the files themselves for now).
+    /// What the app judges workflows with, for a test to swap.
+    #[cfg(test)]
+    pub(crate) fn probes_mut(&mut self) -> &mut Probes {
+        &mut self.probes
+    }
+
     /// The global files, as a host the `workflows.*` actions run on. Blocks (files, CLI probes):
     /// use it off the UI thread. Without a caller it is the user: any app project may be named.
-    #[allow(dead_code)]
     pub(crate) fn store_host(&self, cx: &App) -> StoreHost {
-        let probes = self.probes(cx);
+        let probes = self.probes;
         let host = StoreHost::new(self.dir.clone(), self.signals.clone())
             .with_probe(probes.probe())
             .with_preflight(probes.preflight());
@@ -161,18 +190,12 @@ impl Workflows {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn dir(&self) -> &WorkflowsDir {
         &self.dir
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn runner(&self) -> &WorkflowRunner {
-        &self.runner
-    }
-
     /// Whether a run of the workflow is going.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn is_running(&self, workflow_id: &str) -> bool {
         self.runner.is_running(workflow_id)
     }

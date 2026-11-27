@@ -32,7 +32,7 @@ fn saved_run(s: &Setup, w: &Workflow, run: &WorkflowRun, cx: &mut TestAppContext
 
 fn open_run(s: &Setup, visual: &mut VisualTestContext) {
     s.manager.update(visual, |m, cx| {
-        m.open_workflow_route(Route::WorkflowRun(A.into(), "run-1".into()), cx)
+        m.open_workflow_route(WfRoute::Run(A.into(), "run-1".into()), cx)
     });
     visual.run_until_parked();
     settle(s, visual);
@@ -122,7 +122,7 @@ fn switch_toggles_lanes_and_single_and_is_remembered(cx: &mut TestAppContext) {
     visual.run_until_parked();
     assert_eq!(view_setting(&s).as_deref(), Some("single"));
     // Leave the page and come back: the choice is remembered.
-    s.manager.update(visual, |m, _| m.route = None);
+    s.manager.update(visual, |m, _| m.wf.route = None);
     visual.run_until_parked();
     open_run(&s, visual);
     assert_eq!(lane_cards(&s, visual).len(), 2);
@@ -316,12 +316,12 @@ fn clicking_a_node_shows_its_details_and_round_history(cx: &mut TestAppContext) 
     );
     assert_eq!(
         route(&s, visual),
-        Some(Route::WorkflowRun(A.into(), "run-1".into()))
+        Some(WfRoute::Run(A.into(), "run-1".into()))
     );
 }
 
 #[gpui::test]
-fn a_nodes_session_opens_in_the_panel_and_back_returns_to_the_run(cx: &mut TestAppContext) {
+fn a_nodes_session_opens_as_an_app_session(cx: &mut TestAppContext) {
     let s = setup(cx);
     // A session the app lists, as a workflow run leaves them.
     let session = s
@@ -347,21 +347,16 @@ fn a_nodes_session_opens_in_the_panel_and_back_returns_to_the_run(cx: &mut TestA
     assert!(visual.debug_bounds("wf-open-session").is_none());
     click(visual, "wf-node-dev");
     click(visual, "wf-open-session");
-    assert_eq!(route(&s, visual), Some(Route::Session(session)));
     assert_eq!(page_notice(&s, visual), None);
-    settle(&s, visual);
-    click(visual, "mono-page-back");
+    // The session opens as the app opens any session: the Workflows view is left for it.
+    assert!(visual.debug_bounds("workflows-view").is_none());
     assert_eq!(
-        route(&s, visual),
-        Some(Route::WorkflowRun(A.into(), "run-1".into()))
+        s.window
+            .update(visual, |shell, _, _| shell.workspace.active)
+            .unwrap(),
+        Some(session)
     );
-    // Back from a session that was not opened from here goes to the overview.
-    s.manager
-        .update(visual, |m, _| m.route = Some(Route::Session(session)));
-    visual.run_until_parked();
-    settle(&s, visual);
-    click(visual, "mono-page-back");
-    assert_eq!(route(&s, visual), None);
+    assert_eq!(route(&s, visual), None, "the view is closed with its page");
 }
 
 #[gpui::test]
@@ -472,7 +467,7 @@ fn a_running_run_offers_stop_run_and_stop_ends_it(cx: &mut TestAppContext) {
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     s.manager.update(visual, |m, cx| {
-        m.open_workflow_route(Route::WorkflowRun(A.into(), run_id.clone()), cx)
+        m.open_workflow_route(WfRoute::Run(A.into(), run_id.clone()), cx)
     });
     visual.run_until_parked();
     settle(&s, visual);
@@ -839,7 +834,7 @@ fn opening_a_run_again_starts_with_nothing_picked(cx: &mut TestAppContext) {
         s.manager.read_with(visual, |m, _| m.wf.run.picked.clone())
     };
     assert_eq!(picked(&s, visual).as_deref(), Some("report|"));
-    s.manager.update(visual, |m, _| m.route = None);
+    s.manager.update(visual, |m, _| m.wf.route = None);
     visual.run_until_parked();
     open_run(&s, visual);
     assert_eq!(picked(&s, visual), None);

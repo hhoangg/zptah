@@ -18,7 +18,7 @@ pub(in crate::monos) struct Review {
     pub(super) id: String,
     pub(super) intent: ReviewIntent,
     /// Where Back and a finished approval go: the workflow page, or the overview.
-    pub(super) back: Option<Route>,
+    pub(super) back: Option<WfRoute>,
     /// What is on screen is what approving applies to.
     pub(super) shown: Workflow,
     /// The fingerprint of the stored definition last looked at.
@@ -115,7 +115,7 @@ pub(in crate::monos) fn session_detail(preview: &ImportPreview, node: &Node) -> 
         match (model, harness) {
             (Some(model), _) => visible(model),
             (None, Some(_)) => "its default".to_string(),
-            (None, None) => "Mono default".to_string(),
+            (None, None) => "App default".to_string(),
         }
     ));
     if let Some(effort) = effort.as_deref().filter(|e| !e.is_empty()) {
@@ -423,10 +423,10 @@ impl Monos {
         &mut self,
         id: &str,
         intent: ReviewIntent,
-        back: Option<Route>,
+        back: Option<WfRoute>,
         cx: &mut Context<Self>,
     ) {
-        let Some(workflow) = self.mono_workflow(id).cloned() else {
+        let Some(workflow) = self.global_workflow(id).cloned() else {
             return;
         };
         self.wf.page_notice = None;
@@ -442,7 +442,7 @@ impl Monos {
             busy: false,
             preview: None,
         });
-        self.route = Some(Route::WorkflowReview(id.to_string(), intent));
+        self.wf.route = Some(WfRoute::Review(id.to_string(), intent));
         self.review_preview(cx);
         cx.notify();
     }
@@ -452,7 +452,7 @@ impl Monos {
         let Some(review) = &self.wf.review else {
             return;
         };
-        let Some(stored) = self.mono_workflow(&review.id).cloned() else {
+        let Some(stored) = self.global_workflow(&review.id).cloned() else {
             return;
         };
         let incoming = definition_fingerprint(&stored);
@@ -483,7 +483,7 @@ impl Monos {
         }
         let shown = review.shown.clone();
         let id = review.id.clone();
-        let probe = self.workflow_live.probe();
+        let probe = self.workflow_probes(cx).probe();
         let work = cx.background_executor().spawn(async move {
             let catalog = ModelCatalog::for_harnesses(&harnesses_used(&shown), probe);
             review_of(&shown, &catalog)
@@ -539,8 +539,8 @@ impl Monos {
                 match result {
                     Approval::Done => {
                         this.wf.review = None;
-                        if matches!(this.route, Some(Route::WorkflowReview(..))) {
-                            this.route = back;
+                        if matches!(this.wf.route, Some(WfRoute::Review(..))) {
+                            this.wf.route = back;
                         }
                     }
                     Approval::Changed(stored) => {
@@ -592,7 +592,7 @@ impl Monos {
                         header_button("mono-workflow-review-cancel", "Cancel", false, true)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.wf.review = None;
-                                this.route = go_back.clone();
+                                this.wf.route = go_back.clone();
                                 this.refresh_workflows(cx);
                                 cx.notify();
                             })),

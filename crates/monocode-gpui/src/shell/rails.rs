@@ -534,10 +534,9 @@ impl Shell {
                                     }),
                             )
                             .children(work_item)
-                            .when(
-                                self.automation_state.session_automations.contains_key(&id),
-                                |d| d.child(icon("zap", 12.).text_color(rgb(0xfbbf24))),
-                            )
+                            .when(self.session_zap(id), |d| {
+                                d.child(icon("zap", 12.).text_color(rgb(0xfbbf24)))
+                            })
                             .when_some(rail, |d, (rail, _)| {
                                 d.child(
                                     icon(

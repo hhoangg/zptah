@@ -8,7 +8,7 @@ use super::tests::{click, open_tab, page_notice, route, settle};
 use super::*;
 use crate::monos::tests::{Setup, setup};
 use gpui::{TestAppContext, VisualTestContext};
-use monocode_core::mono::workflows::model::{NodeKind, Workflow};
+use monocode_core::mono::workflows::model::{NodeKind, WORKFLOWS_MAX, Workflow};
 use serde_json::{Value, json};
 
 /// The ClickUp -> Dev -> Review example, laid out (`ticketWorkflow` of the React fixtures).
@@ -57,7 +57,7 @@ pub(super) fn open_board(s: &Setup, w: &Workflow, cx: &mut TestAppContext) -> Vi
     let mut visual = VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     s.manager.update(&mut visual, |m, cx| {
-        m.open_workflow_route(Route::WorkflowBoard(w.id.clone()), cx)
+        m.open_workflow_route(WfRoute::Board(w.id.clone()), cx)
     });
     visual.run_until_parked();
     settle(s, &mut visual);
@@ -214,8 +214,8 @@ fn a_session_model_the_catalog_lacks_is_flagged_and_blocks_saving_enabled(cx: &m
             *model = Some("claude-sonnet-5-5".into());
         }
     }
-    s.manager.update(cx, |m, _| {
-        m.workflow_live = crate::workflows::Probes::new().with_probe(listing)
+    crate::monos::tests::set_probes(&s, cx, |p| {
+        *p = crate::workflows::Probes::new().with_probe(listing)
     });
     let mut visual = open_board(&s, &w, cx);
     let visual = &mut visual;
@@ -272,13 +272,12 @@ fn a_flagged_workflow_is_not_saved_enabled_points_to_the_review_and_keeps_its_ma
     click(visual, "wf-board-review-open");
     assert!(matches!(
         route(&s, visual),
-        Some(Route::WorkflowReview(_, super::ReviewIntent::Enable))
+        Some(WfRoute::Review(_, super::ReviewIntent::Enable))
     ));
     assert!(stored_first(&s).enabled);
     // Back on the board: Save paused keeps the mark.
-    s.manager.update(visual, |m, _| {
-        m.route = Some(Route::WorkflowBoard(A.into()))
-    });
+    s.manager
+        .update(visual, |m, _| m.wf.route = Some(WfRoute::Board(A.into())));
     visual.run_until_parked();
     settle(&s, visual);
     click(visual, "wf-board-save-paused");
@@ -337,16 +336,15 @@ fn run_now_and_resume_in_the_menu_open_the_review_of_a_flagged_workflow(cx: &mut
     do_with(&s, visual, |m, cx| m.board_run_now(cx));
     assert!(matches!(
         route(&s, visual),
-        Some(Route::WorkflowReview(_, super::ReviewIntent::Run))
+        Some(WfRoute::Review(_, super::ReviewIntent::Run))
     ));
-    s.manager.update(visual, |m, _| {
-        m.route = Some(Route::WorkflowBoard(A.into()))
-    });
+    s.manager
+        .update(visual, |m, _| m.wf.route = Some(WfRoute::Board(A.into())));
     visual.run_until_parked();
     do_with(&s, visual, |m, cx| m.board_toggle_enabled(cx));
     assert!(matches!(
         route(&s, visual),
-        Some(Route::WorkflowReview(_, super::ReviewIntent::Enable))
+        Some(WfRoute::Review(_, super::ReviewIntent::Enable))
     ));
     // Nothing was switched on, in the draft or in the file.
     assert!(!on_board(&s, visual, |b| b.meta.enabled));
@@ -385,20 +383,20 @@ fn leaving_with_unsaved_changes_asks_to_save_or_discard(cx: &mut TestAppContext)
     let visual = &mut visual;
     // Nothing changed: Back just goes.
     click(visual, "mono-page-back");
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
     s.manager.update(visual, |m, cx| {
-        m.open_workflow_route(Route::WorkflowBoard(A.into()), cx)
+        m.open_workflow_route(WfRoute::Board(A.into()), cx)
     });
     visual.run_until_parked();
     rename(&s, visual, "Changed");
     click(visual, "mono-page-back");
-    assert_eq!(route(&s, visual), Some(Route::WorkflowBoard(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Board(A.into())));
     assert!(visual.debug_bounds("wf-board-leave").is_some());
     click(visual, "wf-board-keep-editing");
     assert!(visual.debug_bounds("wf-board-leave").is_none());
     click(visual, "mono-page-back");
     click(visual, "wf-board-discard");
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
     assert_eq!(stored_first(&s).name, "ClickUp -> Dev -> Review");
     assert!(s.manager.read_with(visual, |m, _| m.wf.board.is_none()));
 }
@@ -413,7 +411,7 @@ fn save_in_the_leave_dialog_saves_then_leaves(cx: &mut TestAppContext) {
     click(visual, "wf-board-leave-save");
     visual.run_until_parked();
     assert_eq!(stored_first(&s).name, "Changed");
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
 }
 
 #[gpui::test]
@@ -441,7 +439,7 @@ fn a_new_workflow_starts_with_a_manual_trigger_and_a_report_and_is_saved_paused(
     visual.run_until_parked();
     click(visual, "mono-workflow-new");
     settle(&s, visual);
-    assert_eq!(route(&s, visual), Some(Route::NewWorkflow));
+    assert_eq!(route(&s, visual), Some(WfRoute::New));
     assert_eq!(node_ids(&s, visual), vec!["report", "start"]);
     assert_eq!(
         on_board(&s, visual, |b| b.meta.name.clone()),
@@ -461,7 +459,7 @@ fn a_new_workflow_starts_with_a_manual_trigger_and_a_report_and_is_saved_paused(
 #[gpui::test]
 fn the_twenty_first_workflow_is_refused_when_saved(cx: &mut TestAppContext) {
     let s = setup(cx);
-    let list: Vec<Workflow> = (0..20)
+    let list: Vec<Workflow> = (0..WORKFLOWS_MAX)
         .map(|i| {
             let mut w = ticket(json!({}));
             w.id = format!("wf-{i:08}");
@@ -472,17 +470,16 @@ fn the_twenty_first_workflow_is_refused_when_saved(cx: &mut TestAppContext) {
     open_tab(&s, cx);
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
-    s.manager.update(visual, |m, cx| {
-        m.open_workflow_route(Route::NewWorkflow, cx)
-    });
+    s.manager
+        .update(visual, |m, cx| m.open_workflow_route(WfRoute::New, cx));
     visual.run_until_parked();
     settle(&s, visual);
     click(visual, "wf-board-save");
     visual.run_until_parked();
-    assert_eq!(saved(&s).len(), 20);
+    assert_eq!(saved(&s).len(), WORKFLOWS_MAX);
     assert_eq!(
         page_notice(&s, visual).as_deref(),
-        Some("At most 20 workflows.")
+        Some(format!("At most {WORKFLOWS_MAX} workflows.").as_str())
     );
 }
 
@@ -683,7 +680,7 @@ fn saving_an_interval_schedule_anchors_it_and_leaves_the_board_clean(cx: &mut Te
     assert!(!can_save(&s, visual));
     click(visual, "mono-page-back");
     assert!(visual.debug_bounds("wf-board-leave").is_none());
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
 }
 
 #[gpui::test]

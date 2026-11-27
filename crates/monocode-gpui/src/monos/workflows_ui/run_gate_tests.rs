@@ -56,8 +56,7 @@ fn needing(extra: Value) -> Workflow {
 }
 
 fn use_preflight(s: &Setup, visual: &mut VisualTestContext, preflight: fn(&Workflow) -> Preflight) {
-    s.manager
-        .update(visual, |m, _| m.workflow_live.set_preflight(preflight));
+    crate::monos::tests::set_probes(s, visual, |p| p.set_preflight(preflight));
 }
 
 /// Looks at the requirements again: what was found is made old enough to be looked at anew.
@@ -152,8 +151,8 @@ fn a_flagged_workflow_still_goes_to_the_review_first(cx: &mut TestAppContext) {
     click(visual, "mono-workflow-run-wf-aaaaaaaa");
     assert!(!gate_open(&s, visual));
     assert_eq!(
-        s.manager.read_with(visual, |m, _| m.route.clone()),
-        Some(Route::WorkflowReview(A.into(), ReviewIntent::Run))
+        s.manager.read_with(visual, |m, _| m.wf.route.clone()),
+        Some(WfRoute::Review(A.into(), ReviewIntent::Run))
     );
 }
 
@@ -254,7 +253,7 @@ fn the_dialog_belongs_to_the_page_it_was_opened_on(cx: &mut TestAppContext) {
     click(visual, "mono-workflow-run-wf-aaaaaaaa");
     assert!(visible(visual, "wf-run-gate"));
     do_with(&s, visual, |m, cx| {
-        m.open_workflow_route(Route::Workflow(A.into()), cx)
+        m.open_workflow_route(WfRoute::Workflow(A.into()), cx)
     });
     settle(&s, visual);
     assert!(!visible(visual, "wf-run-gate"), "not drawn on another page");
@@ -273,10 +272,9 @@ fn resume_opens_the_dialog_only_when_something_is_required(cx: &mut TestAppConte
     let s = setup(cx);
     let plain = needing(json!({"requires": null, "inputs": {}, "inputValues": {}}));
     let visual = &mut opened(&s, cx, vec![plain.clone()], all_found);
-    let mono = s.id.clone();
     let run = interrupted(&plain);
     s.manager.update(visual, |m, _| {
-        m.wf.runs.insert((mono.clone(), A.into()), vec![run]);
+        m.wf.runs.insert(A.into(), vec![run]);
     });
     let opens = s
         .manager
@@ -287,7 +285,7 @@ fn resume_opens_the_dialog_only_when_something_is_required(cx: &mut TestAppConte
     let with = needing(json!({"inputs": {}, "inputValues": {}}));
     let run = interrupted(&with);
     s.manager.update(visual, |m, _| {
-        m.wf.runs.insert((mono.clone(), A.into()), vec![run]);
+        m.wf.runs.insert(A.into(), vec![run]);
     });
     let opens = s
         .manager
@@ -423,12 +421,12 @@ fn the_workflow_page_lists_each_missing_requirement_with_its_hint(cx: &mut TestA
     use_preflight(&s, visual, gh_missing);
     look_again(&s, visual);
     do_with(&s, visual, |m, cx| {
-        m.open_workflow_route(Route::Workflow(A.into()), cx)
+        m.open_workflow_route(WfRoute::Workflow(A.into()), cx)
     });
     settle(&s, visual);
     assert!(visible(visual, "mono-workflow-missing"));
     let hint = s.manager.read_with(visual, |m, _| {
-        m.missing_requirements(&m.mono_workflow(A).unwrap().clone())
+        m.missing_requirements(&m.global_workflow(A).unwrap().clone())
             .map(|p| p.summary())
     });
     assert!(hint.unwrap().contains("brew install gh"));

@@ -107,6 +107,8 @@ mod web_link;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod window_chrome;
 mod workflow_bridge;
+#[cfg(test)]
+mod workflows_entry_tests;
 mod worktrees;
 
 use crate::{
@@ -896,6 +898,9 @@ pub(crate) struct Shell {
     inbox: Option<Entity<crate::inbox::Inbox>>,
     today: Option<Entity<crate::today::Today>>,
     automations: Option<Entity<crate::automations::Automations>>,
+    workflows_page: Option<Entity<crate::monos::WorkflowsPage>>,
+    /// The sessions a workflow started (the zap badge); see `session_zap`.
+    workflow_sessions: HashSet<i64>,
     contributors: Option<Entity<crate::contributors::ContributorsPage>>,
     /// The app-wide Contributors job model, fed by the core's sinks.
     sync_jobs: Entity<crate::contributors::SyncJobs>,
@@ -1403,6 +1408,8 @@ impl Shell {
             inbox: None,
             today: None,
             automations: None,
+            workflows_page: None,
+            workflow_sessions: HashSet::new(),
             contributors: None,
             sync_jobs: cx.new(crate::contributors::SyncJobs::new),
             contributors_core: None,
@@ -1590,6 +1597,30 @@ impl Shell {
         ));
         this.observations.push(cx.subscribe(
             &monos,
+            |_, _, opened: &crate::monos::OpenWorkflowSession, cx| {
+                let id = opened.0;
+                cx.spawn(async move |this, cx| {
+                    let _ = this.update_in(cx, |this, window, cx| this.open(id, window, cx));
+                })
+                .detach();
+            },
+        ));
+        this.observations.push(cx.subscribe(
+            &monos,
+            |_, _, asked: &crate::monos::AskMonoForWorkflow, cx| {
+                let id = asked.0.clone();
+                cx.spawn(async move |this, cx| {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        if let Some(monos) = this.monos.clone() {
+                            monos.update(cx, |m, cx| m.ask_mono_for_workflow(&id, window, cx));
+                        }
+                    });
+                })
+                .detach();
+            },
+        ));
+        this.observations.push(cx.subscribe(
+            &monos,
             |this, _, event: &crate::monos::NodePathChanged, cx| {
                 this.workspace.preferences.node_path = event.0.clone();
                 this.apply_preferences(cx);
@@ -1635,6 +1666,7 @@ impl Shell {
             cx,
         ));
         this.monos = Some(monos);
+        this.load_workflow_sessions(cx);
         this.bind_notices(cx);
         this.init_app_bridge(cx);
         for summary in summaries {
@@ -6874,9 +6906,7 @@ impl Shell {
             mark.update(cx, |mark, cx| mark.set_size(side, cx));
         }
         let work_item = self.work_item_badge(id, compact, cx);
-        let has_badges = work_item.is_some()
-            || mode.is_some()
-            || self.automation_state.session_automations.contains_key(&id);
+        let has_badges = work_item.is_some() || mode.is_some() || self.session_zap(id);
         let session = self.session_metadata(id, cx);
         let active = self.selected_sessions.contains(&id)
             || (self.workspace.active == Some(id)
@@ -7036,10 +7066,9 @@ impl Shell {
             .gap_1()
             .flex_shrink_0()
             .children(work_item)
-            .when(
-                self.automation_state.session_automations.contains_key(&id),
-                |row| row.child(icon("zap", 12.).text_color(content(0.35))),
-            )
+            .when(self.session_zap(id), |row| {
+                row.child(icon("zap", 12.).text_color(content(0.35)))
+            })
             // Marked on the right like a linked issue or PR, in its mode's colour.
             .when_some(mode, |d, (glyph, color, label)| {
                 d.child(

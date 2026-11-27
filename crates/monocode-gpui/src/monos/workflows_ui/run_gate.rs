@@ -32,7 +32,7 @@ pub(super) struct RunGate {
     /// Whether a notice goes under a page's header rather than under the list.
     pub(super) page: bool,
     /// Where it was opened; it is shown only there.
-    pub(super) route: Option<Route>,
+    pub(super) route: Option<WfRoute>,
     /// The workflow whose requirements are checked: the stored one for a run, the run's own
     /// definition with the workflow's requirements added for a resume.
     pub(super) subject: Workflow,
@@ -122,7 +122,7 @@ impl Monos {
         page: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(w) = self.mono_workflow(id).cloned() else {
+        let Some(w) = self.global_workflow(id).cloned() else {
             return false;
         };
         if w.inputs.is_empty() && w.requires.is_empty() {
@@ -132,7 +132,7 @@ impl Monos {
             workflow_id: id.to_string(),
             mode: GateMode::Run,
             page,
-            route: self.route.clone(),
+            route: self.wf.route.clone(),
             inputs: w
                 .inputs
                 .iter()
@@ -169,7 +169,7 @@ impl Monos {
         page: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(w) = self.mono_workflow(id).cloned() else {
+        let Some(w) = self.global_workflow(id).cloned() else {
             return false;
         };
         let mut subject = self
@@ -184,7 +184,7 @@ impl Monos {
             workflow_id: id.to_string(),
             mode: GateMode::Resume(run.to_string()),
             page,
-            route: self.route.clone(),
+            route: self.wf.route.clone(),
             subject,
             inputs: Vec::new(),
             stored: OrderedMap::new(),
@@ -235,7 +235,12 @@ impl Monos {
 
     /// Whether the dialog is open on the page in view.
     pub(crate) fn wf_gate_shown(&self) -> bool {
-        self.active.is_some() && self.wf.gate.as_ref().is_some_and(|g| g.route == self.route)
+        self.wf.open
+            && self
+                .wf
+                .gate
+                .as_ref()
+                .is_some_and(|g| g.route == self.wf.route)
     }
 
     pub(crate) fn wf_gate_close(&mut self, cx: &mut Context<Self>) {
@@ -245,11 +250,9 @@ impl Monos {
     /// Opens the Run dialog of `w` as a click on Run would.
     #[cfg(test)]
     pub(crate) fn open_gate_for_test(&mut self, w: Workflow, cx: &mut Context<Self>) -> bool {
-        let Some(mono) = self.active.clone() else {
-            return false;
-        };
         let id = w.id.clone();
-        self.wf.loaded.insert(mono, vec![w]);
+        self.wf.open = true;
+        self.wf.loaded = Some(vec![w]);
         self.run_gate_for_run(&id, false, cx)
     }
 
@@ -413,7 +416,7 @@ impl Monos {
     /// One input of the form: a project picker, an on/off picker, or a text box.
     fn run_gate_input(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         name: &str,
         input: &WorkflowInput,
         cx: &mut Context<Self>,
@@ -432,7 +435,7 @@ impl Monos {
                     Some(InputValue::String(path)) => path.clone(),
                     _ => String::new(),
                 };
-                let mut options: Vec<(String, String)> = mono
+                let mut options: Vec<(String, String)> = scope
                     .projects
                     .iter()
                     .map(|path| (path.clone(), basename(path)))
@@ -485,11 +488,16 @@ impl Monos {
     /// The dialog, when it was opened on the page being drawn.
     pub(super) fn run_gate_dialog(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if self.wf.gate.as_ref().is_some_and(|g| g.route != self.route) {
+        if self
+            .wf
+            .gate
+            .as_ref()
+            .is_some_and(|g| g.route != self.wf.route)
+        {
             // Another page is on screen; the dialog belonged to the one that was left.
             return None;
         }
@@ -519,7 +527,7 @@ impl Monos {
 
         let mut fields = div().flex().flex_col().gap_0p5();
         for (name, input) in &inputs {
-            let widget = self.run_gate_input(mono, name, input, cx);
+            let widget = self.run_gate_input(scope, name, input, cx);
             fields = fields.child(property(name.clone(), widget));
         }
         let size = window.viewport_size();

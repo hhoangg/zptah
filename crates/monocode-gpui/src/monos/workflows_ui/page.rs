@@ -106,7 +106,7 @@ fn run_row(
                 .child(format!("{} \u{b7} {took}", when(run.started_at, now))),
         )
         .on_click(cx.listener(move |this, _, _, cx| {
-            this.open_workflow_route(Route::WorkflowRun(workflow.clone(), id.clone()), cx)
+            this.open_workflow_route(WfRoute::Run(workflow.clone(), id.clone()), cx)
         }))
         .into_any_element()
 }
@@ -114,13 +114,13 @@ fn run_row(
 impl Monos {
     pub(in crate::monos) fn workflow_page(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         id: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.ensure_workflows(cx);
-        let Some(w) = self.mono_workflow(id).cloned() else {
+        let Some(w) = self.global_workflow(id).cloned() else {
             return div()
                 .size_full()
                 .min_w_0()
@@ -172,7 +172,7 @@ impl Monos {
 
         let mut inputs = Vec::new();
         for (name, input) in w.inputs.iter() {
-            let field = self.workflow_input_field(mono, &w, name, input, window, cx);
+            let field = self.workflow_input_field(scope, &w, name, input, window, cx);
             inputs.push(property(name.clone(), field));
         }
 
@@ -191,7 +191,7 @@ impl Monos {
             }
             Some(runs) => {
                 for run in runs {
-                    history = history.child(run_row(run, &w.id, mono.color, cx));
+                    history = history.child(run_row(run, &w.id, scope.color, cx));
                 }
             }
             None => {}
@@ -211,7 +211,7 @@ impl Monos {
             .pb_2()
         });
         let missing = self.missing_requirements_section(&w);
-        let gate = self.run_gate_dialog(mono, window, cx);
+        let gate = self.run_gate_dialog(scope, window, cx);
         let (edit, export_w) = (w.id.clone(), w.clone());
         let export = icon_button("mono-workflow-export", "Export", "share")
             .debug_selector(|| "mono-workflow-export".into())
@@ -230,7 +230,7 @@ impl Monos {
                         icon_button("mono-workflow-edit", "Edit board", "pencil-edit")
                             .debug_selector(|| "mono-workflow-edit".into())
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.open_workflow_route(Route::WorkflowBoard(edit.clone()), cx)
+                                this.open_workflow_route(WfRoute::Board(edit.clone()), cx)
                             })),
                     )
                     .child(self.workflow_page_actions(&w, Some(export), cx)),
@@ -285,7 +285,7 @@ impl Monos {
     /// One declared input, edited in place: a project picker, a switch, or a text box.
     fn workflow_input_field(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         w: &Workflow,
         name: &str,
         input: &WorkflowInput,
@@ -301,7 +301,7 @@ impl Monos {
                     Some(InputValue::String(path)) => path.clone(),
                     _ => String::new(),
                 };
-                let mut choices: Vec<(String, String)> = mono
+                let mut choices: Vec<(String, String)> = scope
                     .projects
                     .iter()
                     .map(|path| (path.clone(), basename(path)))
@@ -389,7 +389,7 @@ impl Monos {
         name: &str,
         cx: &mut Context<Self>,
     ) {
-        let Some(w) = self.mono_workflow(workflow).cloned() else {
+        let Some(w) = self.global_workflow(workflow).cloned() else {
             return;
         };
         let Some(input) = w.inputs.get(name).cloned() else {
@@ -419,7 +419,7 @@ impl Monos {
         cx: &mut Context<Self>,
     ) {
         let Some(input) = self
-            .mono_workflow(workflow)
+            .global_workflow(workflow)
             .and_then(|w| w.inputs.get(name))
             .cloned()
         else {

@@ -210,8 +210,8 @@ fn picking_an_effort_fixes_the_model_it_was_chosen_for_and_use_mono_default_clea
         }
     }
     let s = setup(cx);
-    s.manager.update(cx, |m, _| {
-        m.workflow_live = crate::workflows::Probes::new().with_probe(efforts)
+    crate::monos::tests::set_probes(&s, cx, |p| {
+        *p = crate::workflows::Probes::new().with_probe(efforts)
     });
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
@@ -251,8 +251,8 @@ fn the_inspector_says_why_a_stored_model_is_not_available(cx: &mut TestAppContex
     if let NodeKind::Session { model, .. } = &mut w.nodes[1].kind {
         *model = Some("claude-sonnet-5-5".into());
     }
-    s.manager.update(cx, |m, _| {
-        m.workflow_live = crate::workflows::Probes::new().with_probe(listing)
+    crate::monos::tests::set_probes(&s, cx, |p| {
+        *p = crate::workflows::Probes::new().with_probe(listing)
     });
     let mut visual = open_board(&s, &w, cx);
     let visual = &mut visual;

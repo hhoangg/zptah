@@ -633,7 +633,8 @@ impl Shell {
                     ("Today", "clock"),
                     ("Inbox", "inbox"),
                     ("Notes", "file"),
-                    ("Automations", "zap"),
+                    ("Workflows", "zap"),
+                    ("Automations", "refresh-cw"),
                     ("Contributors", "chart-square"),
                 ]
                 .into_iter()
@@ -707,6 +708,7 @@ impl Shell {
                             "Inbox" => this.open_inbox(w, cx),
                             "Notes" => this.open_notes(w, cx),
                             "Automations" => this.open_automations(w, cx),
+                            "Workflows" => this.open_workflows(w, cx),
                             "Contributors" => this.open_contributors(None, None, w, cx),
                             _ => (),
                         }))
@@ -887,6 +889,7 @@ impl Shell {
                         workspace::AppView::Notes,
                         self.workspace.preferences.notes && self.workspace.sidebar_notes_visible,
                     ),
+                    (workspace::AppView::Workflows, true),
                     (
                         workspace::AppView::Automations,
                         self.workspace.sidebar_automations_visible,
@@ -910,6 +913,7 @@ impl Shell {
                         workspace::AppView::Inbox => "rail-inbox",
                         workspace::AppView::Notes => "rail-notes",
                         workspace::AppView::Automations => "rail-automations",
+                        workspace::AppView::Workflows => "rail-workflows",
                         workspace::AppView::Contributors => "rail-contributors",
                     };
                     icon_button(rail_id, view.label(), glyph)
@@ -937,6 +941,7 @@ impl Shell {
                                     workspace::AppView::Inbox => this.open_inbox(w, cx),
                                     workspace::AppView::Notes => this.open_notes(w, cx),
                                     workspace::AppView::Automations => this.open_automations(w, cx),
+                                    workspace::AppView::Workflows => this.open_workflows(w, cx),
                                     workspace::AppView::Contributors => {
                                         this.open_contributors(None, None, w, cx)
                                     }

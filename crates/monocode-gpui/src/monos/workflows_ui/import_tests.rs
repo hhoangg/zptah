@@ -3,6 +3,7 @@ use super::tests::*;
 use super::*;
 use crate::monos::tests::{Setup, call_from, setup};
 use gpui::{TestAppContext, VisualTestContext};
+use monocode_core::mono::workflows::model::WORKFLOWS_MAX;
 use monocode_core::mono::workflows::{
     model::{InputValue, NodeKind, Workflow},
     yaml::export_workflow,
@@ -164,7 +165,7 @@ fn import_waits_for_every_input_and_saves_paused_and_flagged(cx: &mut TestAppCon
     // What came from a file is read again, and approved, before it can run.
     assert!(w.needs_review);
     // The import page is replaced by the new workflow's page.
-    assert_eq!(route(&s, visual), Some(Route::Workflow(w.id.clone())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(w.id.clone())));
 }
 
 #[gpui::test]
@@ -224,22 +225,22 @@ fn the_limit_disables_the_import_and_is_checked_again_over_the_disk(cx: &mut Tes
     // The page believes there is room; the disk is full.
     put(
         &s,
-        (0..20)
+        (0..WORKFLOWS_MAX)
             .map(|i| workflow(json!({"id": format!("wf-full{i:04}")})))
             .collect(),
     );
     assert!(!ready(&s, visual), "the disk is full");
-    assert_eq!(saved(&s).len(), 20);
+    assert_eq!(saved(&s).len(), WORKFLOWS_MAX);
     assert!(
         import_error(&s, visual)
             .unwrap()
-            .contains("at most 20 workflows")
+            .contains(&format!("at most {WORKFLOWS_MAX} workflows"))
     );
-    assert_eq!(route(&s, visual), Some(Route::ImportWorkflow));
+    assert_eq!(route(&s, visual), Some(WfRoute::Import));
     // Once the page knows, the button is off.
     refresh(&s, visual);
     assert!(!ready(&s, visual));
-    assert_eq!(saved(&s).len(), 20);
+    assert_eq!(saved(&s).len(), WORKFLOWS_MAX);
 }
 
 #[gpui::test]
@@ -404,7 +405,7 @@ fn the_real_reason_an_import_could_not_be_saved_is_shown(cx: &mut TestAppContext
     let error = import_error(&s, visual).expect("an error");
     assert_ne!(error, "Could not save the workflow.");
     assert!(!error.is_empty());
-    assert_eq!(route(&s, visual), Some(Route::ImportWorkflow));
+    assert_eq!(route(&s, visual), Some(WfRoute::Import));
 }
 
 #[gpui::test]

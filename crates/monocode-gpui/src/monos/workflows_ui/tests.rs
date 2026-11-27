@@ -318,7 +318,7 @@ fn removing_a_workflow_from_its_own_page_still_shows_the_instances_it_left(
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     s.manager.update(visual, |m, cx| {
-        m.open_workflow_route(Route::Workflow(A.into()), cx)
+        m.open_workflow_route(WfRoute::Workflow(A.into()), cx)
     });
     visual.run_until_parked();
     settle(&s, visual);
@@ -682,7 +682,7 @@ pub(super) fn history(
     load_runs(&s.workflows_dir(), id).unwrap()
 }
 
-/// The overview open on the Workflows tab with the Mono's files read.
+/// The Workflows page open on its list with the global files read.
 pub(super) fn open_tab(s: &Setup, cx: &mut TestAppContext) {
     cx.update(|cx| {
         cx.set_reduce_motion(true);
@@ -690,15 +690,11 @@ pub(super) fn open_tab(s: &Setup, cx: &mut TestAppContext) {
         crate::popover::bind(cx);
     });
     s.window
-        .update(cx, |shell, _, cx| {
-            // Wide enough for the tab strip (now with Overview) plus the header buttons.
-            shell.workspace.right_panel_width = 520.;
-            s.manager.update(cx, |m, cx| {
-                m.settings = None;
-                m.overview_tab = OverviewTab::Workflows;
+        .update(cx, |shell, window, cx| {
+            s.manager.update(cx, |m, _| {
                 m.wf.import.debounce = Some(Duration::ZERO);
-                cx.notify();
-            })
+            });
+            shell.open_workflows(window, cx);
         })
         .unwrap();
     cx.run_until_parked();
@@ -717,10 +713,8 @@ pub(in crate::monos) fn click(visual: &mut VisualTestContext, selector: &'static
     visual.run_until_parked();
 }
 
-/// Lets the page slide finish, so what is clicked is where it is drawn.
-pub(super) fn settle(s: &Setup, visual: &mut VisualTestContext) {
-    let details = s.manager.read_with(visual, |m, _| m.details.clone());
-    details.update(visual, |d, cx| d.elapsed(Duration::from_secs(2), cx));
+/// Lets the page draw, so what is clicked is where it is drawn.
+pub(super) fn settle(_: &Setup, visual: &mut VisualTestContext) {
     visual.run_until_parked();
     visual.refresh().unwrap();
 }
@@ -733,8 +727,8 @@ pub(super) fn page_notice(s: &Setup, visual: &mut VisualTestContext) -> Option<S
     s.manager.read_with(visual, |m, _| m.wf.page_notice.clone())
 }
 
-pub(super) fn route(s: &Setup, visual: &mut VisualTestContext) -> Option<Route> {
-    s.manager.read_with(visual, |m, _| m.route.clone())
+pub(super) fn route(s: &Setup, visual: &mut VisualTestContext) -> Option<WfRoute> {
+    s.manager.read_with(visual, |m, _| m.wf.route.clone())
 }
 
 #[gpui::test]
@@ -757,7 +751,7 @@ fn the_tab_lists_the_workflows_in_order_with_a_count(cx: &mut TestAppContext) {
         s.manager.read_with(visual, |m, _| m.workflow_count()),
         Some(2)
     );
-    assert!(visual.debug_bounds("mono-overview-Workflows").is_some());
+    assert!(visual.debug_bounds("workflows-view").is_some());
     assert!(visual.debug_bounds("mono-workflow-needs-review").is_none());
 }
 
@@ -771,8 +765,8 @@ fn an_empty_tab_says_how_to_fill_it(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("mono-workflows-list").is_some());
     assert!(visual.debug_bounds("mono-workflow-wf-aaaaaaaa").is_none());
     assert_eq!(
-        super::list::empty_message("Broski"),
-        "Ask Broski to chain sessions into a workflow, or create one with +."
+        super::list::EMPTY_MESSAGE,
+        "Chain sessions, commands and decisions into a workflow. Ask a Mono to build one, or create one here."
     );
 }
 
@@ -788,9 +782,10 @@ fn run_now_on_a_row_starts_a_manual_run(cx: &mut TestAppContext) {
     assert_eq!(runs.len(), 1, "the runner took the request");
     assert_eq!(runs[0].status, RunStatus::Done);
     assert!(
-        chat_rows(&s)
+        !chat_rows(&s)
             .iter()
-            .any(|r| r.starts_with("## Nightly checks"))
+            .any(|r| r.starts_with("## Nightly checks")),
+        "a run the user started posts its summary to no Mono"
     );
     assert_eq!(notice(&s, visual), None);
 }
@@ -825,17 +820,17 @@ fn resume_and_run_now_on_a_flagged_workflow_open_the_review_instead(cx: &mut Tes
     click(visual, "mono-workflow-toggle-wf-aaaaaaaa");
     assert_eq!(
         route(&s, visual),
-        Some(Route::WorkflowReview(A.into(), ReviewIntent::Enable))
+        Some(WfRoute::Review(A.into(), ReviewIntent::Enable))
     );
     let w = &saved(&s)[0];
     assert!(!w.enabled && w.needs_review && w.next_run_at.is_none());
-    s.manager.update(visual, |m, _| m.route = None);
+    s.manager.update(visual, |m, _| m.wf.route = None);
     visual.run_until_parked();
     settle(&s, visual);
     click(visual, "mono-workflow-run-wf-aaaaaaaa");
     assert_eq!(
         route(&s, visual),
-        Some(Route::WorkflowReview(A.into(), ReviewIntent::Run))
+        Some(WfRoute::Review(A.into(), ReviewIntent::Run))
     );
     assert!(!saved(&s)[0].run_requested);
 }
@@ -983,11 +978,11 @@ fn the_list_follows_a_run_that_starts_and_ends_in_the_runner(cx: &mut TestAppCon
 }
 
 #[gpui::test]
-fn import_and_new_are_off_at_the_limit_and_ask_mono_starts_a_sentence(cx: &mut TestAppContext) {
+fn import_and_new_are_off_at_the_limit(cx: &mut TestAppContext) {
     let s = setup(cx);
     put(
         &s,
-        (0..20)
+        (0..WORKFLOWS_MAX)
             .map(|i| workflow(json!({"id": format!("wf-full{i:04}")})))
             .collect(),
     );
@@ -997,22 +992,6 @@ fn import_and_new_are_off_at_the_limit_and_ask_mono_starts_a_sentence(cx: &mut T
     click(visual, "mono-workflow-import");
     click(visual, "mono-workflow-new");
     assert_eq!(route(&s, visual), None, "the limit refuses both");
-    assert_eq!(WORKFLOWS_MAX, 20);
-    // Ask Mono fills the composer and never sends.
-    let before = chat_rows(&s).len();
-    click(visual, "mono-workflow-ask");
-    click(visual, "mono-workflow-ask");
-    let draft = s.manager.read_with(visual, |m, cx| {
-        m.chat()
-            .unwrap()
-            .read(cx)
-            .input
-            .read(cx)
-            .content
-            .to_string()
-    });
-    assert_eq!(draft, "Help me build a workflow that ");
-    assert_eq!(chat_rows(&s).len(), before);
 }
 
 #[gpui::test]
@@ -1023,18 +1002,18 @@ fn import_and_new_open_their_pages_below_the_limit(cx: &mut TestAppContext) {
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     click(visual, "mono-workflow-new");
-    assert_eq!(route(&s, visual), Some(Route::NewWorkflow));
+    assert_eq!(route(&s, visual), Some(WfRoute::New));
     assert!(visual.debug_bounds("wf-board").is_some());
-    s.manager.update(visual, |m, _| m.route = None);
+    s.manager.update(visual, |m, _| m.wf.route = None);
     visual.run_until_parked();
     click(visual, "mono-workflow-import");
-    assert_eq!(route(&s, visual), Some(Route::ImportWorkflow));
+    assert_eq!(route(&s, visual), Some(WfRoute::Import));
     assert!(visual.debug_bounds("mono-import-page").is_some());
 }
 
 pub(super) fn open_page(s: &Setup, visual: &mut VisualTestContext) {
     s.manager.update(visual, |m, cx| {
-        m.open_workflow_route(Route::Workflow(A.into()), cx)
+        m.open_workflow_route(WfRoute::Workflow(A.into()), cx)
     });
     visual.run_until_parked();
 }
@@ -1072,7 +1051,7 @@ fn the_page_lists_recent_runs_newest_first_and_opens_one(cx: &mut TestAppContext
     click(visual, "mono-workflow-run-run-1");
     assert_eq!(
         route(&s, visual),
-        Some(Route::WorkflowRun(A.into(), "run-1".into()))
+        Some(WfRoute::Run(A.into(), "run-1".into()))
     );
 }
 
@@ -1210,7 +1189,7 @@ fn remove_on_the_page_closes_it_and_is_refused_while_a_run_is_going(cx: &mut Tes
             .contains("Stop the workflow before removing it")
     );
     assert_eq!(saved(&s).len(), 1);
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
     s.manager
         .read_with(visual, |m, _| m.workflow_signals.set_running(A, false));
     click(visual, "mono-workflow-delete");
@@ -1238,15 +1217,15 @@ fn a_page_shows_the_needs_review_badge_only_when_needed_and_sends_run_and_resume
     click(visual, "mono-workflow-run");
     assert_eq!(
         route(&s, visual),
-        Some(Route::WorkflowReview(A.into(), ReviewIntent::Run))
+        Some(WfRoute::Review(A.into(), ReviewIntent::Run))
     );
     // Back from the review returns to the page it came from.
     click(visual, "mono-page-back");
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
     click(visual, "mono-workflow-toggle");
     assert_eq!(
         route(&s, visual),
-        Some(Route::WorkflowReview(A.into(), ReviewIntent::Enable))
+        Some(WfRoute::Review(A.into(), ReviewIntent::Enable))
     );
     let w = &saved(&s)[0];
     assert!(!w.enabled && w.needs_review && !w.run_requested);
@@ -1260,7 +1239,7 @@ fn a_removed_workflow_closes_its_pages(cx: &mut TestAppContext) {
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     open_page(&s, visual);
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
     put(&s, Vec::new());
     refresh(&s, visual);
     assert_eq!(route(&s, visual), None);
@@ -1333,7 +1312,7 @@ fn the_tab_reads_the_files_again_when_it_is_shown_again(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
-fn a_notice_goes_with_the_tab_and_the_page_it_was_shown_on(cx: &mut TestAppContext) {
+fn a_notice_goes_with_the_view_and_the_page_it_was_shown_on(cx: &mut TestAppContext) {
     let s = setup(cx);
     put(&s, vec![workflow(json!({}))]);
     open_tab(&s, cx);
@@ -1341,18 +1320,18 @@ fn a_notice_goes_with_the_tab_and_the_page_it_was_shown_on(cx: &mut TestAppConte
     visual.run_until_parked();
     s.manager.update(visual, |m, cx| {
         m.wf.notice = Some("Can't run yet: x.".into());
-        m.select_overview(OverviewTab::Workflows, cx);
-        assert!(m.wf.notice.is_some(), "the same tab keeps it");
-        m.select_overview(OverviewTab::Sessions, cx);
+        m.workflows_view_shown(true, cx);
+        assert!(m.wf.notice.is_some(), "the same view keeps it");
+        m.workflows_view_shown(false, cx);
         assert!(m.wf.notice.is_none());
+        m.workflows_view_shown(true, cx);
     });
     open_page(&s, visual);
     s.manager.update(visual, |m, _| {
         m.wf.page_notice = Some("Can't export.".into())
     });
-    s.manager.update(visual, |m, cx| {
-        m.select_overview(OverviewTab::Workflows, cx)
-    });
+    s.manager
+        .update(visual, |m, cx| m.workflows_view_shown(false, cx));
     assert_eq!(page_notice(&s, visual), None);
 }
 
@@ -1364,8 +1343,8 @@ fn the_board_and_run_pages_go_back_to_the_workflow(cx: &mut TestAppContext) {
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     for page in [
-        Route::WorkflowBoard(A.into()),
-        Route::WorkflowRun(A.into(), "run-1".into()),
+        WfRoute::Board(A.into()),
+        WfRoute::Run(A.into(), "run-1".into()),
     ] {
         s.manager
             .update(visual, |m, cx| m.open_workflow_route(page.clone(), cx));
@@ -1374,7 +1353,7 @@ fn the_board_and_run_pages_go_back_to_the_workflow(cx: &mut TestAppContext) {
         click(visual, "mono-page-back");
         assert_eq!(
             route(&s, visual),
-            Some(Route::Workflow(A.into())),
+            Some(WfRoute::Workflow(A.into())),
             "{page:?}"
         );
     }

@@ -184,10 +184,10 @@ pub(super) struct BoardState {
     subs: Vec<Subscription>,
 }
 
-fn is_board(route: &Route) -> Option<String> {
+fn is_board(route: &WfRoute) -> Option<String> {
     match route {
-        Route::NewWorkflow => Some("new".into()),
-        Route::WorkflowBoard(id) => Some(id.clone()),
+        WfRoute::New => Some("new".into()),
+        WfRoute::Board(id) => Some(id.clone()),
         _ => None,
     }
 }
@@ -239,8 +239,8 @@ impl Monos {
     /// workflow it edits is not loaded yet.
     pub(super) fn board_open(
         &mut self,
-        mono: &Mono,
-        route: &Route,
+        scope: &Scope,
+        route: &WfRoute,
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(key) = is_board(route) else {
@@ -250,13 +250,13 @@ impl Monos {
             return true;
         }
         let (workflow, is_new) = match route {
-            Route::WorkflowBoard(id) => match self.mono_workflow(id) {
+            WfRoute::Board(id) => match self.global_workflow(id) {
                 Some(w) => (w.clone(), false),
                 None => return false,
             },
             _ => (blank_workflow(now_ms()), true),
         };
-        let canvas = cx.new(|_| GraphCanvas::new(mono.color));
+        let canvas = cx.new(|_| GraphCanvas::new(scope.color));
         canvas.update(cx, |c, _| c.set_editable(Rc::new(|_, _, _| false)));
         let events = cx.subscribe(&canvas, |this, _, event: &GraphEvent, cx| {
             this.board_graph_event(event, cx)
@@ -302,10 +302,9 @@ impl Monos {
         self.fields.retain(|key, _| !key.starts_with("wf-b:"));
     }
 
-    /// The Mono's own provider, which a session without one of its own starts with.
-    pub(super) fn board_mono_kind(&self, cx: &App) -> Option<monocode_core::provider::Kind> {
-        self.chat()
-            .map(|chat| monocode_core::provider::Kind::from_id(&chat.read(cx).summary.provider))
+    /// The app's default harness, which a session without one of its own starts with.
+    pub(super) fn board_mono_kind(&self, _cx: &App) -> Option<monocode_core::provider::Kind> {
+        self.wf.scope.default_kind
     }
 
     /// Draws the board again: the issues, the cards and the lines, and asks which models exist.
@@ -371,7 +370,7 @@ impl Monos {
             canvas.set_scene(scene, cx);
         });
         if let Some(rev) = probe {
-            let probe = self.workflow_live.probe();
+            let probe = self.workflow_probes(cx).probe();
             let work = cx
                 .background_executor()
                 .spawn(async move { ModelCatalog::for_harnesses(&kinds, probe) });
@@ -1139,7 +1138,7 @@ impl Monos {
         let Some(id) = self.wf.board.as_ref().map(|b| b.current().id) else {
             return;
         };
-        let Some(stored) = self.mono_workflow(&id).cloned() else {
+        let Some(stored) = self.global_workflow(&id).cloned() else {
             return;
         };
         let Some(b) = self.wf.board.as_mut() else {
@@ -1185,6 +1184,16 @@ impl Monos {
         }
     }
 
+    /// Whether the board editor is open.
+    pub(crate) fn wf_board_open(&self) -> bool {
+        self.wf.open && self.wf.board.is_some()
+    }
+
+    /// Back from the board as its Back button does: asks first when edits are unsaved.
+    pub(crate) fn wf_board_back(&mut self, cx: &mut Context<Self>) {
+        self.board_request_back(cx);
+    }
+
     /// Leaves the board for the page it came from.
     pub(super) fn board_back(&mut self, cx: &mut Context<Self>) {
         let id = self
@@ -1194,8 +1203,8 @@ impl Monos {
             .map(|b| (b.is_new, b.base.id.clone()));
         self.board_drop();
         self.wf.page_notice = None;
-        self.route = match id {
-            Some((false, id)) => Some(Route::Workflow(id)),
+        self.wf.route = match id {
+            Some((false, id)) => Some(WfRoute::Workflow(id)),
             _ => None,
         };
         self.refresh_workflows(cx);
@@ -1208,7 +1217,7 @@ impl Monos {
         };
         let id = b.base.id.clone();
         if b.base.needs_review {
-            let back = self.route.clone();
+            let back = self.wf.route.clone();
             self.open_workflow_review(&id, super::ReviewIntent::Run, back, cx);
             return;
         }
@@ -1223,7 +1232,7 @@ impl Monos {
             return;
         };
         if b.base.needs_review && !b.meta.enabled {
-            let (id, back) = (b.base.id.clone(), self.route.clone());
+            let (id, back) = (b.base.id.clone(), self.wf.route.clone());
             self.open_workflow_review(&id, super::ReviewIntent::Enable, back, cx);
             return;
         }

@@ -26,8 +26,48 @@ impl WorkflowDefaults {
 }
 
 impl Shell {
+    /// Whether a session wears the zap badge: an automation or a workflow started it.
+    pub(crate) fn session_zap(&self, id: i64) -> bool {
+        self.automation_state.session_automations.contains_key(&id)
+            || self.workflow_sessions.contains(&id)
+    }
+
+    /// A workflow started session `id`: it gets the zap badge.
+    pub(crate) fn workflow_session_started(&mut self, id: i64, cx: &mut Context<Self>) {
+        if self.workflow_sessions.insert(id) {
+            self.notify_sidebar(cx);
+        }
+    }
+
+    /// Reads which sessions the workflows' run files name, off the UI thread, once at startup.
+    pub(crate) fn load_workflow_sessions(&mut self, cx: &mut Context<Self>) {
+        let Some(workflows) = self.workflows() else {
+            return;
+        };
+        let dir = workflows.read(cx).dir().clone();
+        let store = self.store.clone();
+        let task = cx.background_executor().spawn(async move {
+            let persisted = crate::workflows::run_session_ids(&dir);
+            let db = locked(&store).ok()?;
+            Some(
+                persisted
+                    .iter()
+                    .filter_map(|id| db.resolve_existing_session_id(id))
+                    .collect::<HashSet<i64>>(),
+            )
+        });
+        cx.spawn(async move |this, cx| {
+            if let Some(ids) = task.await {
+                let _ = this.update(cx, |this, cx| {
+                    this.workflow_sessions.extend(ids);
+                    this.notify_sidebar(cx);
+                });
+            }
+        })
+        .detach();
+    }
+
     /// The workflows entity (there is one per app).
-    #[allow(dead_code)]
     pub(crate) fn workflows(&self) -> Option<Entity<crate::workflows::Workflows>> {
         self.workflows.clone()
     }

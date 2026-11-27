@@ -1,4 +1,4 @@
-//! The Workflows tab: one row per workflow, with its hover actions (`MonoWorkflows.tsx`).
+//! The Workflows list: one row per workflow, with its hover actions (`MonoWorkflows.tsx`).
 use super::super::scheduler::{duration, habit_icon_button};
 use super::super::*;
 use super::actions::{self, ReviewIntent};
@@ -50,10 +50,8 @@ pub(in crate::monos) fn workflow_trigger_label(workflow: &Workflow) -> String {
     }
 }
 
-/// What the empty tab says.
-pub(in crate::monos) fn empty_message(mono: &str) -> String {
-    format!("Ask {mono} to chain sessions into a workflow, or create one with +.")
-}
+/// What the empty list says.
+pub(in crate::monos) const EMPTY_MESSAGE: &str = "Chain sessions, commands and decisions into a workflow. Ask a Mono to build one, or create one here.";
 
 /// What a row says under the name.
 pub(in crate::monos) fn workflow_subtitle(
@@ -83,7 +81,7 @@ pub(in crate::monos) fn workflow_subtitle(
 }
 
 impl Monos {
-    /// The tab's buttons beside the tabs: Ask Mono, Import and New, the last two off at the limit.
+    /// The buttons of the page header: Ask Mono, Import and New, the last two off at the limit.
     pub(in crate::monos) fn workflow_header_actions(
         &self,
         cx: &mut Context<Self>,
@@ -92,7 +90,7 @@ impl Monos {
         let at_most = count.is_some_and(|n| n >= WORKFLOWS_MAX);
         // Until the list is read the limit is unknown, so adding waits.
         let can_add = count.is_some_and(|n| n < WORKFLOWS_MAX);
-        let can_ask = self.chat().is_some();
+        let can_ask = self.prefs.monos && !self.roster.monos.is_empty();
         vec![
             icon_button_enabled(
                 "mono-workflow-ask",
@@ -101,16 +99,18 @@ impl Monos {
                 can_ask,
             )
             .debug_selector(|| "mono-workflow-ask".into())
+            .relative()
+            .child(self.wf.ask_anchor.probe())
             .on_click(cx.listener(move |this, _, window, cx| {
                 if can_ask {
-                    this.ask_mono_for_workflow(window, cx);
+                    this.open_ask_mono_picker(window, cx);
                 }
             }))
             .into_any_element(),
             icon_button_enabled(
                 "mono-workflow-import",
                 if at_most {
-                    "At most 20 workflows"
+                    "At most 100 workflows"
                 } else {
                     "Import workflow"
                 },
@@ -127,7 +127,7 @@ impl Monos {
             icon_button_enabled(
                 "mono-workflow-new",
                 if at_most {
-                    "At most 20 workflows"
+                    "At most 100 workflows"
                 } else {
                     "New workflow"
                 },
@@ -137,7 +137,7 @@ impl Monos {
             .debug_selector(|| "mono-workflow-new".into())
             .on_click(cx.listener(move |this, _, _, cx| {
                 if can_add {
-                    this.open_workflow_route(Route::NewWorkflow, cx);
+                    this.open_workflow_route(WfRoute::New, cx);
                 }
             }))
             .into_any_element(),
@@ -157,13 +157,13 @@ impl Monos {
 
     pub(in crate::monos) fn workflows_list(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.ensure_workflows(cx);
         let this = &*self;
-        let Some(workflows) = this.wf.loaded.get(&mono.id) else {
+        let Some(workflows) = this.wf.loaded.as_ref() else {
             // Blank for the moment it loads, rather than a line the list replaces.
             return div()
                 .id("mono-workflows-list")
@@ -178,16 +178,16 @@ impl Monos {
                 .size_full()
                 .child(super::super::panels::empty_state(
                     "git-branch",
-                    &empty_message(&mono.label()),
+                    EMPTY_MESSAGE,
                 ))
                 .into_any_element();
         }
         let rows = workflows
             .iter()
-            .map(|w| this.workflow_row(w, mono, cx))
+            .map(|w| this.workflow_row(w, scope, cx))
             .collect::<Vec<_>>();
         let notice = this.wf.notice.clone();
-        let gate = self.run_gate_dialog(mono, window, cx);
+        let gate = self.run_gate_dialog(scope, window, cx);
         div()
             .size_full()
             .min_w_0()
@@ -210,7 +210,7 @@ impl Monos {
             .into_any_element()
     }
 
-    fn workflow_row(&self, w: &Workflow, mono: &Mono, cx: &mut Context<Self>) -> AnyElement {
+    fn workflow_row(&self, w: &Workflow, scope: &Scope, cx: &mut Context<Self>) -> AnyElement {
         let id = w.id.clone();
         let running = self.workflow_running(&w.id);
         let glance = self.workflow_glance(&w.id);
@@ -255,7 +255,7 @@ impl Monos {
                             .child(if running {
                                 super::view::running_dot(
                                     SharedString::from(format!("mono-workflow-pulse-{id}")),
-                                    mono.color,
+                                    scope.color,
                                     8.,
                                 )
                             } else {
@@ -300,7 +300,7 @@ impl Monos {
                     .on_click(cx.listener({
                         let id = id.clone();
                         move |this, _, _, cx| {
-                            this.open_workflow_route(Route::Workflow(id.clone()), cx)
+                            this.open_workflow_route(WfRoute::Workflow(id.clone()), cx)
                         }
                     })),
             )
@@ -418,8 +418,8 @@ impl Monos {
         self.workflow_actions(w, running, starting, true, before_remove, cx)
     }
 
-    fn workflow_back(&self, page: bool) -> Option<Route> {
-        if page { self.route.clone() } else { None }
+    fn workflow_back(&self, page: bool) -> Option<WfRoute> {
+        if page { self.wf.route.clone() } else { None }
     }
 
     pub(in crate::monos) fn workflow_run_clicked(
@@ -478,11 +478,11 @@ impl Monos {
             move |this, (notice, left), cx| {
                 let mut page = page;
                 if notice.is_none()
-                    && matches!(&this.route, Some(Route::Workflow(open)) if *open == removed)
+                    && matches!(&this.wf.route, Some(WfRoute::Workflow(open)) if *open == removed)
                 {
                     // Once the workflow is gone, its page closes. A text for the user then
                     // belongs to the list, which is what shows.
-                    this.route = None;
+                    this.wf.route = None;
                     page = false;
                 }
                 // A refusal first; otherwise the cloud instances the removed history named.

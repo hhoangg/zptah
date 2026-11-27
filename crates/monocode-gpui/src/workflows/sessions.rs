@@ -187,7 +187,7 @@ impl Workflows {
                 },
             )
         });
-        let probe = self.probes(cx).models;
+        let probe = self.probes().models;
         let store = self.store.clone();
         let model = req.model.clone();
         let effort = req.effort.clone();
@@ -353,6 +353,7 @@ impl Workflows {
         if let Some(shell) = self.shell.upgrade() {
             shell.update(cx, |shell, cx| {
                 shell.mono_install_app(summary, settings, draft, cx);
+                shell.workflow_session_started(local, cx);
                 if let Some(parent) = parent {
                     shell.mono_link_started(local, parent, cx);
                 }
