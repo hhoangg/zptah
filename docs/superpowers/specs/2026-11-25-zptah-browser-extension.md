@@ -1,5 +1,7 @@
 # zptah Browser: our own Chrome extension for Mono browser use - design
 
+> Superseded by [2026-11-27-ardia-browser.md](2026-11-27-ardia-browser.md) (Mono Browser on Ardia). Kept as history.
+
 Status: design spec. No code. Date: 2026-11-25, revised the same day with the user's answers to
 the open questions (section 18), one new requirement (the in-tab overlay, section 10a), and the M0
 spike results (section 19).

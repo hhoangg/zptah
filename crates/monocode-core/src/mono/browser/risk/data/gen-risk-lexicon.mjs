@@ -1,8 +1,8 @@
 // Generates risk-lexicon.json and lexicon-cases.json from spec Appendix A plus
 // risk-lexicon.manual.json (the hand-written entries, settings and cases).
 //
-//   node extensions/zptah-browser/shared/gen-risk-lexicon.mjs          write the files
-//   node extensions/zptah-browser/shared/gen-risk-lexicon.mjs --check  fail when they are stale
+//   node crates/monocode-core/src/mono/browser/risk/data/gen-risk-lexicon.mjs          write the files
+//   node crates/monocode-core/src/mono/browser/risk/data/gen-risk-lexicon.mjs --check  fail when they are stale
 //
 // Edit the manual file or the spec appendix, never the generated JSON.
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SPEC = join(here, '../../../docs/superpowers/specs/2026-11-25-zptah-browser-extension.md');
+const SPEC = join(here, '../../../../../../../docs/superpowers/specs/2026-11-25-zptah-browser-extension.md');
 
 const strip = (s) =>
   s.replace(/đ/g, 'd').replace(/Đ/g, 'D').normalize('NFD').replace(/\p{M}/gu, '');
@@ -146,7 +146,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const path = join(here, file);
     if (check) {
       if (readFileSync(path, 'utf8') !== text) {
-        console.error(`${file} is stale: run node extensions/zptah-browser/shared/gen-risk-lexicon.mjs`);
+        console.error(`${file} is stale: run node crates/monocode-core/src/mono/browser/risk/data/gen-risk-lexicon.mjs`);
         stale = true;
       }
     } else {

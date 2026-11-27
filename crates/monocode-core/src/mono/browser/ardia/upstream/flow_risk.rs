@@ -17,8 +17,8 @@
 use super::flow_model::{self as model, Flow, Kind, ParamSource, Step, StepKind};
 use super::fresh::{self, Attrs};
 use super::*;
-use crate::mono::browser::gate::extension::act::looks_vietnamese;
-use crate::mono::browser::gate::extension::ReadRefusal;
+use crate::mono::browser::gate::origins::looks_vietnamese;
+use crate::mono::browser::gate::origins::ReadRefusal;
 use crate::mono::browser::risk::decide::Decision;
 use crate::mono::browser::risk::lexicon::{lexicon, ControlKind};
 use crate::mono::browser::risk::signals::{

@@ -1,13 +1,10 @@
-//! A Mono's Browser: the user's real Chrome (one chosen profile, logged-in sessions) driven
-//! through the zptah Browser extension. Design:
-//! `docs/superpowers/specs/2026-11-25-zptah-browser-extension.md`.
+//! A Mono's Browser: the user's Ardia browser (one chosen profile, logged-in sessions) driven
+//! through the `ardia` command. Design: `docs/superpowers/specs/2026-11-27-ardia-browser.md`.
 //!
 //! * [`MonoBrowser`] is the non-secret setting kept on the Mono (roster JSON).
 //! * [`resolve`] turns a Mono into a [`Runtime`], which adds the `zptah_browser` MCP server (the
-//!   Mono's [`gate`], a loopback endpoint that talks to the extension through the link manager)
-//!   to a Claude or Codex launch.
-//! * Chrome helpers (profiles, install detection) take their paths from a [`PrereqEnv`] so tests
-//!   never touch a real Chrome.
+//!   Mono's [`gate`], a loopback endpoint that runs the `ardia` command) to a Claude or Codex
+//!   launch.
 use crate::accounts::sealed;
 use crate::git_credentials::Secret;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
@@ -16,22 +13,11 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 pub mod ardia;
-pub mod connect;
 pub mod copy;
 pub mod defense;
-#[cfg(all(unix, feature = "test-support", any(test, debug_assertions)))]
-pub mod e2e;
 pub mod gate;
-pub mod host_mode;
-pub mod link;
-pub(crate) mod links;
-pub mod migration;
 pub mod output;
-pub mod ownership;
-pub(crate) mod peer;
-pub mod recipe;
 pub mod risk;
-pub mod roster;
 pub mod server;
 pub mod soul_rules;
 pub mod trust;
@@ -52,84 +38,17 @@ const START_TIMEOUT_SECONDS: u32 = 90;
 /// rules (`browser_route`, `browser_unroute`) or reshape the user's real window
 /// (`browser_resize`; the Mono scrolls instead).
 pub const ALWAYS_BLOCKED_TOOLS: [&str; 3] = ["browser_route", "browser_unroute", "browser_resize"];
-/// The only tools Level 1 offers. All of them read or move the view, none change a page.
-/// `browser_press_key` is in the list so Level 1 can scroll, but only for the keys of
-/// [`SCROLL_KEYS`]: a harness list cannot look at the key, so the gate does (Enter or Space can
-/// submit a form or press a focused button, and stay refused).
-pub const READ_ONLY_TOOLS: [&str; 11] = [
-    "browser_navigate",
-    "browser_navigate_back",
-    "browser_navigate_forward",
-    "browser_snapshot",
-    "browser_tabs",
-    "browser_wait_for",
-    "browser_take_screenshot",
-    "browser_find",
-    "browser_read",
-    "browser_mouse_wheel",
-    "browser_press_key",
-];
-/// The only keys `browser_press_key` may press at Level 1: they scroll a page and, unlike Enter,
-/// Space or Tab, do not press a focused button or move focus. The same keys are the only ones a
-/// recipe `scroll` step uses.
+/// The only keys a scroll may press at Level 1: they scroll a page and, unlike Enter,
+/// Space or Tab, do not press a focused button or move focus.
 pub const SCROLL_KEYS: [&str; 6] = ["PageDown", "PageUp", "Home", "End", "ArrowDown", "ArrowUp"];
 /// Whether `key` is one of [`SCROLL_KEYS`] (exact name, no modifiers).
 pub fn is_scroll_key(key: &str) -> bool {
     SCROLL_KEYS.contains(&key)
 }
-/// Every tool the zptah Browser extension backend offers. A tool that is not here is neither
-/// offered nor run by the gate.
-pub const KNOWN_TOOLS: [&str; 19] = [
-    "browser_navigate",
-    "browser_navigate_back",
-    "browser_navigate_forward",
-    "browser_snapshot",
-    "browser_tabs",
-    "browser_wait_for",
-    "browser_take_screenshot",
-    "browser_find",
-    "browser_read",
-    "browser_mouse_wheel",
-    "browser_click",
-    "browser_drag",
-    "browser_file_upload",
-    "browser_fill_form",
-    "browser_handle_dialog",
-    "browser_hover",
-    "browser_press_key",
-    "browser_select_option",
-    "browser_type",
-];
 
-/// Banks, wallets and payment pages the Mono must never open (editable per Mono). An origin
-/// matches exactly (scheme, host, port); subdomains are listed one by one.
-pub const DEFAULT_BLOCKED_ORIGINS: [&str; 22] = [
-    "https://paypal.com",
-    "https://www.paypal.com",
-    "https://checkout.stripe.com",
-    "https://js.stripe.com",
-    "https://pay.google.com",
-    "https://payments.google.com",
-    "https://pay.amazon.com",
-    "https://www.venmo.com",
-    "https://cash.app",
-    "https://wise.com",
-    "https://www.revolut.com",
-    "https://www.chase.com",
-    "https://secure.chase.com",
-    "https://www.bankofamerica.com",
-    "https://secure.bankofamerica.com",
-    "https://www.wellsfargo.com",
-    "https://connect.secure.wellsfargo.com",
-    "https://online.citi.com",
-    "https://momo.vn",
-    "https://zalopay.vn",
-    "https://pay.vnpay.vn",
-    "https://vcbdigibank.vietcombank.com.vn",
-];
-
-/// What a Mono keeps about its browser. No secret.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// What a Mono keeps about its browser. No secret. New Monos start with no hard block (an empty
+/// `blocked_origins`): the sensitive-site rule asks on banking and payment sites instead.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MonoBrowser {
     pub enabled: bool,
@@ -137,10 +56,6 @@ pub struct MonoBrowser {
     pub ardia_profile: String,
     /// The Ardia profile's name when it was chosen, for the prompt and the UI.
     pub ardia_profile_name: String,
-    /// Retired with the extension (M4 removes it). The Ardia backend never reads it.
-    pub profile_dir: String,
-    /// The profile's name when it was chosen, for the prompt and the UI.
-    pub profile_name: String,
     pub blocked_origins: Vec<String>,
     /// When not empty, only these origins may be used.
     pub allowed_origins: Vec<String>,
@@ -148,53 +63,6 @@ pub struct MonoBrowser {
     /// stored value of a retired level reads as `act`; an unknown value reads as read only, never
     /// as act (spec 15.3).
     pub trust: BrowserLevel,
-    /// The Mono's own virtual cursor switch ("Show cursor", spec 10). Default on. The roster sends
-    /// it to the extension as `cursor`; the glow and Stop button do not depend on it.
-    pub show_actions: bool,
-    /// The Browser page's last check found Chrome and a profile. Shown in the UI only: a launch
-    /// never reads it, it checks the live conditions instead, see [`resolve`].
-    pub ready: bool,
-    /// The paired zptah Browser connection this Mono is bound to (spec 15.3). `None` until the
-    /// user binds one: a Mono with a saved Chrome profile and no connection shows "Reconnect
-    /// needed" (see [`MonoBrowser::needs_reconnect`]).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub connection: Option<String>,
-    /// The one-time notice of [`migration`] has not been dismissed yet (Settings > Browser).
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub migration_notice: bool,
-    /// The [`migration`] version this setting went through (0: none). A row that carries it is
-    /// never migrated again, even when the roster's version marker could not be written.
-    #[serde(skip_serializing_if = "is_zero")]
-    pub migrated: u32,
-    /// The migration kept the old default blocked list: Settings > Browser offers once to switch
-    /// to the new defaults (spec 18, decision 15). See [`MonoBrowser::switch_to_new_defaults`].
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub suggest_new_defaults: bool,
-}
-fn is_zero(n: &u32) -> bool {
-    *n == 0
-}
-impl Default for MonoBrowser {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            ardia_profile: String::new(),
-            ardia_profile_name: String::new(),
-            profile_dir: String::new(),
-            profile_name: String::new(),
-            // New Monos start with no hard block: the sensitive-site rule (spec 7.4) asks on
-            // banking and payment sites instead. The old defaults only survive in a migrated list.
-            blocked_origins: Vec::new(),
-            allowed_origins: Vec::new(),
-            trust: BrowserLevel::default(),
-            show_actions: true,
-            ready: false,
-            connection: None,
-            migration_notice: false,
-            migrated: 0,
-            suggest_new_defaults: false,
-        }
-    }
 }
 /// Whether this system can run `browser_upload`: it has a private folder for the copies of
 /// uploaded files (not Windows, and not Linux without `XDG_RUNTIME_DIR`).
@@ -208,22 +76,6 @@ impl MonoBrowser {
         gate::Policy::ardia(self.trust, self.blocked_origins.clone())
             .with_allowed_origins(self.allowed_origins.clone())
             .with_uploads(uploads_available())
-    }
-    /// A migrated Mono that has a saved profile but is not bound to a paired connection yet.
-    pub fn needs_reconnect(&self) -> bool {
-        valid_profile_dir(&self.profile_dir) && self.connection.is_none()
-    }
-    /// "Switch" of the one-time suggestion: removes only the entries of the old
-    /// [`DEFAULT_BLOCKED_ORIGINS`] that are still present; origins the user added stay blocked.
-    pub fn switch_to_new_defaults(&mut self) {
-        self.blocked_origins.retain(|o| {
-            normalize_origin(o).map_or(true, |o| !DEFAULT_BLOCKED_ORIGINS.contains(&o.as_str()))
-        });
-        self.suggest_new_defaults = false;
-    }
-    /// "Keep my list" of the one-time suggestion: the list stays as it is.
-    pub fn keep_blocked_list(&mut self) {
-        self.suggest_new_defaults = false;
     }
     /// Whether going from `self` to `after` ends the Mono's Ardia sessions (closes its tabs): the
     /// browser is turned off or another profile is chosen. Editing the origin lists or the level
@@ -247,19 +99,13 @@ impl MonoBrowser {
             &self.allowed_origins,
         )
     }
-    /// Trims the profile, keeps only valid origins once each, and clears `ready` without a profile.
+    /// Trims the profile and keeps only valid origins once each.
     pub fn normalize(&mut self) {
         self.ardia_profile = self.ardia_profile.trim().to_owned();
         self.ardia_profile_name = self.ardia_profile_name.trim().chars().take(80).collect();
         if !valid_ardia_profile(&self.ardia_profile) {
             self.ardia_profile.clear();
             self.ardia_profile_name.clear();
-        }
-        self.profile_dir = self.profile_dir.trim().to_owned();
-        self.profile_name = self.profile_name.trim().chars().take(80).collect();
-        if !valid_profile_dir(&self.profile_dir) {
-            self.profile_dir.clear();
-            self.ready = false;
         }
         for list in [&mut self.blocked_origins, &mut self.allowed_origins] {
             let mut seen = Vec::new();
@@ -282,16 +128,6 @@ pub fn valid_ardia_profile(id: &str) -> bool {
         && id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-}
-
-/// A Chrome profile directory name: `Default`, `Profile 6`. No path separators or dots.
-pub fn valid_profile_dir(dir: &str) -> bool {
-    !dir.is_empty()
-        && dir.len() <= 64
-        && dir != "."
-        && dir
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-'))
 }
 
 /// `https://host[:port]` for a typed origin or host. Wildcards, paths and `;` are refused:
@@ -336,204 +172,6 @@ pub fn profile_shared_with(monos: &[super::Mono], id: &str) -> Vec<String> {
         .collect()
 }
 
-// ---- Chrome: profiles, install detection, prerequisites ----
-
-/// One entry of Chrome's `Local State` `profile.info_cache`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ChromeProfile {
-    pub dir: String,
-    pub name: String,
-    pub email: String,
-    /// `chrome://theme/IDR_PROFILE_AVATAR_N` for a built-in avatar.
-    pub avatar_icon: String,
-    /// The signed-in account's picture file inside the profile directory, if any.
-    pub picture: Option<String>,
-}
-impl ChromeProfile {
-    /// The text shown in a picker row.
-    pub fn label(&self) -> String {
-        if self.email.is_empty() {
-            self.name.clone()
-        } else {
-            format!("{} ({})", self.name, self.email)
-        }
-    }
-}
-
-fn profile_order(dir: &str) -> (u8, u32, String) {
-    if dir == "Default" {
-        return (0, 0, String::new());
-    }
-    match dir
-        .strip_prefix("Profile ")
-        .and_then(|n| n.parse::<u32>().ok())
-    {
-        Some(n) => (1, n, String::new()),
-        None => (2, 0, dir.to_owned()),
-    }
-}
-
-/// The profiles in a `Local State` file: `Default`, then `Profile N` by number, then the rest.
-pub fn parse_local_state(text: &str) -> Result<Vec<ChromeProfile>, String> {
-    let value: Value =
-        serde_json::from_str(text).map_err(|_| "Chrome's profile list could not be read.")?;
-    let cache = value["profile"]["info_cache"]
-        .as_object()
-        .ok_or("Chrome has no profiles yet.")?;
-    let mut profiles: Vec<ChromeProfile> = cache
-        .iter()
-        .filter(|(dir, _)| valid_profile_dir(dir))
-        .map(|(dir, info)| {
-            let text = |key: &str| info[key].as_str().unwrap_or("").trim().to_owned();
-            let name = [text("name"), text("gaia_name")]
-                .into_iter()
-                .find(|n| !n.is_empty())
-                .unwrap_or_else(|| dir.clone());
-            ChromeProfile {
-                dir: dir.clone(),
-                name,
-                email: text("user_name"),
-                avatar_icon: text("avatar_icon"),
-                picture: Some(text("gaia_picture_file_name")).filter(|p| !p.is_empty()),
-            }
-        })
-        .collect();
-    profiles.sort_by_key(|p| profile_order(&p.dir));
-    Ok(profiles)
-}
-
-/// Where Chrome keeps its data and which binaries to look at. Tests fill it from a temporary
-/// directory; the app uses [`PrereqEnv::detect`].
-#[derive(Clone, Debug)]
-pub struct PrereqEnv {
-    pub chrome_binaries: Vec<PathBuf>,
-    pub user_data_dir: PathBuf,
-}
-impl PrereqEnv {
-    pub fn detect() -> Self {
-        let home = crate::scm::shell::dirs_home()
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        let (binaries, data): (Vec<PathBuf>, PathBuf) = if cfg!(target_os = "macos") {
-            const APP: &str = "Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-            (
-                vec![PathBuf::from("/").join(APP), home.join(APP)],
-                home.join("Library/Application Support/Google/Chrome"),
-            )
-        } else if cfg!(windows) {
-            let local = std::env::var_os("LOCALAPPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join("AppData/Local"));
-            (
-                vec![
-                    PathBuf::from(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
-                    local.join(r"Google\Chrome\Application\chrome.exe"),
-                ],
-                local.join(r"Google\Chrome\User Data"),
-            )
-        } else {
-            (
-                vec![
-                    "/usr/bin/google-chrome".into(),
-                    "/usr/bin/google-chrome-stable".into(),
-                ],
-                home.join(".config/google-chrome"),
-            )
-        };
-        Self {
-            chrome_binaries: binaries,
-            user_data_dir: data,
-        }
-    }
-    pub fn chrome(&self) -> Option<&Path> {
-        self.chrome_binaries
-            .iter()
-            .map(PathBuf::as_path)
-            .find(|p| p.is_file())
-    }
-    pub fn local_state(&self) -> PathBuf {
-        self.user_data_dir.join("Local State")
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Check {
-    Ok,
-    /// Missing, with what to do about it.
-    Missing(String),
-    /// macOS refused the read: Full Disk Access is needed.
-    Denied,
-}
-impl Check {
-    pub fn is_ok(&self) -> bool {
-        *self == Check::Ok
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Prerequisites {
-    pub chrome: Check,
-    pub full_disk_access: Check,
-}
-impl Prerequisites {
-    pub fn all_ok(&self) -> bool {
-        self.chrome.is_ok() && self.full_disk_access.is_ok()
-    }
-    /// What a launch needs once a profile is saved. Full Disk Access is not part of it: it only
-    /// lets the app list Chrome's profiles.
-    pub fn can_attach(&self) -> bool {
-        self.chrome.is_ok()
-    }
-}
-
-/// Reads Chrome's `Local State`: the check for Full Disk Access (macOS answers `EPERM`).
-pub fn read_local_state(env: &PrereqEnv) -> Result<String, Check> {
-    match std::fs::read_to_string(env.local_state()) {
-        Ok(text) => Ok(text),
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Err(Check::Denied),
-        Err(_) => Err(Check::Missing(
-            "Chrome has no profile data yet. Open Chrome once and sign in.".into(),
-        )),
-    }
-}
-
-pub fn check_prerequisites(env: &PrereqEnv) -> Prerequisites {
-    Prerequisites {
-        chrome: if env.chrome().is_some() {
-            Check::Ok
-        } else {
-            Check::Missing("Install Google Chrome.".into())
-        },
-        full_disk_access: match read_local_state(env) {
-            Ok(_) => Check::Ok,
-            Err(check) => check,
-        },
-    }
-}
-
-/// Arguments that open `url` in `profile_dir`. A running Chrome hands them to its instance.
-pub fn chrome_launch_args(profile_dir: &str, url: &str) -> Result<Vec<String>, String> {
-    if !valid_profile_dir(profile_dir) {
-        return Err("Choose a Chrome profile first.".into());
-    }
-    Ok(vec![
-        format!("--profile-directory={profile_dir}"),
-        url.to_owned(),
-    ])
-}
-/// Opens `url` in a Chrome profile. Never used by tests.
-pub fn open_in_profile(env: &PrereqEnv, profile_dir: &str, url: &str) -> Result<(), String> {
-    let args = chrome_launch_args(profile_dir, url)?;
-    let chrome = env.chrome().ok_or("Install Google Chrome first.")?;
-    std::process::Command::new(chrome)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| "Could not open Chrome.".into())
-}
-
 // ---- Secrets and audit storage ----
 
 /// DDL for the secrets and audit tables, shared with the native store schema.
@@ -550,7 +188,33 @@ CREATE TABLE IF NOT EXISTS mono_browser_grants(
 CREATE TABLE IF NOT EXISTS mono_browser_rules(
   mono_id TEXT PRIMARY KEY, lines TEXT NOT NULL, hash TEXT NOT NULL, confirmed_at INTEGER NOT NULL);";
 
+/// Tables the extension-era recipes kept in the store. Nothing creates them any more; they are
+/// dropped when the store opens ([`drop_retired_tables`]). The `<mono>/recipes/` and
+/// `_shared_recipes/` folders are not touched.
+const RETIRED_TABLES: [&str; 7] = [
+    "mono_browser_recipe_approvals",
+    "mono_browser_recipe_hashes",
+    "mono_browser_recipe_verified",
+    "mono_browser_recipe_outside",
+    "mono_browser_recipe_dryrun",
+    "mono_browser_task_shapes",
+    "mono_browser_no_suggest",
+];
+
+/// Drops the [`RETIRED_TABLES`] (`DROP TABLE IF EXISTS`, so a store without them and a second
+/// call are fine). Every other table is left as it is.
+pub(crate) fn drop_retired_tables(conn: &Connection) -> rusqlite::Result<()> {
+    for table in RETIRED_TABLES {
+        conn.execute_batch(&format!("DROP TABLE IF EXISTS {table};"))?;
+    }
+    Ok(())
+}
+
 const UNAVAILABLE: &str = "Browser storage is unavailable.";
+
+/// The secret v0.1.x of the Playwright backend saved for each Mono. It is deleted whenever the
+/// roster loads ([`MonoBrowserStore::delete_secrets_named`]), so an old install loses it too.
+pub const LEGACY_TOKEN_SECRET: &str = "playwright-extension-token";
 
 /// The associated data a secret is sealed under: moving a row to another Mono breaks opening.
 pub(crate) fn secret_aad(mono_id: &str, name: &str) -> Vec<u8> {
@@ -706,13 +370,6 @@ impl MonoBrowserStore {
             "DELETE FROM mono_browser_audit WHERE mono_id=?1",
             "DELETE FROM mono_browser_grants WHERE mono_id=?1",
             "DELETE FROM mono_browser_rules WHERE mono_id=?1",
-            "DELETE FROM mono_browser_recipe_approvals WHERE mono_id=?1",
-            "DELETE FROM mono_browser_recipe_hashes WHERE mono_id=?1",
-            "DELETE FROM mono_browser_recipe_verified WHERE mono_id=?1",
-            "DELETE FROM mono_browser_recipe_outside WHERE mono_id=?1",
-            "DELETE FROM mono_browser_recipe_dryrun WHERE mono_id=?1",
-            "DELETE FROM mono_browser_task_shapes WHERE mono_id=?1",
-            "DELETE FROM mono_browser_no_suggest WHERE mono_id=?1",
         ] {
             match conn.execute(sql, [mono_id]) {
                 Ok(_) => {}
@@ -820,7 +477,7 @@ pub fn audit_entry(tool_name: &str, input: &str, session_id: i64) -> Option<Audi
 pub struct Runtime {
     /// The Mono's trust level when this runtime was resolved.
     pub trust: BrowserLevel,
-    /// The URL the agent connects to: the Mono's gate, which fronts the extension link.
+    /// The URL the agent connects to: the Mono's gate, which fronts Ardia.
     pub endpoint: String,
     /// The bearer token the gate requires in `Authorization`. Never put it in a URL or on argv.
     pub token: String,
@@ -847,7 +504,7 @@ impl Runtime {
     pub fn claude_allowed(&self) -> String {
         format!("mcp__{MCP_SERVER}")
     }
-    /// Tools Claude must not offer at this trust level: see [`BrowserLevel::disabled_tools`].
+    /// Tools Claude must not offer at this trust level: see [`BrowserLevel::disabled_tools_ardia_for`].
     pub fn claude_disallowed(&self) -> String {
         // The shell must not reach Ardia around the gate: a guard against mistakes, not a
         // boundary (design spec section 1, decision 2).
@@ -918,17 +575,6 @@ pub fn output_dir(root: &Path, mono_id: &str) -> PathBuf {
     root.join(mono_id).join("browser")
 }
 
-/// The folder for a Mono's recipes. Not inside [`output_dir`]: the files there are swept.
-pub fn recipes_dir(root: &Path, mono_id: &str) -> PathBuf {
-    root.join(mono_id).join("recipes")
-}
-
-/// The folder of the shared recipe library: recipes a user promoted so other Monos can copy them.
-/// Next to the Mono folders; the underscore can not be in a Mono id, so it never collides.
-pub fn shared_recipes_dir(root: &Path) -> PathBuf {
-    root.join("_shared_recipes")
-}
-
 /// What a launch gets for a Mono's browser.
 #[derive(Debug)]
 pub enum Attach {
@@ -949,9 +595,8 @@ impl Attach {
     }
 }
 
-/// The browser for a Mono's launch. A saved profile is enough to try: Chrome's `Local State`
-/// (Full Disk Access) is only needed to list profiles, so it is not read here, and the stored
-/// `ready` flag is ignored. See [`Attach`].
+/// The browser for a Mono's launch. A saved Ardia profile is enough to try; whether Ardia can be
+/// used right now is decided by the static check below. See [`Attach`].
 pub fn resolve(ctx: &crate::agent::MonoContext) -> Attach {
     resolve_ardia_with(ctx, server::servers(), ardia::controller())
 }
@@ -1049,104 +694,7 @@ fn attach_ardia(
     gate.set_workspace(gate::Workspace {
         mono_id: ctx.mono.id.clone(),
         output_dir: dir.clone(),
-        recipes_dir: recipes_dir(&ctx.root, &ctx.mono.id),
         database,
-        recipe_options: recipe::runner::Options::default(),
-    });
-    let route = gate.route_for(crate::process::owner());
-    Attach::Ready(Runtime {
-        trust: browser.trust,
-        endpoint: gate.url_for(&route),
-        token: gate.token().to_owned(),
-        gate,
-        route,
-        approvals: queue,
-    })
-}
-
-/// The extension backend's launch. No longer used for new launches (M4 deletes it with the
-/// extension); the old tests that cover it still build their runtime through it.
-#[cfg(test)]
-pub(crate) fn resolve_with(
-    ctx: &crate::agent::MonoContext,
-    servers: &server::BrowserServers,
-    manager: Option<links::manager::LinkManager>,
-) -> Attach {
-    let attach = attach(ctx, servers, manager);
-    match &attach {
-        Attach::Unavailable(reason) => {
-            eprintln!("mono browser: unavailable: {reason}");
-            servers.set_attach_error(&ctx.mono.id, Some(reason.clone()));
-        }
-        _ => servers.set_attach_error(&ctx.mono.id, None),
-    }
-    attach
-}
-/// The extension launch: the gate talks to the paired profile's extension through the link
-/// manager.
-#[cfg(test)]
-fn attach(
-    ctx: &crate::agent::MonoContext,
-    servers: &server::BrowserServers,
-    manager: Option<links::manager::LinkManager>,
-) -> Attach {
-    let Some(browser) = ctx.mono.browser.as_ref().filter(|b| b.enabled) else {
-        return Attach::Off;
-    };
-    let Some(database) = ctx.browser_database.clone() else {
-        return Attach::Off;
-    };
-    if !valid_profile_dir(&browser.profile_dir) {
-        return Attach::Unavailable("no Chrome profile is chosen".into());
-    }
-    let Some(manager) = manager else {
-        return Attach::Unavailable("the zptah Browser link is not running".into());
-    };
-    let store = MonoBrowserStore::at(database.clone());
-    let dir = output_dir(&ctx.root, &ctx.mono.id);
-    let _ = output::prepare(&dir);
-    output::sweep_keeping(&dir, &store.audit_screenshots(&ctx.mono.id));
-
-    // The extension may have connected after the Monos were saved: make sure it knows this one.
-    roster::book().upsert(&ctx.mono);
-    // Before the first tool call: a link that is behind (a change that did not arrive) gets the
-    // roster now, with a short wait. A link that does not answer is retried in the background.
-    if !roster::book().publish_timeout(&manager, std::time::Duration::from_secs(3)) {
-        roster::book().publish_soon();
-    }
-    let upstream = gate::upstream_for(&ctx.mono.id).unwrap_or_else(|| {
-        gate::ExtensionUpstream::for_profile(&ctx.mono.id, manager, &browser.profile_dir)
-    });
-    upstream.set_output_dir(dir.clone());
-    // The rules the gate applies: the soul's, reconciled with what the user confirmed.
-    let soul = load_files_soul(ctx);
-    let status = trust::rules::status(&store, &ctx.mono.id, &soul);
-    let queue = trust::approval::queue_for(&ctx.mono.id);
-    upstream.configure_act(
-        gate::ActConfig {
-            level: browser.trust,
-            rules: status.active,
-            store: Some(store),
-            mono_label: ctx.mono.label(),
-            profile: Some(browser.profile_name.clone()).filter(|n| !n.is_empty()),
-            approval_timeout: gate::APPROVAL_TIMEOUT,
-            queue: queue.clone(),
-        },
-        gate::Origins::new(&browser.allowed_origins, &browser.blocked_origins),
-    );
-    let policy = gate::Policy::new(browser.trust, browser.blocked_origins.clone());
-    let gate = match servers.gate_for_extension(&ctx.mono.id, upstream, policy) {
-        Ok(gate) => gate,
-        Err(error) => {
-            return Attach::Unavailable(format!("the browser gate failed to start: {error}"))
-        }
-    };
-    gate.set_workspace(gate::Workspace {
-        mono_id: ctx.mono.id.clone(),
-        output_dir: dir.clone(),
-        recipes_dir: recipes_dir(&ctx.root, &ctx.mono.id),
-        database,
-        recipe_options: recipe::runner::Options::default(),
     });
     let route = gate.route_for(crate::process::owner());
     Attach::Ready(Runtime {
@@ -1167,15 +715,6 @@ fn load_files_soul(ctx: &crate::agent::MonoContext) -> String {
         .unwrap_or_default()
 }
 
-/// The title of the Mono's Chrome tab group: the Mono's name.
-pub fn group_name(mono: &super::Mono) -> String {
-    let name = prompt_name(&mono.label());
-    if name.is_empty() {
-        "Mono".into()
-    } else {
-        name
-    }
-}
 /// A Mono's standing rules as this launch can honor them: the browser paragraph only when the
 /// server is really added. When the browser is switched on but could not be attached
 /// (`unavailable` holds the reason), the Mono is told so instead, so it reports the reason to

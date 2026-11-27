@@ -16,10 +16,6 @@ url = "2"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 sha2 = "0.10"
-# Browser link: HMAC handshake, per-frame MAC and session key derivation (mono/browser/link).
-hmac = "0.12"
-hkdf = "0.12"
-subtle = "2"
 snow = "0.10"
 aes-gcm = "0.10"
 zeroize = "1"
@@ -87,8 +83,3 @@ minisign = "0.10.0"
 tempfile = "3"
 # `tokio::time::pause` for the web heartbeat test
 tokio = { version = "1.54.1", features = ["test-util"] }
-
-# App side of `npm run ext:e2e` (headless Chrome for Testing). Unix debug builds only.
-[[example]]
-name = "browser_e2e_app"
-required-features = ["test-support"]

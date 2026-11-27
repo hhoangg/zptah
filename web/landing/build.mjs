@@ -5,7 +5,7 @@
 // Output under DIR (default landing/dist):
 //   landing/index.html        the page (served at /landing/ and, by the Worker, at / and /home; web/worker/src/landing.ts)
 //   landing/landing.css       src/styles/*.css, concatenated in file name order
-//   landing/privacy/index.html  the privacy policy of the zptah Browser extension (served at /privacy by web/worker/src/landing.ts)
+//   landing/privacy/index.html  the privacy policy of the Mono Browser (Ardia) (served at /privacy by web/worker/src/landing.ts)
 //   landing/js/*.js           src/js/*.js as native ES modules plus the blocking boot.js (no bundler)
 //   landing/app-icon.png, landing/og.png
 // `--target prod` also writes robots.txt and sitemap.xml at the root of DIR (the app's assets directory). `site` (the

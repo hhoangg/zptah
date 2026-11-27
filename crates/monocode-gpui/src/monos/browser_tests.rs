@@ -576,15 +576,15 @@ fn another_mono_on_the_same_profile_gets_a_warning(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_page_no_longer_writes_the_chrome_ready_flag(cx: &mut TestAppContext) {
+fn choosing_a_profile_alone_makes_the_browser_active(cx: &mut TestAppContext) {
     let mut page = open(cx);
     page.enable();
-    assert!(!page.setting().unwrap().ready, "no profile yet");
+    assert!(!page.setting().unwrap().active(), "no profile yet");
     page.choose("p-work-1");
     let setting = page.setting().unwrap();
     assert!(
-        !setting.ready && setting.active(),
-        "the profile alone makes it active; Ardia's readiness replaces the flag"
+        setting.active(),
+        "the profile alone makes it active; Ardia's readiness is checked live"
     );
     // The Mono's rules now carry the browser paragraph for the chosen profile.
     let rules = page.s.manager.read_with(&page.visual, |m, _| {
@@ -737,7 +737,7 @@ fn the_trust_selector_offers_only_read_only_and_act_for_me(cx: &mut TestAppConte
 fn a_stored_legacy_level_reads_as_act_for_me_and_an_unknown_one_as_read_only(
     cx: &mut TestAppContext,
 ) {
-    use super::browser_migration::{CHOICES, trust_label};
+    use super::browser_ui::{CHOICES, trust_label};
     use monocode_core::mono::browser::copy::Lang;
     assert_eq!(CHOICES, [BrowserLevel::ReadOnly, BrowserLevel::Act]);
     for (stored, shown) in [
@@ -778,7 +778,7 @@ fn changing_the_level_reconfigures_the_gate_and_keeps_it(cx: &mut TestAppContext
     other.trust = BrowserLevel::Act;
     assert_eq!(setting.server_key(), other.server_key());
     assert_eq!(
-        Policy::new(setting.trust, setting.blocked_origins.clone()).trust,
+        Policy::ardia(setting.trust, setting.blocked_origins.clone()).trust,
         BrowserLevel::ReadOnly
     );
 }

@@ -220,15 +220,6 @@ fn plist_data_mode(plist: &str) -> Option<bool> {
     }
 }
 fn main() {
-    // Chrome starts the zptah binary as a native messaging host (`<exe> chrome-extension://<id>/`).
-    // This runs before anything else: host mode has no UI, no listener and writes only frames to
-    // stdout.
-    {
-        let host_args: Vec<String> = std::env::args().skip(1).collect();
-        if let Some(code) = monocode_core::mono::browser::host_mode::maybe_run(&host_args) {
-            std::process::exit(code);
-        }
-    }
     // A transform child of the mentioned-file preview: serves one request and exits, before
     // anything else starts. Otherwise the parent runs its HTML transforms in such children.
     monocode_core::mobile::mentioned_file::sandbox::maybe_run_child();
@@ -494,20 +485,6 @@ fn main() {
     app_log::init();
     // Kills login CLIs an earlier crashed run left behind and starts recording new ones.
     monocode_core::process::guard::init(&database.with_file_name("orphan-guard"));
-    // The browser link layer: hashes this executable before anything can connect, then listens for
-    // the zptah Browser extension's host for the whole app lifetime (kept in a global; `shutdown`
-    // below releases the socket and lock).
-    {
-        let data_dir = database
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_default();
-        monocode_core::mono::browser::connect::start_app(
-            &database,
-            &data_dir,
-            notifications::updater::version(),
-        );
-    }
     // Quitting and hiding Ardia go through AppKit, not Apple Events.
     #[cfg(target_os = "macos")]
     ardia_platform::register();
@@ -537,7 +514,6 @@ fn main() {
             // A quit that macOS starts (Dock, logout) never reaches `quit`.
             cx.on_app_quit(|_| {
                 monocode_core::process::guard::kill_all();
-                monocode_core::mono::browser::connect::shutdown();
                 // Asks an Ardia zptah started to quit, or closes the tabs zptah opened in the
                 // user's. Done here, before the future is returned: the app polls these futures
                 // for only 200 ms. Bounded, so a hung Ardia never holds the quit.

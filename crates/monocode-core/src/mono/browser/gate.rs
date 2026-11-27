@@ -1,16 +1,16 @@
-//! The Browser gate: a zptah MCP server that stands between the agent and the zptah Browser
-//! extension. The agent is only given the gate's URL, so every browser tool call passes through
-//! [`Policy::evaluate`] before it is forwarded to the [`Upstream`] (the extension link, see
-//! [`extension`]). It works in every permission mode (Auto and Full Access included) because it
-//! is zptah code, not a harness ask mode.
+//! The Browser gate: a zptah MCP server that stands between the agent and Ardia. The agent is only
+//! given the gate's URL, so every browser tool call passes through [`Policy::evaluate`] before it
+//! is forwarded to the [`Upstream`] (the `ardia` command, see [`ardia`]). It works in every
+//! permission mode (Auto and Full Access included) because it is zptah code, not a harness ask
+//! mode.
 //!
 //! What is enforced here, and what is not:
 //!
 //! * Mechanical, whatever the agent does: tools outside the trust level are neither listed nor
 //!   run; `browser_route`, `browser_unroute` and `browser_resize` never run. Anything the user
 //!   does not answer, or that cannot be asked (no channel, plan or read-only session, timeout),
-//!   is denied: the gate fails closed. The extension upstream classifies every act tool call
-//!   itself (`trust::TrustState::evaluate`) and asks through the approval queue.
+//!   is denied: the gate fails closed. The Ardia upstream classifies every act tool call itself
+//!   and asks through the approval queue.
 //! * By the agent's cooperation: the actions the classifier can not recognise from a click.
 //!   The gate offers the agent `browser_request_approval` for them and the Mono's rules require
 //!   it, but nothing stops an agent that skips it.
@@ -21,37 +21,47 @@
 //! An approval is shown through the app's approval card: the gate sends an [`Ask`] to the run
 //! that is attached ([`Gate::attach`]), the provider loop turns it into an `Event::Approval` and
 //! answers it from the user's decision.
-use super::recipe::{self, record::Trace, runner};
+use super::ALWAYS_BLOCKED_TOOLS;
 use super::{ardia, defense, output, AuditEntry, BrowserLevel, MonoBrowserStore};
-use super::{is_scroll_key, ALWAYS_BLOCKED_TOOLS, KNOWN_TOOLS, READ_ONLY_TOOLS, SCROLL_KEYS};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-pub(crate) mod extension;
 mod guard;
 mod http;
-mod refs;
-pub mod tabs;
-pub use extension::act::end_conversation_everywhere as end_extension_conversations;
-pub use extension::act::{upstream_for, ActConfig, ExtensionStatus};
-pub use extension::{ExtensionUpstream, Origins};
+pub mod origins;
+pub use origins::Origins;
+
+/// What the wiring tells the Ardia upstream about its Mono. Set before the first run and on every
+/// launch (the level and rules are live settings).
+#[derive(Clone)]
+pub struct ActConfig {
+    pub level: BrowserLevel,
+    /// The soul rules in force (`soul_rules::reconcile`).
+    pub rules: super::soul_rules::Parsed,
+    /// Where grants and audit rows live. None (tests, no database): grants stay in memory and no
+    /// audit row is written.
+    pub store: Option<MonoBrowserStore>,
+    /// The Mono's name as the card says it (`Mono::label()`).
+    pub mono_label: String,
+    /// The Ardia profile's name, for the audit row.
+    pub profile: Option<String>,
+    /// How long a card waits for the user.
+    pub approval_timeout: Duration,
+    /// Where the cards of this Mono go.
+    pub queue: Arc<super::trust::approval::ApprovalQueue>,
+}
 
 /// A conversation (an app session) was closed, cleared or deleted: its grants and open cards end
 /// and the Ardia tabs it opened close.
 pub fn end_conversation_everywhere(session: i64) {
-    end_extension_conversations(session);
     ardia::end_conversation_everywhere(session);
 }
 
 /// A stand-in route name for code that builds a [`Runtime`](super::Runtime) without a gate.
 pub const SHARED_ROUTE: &str = "shared";
-/// The prefix of the id of the card that offers to save a task as a recipe. Its three answers
-/// are Dismiss (deny), Save as recipe (allow once) and Never for this site (the session answer,
-/// desktop only).
-pub const SUGGEST_ID_PREFIX: &str = "browser-gate-suggest-";
 /// The tool the gate adds for the actions it can not detect itself.
 pub const APPROVAL_TOOL: &str = "browser_request_approval";
 /// What a turn is told when its gate was shut down mid-turn.
@@ -72,15 +82,11 @@ pub enum Category {
     PostPublish,
     /// Any other risky action. Agent-chosen.
     Other,
-    /// Saving a browser recipe the Mono recorded. Chosen by the gate.
-    Recipe,
     /// An action that follows untrusted page content and was not declared before it was read.
     /// Chosen by the gate, asked at every trust level.
     Untrusted,
     /// A page held a prompt injection pattern: the user decides whether the Mono sees it.
     Injection,
-    /// "Save as recipe?" for a task the app found repeatable. Chosen by the app.
-    Suggestion,
 }
 impl Category {
     /// The values `browser_request_approval` accepts.
@@ -101,29 +107,9 @@ impl Category {
             Self::SendMessage => "Sending a message",
             Self::PostPublish => "Posting, commenting or publishing",
             Self::Other => "Risky action",
-            Self::Recipe => "Save a browser recipe",
             Self::Untrusted => "Action after reading untrusted content",
             Self::Injection => "Possible prompt injection in a page",
-            Self::Suggestion => "Save this task as a browser recipe",
         }
-    }
-}
-
-/// Whether an action of `category` needs the user's approval at `level` (used by recipes).
-/// `read-only` can not act at all (the policy denies the tool, so there is nothing to approve);
-/// `act` asks for every category the agent or a recipe names. Untrusted content and injection
-/// warnings ask at every level; a suggestion never blocks, and a recipe that saves itself never
-/// asks through this function.
-pub fn approval_required(level: BrowserLevel, category: Category) -> bool {
-    if matches!(category, Category::Untrusted | Category::Injection) {
-        return true;
-    }
-    if category == Category::Suggestion {
-        return false;
-    }
-    match level {
-        BrowserLevel::ReadOnly => false,
-        BrowserLevel::Act => category != Category::Recipe,
     }
 }
 
@@ -144,10 +130,8 @@ impl ApprovalRequest {
             Category::SendMessage => "Allow the browser to send this?",
             Category::PostPublish => "Allow the browser to post this?",
             Category::Other => "Allow this risky browser action?",
-            Category::Recipe => "Save this browser recipe?",
             Category::Untrusted => "Allow this action? It follows untrusted web content",
             Category::Injection => "This page looks like a prompt injection. Let the Mono read it?",
-            Category::Suggestion => "Save this task as a recipe?",
         }
         .to_owned()
     }
@@ -177,24 +161,21 @@ pub enum Verdict {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     pub trust: BrowserLevel,
-    /// The Mono's blocked origins (recipes ask before a step on one, as on a finance page).
+    /// The Mono's blocked origins (a finance page is judged by the upstream's classifier).
     pub blocked_origins: Vec<String>,
     /// When not empty, only these origins may be used (the Mono's allowed list).
     pub allowed_origins: Vec<String>,
-    /// The gate fronts Ardia (`browser_open`, `browser_snapshot`, ...), not the Playwright-style
-    /// tool set of the extension.
-    pub ardia: bool,
     /// `browser_upload` can run: there is a private folder for the copies of uploaded files
     /// ([`ardia::upstream::private_staging_dir`]). Without one the tool is not offered.
     pub uploads: bool,
 }
 impl Policy {
-    pub fn new(trust: BrowserLevel, blocked_origins: Vec<String>) -> Self {
+    /// The rules of a gate in front of Ardia.
+    pub fn ardia(trust: BrowserLevel, blocked_origins: Vec<String>) -> Self {
         Self {
             trust,
             blocked_origins,
             allowed_origins: Vec::new(),
-            ardia: false,
             uploads: true,
         }
     }
@@ -208,72 +189,13 @@ impl Policy {
         self.allowed_origins = allowed;
         self
     }
-    /// The rules of a gate in front of Ardia.
-    pub fn ardia(trust: BrowserLevel, blocked_origins: Vec<String>) -> Self {
-        Self {
-            ardia: true,
-            ..Self::new(trust, blocked_origins)
-        }
-    }
-
-    /// The decision for one `tools/call`. The extension upstream decides every act tool call
-    /// itself (finance pages, card numbers and the rest are categories of its classifier and it
-    /// asks through the approval queue), so this is the mechanical part: the level's tool list,
-    /// the address scheme and the approval tool.
+    /// The decision for one `tools/call`: the read tools are allowed at every level, the act tools
+    /// and the approval tool only at the act level (the upstream then decides what needs the
+    /// user's answer, spec 6); addresses are limited to http and https.
     pub fn evaluate(&self, tool: &str, args: &Value) -> Verdict {
         if ALWAYS_BLOCKED_TOOLS.contains(&tool) {
             return Verdict::Deny(format!("{tool} is never available in this browser."));
         }
-        if self.ardia {
-            return self.evaluate_ardia(tool, args);
-        }
-        if tool == APPROVAL_TOOL {
-            // The upstream words the card and asks (tier K: always).
-            return if self.trust == BrowserLevel::ReadOnly {
-                Verdict::Deny(
-                    "At Level 1 the browser can not act, so there is nothing to approve.".into(),
-                )
-            } else {
-                Verdict::Allow
-            };
-        }
-        if !KNOWN_TOOLS.contains(&tool) {
-            return Verdict::Deny(format!("{tool} is not an available browser tool."));
-        }
-        if let Some(reason) = unsafe_address(tool, args) {
-            return Verdict::Deny(reason);
-        }
-        if self.trust == BrowserLevel::ReadOnly {
-            let action = args["action"].as_str().unwrap_or("");
-            // Closing a tab ends something the user may still need.
-            let allowed = READ_ONLY_TOOLS.contains(&tool)
-                && (tool != "browser_tabs" || matches!(action, "list" | "new" | "select"));
-            // `browser_press_key` is the Level 1 way to scroll, for the scroll keys only: Enter or
-            // Space could submit a form or press a focused button.
-            if allowed
-                && tool == "browser_press_key"
-                && !args["key"].as_str().is_some_and(is_scroll_key)
-            {
-                return Verdict::Deny(format!(
-                    "browser_press_key at Level 1 (read only) only accepts the scrolling keys {}. Other keys can press a button or submit a form; tell the user what to do, or that the browser level must be raised.",
-                    SCROLL_KEYS.join(", ")
-                ));
-            }
-            return if allowed {
-                Verdict::Allow
-            } else {
-                Verdict::Deny(format!(
-                    "{tool} is not available: this browser is at Level 1 (read only). Tell the user what to do, or that the browser level must be raised."
-                ))
-            };
-        }
-        Verdict::Allow
-    }
-
-    /// The decision for one call on an Ardia gate: the read tools are allowed at every level, the
-    /// act tools and the approval tool only at the act level (the upstream then decides what
-    /// needs the user's answer, spec 6); addresses are limited to http and https.
-    fn evaluate_ardia(&self, tool: &str, args: &Value) -> Verdict {
         let acts = ardia::upstream::ACT_TOOLS.contains(&tool) || tool == APPROVAL_TOOL;
         if !acts && !ardia::upstream::TOOLS.contains(&tool) {
             return Verdict::Deny(format!("{tool} is not an available browser tool."));
@@ -295,13 +217,10 @@ impl Policy {
 
     /// Whether the gate lists `tool` to the agent.
     pub fn offers(&self, tool: &str) -> bool {
-        if self.ardia {
-            return ardia::upstream::TOOLS.contains(&tool)
-                || (self.trust != BrowserLevel::ReadOnly
-                    && ardia::upstream::ACT_TOOLS.contains(&tool)
-                    && (self.uploads || tool != "browser_upload"));
-        }
-        self.trust.offers(tool)
+        ardia::upstream::TOOLS.contains(&tool)
+            || (self.trust != BrowserLevel::ReadOnly
+                && ardia::upstream::ACT_TOOLS.contains(&tool)
+                && (self.uploads || tool != "browser_upload"))
     }
 }
 
@@ -332,18 +251,6 @@ fn opened_address(tool: &str, args: &Value) -> Option<String> {
         _ => None,
     }?;
     Some(target.trim().to_owned()).filter(|t| !t.is_empty())
-}
-
-fn clip(text: &str, max: usize) -> String {
-    text.chars().take(max).collect()
-}
-fn short_args(args: &Value) -> String {
-    let text = args
-        .get("element")
-        .or_else(|| args.get("target"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    clip(text, 120)
 }
 
 /// Words in a host that mark a bank, wallet or payment site. A match only asks for approval, so
@@ -557,9 +464,6 @@ pub struct Ask {
     pub reply: mpsc::Sender<bool>,
     /// Set by the gate when it stopped waiting (timeout): the card should be withdrawn.
     pub abandoned: Arc<AtomicBool>,
-    /// Set by the run when the user chose "Never for this site" on a suggestion card (then the
-    /// reply is `true`, and the gate reads this first).
-    pub never: Arc<AtomicBool>,
 }
 
 /// A run's end of the approval channel. Dropping it detaches the run from the gate.
@@ -593,14 +497,17 @@ impl Drop for Attached {
         }
     }
 }
+/// The route's end of the approval channel. Nothing on an Ardia gate asks through the channel
+/// (the Ardia upstream shows its cards through the approval queue); it stays for [`Gate::attach`].
 struct Approver {
+    #[cfg_attr(not(test), allow(dead_code))]
     sender: mpsc::Sender<Ask>,
     generation: u64,
 }
 
 // ---- The upstream server ----
 
-/// Posts one JSON-RPC message to the browser backend (the extension link, or a fake in tests).
+/// Posts one JSON-RPC message to the browser backend (the Ardia upstream, or a fake in tests).
 pub trait Upstream: Send + Sync {
     /// Returns the reply (for a request) and the `Mcp-Session-Id` the server named, if any.
     /// A server that refused the request answers `Err("HTTP <status>")`.
@@ -610,19 +517,19 @@ pub trait Upstream: Send + Sync {
         session: Option<&str>,
         message: &Value,
     ) -> Result<(Option<Value>, Option<String>), String>;
-    /// Whether the MCP session is still the one to use after `error`. The extension link has
-    /// exactly one session for its life; a backend that drops its session on an error says so
-    /// here and the gate starts a new one.
+    /// Whether the MCP session is still the one to use after `error`. A backend that keeps
+    /// one session for its life says so here; one that drops its session on an error does not, and
+    /// the gate starts a new one.
     fn session_survives(&self, _error: &str) -> bool {
         false
     }
     /// A run of app session `session` starts with the user's own message (never page content).
-    /// Only the extension upstream uses it: task domains and named recipients come from it.
+    /// Only the Ardia upstream uses it: task domains and named recipients come from it.
     fn run_started(&self, _session: i64, _user_message: &str) {}
     /// [`Upstream::run_started`] that also says whether `user_message` was typed by the user.
     /// An automation's stored prompt is the user's own text (it counts as the words of the task)
     /// but was not typed in this turn, so it does not lift a Stop (design spec section 9). The
-    /// default ignores the difference (the extension upstream does not use it).
+    /// default ignores the difference.
     fn run_started_by(&self, session: i64, user_message: &str, _typed_by_user: bool) {
         self.run_started(session, user_message);
     }
@@ -685,8 +592,8 @@ struct State {
     upstream_key: String,
     session: Option<Session>,
     /// The page the browser is on, as the last tool result or opened address said. The browser
-    /// (and its current tab) is shared by every session of the Mono, so the recipe checks read
-    /// this one value whichever session writes.
+    /// (and its current tab) is shared by every session of the Mono, so the checks read this one
+    /// value whichever session writes.
     page: String,
     /// Issued routes: an unguessable token per app session (`None`: no session).
     routes: std::collections::HashMap<Option<i64>, String>,
@@ -699,45 +606,31 @@ struct Inner {
     state: Mutex<State>,
     init: Mutex<()>,
     approvers: Mutex<std::collections::HashMap<String, Approver>>,
-    /// Held by a recipe run for all of it, and by an agent call while it is forwarded, so a run is
-    /// never interleaved with agent clicks in the same tab.
+    /// Held by an agent call while it is forwarded, so calls are never interleaved in the same tab.
     run: Mutex<()>,
-    /// Where this Mono keeps its recipes and browser files; none until the app sets it.
+    /// Where this Mono keeps its browser files; none until the app sets it.
     workspace: Mutex<Option<Workspace>>,
-    /// The browser calls of each route (app session) since its last saved recipe, in memory only.
-    traces: Mutex<std::collections::HashMap<String, Trace>>,
-    /// Failed recipe runs waiting for the Mono's repair patch (in memory, with an expiry).
-    repairs: recipe::repair::Book,
-    /// Which tabs the agent opened and when each was used (see [`tabs`]).
-    tabs: Mutex<tabs::TabBook>,
     /// What each route (app session) read and declared this turn (see [`defense`]).
     turns: Mutex<std::collections::HashMap<String, defense::Turn>>,
-    /// This gate, for the suggestion card that waits on its own thread.
-    me: std::sync::Weak<Inner>,
-    calls: AtomicU64,
     generation: AtomicU64,
     next_id: AtomicU64,
     /// The Mono's browser was turned off or changed ([`Gate::shut_down`]): the turn that still
     /// holds this gate's address gets a refusal for every further call.
     stopped: AtomicBool,
-    /// Tests: selectors are not turned into refs (see [`Gate::pass_selectors_through`]).
-    #[cfg(test)]
-    selectors_through: AtomicBool,
+    /// How long [`Inner::ask`] waits for the user.
+    #[cfg_attr(not(test), allow(dead_code))]
     timeout: Duration,
 }
 
-/// What the gate needs to keep recipes and to confine the files the browser writes. Without it
-/// (some tests) the gate offers no recipe tools and leaves `filename` alone.
+/// What the gate needs to confine the files the browser writes and to audit. Without it (some
+/// tests) the gate leaves `filename` alone.
 #[derive(Clone, Debug)]
 pub struct Workspace {
     pub mono_id: String,
     /// The browser's output folder: private, swept, the only place `filename` may point to.
     pub output_dir: PathBuf,
-    /// Recipe files. Outside the output folder, so a sweep never touches them.
-    pub recipes_dir: PathBuf,
     /// The store database (approved hashes, audit log).
     pub database: PathBuf,
-    pub recipe_options: runner::Options,
 }
 
 impl Workspace {
@@ -780,10 +673,8 @@ impl Gate {
         upstream_key: &str,
         timeout: Duration,
     ) -> Result<Arc<Self>, String> {
-        let inner = Arc::new_cyclic(|me| Inner {
-            me: me.clone(),
+        let inner = Arc::new(Inner {
             turns: Mutex::new(Default::default()),
-            tabs: Mutex::new(Default::default()),
             state: Mutex::new(State {
                 policy,
                 upstream,
@@ -796,14 +687,9 @@ impl Gate {
             approvers: Mutex::new(Default::default()),
             run: Mutex::new(()),
             workspace: Mutex::new(None),
-            traces: Mutex::new(Default::default()),
-            repairs: Default::default(),
-            calls: AtomicU64::new(0),
             generation: AtomicU64::new(0),
             next_id: AtomicU64::new(100),
             stopped: AtomicBool::new(false),
-            #[cfg(test)]
-            selectors_through: AtomicBool::new(false),
             timeout,
         });
         let secret = format!("{:032x}", rand::random::<u128>());
@@ -842,8 +728,8 @@ impl Gate {
         self.url_for(&self.route_for(None))
     }
 
-    /// Tells the gate where this Mono keeps its recipes and browser files. Turns the recipe tools
-    /// on and confines `filename` arguments to the output folder.
+    /// Tells the gate where this Mono keeps its browser files and confines `filename` arguments to
+    /// the output folder.
     pub fn set_workspace(&self, workspace: Workspace) {
         let _ = output::prepare(&workspace.output_dir);
         self.inner.sweep_output(&workspace);
@@ -852,37 +738,6 @@ impl Gate {
             .workspace
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(workspace);
-    }
-
-    /// The Browser tab's dry run of a recipe (see `recipe::manage::dry_run`), through this gate:
-    /// the Mono's trust level, blocked sites and approval rules apply to every step. It uses a
-    /// route of its own that no run is attached to, so a step that would need a card is denied
-    /// instead of asking in some chat. It waits for a running recipe to finish, so call it off
-    /// the UI thread.
-    pub fn dry_run_recipe(&self, recipe_id: &str) -> Result<recipe::manage::DryRunReport, String> {
-        let workspace = self
-            .inner
-            .workspace()
-            .ok_or("The Mono's browser is not ready.")?;
-        let _one_at_a_time = self.inner.run.lock().unwrap_or_else(|e| e.into_inner());
-        let route = "dry-run";
-        let host = GateHost {
-            inner: &self.inner,
-            route,
-            workspace: &workspace,
-        };
-        let store = recipe::store::RecipeStore::new(workspace.recipes_dir.clone());
-        let approvals = MonoBrowserStore::at(workspace.database.clone());
-        let result = recipe::manage::dry_run(
-            &host,
-            &store,
-            &approvals,
-            &workspace.mono_id,
-            recipe_id,
-            workspace.recipe_options.clone(),
-        );
-        self.inner.sweep_output(&workspace);
-        result
     }
 
     /// Removes the browser files of this Mono (its gate stopped): they are page content.
@@ -963,19 +818,6 @@ impl Gate {
         self.inner.begin_turn(route, request, typed_by_user);
     }
 
-    /// Tests that stand in for the extension upstream (which asks through the approval queue):
-    /// shows a card on `route` through the gate's own channel and waits for the answer.
-    #[cfg(test)]
-    pub(crate) fn ask_for_test(&self, route: &str, request: ApprovalRequest) -> Result<(), String> {
-        self.inner.ask(route, request)
-    }
-
-    /// Tests whose scripted page resolves selectors itself: recipe steps keep their selectors.
-    #[cfg(test)]
-    pub(crate) fn pass_selectors_through(&self) {
-        self.inner.selectors_through.store(true, Ordering::SeqCst);
-    }
-
     /// Tests of other features: the route's turn is never judged by the taint rule.
     #[cfg(test)]
     pub fn exempt_from_taint(&self, route: &str) {
@@ -1044,27 +886,11 @@ impl Inner {
         })
     }
 
-    /// The upstream tools this level offers, plus the approval tool where there is something to
-    /// approve.
+    /// The upstream tools this level offers, plus the approval tool and the declared intent where
+    /// there is something to approve.
     fn list_tools(&self) -> Result<Vec<Value>, String> {
         let policy = self.lock_state().policy.clone();
         let upstream = self.upstream_rpc("tools/list", json!({}))?;
-        if policy.ardia {
-            // The read tools, the act tools at the act level, and the two gate-only tools (the
-            // approval request and the declared intent). No recipe tools on Ardia.
-            let mut tools: Vec<Value> = upstream["tools"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|tool| tool["name"].as_str().is_some_and(|n| policy.offers(n)))
-                .cloned()
-                .collect();
-            if policy.trust != BrowserLevel::ReadOnly {
-                tools.push(approval_tool_definition());
-                tools.push(defense::declare_tool_definition());
-            }
-            return Ok(tools);
-        }
         let mut tools: Vec<Value> = upstream["tools"]
             .as_array()
             .into_iter()
@@ -1072,25 +898,9 @@ impl Inner {
             .filter(|tool| tool["name"].as_str().is_some_and(|n| policy.offers(n)))
             .cloned()
             .collect();
-        for tool in &mut tools {
-            if tool["name"] == "browser_tabs" {
-                tool["inputSchema"]["properties"][tabs::DUPLICATE_FLAG] = json!({
-                    "type": "boolean",
-                    "description": "Only with action new: open a second tab even when that site is already open. Use it only when the user asked for another tab; otherwise the existing tab is reused.",
-                });
-                let description = tool["description"].as_str().unwrap_or("").to_owned();
-                tool["description"] = format!(
-                    "{description} Call action list first and reuse an open tab for the same site: a new tab to a site that is already open switches to that tab instead."
-                )
-                .into();
-            }
-        }
         if policy.trust != BrowserLevel::ReadOnly {
             tools.push(approval_tool_definition());
             tools.push(defense::declare_tool_definition());
-        }
-        if self.workspace().is_some() {
-            tools.extend(recipe::tools::definitions(policy.trust));
         }
         Ok(tools)
     }
@@ -1103,8 +913,8 @@ impl Inner {
     }
 
     /// The policy's decision for one call. `Err` is the reply to give the caller instead of
-    /// running the call. The extension upstream decides what needs the user's answer itself
-    /// (spec 7.6) and asks through the approval queue, so the gate only denies here.
+    /// running the call. The Ardia upstream decides what needs the user's answer itself and asks
+    /// through the approval queue, so the gate only denies here.
     fn authorize(&self, name: &str, args: &Value) -> Result<(), Value> {
         let policy = self.lock_state().policy.clone();
         match policy.evaluate(name, args) {
@@ -1118,39 +928,7 @@ impl Inner {
             }
             Verdict::Allow => {}
         }
-        if name == "browser_press_key" && policy.trust == BrowserLevel::ReadOnly {
-            self.focus_guard()
-                .map_err(|reason| tool_text(reason, true))?;
-        }
         Ok(())
-    }
-
-    /// Level 1 scrolls with keys, and a key moves the value of a focused select, slider, radio,
-    /// listbox or menu. So before the key goes out, the page is probed for the focused element
-    /// (`[active]` in the snapshot): a form control or widget refuses the key, and so
-    /// does a page whose focus can not be read. A page with nothing focused is fine to scroll.
-    fn focus_guard(&self) -> Result<(), String> {
-        const UNKNOWN: &str = "browser_press_key is refused at Level 1: the focused element of the page could not be read, and a key could change a control. Use browser_mouse_wheel if it is listed, or tell the user.";
-        let probe = self.forward("browser_snapshot", &json!({}));
-        if probe["isError"] == true {
-            return Err(UNKNOWN.into());
-        }
-        let text = result_text(&probe);
-        if !text.contains("```yaml") {
-            return Err(UNKNOWN.into());
-        }
-        let forest = recipe::snapshot::parse(recipe::snapshot::snapshot_body(&text));
-        let focused = recipe::snapshot::all(&forest).into_iter().find(|node| {
-            node.attrs.iter().any(|a| a == "active") && FOCUS_WIDGETS.contains(&node.role.as_str())
-        });
-        match focused {
-            Some(node) => Err(format!(
-                "browser_press_key is refused at Level 1: a {} (\"{}\") has the focus, and a key could change its value or press it. Tell the user, or raise the browser level.",
-                node.role,
-                node.name.chars().take(40).collect::<String>()
-            )),
-            None => Ok(()),
-        }
     }
 
     /// Sweeps the output folder; the pictures of audit rows stay.
@@ -1193,67 +971,10 @@ impl Inner {
         if self.stopped.load(Ordering::SeqCst) {
             return tool_text(STOPPED_GATE, true);
         }
-        if self.lock_state().policy.ardia {
-            if name == defense::DECLARE_TOOL {
-                return self.declare_intent(route, &args);
-            }
-            return self.call_ardia_tool(route, name, args);
-        }
         if name == defense::DECLARE_TOOL {
             return self.declare_intent(route, &args);
         }
-        if recipe::tools::is_recipe_tool(name) {
-            return self.recipe_tool(route, name, &args);
-        }
-        if let Err(reply) = self.authorize(name, &args) {
-            return reply;
-        }
-        let mut forwarded = args;
-        // Never sent on: the backend does not know it.
-        let duplicate_wanted = forwarded
-            .as_object_mut()
-            .and_then(|map| map.remove(tabs::DUPLICATE_FLAG))
-            .is_some_and(|flag| flag == true);
-        let workspace = self.workspace();
-        if let Some(workspace) = &workspace {
-            // A file the Mono names goes into the private output folder, never elsewhere.
-            if let Err(reason) =
-                output::confine_filename(name, &mut forwarded, &workspace.output_dir)
-            {
-                return tool_text(reason, true);
-            }
-            if self.calls.fetch_add(1, Ordering::Relaxed) % 25 == 24 {
-                self.sweep_output(workspace);
-            }
-        }
-        let page_before = self.lock_state().page.clone();
-        let TabOutcome {
-            result,
-            note,
-            performed,
-        } = {
-            let _one_at_a_time = self.run.lock().unwrap_or_else(|e| e.into_inner());
-            self.act_tracking_tabs(route, name, &forwarded, duplicate_wanted)
-        };
-        if let Some(workspace) = &workspace {
-            // A recording keeps what was done in the browser: a call the gate made instead of the
-            // agent's (a tab switch) is what a replay must make too.
-            if performed.is_empty() {
-                self.trace(route, workspace, name, &forwarded, &page_before, &result);
-            }
-            for (done, args) in &performed {
-                self.trace(route, workspace, done, args, &page_before, &result);
-            }
-            if result["isError"] != true {
-                self.maybe_suggest(route, workspace);
-            }
-        }
-        let mut result = self.defend(route, name, result);
-        // The gate's own note sits outside the page-content fence.
-        if let (Some(note), Some(parts)) = (note, result["content"].as_array_mut()) {
-            parts.push(json!({"type": "text", "text": note}));
-        }
-        result
+        self.call_ardia_tool(route, name, args)
     }
 
     /// A call on an Ardia gate: authorized by the policy, run by the upstream (which keeps its own
@@ -1267,252 +988,6 @@ impl Inner {
             self.forward(name, &args)
         };
         self.defend(route, name, result)
-    }
-
-    /// The tabs the browser has now, or none when the list could not be read.
-    fn list_tabs(&self) -> Vec<tabs::Tab> {
-        let args = json!({"action": "list"});
-        match self.upstream_rpc(
-            "tools/call",
-            json!({"name": "browser_tabs", "arguments": args}),
-        ) {
-            Ok(result) if result["isError"] != true => tabs::parse_tabs(&result_text(&result)),
-            _ => Vec::new(),
-        }
-    }
-    fn lock_tabs(&self) -> std::sync::MutexGuard<'_, tabs::TabBook> {
-        self.tabs.lock().unwrap_or_else(|e| e.into_inner())
-    }
-    /// Whether the policy lets a call the gate derives from the agent's (a tab switch, a close of
-    /// a tab the agent made, a navigation to the very address the agent asked for) run without
-    /// asking anyone. The agent's own call was authorized once, before; a derived call never
-    /// prompts, and one that would is not made.
-    fn derived_allowed(&self, route: &str, name: &str, args: &Value) -> bool {
-        let (policy, page_url) = {
-            let state = self.lock_state();
-            (state.policy.clone(), state.page.clone())
-        };
-        // The same untrusted-content check as the agent's own call gets, but never asked.
-        let verdict = policy.evaluate(name, args);
-        let verdict = self.apply_taint(route, name, args, &page_url, verdict);
-        verdict == Verdict::Allow
-    }
-
-    /// [`Inner::act`] for an authorized call that may open a tab or change which one is in use.
-    ///
-    /// * A new tab (or a navigation) to an address whose origin is already open in a tab the
-    ///   agent made switches to that tab instead, and loads the address there. A tab the user
-    ///   owns is only switched to, and only when it already shows that page: it is never
-    ///   navigated away.
-    /// * The tabs the agent made are closed least recently used first when a ninth tab would open
-    ///   ([`tabs::MAX_TABS`]), only where the policy allows a close without asking.
-    /// * The switch is checked on the result (the current tab must be the one expected), and any
-    ///   doubt or failure falls back to the call exactly as the agent made it.
-    ///
-    /// Everything the gate does itself is reported in `performed`, so a recording replays it.
-    fn act_tracking_tabs(
-        &self,
-        route: &str,
-        name: &str,
-        forwarded: &Value,
-        duplicate_wanted: bool,
-    ) -> TabOutcome {
-        let action = forwarded["action"].as_str().unwrap_or("");
-        let opens_tab = name == "browser_tabs" && action == "new";
-        let navigates = name == "browser_navigate";
-        let url = forwarded["url"].as_str().unwrap_or("").trim().to_owned();
-        if !(opens_tab || navigates) {
-            return self.as_asked(name, forwarded, &url);
-        }
-        let list = self.list_tabs();
-        if list.is_empty() {
-            // The list could not be read: do what the agent asked, as before.
-            return self.as_asked(name, forwarded, &url);
-        }
-        self.lock_tabs().sync(&list);
-        let reuse = if url.is_empty() || (opens_tab && duplicate_wanted) {
-            None
-        } else {
-            self.lock_tabs().reusable(&list, &url)
-        };
-        if let Some(reuse) = reuse {
-            if let Some(outcome) = self.reuse_tab(route, name, forwarded, &list, reuse, &url) {
-                return outcome;
-            }
-        }
-        let note = if opens_tab && list.len() >= tabs::MAX_TABS {
-            self.close_least_used_agent_tab(route, &list)
-        } else {
-            None
-        };
-        let mut outcome = self.as_asked(name, forwarded, &url);
-        outcome.note = note;
-        outcome
-    }
-
-    /// The call as the agent made it, with the tab book kept in step.
-    fn as_asked(&self, name: &str, forwarded: &Value, url: &str) -> TabOutcome {
-        let result = self.forward(name, forwarded);
-        if result["isError"] != true {
-            let mut book = self.lock_tabs();
-            let list = tabs::parse_tabs(&result_text(&result));
-            let opened = name == "browser_tabs" && forwarded["action"] == "new";
-            if opened && !list.is_empty() {
-                book.opened(&list, url);
-            } else if name == "browser_tabs" {
-                if forwarded["action"] == "close" {
-                    if let Some(index) = tabs::close_index(forwarded, &book) {
-                        book.closed(index);
-                    }
-                }
-                if !list.is_empty() {
-                    book.sync(&list);
-                }
-            } else {
-                book.touch_current();
-            }
-        }
-        TabOutcome {
-            result,
-            note: None,
-            performed: Vec::new(),
-        }
-    }
-
-    /// Shows `url` in the open tab `reuse`, or `None` when that is not safe or did not work (the
-    /// caller then makes the agent's own call).
-    fn reuse_tab(
-        &self,
-        route: &str,
-        name: &str,
-        forwarded: &Value,
-        list: &[tabs::Tab],
-        reuse: tabs::Reuse,
-        url: &str,
-    ) -> Option<TabOutcome> {
-        let target = &list[reuse.index];
-        let opens_tab = name == "browser_tabs";
-        let page_same = tabs::same_page(url, &target.url);
-        // Never navigate a tab the user owns: it is reusable only as it is.
-        if !reuse.agent && !page_same {
-            return None;
-        }
-        let mut performed = Vec::new();
-        let mut shown = None;
-        if !target.current {
-            let back = list.iter().position(|t| t.current);
-            let select = json!({"action": "select", "index": reuse.index});
-            if !self.derived_allowed(route, "browser_tabs", &select) {
-                return None;
-            }
-            let result = self.forward("browser_tabs", &select);
-            // The indexes may have moved since the list: the tab now in use must be the one
-            // that was meant (same address), or the switch is undone.
-            let now = tabs::parse_tabs(&result_text(&result));
-            let landed = result["isError"] != true
-                && now.iter().filter(|t| t.current).count() == 1
-                && now
-                    .get(reuse.index)
-                    .is_some_and(|t| t.current && t.url == target.url);
-            if !landed {
-                // Undo the switch once, then read the list again (no loop): the book follows
-                // whatever the browser shows now.
-                if let Some(back) = back {
-                    let _ =
-                        self.forward("browser_tabs", &json!({"action": "select", "index": back}));
-                }
-                let after = self.list_tabs();
-                if !after.is_empty() {
-                    self.lock_tabs().sync(&after);
-                }
-                return None;
-            }
-            self.lock_tabs().sync(&now);
-            performed.push(("browser_tabs".to_owned(), select));
-            shown = Some(result);
-        }
-        let note = Some(tabs::reuse_note(reuse.index, &target.url));
-        if opens_tab {
-            let result = if page_same {
-                match shown {
-                    Some(result) => result,
-                    None => self.forward("browser_tabs", &json!({"action": "list"})),
-                }
-            } else {
-                // The agent's authorized address, exactly, in the tab the agent made.
-                let navigate = json!({"url": url});
-                if !self.derived_allowed(route, "browser_navigate", &navigate) {
-                    return None;
-                }
-                let result = self.forward("browser_navigate", &navigate);
-                if result["isError"] == true {
-                    return None;
-                }
-                performed.push(("browser_navigate".to_owned(), navigate));
-                self.lock_tabs().touch_current();
-                result
-            };
-            return Some(TabOutcome {
-                result,
-                note,
-                performed,
-            });
-        }
-        // `browser_navigate`: a user's tab we switched to already shows the page; an agent tab or
-        // the current tab gets the agent's own call.
-        if !reuse.agent && !target.current {
-            let result = shown?;
-            return Some(TabOutcome {
-                result,
-                note,
-                performed,
-            });
-        }
-        let result = self.forward(name, forwarded);
-        self.lock_tabs().touch_current();
-        performed.push((name.to_owned(), forwarded.clone()));
-        Some(TabOutcome {
-            result,
-            note,
-            performed,
-        })
-    }
-
-    /// Closes the agent-made tab used longest ago, to stay within [`tabs::MAX_TABS`]. Only when
-    /// the policy allows a close without asking (Level 1 does not), the tab is the agent's with
-    /// certainty, and a fresh list is exactly the one the choice was made on. Returns a note for
-    /// the agent when a tab was closed; otherwise the agent just opens its tab.
-    fn close_least_used_agent_tab(&self, route: &str, list: &[tabs::Tab]) -> Option<String> {
-        let (index, url) = {
-            let book = self.lock_tabs();
-            let index = book.victim()?;
-            (index, book.url_at(index)?.to_owned())
-        };
-        let close = json!({"action": "close", "index": index});
-        if !self.derived_allowed(route, "browser_tabs", &close) {
-            return None;
-        }
-        let fresh = self.list_tabs();
-        let same = fresh.len() == list.len()
-            && fresh.iter().zip(list).all(|(a, b)| a.url == b.url)
-            && fresh.get(index).is_some_and(|t| t.url == url);
-        if !same {
-            return None;
-        }
-        let result = self.forward("browser_tabs", &close);
-        if result["isError"] == true {
-            return None;
-        }
-        let mut book = self.lock_tabs();
-        book.closed(index);
-        let after = tabs::parse_tabs(&result_text(&result));
-        if !after.is_empty() {
-            book.sync(&after);
-        }
-        Some(format!(
-            "zptah closed the tab {url} that you opened earlier and used least, because this browser keeps at most {} tabs. Tabs the user opened are never closed.",
-            tabs::MAX_TABS
-        ))
     }
 
     /// One call to the backend, after the policy allowed it. Remembers the page.
@@ -1533,31 +1008,6 @@ impl Inner {
         }
     }
 
-    /// Adds an agent call to its route's trace (in memory; see `recipe::record`).
-    fn trace(
-        &self,
-        route: &str,
-        workspace: &Workspace,
-        name: &str,
-        args: &Value,
-        page_before: &str,
-        result: &Value,
-    ) {
-        let text = result_text(result);
-        let ok = result["isError"] != true;
-        let page_after = self.lock_state().page.clone();
-        let mut traces = self.traces.lock().unwrap_or_else(|e| e.into_inner());
-        let trace = traces.entry(route.to_owned()).or_default();
-        if ok {
-            // A saved snapshot (`- [Snapshot](page-1.yml)`) is read from the private output folder.
-            let saved = output::linked_file(&text, &workspace.output_dir)
-                .filter(|path| path.metadata().is_ok_and(|m| m.len() < 4_000_000))
-                .and_then(|path| std::fs::read_to_string(path).ok());
-            trace.learn(saved.as_deref().unwrap_or(&text));
-        }
-        trace.note(name, args, page_before, &page_after, ok);
-    }
-
     fn audit(&self, route: &str, workspace: &Workspace, tool: &str, url: &str, summary: &str) {
         let session_id = self
             .lock_state()
@@ -1576,171 +1026,9 @@ impl Inner {
         let _ = MonoBrowserStore::at(workspace.database.clone()).record(&workspace.mono_id, &entry);
     }
 
-    /// Turns the selector a recipe step puts in `target` into the ref of the element it names
-    /// (spec 15.5): the page is snapshotted and the selector matched against it. `Err` is what
-    /// the step gets instead of running: the answer of a locator that found nothing, or several.
-    fn with_refs(&self, tool: &str, mut args: Value) -> Result<Value, runner::ToolOutput> {
-        #[cfg(test)]
-        if self.selectors_through.load(Ordering::SeqCst) {
-            return Ok(args);
-        }
-        // Where the call names elements: its `target`, and the `target` of each form field.
-        let mut slots: Vec<(Option<usize>, String)> = Vec::new();
-        if let Some(selector) = refs::selector_of(&args) {
-            slots.push((None, selector.to_owned()));
-        }
-        for (at, field) in args["fields"].as_array().into_iter().flatten().enumerate() {
-            if let Some(selector) = refs::selector_of(field) {
-                slots.push((Some(at), selector.to_owned()));
-            }
-        }
-        if slots.is_empty() {
-            return Ok(args);
-        }
-        let failed = |text: String| runner::ToolOutput {
-            text,
-            is_error: true,
-        };
-        let snapshot = self.forward("browser_snapshot", &json!({}));
-        let text = result_text(&snapshot);
-        if snapshot["isError"] == true {
-            return Err(failed(text));
-        }
-        let forest = recipe::snapshot::parse(recipe::snapshot::snapshot_body(&text));
-        // Every element must resolve to exactly one: otherwise the whole step fails.
-        let mut found = Vec::new();
-        for (at, selector) in &slots {
-            match refs::locate(&forest, selector) {
-                refs::Located::Ref(reference) => found.push((*at, reference)),
-                refs::Located::Multiple(count) => {
-                    return Err(failed(format!(
-                        "Error: strict mode violation: locator resolved to {count} elements for {selector}"
-                    )))
-                }
-                refs::Located::Missing | refs::Located::Unsupported => {
-                    return Err(failed(format!(
-                        "Error: \"{selector}\" does not match any elements ({tool})."
-                    )))
-                }
-            }
-        }
-        for (at, reference) in found {
-            match at {
-                None => args["target"] = json!(reference),
-                Some(at) => args["fields"][at]["target"] = json!(reference),
-            }
-        }
-        Ok(args)
-    }
-
-    /// A `recipe_*` tool call. The browser-using ones (`run`, `record`) hold the run lock.
-    fn recipe_tool(&self, route: &str, name: &str, args: &Value) -> Value {
-        let Some(workspace) = self.workspace() else {
-            return tool_text("Recipes are not available here.", true);
-        };
-        let trust = self.lock_state().policy.trust;
-        if !recipe::tools::offered(name, trust) {
-            return tool_text(
-                format!("{name} is not available at this browser level (read only)."),
-                true,
-            );
-        }
-        if matches!(name, recipe::tools::RUN | recipe::tools::REPAIR) {
-            if let Err(reason) = self.check_recipe_params(route, name, args) {
-                return tool_text(reason, true);
-            }
-        }
-        let uses_browser = matches!(
-            name,
-            recipe::tools::RUN | recipe::tools::RECORD | recipe::tools::REPAIR
-        );
-        let _one_at_a_time =
-            uses_browser.then(|| self.run.lock().unwrap_or_else(|e| e.into_inner()));
-        let store = recipe::store::RecipeStore::new(workspace.recipes_dir.clone());
-        let approvals = MonoBrowserStore::at(workspace.database.clone());
-        let trace = self
-            .traces
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(route)
-            .cloned()
-            .unwrap_or_default();
-        let host = GateHost {
-            inner: self,
-            route,
-            workspace: &workspace,
-        };
-        // The user accepted "Save as recipe?": the recorder keeps its checks and its dry run,
-        // but does not ask a second time. Never after untrusted content or an injection signal.
-        let accepted = name == recipe::tools::RECORD
-            && self.with_turn(route, |t| t.save_ok && !t.tainted && !t.flagged());
-        let ask = |request: ApprovalRequest| {
-            if accepted && request.category == Category::Recipe {
-                Ok(())
-            } else {
-                self.ask(route, request)
-            }
-        };
-        let context = recipe::tools::Context {
-            mono_id: &workspace.mono_id,
-            store: &store,
-            approvals: Some(&approvals),
-            host: &host,
-            ask: &ask,
-            trace: &trace,
-            options: workspace.recipe_options.clone(),
-            repairs: &self.repairs,
-        };
-        let reply = recipe::tools::call(name, args, &context);
-        if uses_browser {
-            // A run reads many snapshots: sweep at the end of each one.
-            self.sweep_output(&workspace);
-        }
-        if name == recipe::tools::RECORD && !reply.is_error {
-            if let Some(trace) = self
-                .traces
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get_mut(route)
-            {
-                trace.clear();
-            }
-        }
-        if name == recipe::tools::RECORD && !reply.is_error {
-            self.with_turn(route, |t| t.save_ok = false);
-        }
-        // What a run or a repair returns is page content (extracted fields, an observation).
-        if reply.page {
-            return match self.after_read(route, name, &reply.text, true) {
-                Err(reason) => tool_text(
-                    format!("{reason} The result was withheld: it looked like a prompt injection."),
-                    true,
-                ),
-                Ok(hits) => {
-                    let mut out = tool_text(
-                        defense::fence(&reply.text, &defense::new_nonce()),
-                        reply.is_error,
-                    );
-                    if !hits.is_empty() {
-                        out["content"].as_array_mut().into_iter().for_each(|parts| {
-                            parts.push(json!({"type": "text", "text": guard::INJECTION_NOTE}))
-                        });
-                    }
-                    out
-                }
-            };
-        }
-        tool_text(reply.text, reply.is_error)
-    }
-
     /// Shows the card and waits. Everything but an explicit Allow is an error text for the agent.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn ask(&self, route: &str, request: ApprovalRequest) -> Result<(), String> {
-        self.ask_full(route, request).map(|_| ())
-    }
-
-    /// [`Inner::ask`] that also tells whether the user chose "Never for this site" (only a
-    /// suggestion card offers it).
-    fn ask_full(&self, route: &str, request: ApprovalRequest) -> Result<bool, String> {
         let sender = self
             .approvers
             .lock()
@@ -1752,18 +1040,16 @@ impl Inner {
         };
         let (reply, answer) = mpsc::channel();
         let abandoned = Arc::new(AtomicBool::new(false));
-        let never = Arc::new(AtomicBool::new(false));
         let ask = Ask {
             request,
             reply,
             abandoned: abandoned.clone(),
-            never: never.clone(),
         };
         if sender.send(ask).is_err() {
             return Err(guard::NO_CHANNEL.into());
         }
         match answer.recv_timeout(self.timeout) {
-            Ok(true) => Ok(never.load(Ordering::SeqCst)),
+            Ok(true) => Ok(()),
             Ok(false) => Err(
                 "Denied by the user. Do not do this action, and do not try another way to do it."
                     .into(),
@@ -1854,8 +1140,6 @@ impl Inner {
         )?;
         let session = Session { key, id };
         self.lock_state().session = Some(session.clone());
-        // A new connection owns none of the tabs of the old one: nothing is the agent's to close.
-        self.lock_tabs().reset();
         Ok(session)
     }
 }
@@ -1917,42 +1201,6 @@ pub fn audit_url(url: &str) -> String {
         .collect()
 }
 
-/// Roles that react to the scroll keys (or to a press) when they have the focus.
-const FOCUS_WIDGETS: [&str; 22] = [
-    "textbox",
-    "searchbox",
-    "combobox",
-    "listbox",
-    "option",
-    "slider",
-    "spinbutton",
-    "radio",
-    "radiogroup",
-    "checkbox",
-    "switch",
-    "menu",
-    "menubar",
-    "menuitem",
-    "menuitemcheckbox",
-    "menuitemradio",
-    "tab",
-    "tablist",
-    "button",
-    "tree",
-    "treeitem",
-    "grid",
-];
-
-/// What [`Inner::act_tracking_tabs`] did.
-struct TabOutcome {
-    result: Value,
-    /// For the agent, outside the page-content fence.
-    note: Option<String>,
-    /// The calls the gate made in place of or besides the agent's, with their arguments; empty
-    /// when it made the agent's call as it was.
-    performed: Vec<(String, Value)>,
-}
-
 /// The text parts of a tool result, joined.
 fn result_text(result: &Value) -> String {
     result["content"]
@@ -1964,54 +1212,5 @@ fn result_text(result: &Value) -> String {
         .join("\n")
 }
 
-/// A recipe run's way to the browser: every step passes the same policy as an agent call, and
-/// asks the user where the policy says so.
-struct GateHost<'a> {
-    inner: &'a Inner,
-    route: &'a str,
-    workspace: &'a Workspace,
-}
-impl runner::Host for GateHost<'_> {
-    fn call(&self, tool: &str, args: Value) -> Result<runner::ToolOutput, String> {
-        if let Err(reply) = self.inner.authorize(tool, &args) {
-            return Err(result_text(&reply));
-        }
-        // A recipe names elements by selector; the browser takes refs (see `refs`).
-        let args = match self.inner.with_refs(tool, args) {
-            Ok(args) => args,
-            Err(output) => return Ok(output),
-        };
-        let result = self.inner.forward(tool, &args);
-        // A page a recipe step reads is scanned like one the agent reads, but it does not taint
-        // the turn until the run's output is read (the user approved the steps).
-        self.inner
-            .after_read(self.route, tool, &result_text(&result), false)?;
-        Ok(runner::ToolOutput {
-            text: result_text(&result),
-            is_error: result["isError"] == true,
-        })
-    }
-    fn page_url(&self) -> String {
-        self.inner.lock_state().page.clone()
-    }
-    fn trust(&self) -> BrowserLevel {
-        self.inner.lock_state().policy.trust
-    }
-    fn blocked_origins(&self) -> Vec<String> {
-        self.inner.lock_state().policy.blocked_origins.clone()
-    }
-    fn pause(&self, duration: Duration) {
-        if !duration.is_zero() {
-            std::thread::sleep(duration);
-        }
-    }
-    fn audit(&self, tool: &str, url: &str, summary: &str) {
-        self.inner
-            .audit(self.route, self.workspace, tool, url, summary);
-    }
-}
-
-#[cfg(all(test, unix))]
-mod extension_tests;
 #[cfg(test)]
 mod tests;

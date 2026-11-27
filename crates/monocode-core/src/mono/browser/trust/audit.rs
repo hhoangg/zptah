@@ -108,9 +108,9 @@ pub struct DecisionAudit {
     pub reason: String,
     pub approval_id: Option<String>,
     pub screenshot: Option<String>,
-    /// `mono`, `recipe`, `auto_consent` or `user_stop`.
+    /// `mono`, `auto_consent` or `user_stop` (rows of the recipe era may say `recipe`).
     pub actor: String,
-    /// `content` or `debugger`.
+    /// How the action was made (rows of the extension era say `content` or `debugger`).
     pub input: Option<String>,
     pub profile: Option<String>,
 }

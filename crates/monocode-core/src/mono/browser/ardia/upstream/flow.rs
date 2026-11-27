@@ -31,7 +31,7 @@ use super::flow_risk::Classified;
 use super::fresh::SeenRefs;
 use super::*;
 use crate::mono::browser::copy::{ActionDesc, CardFacts};
-use crate::mono::browser::gate::extension::ReadRefusal;
+use crate::mono::browser::gate::origins::ReadRefusal;
 use crate::mono::browser::risk::decide::{never_granted, Decision};
 use crate::mono::browser::risk::signals::{registrable_domain_of, site_category};
 use crate::mono::browser::risk::Category;

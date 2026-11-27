@@ -5,7 +5,6 @@ mod browser_approval;
 #[cfg(test)]
 mod browser_approval_tests;
 mod browser_ardia;
-mod browser_migration;
 #[cfg(test)]
 mod browser_tests;
 mod browser_ui;

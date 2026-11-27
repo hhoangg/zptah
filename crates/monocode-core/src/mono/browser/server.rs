@@ -1,7 +1,7 @@
 //! The registry of the Monos' browser gates (one per Mono with a browser).
 //!
 //! The gate (see [`super::gate`]) is the only thing the agent talks to: a loopback MCP endpoint in
-//! front of the zptah Browser extension link. Its address stays the same while the Mono's browser
+//! front of Ardia. Its address stays the same while the Mono's browser
 //! stays on, so a parked agent process keeps a working URL.
 use super::gate::{self, Gate};
 use std::collections::HashMap;
@@ -36,18 +36,6 @@ impl BrowserServers {
             .unwrap_or_else(|e| e.into_inner())
             .get(mono_id)
             .cloned()
-    }
-    /// This Mono's gate in front of the zptah Browser extension: the one it has (updated to the
-    /// current policy and upstream), or a new one.
-    #[cfg(test)]
-    pub(crate) fn gate_for_extension(
-        &self,
-        mono_id: &str,
-        upstream: Arc<gate::ExtensionUpstream>,
-        policy: gate::Policy,
-    ) -> Result<Arc<Gate>, String> {
-        let key = format!("extension-{:p}", Arc::as_ptr(&upstream));
-        self.gate_for(mono_id, &key, upstream, policy)
     }
     /// This Mono's gate in front of Ardia.
     pub(crate) fn gate_for_ardia(

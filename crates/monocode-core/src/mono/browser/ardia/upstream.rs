@@ -17,7 +17,7 @@
 //!   (`strip_invisible`, `redact_secrets`) and fenced, scanned and tainted by the gate's
 //!   `defend`, as for every upstream.
 use super::super::defense;
-use super::super::gate::extension::refusal_text as tabs_origin_refusal;
+use super::super::gate::origins::refusal_text as tabs_origin_refusal;
 use super::super::gate::{audit_url, Origins, Policy, RunContext, Upstream};
 use super::controller::{controller, Controller, Readiness};
 use super::runner::{plain_value, web_url, CancelToken, Failure, BROWSE_TIMEOUT};
