@@ -1,8 +1,26 @@
 # Chief: one assistant above the Monos - design
 
-Status: spec for review, not scheduled. Native app first.
-Source: planning session 2026-11-27, revised once after an independent review. Line references
-are to `main` at 3605151d.
+Status: spec for review, not scheduled. Native app and web companion.
+Source: planning session 2026-11-27, revised after an independent review and the owner's
+answers (see "Decisions from the owner"). Line references are to `main` at 3605151d.
+
+## Decisions from the owner (2026-11-27)
+
+1. Every command needs a Send click for now; revisit if it gets in the way.
+2. The owner names the Chief in its settings.
+3. Status comes from reading sessions; the Chief does not ask Monos.
+4. Routing: one owning Mono → through it; several → the owner picks; none → the app sends the
+   command straight to the session. No adoption.
+5. The Chief phrases the command, as a Mono does; the card shows the text before Send.
+6. A busy target session gets the command in its follow-up queue and runs it when idle.
+7. The web companion is in phase 1. Send from the web needs a Control device and a desktop
+   toggle that defaults off.
+8. The Chief has no harness tools (no shell, files or browser), only the `app` tool.
+9. Chief settings, like a Mono's minus the browser: name, emoji, color, appearance, soul,
+   memory, model, effort, account. No heartbeat, habits or workflows.
+10. A direct send to an unowned session is not tracked; the owner asks later.
+11. Monos do not message each other. The Chief covers that need instead of PR #69's
+    Mono-to-Mono approach.
 
 ## Goal
 
@@ -33,8 +51,9 @@ Two jobs:
 - The Chief starting new sessions, creating Monos or editing a Mono's soul, habits or workflows.
 - The Chief running on a schedule (no heartbeat, no habits): it only acts when the owner asks.
 - Monos or sessions sending anything to the Chief.
-- Web and phone access, the tray entry, a History page (phase 2).
-- Commands that skip a Mono and go straight to a session.
+- Phone app access and a History page (phase 2).
+- Skipping a Mono that owns the session (only unowned sessions get a direct send).
+- Monos messaging each other.
 
 ## What exists today (research)
 
@@ -77,7 +96,9 @@ A finished Mono turn emits `NotificationFinished` (`mod.rs:1310-1324`).
 
 **Checks.** `sessions.read/send/stop` are scoped to the Mono's projects by cwd
 (`host.rs:1027-1089`); `send` is refused while the target is busy or has a draft
-(`host.rs:1120-1132`). `unmanaged_session` (`host.rs:463-472`) guards only delete, cloud
+(`host.rs:1120-1132`). Sessions do have a persisted follow-up queue (`core/follow_up.rs`):
+a web or phone send to a busy session is queued with `enqueue_follow_up` and pumped when the
+session is idle (`gpui/conversation/mobile.rs:241-264`). `unmanaged_session` (`host.rs:463-472`) guards only delete, cloud
 archive and moves (`host.rs:1048-1060`), so `sessions.send` can reach another Mono's chat when
 a Mono has `$HOME` as a project. Habit runs, heartbeats and workflow questions are barred from
 terminals, `app.update`, `projects.add`, moves and workflow edits (`host.rs:407-457`).
@@ -103,18 +124,20 @@ review asks to refuse `monos.send` from habit runs, heartbeats and workflow ques
 
 ## Concept
 
-**Chief** (UI name "Chief", Vietnamese "tổng quản"; naming is an open question).
+**Chief** (Vietnamese "tổng quản"). "Chief" is the default name; the owner renames it in the
+Chief settings.
 
 | | Mono | Chief |
 |---|---|---|
 | How many | many | exactly one, optional |
 | Scope | its projects | every project and Mono, read only |
 | Owns sessions | yes (`launches`) | no, never |
-| Can start or send to sessions | yes | no |
-| Can command | its sessions | a Mono, about one of that Mono's sessions, only after the owner clicks Send |
+| Can start or send to sessions | yes | no (a direct send is done by the app after Send) |
+| Can command | its sessions | a Mono, about one of that Mono's sessions; an unowned session directly; always after the owner clicks Send |
 | Runs on its own | heartbeat, habits, workflows | never |
-| Receives messages from | owner, its sessions' reports, (PR #69) other Monos | owner only |
+| Receives messages from | owner, its sessions' reports | owner only |
 | Harness tools (shell, files, browser) | yes | none |
+| Settings | name, emoji, color, appearance, soul, memory, model/effort/account, projects, sub-session defaults, heartbeat, habits, workflows, browser | name, emoji, color, appearance, soul, memory, model/effort/account, web Send toggle |
 
 **Decision: separate storage, shared chat runtime with a role.**
 - Stored as `Roster.chief: Option<Chief>`, not in `Roster.monos`, so every loop over
@@ -131,9 +154,18 @@ review asks to refuse `monos.send` from habit runs, heartbeats and workflow ques
   "skip the Chief" check in every roster loop; a missed one hands the Chief projects, habits or
   sessions. We prefer the compile-time separation.
 
-**No harness tools.** The Chief chat runs with no shell, file or browser tools, only the `app`
-MCP tool. Otherwise text injected through a session read could drive shell commands with no
-click, or read transcripts directly past the fence. The first implementation task is a spike
+**No harness tools (owner decision 8).** The Chief chat runs with no shell, file or browser
+tools, only the `app` MCP tool. Reasons:
+- It reads more untrusted text than anything else in the app (output from every session in
+  every project). With a shell in Auto mode, injected text could run commands with no click;
+  the Send click guards only commands.
+- A Mono with the same weakness is limited to its projects; a tricked Chief reaches all of them.
+- With a shell it could do the work itself (edit a repo, run git) instead of handing it to the
+  Mono, which loses the Mono's context, the thing this design exists to keep.
+- With file access it could read the database or transcripts directly, past the fence and
+  `redact_secrets`.
+
+The first implementation task is a spike
 proving each harness (Claude, Codex) can run with its own tools off and the `app` tool on
 (likely `AccessMode::ReadOnly` plus an empty tool allowlist; not yet verified), with a test
 that the Chief cannot run a shell command. If a harness cannot do this, the Chief does not
@@ -156,53 +188,67 @@ support it.
    and `fence` before the Chief sees it.
 5. Nothing is written into any Mono's chat; no Mono spends tokens.
 
-### W2. Command a session through its Mono
+### W2. Command a session
 
 1. Owner: "Tell the login session to add tests for the expired-token case."
-2. Chief resolves the session (see below) and calls
-   `chief.propose {sessionId, instruction, mono?}`.
-3. The app checks the route: the session exists, is not archived, hidden, a Mono chat or the
-   Chief chat; its owning Mono (rules in W3); that Mono's chat is available; the session is in
-   that Mono's projects (or is its cloud twin). It stores a **proposal** and draws a card in the
-   Chief chat from the stored record:
-   `Mono A → session #412 "Login refactor" (project web, branch feat/login)` and the full
-   instruction text (invisible characters stripped, never clipped), with **Send**, **Edit** and
-   **Cancel**. Warnings: session busy, Mono busy (will queue), cloud sandbox asleep (waking
-   costs money), Mono will adopt this session.
-4. The tool returns `{proposalId, status:"awaitingOwner"}` and the Chief ends its turn. **The
-   model cannot confirm; only a click in the app does.**
-5. On **Send** the app checks the route again, then enqueues an internal message into Mono A's
-   outbox:
+2. Chief resolves the session (see below), phrases the command as a Mono would (owner decision
+   5), and calls `chief.propose {sessionId, instruction, mono?}`.
+3. The app checks the target (exists; not archived, hidden, a Mono chat or the Chief chat) and
+   picks the **route** from the owning Monos. An owning Mono is one with a launch for this
+   session that is not dismissed:
+   - **one owner** → route `viaMono(A)`; A's chat must be available and the session in A's
+     projects (or its cloud twin);
+   - **several owners** → `chief.propose` returns `needsMono` with the candidates; the Chief asks
+     the owner and proposes again with `mono`;
+   - **no owner** → route `direct`.
+4. It stores a **proposal** and draws a card in the Chief chat from the stored record, never
+   from model text: `Mono A → session #412 "Login refactor" (project web, branch feat/login)`
+   (or `Directly → session #412 …` for `direct`), the full instruction (invisible characters
+   stripped, never clipped), and **Send**, **Edit**, **Cancel**. Notes on the card: session
+   busy (the command will wait in its queue), Mono busy (will wait), cloud sandbox asleep
+   (waking costs money).
+5. The tool returns `{proposalId, status:"awaitingOwner"}` and the Chief ends its turn. **The
+   model cannot confirm; only a click in the app (desktop, or web under decision 7) does.**
+6. On **Send** the app checks the target and route again, then:
+   - `direct`: the app puts the confirmed text into the session the way a web send does: sent
+     now when idle, otherwise added to the session's follow-up queue (`enqueue_follow_up`).
+     State `sent` or `queuedInSession`. Nothing tracks it afterwards (decision 10).
+   - `viaMono(A)`: enqueues an internal message into A's outbox:
 
-   ```
-   [Command from the owner, relayed by the Chief]
-   Proposal: p_7f3a  Session: #412 "Login refactor" (project web)
-   The owner confirmed this text:
-   <instruction>
-   Send it with sessions.send {session: 412, proposalId: "p_7f3a", notifyOnComplete: true}.
-   ```
+     ```
+     [Command from the owner, relayed by the Chief]
+     Proposal: p_7f3a  Session: #412 "Login refactor" (project web)
+     The owner confirmed this text:
+     <instruction>
+     Send it with sessions.send {session: 412, proposalId: "p_7f3a", notifyOnComplete: true}.
+     ```
 
-6. Mono A handles it on its next turn (now, or when its current turn ends). It sends the text
-   to the session with `sessions.send` carrying `proposalId`. It may add context before or
-   after the text, but the confirmed text must appear in the prompt unchanged.
-7. **The app enforces the authority, not the model.** `sessions.send` with a `proposalId` is
-   accepted only when the proposal is confirmed, unused, for this Mono and this session, and
-   the prompt contains the confirmed text verbatim. Then the proposal is marked used. The Mono
-   rules say owner authority exists only when that send is accepted. A fake header anywhere
-   else (in a session's reply, a completion report, a peer message) carries no proposal the app
-   will accept.
-8. The launch records `origin: Chief(proposalId)`. When the session stops, the completion
-   report for that launch uses a different lead: "An owner command relayed by the Chief has
-   finished. Report the result in one line. Do not continue unless the owner asks." This
-   keeps the Mono from following up on its own.
-9. **Nothing is pushed to the Chief.** The owner later asks "Did it finish?" and the Chief calls
-   `chief.commands {}` (proposal states) plus `chief.overview` / `chief.readSession`.
+7. Mono A handles it on its next turn (now, or when its current turn ends). It sends the text
+   with `sessions.send` carrying `proposalId`. It may add context before or after the text,
+   but the confirmed text must appear in the prompt unchanged.
+8. **The app enforces the authority, not the model.** `sessions.send` with a `proposalId` is
+   accepted only when the proposal is confirmed, unused, routed `viaMono` to this Mono and this
+   session, and the prompt contains the confirmed text verbatim; then it is marked used. The
+   Mono rules say owner authority exists only when that send is accepted. A fake header
+   anywhere else (a session's reply, a completion report) carries no proposal the app accepts.
+9. **A proposal-bound send to a busy session is queued, not refused** (decision 6). It goes
+   into the session's follow-up queue like a web send; plain `sessions.send` without a
+   proposal keeps today's refusal. State `queuedInSession`, then `sent` when the queue
+   delivers it (the follow-up message's `sent_at`).
+10. The launch records `origin: Chief(proposalId)` and the follow-up message id. Its completion
+    report waits until that message was delivered and its turn ended, so the Mono never
+    reports the earlier turn's result as the command's. The report uses a different lead: "An
+    owner command relayed by the Chief has finished. Report the result in one line. Do not
+    continue unless the owner asks."
+11. **Nothing is pushed to the Chief.** The owner later asks "Did it finish?" and the Chief calls
+    `chief.commands {}` (proposal states) plus `chief.overview` / `chief.readSession`.
 
-**Proposal states:** `awaitingOwner` → `cancelled` | `queued` (in the Mono outbox) →
-`sent` (the proposal-bound send was accepted) | `refused(reason)` (the send was refused, for
-example the session is busy) | `notAttempted` (the Mono's turn ended without a proposal-bound
-send) | `failed(reason)` (the internal message errored, was discarded, or the Mono was reset or
-deleted). The Chief reads the session's later state live.
+**Proposal states:** `awaitingOwner` → `cancelled` | `queuedAtMono` (in the Mono outbox) →
+`queuedInSession` (in the session's follow-up queue) → `sent` (delivered to the session) |
+`refused(reason)` (the send was refused, for example the session was deleted) |
+`notAttempted` (the Mono's turn ended without a proposal-bound send) | `failed(reason)` (the
+internal message errored or was discarded, a queued follow-up was removed, or the Mono was
+reset or deleted). The Chief reads the session's later state live.
 
 **When the Mono's send is refused,** its rules say: do not stop the session, retry, draft or
 start another session; reply with the reason in one line. The app refuses a second send for the
@@ -216,16 +262,17 @@ as any Mono turn does today; that is a notice to the owner, not a push to the Ch
 
 | Case | Behaviour (phase 1) |
 |---|---|
-| Session has no owning Mono (the owner started it, or the Mono dismissed it) | If exactly one Mono covers the session's project, the card says "Mono A will adopt this session". If several do, the Chief asks the owner which. If none does, the Chief refuses and explains. No direct send. An adopted launch gets `adopted: true` and stays visible in the sidebar (today it would be hidden, `host.rs:1180`, `mod.rs:607-612`). |
-| Two Monos track the same session | Default to the one with the most recent active launch; the card names it; the owner can say "no, Mono B" and the Chief proposes again. |
+| No owning Mono (the owner started it, or the Mono dismissed it) | Route `direct`: the app sends the confirmed text straight to the session after Send. No adoption, no tracking. |
+| Several owning Monos | The Chief asks the owner which Mono, then proposes with `mono`. |
 | Several sessions match the words | The Chief asks, listing candidates. It proposes only after one is chosen. |
-| Mono busy | The command waits in the Mono outbox (existing). Card: "Queued: Mono A is busy". |
+| Mono busy | The command waits in the Mono outbox (existing). Card: "Waiting: Mono A is busy". |
 | Mono chat missing (`unavailable_session`) | Refused at propose and at Send. |
-| Target session busy or has a draft | Card warns. If still busy at send time the send is refused → `refused`. |
-| Cloud session | Allowed when the Mono covers its local project; card warns when the sandbox is asleep. |
+| Target session busy, or has an unsent draft in its composer | The command goes into the session's follow-up queue and runs when it is idle. The owner's draft stays untouched. |
+| Session's follow-up queue is paused | The command waits in the paused queue; the card says so. |
+| Cloud session | Allowed; card warns when the sandbox is asleep. A send wakes it, as today. |
 | Session archived, deleted or moved before Send | The second check fails; the card shows why; nothing is sent. |
 | Open proposals | At most 5; older ones must be sent or cancelled first. No timed expiry. |
-| App quits with a queued command | The outbox is persisted (existing). On load, a `queued` proposal whose outbox entry is gone and that was never used becomes `failed("interrupted")`, which avoids PR #69's kind of leak. |
+| App quits with a queued command | The Mono outbox and the follow-up queue are persisted (existing). On load, a `queuedAtMono` proposal whose outbox entry is gone and that was never used becomes `failed("interrupted")`. |
 
 ## Resolving which session
 
@@ -240,7 +287,7 @@ The model does the language part; the app checks the facts.
 **Confirm on every command is an addition to the request.** The owner already typed the
 command, so a click is extra friction. It is what makes the design safe: the Chief reads text
 written by sessions, and only an app-drawn click separates that text from an action. This needs
-the owner's approval (open question 1).
+the owner's approval, given 2026-11-27 (decision 1).
 
 ## Permissions and safety
 
@@ -250,11 +297,12 @@ the owner's approval (open question 1).
 |---|---|
 | `chief.overview`, `chief.readSession`, `chief.commands` | read |
 | `chief.propose`, `chief.cancel` | create or cancel a proposal; sends nothing |
-| `memory.read/search/add/replace/remove` (the Chief's own memory) | own state |
+| `memory.read/search/add/replace/remove`, `soul.read` (the Chief's own files) | own state |
 
 Everything else is refused for the Chief by `chief_call`, tested by looping over every Mono
 action. `chief.*` is refused for every other caller: Monos, habit runs, heartbeats, workflow
-questions, Operator threads, plain sessions, and web and phone in phase 1.
+questions, Operator threads and plain sessions. Web devices reach the Chief only through its
+own web methods (see Impact), never through `chief.*` app actions.
 
 **No inbound path.** All `sessions.*` actions refuse the Chief chat id as a target. The same
 gap exists today between Mono chats (`sessions.send` into another Mono's chat when a Mono has
@@ -277,11 +325,11 @@ Mono, confirmed text, every check result, outbox id, final state and reason, the
 one-line reply (clipped). The last 100 are kept in `Roster.chief`; the Chief reads them with
 `chief.commands`. A History page and an append-only log file are phase 2.
 
-**Relation to PR #69.** Independent; neither needs the other. The Chief does not use
-`peer_inbox`, `accept_peer_messages` or the "another Mono, not the user" framing, because a
-confirmed owner command is not a peer message. If #69 merges first, its messages are added to
-the texts that get the header `neutralize`d. Worth sharing later: one `enqueue_internal(mono,
-text, tag)` helper, since `enqueue_peer` and the completion path do the same steps.
+**Relation to PR #69.** The owner does not want Monos messaging each other (decision 11). The
+Chief covers the need behind #69 (getting work to the right Mono) with a fixed chain instead
+of a peer mesh. The Chief does not use `peer_inbox`, `accept_peer_messages` or the "another
+Mono, not the user" framing, because a confirmed owner command is not a peer message. Nothing
+here depends on #69.
 
 ## Cost and context
 
@@ -294,106 +342,149 @@ text, tag)` helper, since `enqueue_peer` and the completion path do the same ste
 - A command costs one Mono turn for the relay, one session turn, and one short Mono turn for
   the completion report.
 
-## UX (phase 1)
+## UX (proposed, pending owner review)
 
-- The Chief is pinned first in the Monos rail of the floating panel and the Monos dashboard,
-  with its own mark, and opens the same chat view.
-- Settings: one "Chief" switch (off by default while experimental) and its model and effort.
-- Results come back in the Chief chat. Proposal cards update in place as their state changes.
+**Desktop**
+- **Floating panel and Monos dashboard.** The Chief sits first in the Monos rail, above a thin
+  divider, with its own name and emoji from its settings and a small "Chief" tag so it never
+  looks like one more Mono. Clicking it opens the same chat view as a Mono.
+- **Badge.** A dot on the Chief's avatar while a proposal is waiting for Send. It is the only
+  attention signal the Chief has. It is not a push about sessions.
+- **Tray (macOS).** "Ask <Chief name>…" is the first menu item (`monos/status.rs`) and opens the
+  floating panel on the Chief. This is small and stays in phase 1.
+- **Shortcut.** An optional global shortcut (empty by default, set in Keybindings, registered
+  like Quick Composer's `hotkey::Registration`) that opens the floating panel on the Chief.
+- **Proposal card in the Chief chat.** Drawn by the app:
+  - a route line (`Mono A → #412 Login refactor · web · feat/login`, or `Directly → …`);
+  - the full text;
+  - notes (session busy → will wait in its queue; cloud asleep → waking costs money);
+  - Send, Edit, Cancel;
+  - a state chip that updates in place (Waiting for Mono A, Queued in session, Sent, Refused:
+    reason).
+- **In the Mono's chat** the relayed command shows as an internal turn labelled "From you, via
+  <Chief name>" with the text. The Mono's history therefore shows who asked.
+- **In the session** the command arrives as a normal user message, as a Mono send does today.
+- **Not in the session sidebar.** The Chief chat is hidden there, like Mono chats.
+- **Settings.** A "Chief" page next to the Monos settings:
+  - an on/off switch (off by default while experimental);
+  - name, emoji, color, appearance;
+  - soul and memory;
+  - model, effort, account;
+  - "Allow Send from web devices" (off by default).
+
+**Web**
+- The Chief is pinned first in the Mono home list (`web/app/src/features/monos/MonoHome.tsx`)
+  and in the Monos route, with the same tag.
+- It opens in the Mono chat screen (`MonoScreen.tsx`) as conversation `chief`.
+- The card is the same. Send is enabled only for a Control device while the desktop toggle is
+  on; otherwise it reads "Confirm on the desktop".
+- The Chief's settings are read-only on web in phase 1.
 
 ## Data and migration
 
-- `Roster.chief: Option<Chief>` with `#[serde(default)]`: `{ session_id, model, effort,
-  account, proposals (last 100) }`. Check that the desktop reconcile (`mono/desktop.rs:24`)
-  keeps the field.
+- `Roster.chief: Option<Chief>` with `#[serde(default)]`: `{ session_id, name, emoji, color,
+  appearance, model, effort, account, allow_web_send, proposals (last 100) }`. Check that the
+  desktop reconcile (`mono/desktop.rs:24`) keeps the field.
 - Downgrade: an older build reads the roster fine but drops `chief` on its next save, losing
   the Chief's chat link and proposals. Acceptable for an experimental feature; say so in the
   release note.
-- Files under `<appdata>/chief/` (MEMORY.md; provider files), a separate root from
+- Files under `<appdata>/chief/` (SOUL.md, MEMORY.md, provider files), a separate root from
   `<appdata>/monos/<id>/`. `load_files`, emoji and `provider_files` paths take the root as a
   parameter.
-- `Launch` gains `origin: Option<LaunchOrigin>` and `adopted: bool`, both `#[serde(default)]`.
+- `Launch` gains `origin: Option<LaunchOrigin>` (proposal id and follow-up message id),
+  `#[serde(default)]`.
 - No database migration. Turning the Chief off keeps its files; deleting it asks first.
 
 ## Impact on existing features
 
 - Hidden-session handling must include the Chief chat: sidebar, Mono `sessions.list`,
-  heartbeat digests, mobile `workspace.list`, notifications (`shell/notifications.rs`), Today.
+  heartbeat digests, mobile `workspace.list` (the Chief appears as its own entry, not as a
+  session), notifications (`shell/notifications.rs`), Today.
 - `app_caller` behaviour for Monos is unchanged; current refusal tests must still pass.
-- `sessions.send` gains an optional `proposalId`; without it nothing changes.
+- `sessions.send` gains an optional `proposalId`; with it a busy session queues instead of
+  refusing. Without it nothing changes.
 - Completion reports change only for launches with a Chief origin.
-- Adoption visibility changes only for Chief-driven adoptions (`adopted: true`); plain Mono
-  adoption keeps today's behaviour.
+- Web protocol: new methods for the Chief (`chief.profile`, proposal `send` / `cancel` /
+  `edit`), added to `web/protocol/methods.json` and `policy::METHODS`, with Read vs Control
+  rules and the desktop toggle check in `mobile/policy.rs`.
 - Mono instructions gain one section; untrusted texts entering Mono turns get one more
   `neutralize` pass.
 
 ## Phased rollout
 
-1. **Phase 1 (this request).** Chief entity and chat with no harness tools, `chief.overview`,
-   `chief.readSession`, `chief.propose/cancel/commands`, confirm card, routing through the
-   owning Mono with proposal-bound send and adoption, proposal audit, fencing, switch off by
-   default. Desktop only.
-2. **Phase 2.** Tray "Ask Chief…", web and phone (Send needs a Control device and a desktop
-   toggle that defaults off, like remote approvals), History page and log file,
-   `chief.askMono` (a Mono answers from its own context, costs a turn), queue until a busy
-   session is idle, overview text search.
+1. **Phase 1 (this request).**
+   - Chief entity and chat with no harness tools, and its settings.
+   - `chief.overview`, `chief.readSession`, `chief.propose/cancel/commands`, the confirm card.
+   - Routing through the owning Mono with the proposal-bound send; a direct send for unowned
+     sessions; queueing in busy sessions.
+   - Proposal audit, fencing, the switch off by default.
+   - Desktop (panel, dashboard, tray, optional shortcut) and web.
+2. **Phase 2.** Phone app; History page and log file; optional notification when a command is
+   delivered; overview text search; editing Chief settings from web.
 3. **Phase 3.** Route "start new work on X" to the right Mono (the Mono starts the session);
-   on-demand digests ("what did everyone do today"); renaming and a soul for the Chief.
-4. **Phase 4, only if wanted.** Per-Mono standing rules for low-risk commands without a click.
-   This removes the main safety boundary and needs its own design and review.
+   on-demand digests ("what did everyone do today").
+4. **Phase 4, only if wanted.** Send without a click for low-risk commands. This removes the main
+   safety boundary and needs its own design and review.
 
 ## Test strategy
 
 Core (`monocode-core`):
-- `owner_of(session)`: none, one, two Monos, dismissed launch, cloud twin, archived.
-- `chief` field validation for every `chief.*` action.
-- Proposal lifecycle: create, edit, cancel, cap of 5, second-check failures, every terminal
-  state, load-time `queued` → `failed("interrupted")`.
-- Proposal-bound send check: wrong Mono, wrong session, used twice, text altered or missing.
+- Owner resolution: none, one, two Monos, dismissed launch, completed launch, cloud twin,
+  archived.
+- Field validation for every `chief.*` action and the new web methods; web policy: Read
+  device refused, Control refused while the toggle is off, allowed when on.
+- Proposal lifecycle: create, edit, cancel, cap of 5, second-check failures, every state,
+  load-time `queuedAtMono` → `failed("interrupted")`.
+- Proposal-bound send check: wrong Mono, wrong session, `direct` route, used twice, text altered
+  or missing.
 - Command text builder; `neutralize` of the header in completion reports and digests; fence
   output with nested fake fence tags.
-- Roster round trip with and without `chief`, including the desktop reconcile; `Launch`
-  round trip with old JSON.
+- Roster round trip with and without `chief`, including the desktop reconcile; `Launch` round
+  trip with old JSON.
 
-GPUI (Linux-portable, `secondary-` keystrokes):
+GPUI (Linux-portable, `secondary-` keystrokes; tray code `#[cfg(target_os = "macos")]`):
 - The Chief cannot run a shell command; its chat has no browser server.
 - `chief_call` refuses every non-Chief action; Monos, habit runs, heartbeats and Operator are
   refused `chief.*`; `sessions.*` refuse the Chief chat as a target.
-- Send click: second check, enqueue into the right Mono outbox; busy Mono queues; missing Mono
-  chat refused.
+- Send click, `viaMono`: second check, enqueue into the right Mono outbox; busy Mono waits;
+  missing Mono chat refused.
+- Send click, `direct`: idle session gets the text; busy session or one with a composer draft
+  gets it in the follow-up queue and the draft is untouched.
+- Proposal-bound send to a busy session queues; the completion report waits for the queued
+  message's turn, not the earlier one.
 - Through `chat_changed`: proposal reaches `sent`, `refused`, `notAttempted` and `failed`
-  (including a failed internal message that is discarded).
-- Adopted session stays visible; Chief-origin completion uses the one-line lead; relay turn
-  sends no notification.
-- The Chief chat is absent from Mono `sessions.list`, heartbeat digest and mobile catalog.
+  (including a discarded internal message and a removed follow-up).
+- Chief-origin completion uses the one-line lead; relay turn sends no notification.
+- The Chief chat is absent from the sidebar, Mono `sessions.list`, heartbeat digest and mobile
+  catalog sessions.
 
-Manual: a real Mono with a real session; command while the Mono is busy; while the session is
-busy; an owner-started session adopted; a cloud session asleep; a session whose reply contains
-a fake Chief header.
+Web (`web/`): Chief pinned in the Mono home; card Send enabled and disabled states.
+
+Manual:
+- a real Mono with a real session;
+- a command while the Mono is busy, and while the session is busy;
+- an owner-started session (direct);
+- a cloud session asleep;
+- a session whose reply contains a fake Chief header;
+- Send from the web with the toggle off, then on.
 
 ## Risks
 
 - **A harness cannot run with its tools off.** Then that harness cannot host the Chief;
   found by the first spike, before any other work.
-- **Wrong session.** The card shows title, project and branch before Send.
+- **Wrong session.** The card shows route, title, project and branch before Send.
 - **The Mono rewrites the command.** The app requires the confirmed text verbatim in the
   proposal-bound send.
-- **The owner expects reports without asking.** By design there are none; proposal states and
-  phase 2 options cover this.
+- **A direct send bypasses Mono context by design.** It is only used when no Mono owns the
+  session, so no Mono context is lost.
+- **Queueing differs from today's Mono refusal.** It is limited to proposal-bound sends; the
+  owner sees "Queued in session" on the card.
+- **Remote Send.** A stolen Control device could confirm commands; the desktop toggle is off by
+  default and every Send is in the proposal audit.
 - **Hidden-session leaks** if one list misses the Chief chat. One test per list.
 - **Runtime refactor** (`Role` in the Mono context) touches shared Mono code; existing Mono
   tests must pass unchanged.
 
 ## Open questions for the owner
 
-1. Confirm every command with a click (recommended; this is the safety boundary), or send
-   straight away once the Chief is sure?
-2. Name in the UI: "Chief", "Tổng quản", or a name the owner picks?
-3. Status: read sessions directly (cheap, Mono context untouched, recommended), or also ask
-   the owning Mono (richer, costs a Mono turn)?
-4. Session with no owning Mono: let a Mono that covers the project adopt it (recommended), or
-   refuse?
-5. May the Chief phrase the command, or must it pass the owner's words as typed? Either way the
-   card shows the exact text before Send.
-6. Target session busy: tell the owner (phase 1), or queue until it is idle?
-7. Should Mono-to-Mono messages (PR #69) stay a separate feature?
+None left from the first round (see "Decisions from the owner"). Still to confirm: the UX above.
