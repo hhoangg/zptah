@@ -157,6 +157,14 @@ pub(crate) fn place(
         let available = room_on(side, &anchor, viewport, o.gap, o.padding)
             .max(o.min_height.unwrap_or(0.))
             .min((vh - o.padding * 2.).max(0.));
+        // With less than MIN_CAP beside the anchor, on either side, the card keeps its
+        // height (see `vertical_cap`) and is shifted over the anchor to stay in the window.
+        let whole = (vh - o.padding * 2.).max(0.);
+        let available = if popover.1 > available && available < MIN_CAP.min(whole) {
+            popover.1.min(whole)
+        } else {
+            available
+        };
         let max_height = max.min(available);
         if side == Side::Bottom {
             let top = (anchor.bottom + o.gap).min(vh - o.padding - max_height);
@@ -201,6 +209,26 @@ pub(crate) fn place(
         max_height: capped.min(vh - top - o.padding),
     }
 }
+
+/// The tallest a popover on a vertical side may be laid out, known before its content is
+/// measured. `place` only moves the card; a card laid out taller than the room on the side it
+/// ends up on would hang past the window edge. This is the room of whichever side
+/// `place` can pick (the preferred one, or the flipped one when that has more), so
+/// content that does not fit either way is cut to the room it will be given and scrolls.
+///
+/// An anchor that leaves almost no room on either side (a trigger spanning the window) would
+/// squash the card to nothing, so below [`MIN_CAP`] the cap is the whole window and `place`
+/// shifts the card over the anchor, as it did before the cap existed.
+pub(crate) fn vertical_cap(anchor: Rect, viewport: (f32, f32), o: &Options) -> f32 {
+    let room = room_on(o.side, &anchor, viewport, o.gap, o.padding);
+    let flipped = room_on(o.side.opposite(), &anchor, viewport, o.gap, o.padding);
+    let whole = (viewport.1 - o.padding * 2.).max(0.);
+    let cap = room.max(flipped).max(o.min_height.unwrap_or(0.)).min(whole);
+    let cap = if cap < MIN_CAP.min(whole) { whole } else { cap };
+    cap.min(o.max_height.unwrap_or(f32::INFINITY))
+}
+/// The least room worth cutting a card down to; with less, it keeps the window's full height.
+const MIN_CAP: f32 = 180.;
 
 /// Window bounds of a trigger, written while it is laid out so a popover can
 /// open against it. Put [`AnchorSlot::probe`] inside the trigger.
@@ -326,6 +354,9 @@ pub(crate) struct Popover {
     consume_outside_press: bool,
     modal_classic: Option<bool>,
     animate: bool,
+    /// The content scrolls, so the card may be cut to the room beside its anchor. Other
+    /// content would only be clipped by that, so it keeps the window's height instead.
+    scrolls: bool,
     /// Without a fixed width, the card hugs its content between these.
     fit: (Option<f32>, Option<f32>),
     children: Vec<AnyElement>,
@@ -343,6 +374,7 @@ pub(crate) fn popover(id: impl Into<ElementId>, anchor: Anchor) -> Popover {
         consume_outside_press: true,
         modal_classic: None,
         animate: true,
+        scrolls: false,
         fit: (None, None),
         children: Vec::new(),
     }
@@ -352,6 +384,11 @@ impl Popover {
     /// link menus let that press select text or open another link's menu.
     pub(crate) fn allow_outside_press(mut self) -> Self {
         self.consume_outside_press = false;
+        self
+    }
+    /// Marks the content as scrolling (a [`Menu`]), so a tall card is cut to the room it is given.
+    pub(crate) fn scrolling(mut self) -> Self {
+        self.scrolls = true;
         self
     }
     pub(crate) fn without_animation(mut self) -> Self {
@@ -471,11 +508,21 @@ impl Popover {
             tint()
         };
         let viewport = f32::from(viewport_height) - self.options.padding * 2.;
-        let max_height = self
+        let mut max_height = self
             .options
             .max_height
             .unwrap_or(f32::INFINITY)
             .min(viewport);
+        // Without this the card is laid out as tall as the window, then placed against an
+        // anchor with less room than that, and its bottom (or top) hangs off the screen.
+        if self.scrolls && self.options.side.vertical() && !matches!(self.anchor, Anchor::Center) {
+            let cap = vertical_cap(
+                Rect::from_bounds(self.anchor.bounds()),
+                (f32::from(viewport_width), f32::from(viewport_height)),
+                &self.options,
+            );
+            max_height = max_height.min(cap);
+        }
         let frame = div()
             .id(self.id)
             .occlude()
@@ -1065,6 +1112,11 @@ pub(crate) struct Menu {
     width: f32,
     row_metrics: Option<(f32, f32)>,
     search_navigation: bool,
+    /// Set while the menu shows a search page: Escape picks this id (the owner swaps the
+    /// page back) instead of dismissing, and the search row stays above the scrolling list.
+    back: Option<SharedString>,
+    scroll: gpui::ScrollHandle,
+    sub_scroll: gpui::ScrollHandle,
     submenu_width: Option<f32>,
     active: Option<usize>,
     submenu: Option<usize>,
@@ -1119,6 +1171,9 @@ impl Menu {
             width: MENU_WIDTH,
             row_metrics: None,
             search_navigation: false,
+            back: None,
+            scroll: gpui::ScrollHandle::new(),
+            sub_scroll: gpui::ScrollHandle::new(),
             submenu_width: None,
             active,
             submenu: None,
@@ -1141,6 +1196,15 @@ impl Menu {
     pub(crate) fn search_navigation(mut self) -> Self {
         self.search_navigation = true;
         self
+    }
+    /// Turns the menu into (`Some`) or back from (`None`) a searchable page in place. The first
+    /// item must be the [`MenuSearch`] row: it stays put while the rows under it scroll, the
+    /// arrow keys and Enter work from the field, and Escape picks `back` rather than closing,
+    /// so the owner can show its previous page. Follow with `set_items`.
+    pub(crate) fn set_search_page(&mut self, back: Option<SharedString>) {
+        self.search_navigation = back.is_some();
+        self.back = back;
+        self.scroll = gpui::ScrollHandle::new();
     }
     pub(crate) fn submenu_width(mut self, width: f32) -> Self {
         self.submenu_width = Some(width);
@@ -1180,6 +1244,26 @@ impl Menu {
         self.sub_active = None;
         self.sub_region.set(None);
         cx.notify();
+    }
+    /// The highlighted action's id, for tests.
+    #[cfg(test)]
+    pub(crate) fn active_for_test(&self) -> Option<String> {
+        self.active
+            .and_then(|ix| self.action(ix))
+            .map(|a| a.id.to_string())
+    }
+    /// What the menu lists, for tests: each action's id and whether it is checked, and each
+    /// note as `note:<text>`.
+    #[cfg(test)]
+    pub(crate) fn rows_for_test(&self) -> Vec<(String, bool)> {
+        self.items
+            .iter()
+            .filter_map(|item| match item {
+                MenuItem::Action(action) => Some((action.id.to_string(), action.checked)),
+                MenuItem::Note(text) => Some((format!("note:{text}"), false)),
+                _ => None,
+            })
+            .collect()
     }
     /// Rows of the open submenu or flyout's anchor, for anchoring follow-ups.
     pub(crate) fn row_bounds(&self, ix: usize) -> Option<Bounds<Pixels>> {
@@ -1256,6 +1340,9 @@ impl Menu {
         cx: &mut Context<Self>,
     ) {
         let changed = self.submenu != Some(ix);
+        if changed {
+            self.sub_scroll = gpui::ScrollHandle::new();
+        }
         self.submenu = Some(ix);
         self.sub_active = active;
         if let Some(focus) = self
@@ -1327,6 +1414,7 @@ impl Menu {
                 Some(at) => (at as isize + direction).rem_euclid(count as isize) as usize,
             };
             self.sub_active = Some(next);
+            self.sub_scroll.scroll_to_item(next);
         } else {
             let ids: Vec<_> = (0..self.items.len())
                 .filter(|ix| self.action(*ix).is_some())
@@ -1340,6 +1428,11 @@ impl Menu {
                 .unwrap_or(0);
             self.active =
                 Some(ids[(from as isize + direction).rem_euclid(ids.len() as isize) as usize]);
+            if let Some(active) = self.active {
+                // A search page keeps its search row out of the scrolling list.
+                let skipped = usize::from(self.back.is_some());
+                self.scroll.scroll_to_item(active.saturating_sub(skipped));
+            }
         }
         cx.notify();
     }
@@ -1763,6 +1856,9 @@ impl Render for Menu {
                             .id("popover-submenu")
                             .role(Role::Menu)
                             .aria_label(action.label.clone())
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.sub_scroll)
                             .flex()
                             .flex_col()
                             .children(rows),
@@ -1781,7 +1877,9 @@ impl Render for Menu {
                     return;
                 }
                 this.step(-1, cx);
-                window.focus(&this.focus, cx);
+                if this.back.is_none() {
+                    window.focus(&this.focus, cx);
+                }
                 cx.stop_propagation();
             }))
             .capture_action(cx.listener(|this, _: &crate::input::Down, window, cx| {
@@ -1790,7 +1888,9 @@ impl Render for Menu {
                     return;
                 }
                 this.step(1, cx);
-                window.focus(&this.focus, cx);
+                if this.back.is_none() {
+                    window.focus(&this.focus, cx);
+                }
                 cx.stop_propagation();
             }))
             .capture_action(cx.listener(|this, _: &crate::input::Submit, window, cx| {
@@ -1798,7 +1898,9 @@ impl Render for Menu {
                     cx.propagate();
                     return;
                 }
-                window.focus(&this.focus, cx);
+                if this.back.is_none() {
+                    window.focus(&this.focus, cx);
+                }
                 match (this.submenu, this.sub_active) {
                     (Some(_), Some(sub)) => this.pick_sub(sub, window, cx),
                     _ => {
@@ -1858,6 +1960,10 @@ impl Render for Menu {
                 cx.listener(|this, _: &CloseSubmenu, window, cx| this.close_submenu(window, cx)),
             )
             .on_action(cx.listener(|this, _: &Cancel, window, cx| {
+                if let Some(back) = this.back.clone() {
+                    cx.emit(MenuEvent::Picked(back, None));
+                    return;
+                }
                 // A flyout's Escape closes everything, as the pickers' does.
                 if this.submenu.is_some() && !this.flyout_open() {
                     this.close_submenu(window, cx);
@@ -1866,11 +1972,32 @@ impl Render for Menu {
                 }
             }))
             .min_h_0()
-            .overflow_y_scroll()
             .flex()
             .flex_col()
-            .children(rows)
-            .children(submenu)
+            .map(|d| {
+                if self.back.is_none() {
+                    return d
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll)
+                        .children(rows)
+                        .children(submenu);
+                }
+                let mut rows = rows.into_iter();
+                d.overflow_hidden()
+                    .children(rows.next())
+                    .child(
+                        div()
+                            .id("popover-menu-list")
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .children(rows),
+                    )
+                    .children(submenu)
+            })
     }
 }
 fn separator(ix: usize, style: MenuStyle) -> AnyElement {
@@ -1920,6 +2047,7 @@ pub(crate) fn menu_popover(menu: &Entity<Menu>, anchor: Anchor, cx: &App) -> Pop
         .iter()
         .any(|item| matches!(item, MenuItem::Custom(..)));
     popover(("menu", menu.entity_id().as_u64() as usize), anchor)
+        .scrolling()
         .map(|p| {
             if custom || m.style == MenuStyle::Filter {
                 p.width(m.width)
@@ -2248,6 +2376,170 @@ mod tests {
             2,
             "a closed popover no longer claims presses"
         );
+    }
+
+    #[test]
+    fn a_tall_card_is_capped_to_the_larger_side_of_its_anchor() {
+        let viewport = (1000., 800.);
+        let rect = |top: f32| Rect {
+            left: 100.,
+            top,
+            right: 100.,
+            bottom: top,
+        };
+        let o = Options::default();
+        // Gap 6 and padding 8 either side: the room below is 86, above is 686.
+        assert_eq!(vertical_cap(rect(700.), viewport, &o), 686.);
+        assert_eq!(vertical_cap(rect(100.), viewport, &o), 686.);
+        let capped = Options {
+            max_height: Some(200.),
+            ..o
+        };
+        assert_eq!(vertical_cap(rect(700.), viewport, &capped), 200.);
+        // Never taller than the window, whatever the minimum asks for.
+        let tall = Options {
+            min_height: Some(5000.),
+            ..o
+        };
+        assert_eq!(vertical_cap(rect(400.), viewport, &tall), 784.);
+    }
+
+    #[test]
+    fn an_anchor_spanning_the_window_keeps_the_card_a_usable_height() {
+        let viewport = (1000., 800.);
+        let whole = Rect {
+            left: 0.,
+            top: 0.,
+            right: 1000.,
+            bottom: 790.,
+        };
+        let o = Options::default();
+        // 4px of room on either side: cut to that the card would be unusable.
+        assert_eq!(vertical_cap(whole, viewport, &o), 784.);
+        // And placing it shifts it up into the window rather than off the bottom.
+        let placed = place(whole, (200., 400.), viewport, &o);
+        assert_eq!(placed.max_height, 400.);
+        assert!(placed.top.is_some_and(|top| (8.0..=392.).contains(&top)));
+        // A card of 2px is not stretched to the window.
+        assert_eq!(place(whole, (200., 2.), viewport, &o).max_height, 2.);
+        // A small max still wins over the floor.
+        let capped = Options {
+            max_height: Some(120.),
+            ..o
+        };
+        assert_eq!(vertical_cap(whole, viewport, &capped), 120.);
+    }
+
+    struct TallMenuHost {
+        menu: Entity<Menu>,
+        anchor: Point<Pixels>,
+    }
+    impl Render for TallMenuHost {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                menu_popover(&self.menu, Anchor::Point(self.anchor), cx)
+                    .gap(0.)
+                    .without_animation(),
+            )
+        }
+    }
+
+    struct KeyedMenuHost {
+        menu: Entity<Menu>,
+    }
+    impl Render for KeyedMenuHost {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                menu_popover(&self.menu, Anchor::Point(point(px(40.), px(20.))), cx)
+                    .gap(0.)
+                    .without_animation(),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn arrow_keys_scroll_the_highlighted_row_into_a_capped_menu(cx: &mut gpui::TestAppContext) {
+        cx.update(bind);
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                let items = (0..120)
+                    .map(|n| MenuAction::new(format!("row-{n}"), format!("Row {n}")).into())
+                    .collect();
+                cx.new(|cx| KeyedMenuHost {
+                    menu: cx.new(|cx| Menu::new("Tall", items, window, cx).width(228.)),
+                })
+            })
+            .unwrap()
+        });
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let card = window
+            .update(visual, |host, _, cx| host.menu.read(cx).surface_region())
+            .unwrap();
+        let before = visual.debug_bounds("menu-action-row-60").unwrap();
+        assert!(
+            before.top() > card.get().unwrap().bottom(),
+            "row 60 starts below the card"
+        );
+        visual.simulate_keystrokes("down ".repeat(60).trim_end());
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let (card, row) = (
+            card.get().unwrap(),
+            visual.debug_bounds("menu-action-row-60").unwrap(),
+        );
+        assert!(
+            row.top() >= card.top() && row.bottom() <= card.bottom(),
+            "row {row:?} is inside the card {card:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn a_tall_menu_opened_anywhere_stays_inside_the_window_and_scrolls(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                let items = (0..120)
+                    .map(|n| MenuAction::new(format!("row-{n}"), format!("Row {n}")).into())
+                    .collect();
+                cx.new(|cx| TallMenuHost {
+                    menu: cx.new(|cx| Menu::embedded("Tall", items, cx).width(228.)),
+                    anchor: point(px(40.), px(40.)),
+                })
+            })
+            .unwrap()
+        });
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        let viewport = window.update(visual, |_, w, _| w.viewport_size()).unwrap();
+        let content = px(120. * 28.);
+        assert!(content > viewport.height, "the menu cannot fit the window");
+        for y in [
+            8.,
+            40.,
+            f32::from(viewport.height) / 2.,
+            f32::from(viewport.height) - 40.,
+            f32::from(viewport.height) - 2.,
+        ] {
+            let surface = window
+                .update(visual, |host, _, cx| {
+                    host.anchor = point(px(40.), px(y));
+                    cx.notify();
+                    host.menu.read(cx).surface_region()
+                })
+                .unwrap();
+            visual.run_until_parked();
+            visual.refresh().unwrap();
+            let card = surface.get().expect("the menu is drawn");
+            assert!(
+                card.top() >= px(0.) && card.bottom() <= viewport.height,
+                "menu opened at y={y} spans {card:?} in a window {viewport:?} tall"
+            );
+            assert!(
+                card.size.height < content,
+                "the card is cut to the room, so the rows scroll: {card:?}"
+            );
+        }
     }
 
     #[gpui::test]
