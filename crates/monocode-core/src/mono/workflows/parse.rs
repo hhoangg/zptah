@@ -410,7 +410,7 @@ pub(crate) fn parse_decision_model(raw: Option<&Json>) -> Option<Option<Decision
 
 /// `Some(None)` when there is no `reportTo`, `None` when it is there but unreadable (it decides
 /// who is told about a run, so it is never dropped quietly).
-fn parse_report_to(raw: Option<&Json>) -> Option<Option<ReportTo>> {
+pub(crate) fn parse_report_to(raw: Option<&Json>) -> Option<Option<ReportTo>> {
     let raw = match raw {
         None | Some(Json::Null) => return Some(None),
         Some(raw) if is_rec(raw) => raw,

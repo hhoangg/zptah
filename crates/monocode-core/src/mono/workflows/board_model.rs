@@ -210,7 +210,7 @@ impl NodeType {
     /// The start of the id a new node of this type gets.
     fn id_base(self) -> &'static str {
         match self {
-            Self::Schedule | Self::Manual => "trigger",
+            Self::Schedule | Self::Manual => "start",
             Self::Session => "session",
             Self::Command => "command",
             Self::If => "check",
@@ -1089,7 +1089,7 @@ pub fn issues_by_node(issues: &[WorkflowIssue]) -> HashMap<NodeId, Vec<String>> 
 
 /// A workflow to start from: a manual trigger, paused. `now` is the creation time in ms.
 pub fn blank_workflow(now: u64) -> Workflow {
-    let mut trigger = Node::new("trigger", NodeKind::Manual);
+    let mut trigger = Node::new("start", NodeKind::Manual);
     trigger.title = Some("Manual trigger".into());
     trigger.ui = Some(Ui { x: 0.0, y: 0.0 });
     let mut w = Workflow::new(new_workflow_id(), "New workflow");

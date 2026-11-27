@@ -375,36 +375,6 @@ fn a_habit_missed_within_the_grace_still_runs(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_workflow_question_session_is_a_run_without_a_habit(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    let host = cx.update(|cx| s.manager.update(cx, |m, cx| m.workflow_host(cx)));
-    let mono = s.id.clone();
-    cx.spawn(async move |_| {
-        let _ = host.ask_mono(&mono, "Ship it?".into()).await;
-    })
-    .detach();
-    cx.run_until_parked();
-    let ask = cx.update(|cx| {
-        let ids: Vec<_> = s
-            .manager
-            .read(cx)
-            .workflow_live
-            .asks
-            .keys()
-            .copied()
-            .collect();
-        assert_eq!(ids.len(), 1);
-        ids[0]
-    });
-    let refused = call(&s, ask, "today.dismiss", json!({"id": "gh:1"}), cx).unwrap_err();
-    assert!(
-        refused.starts_with("A run cannot use today.dismiss"),
-        "{refused}"
-    );
-    assert!(call(&s, ask, "today.list", json!({}), cx).is_ok());
-}
-
-#[gpui::test]
 fn a_read_leaves_the_revision_alone_and_a_habit_change_wakes_the_roster(cx: &mut TestAppContext) {
     let s = setup(cx);
     call(&s, s.session, "today.sync", sync("gh", "gh:1"), cx).unwrap();

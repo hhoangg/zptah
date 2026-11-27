@@ -251,7 +251,7 @@ fn round_trips_every_schedule_kind() {
     ];
     for schedule in schedules {
         let trigger = node(&format!(
-            r#"{{"id":"trigger","type":"schedule","schedule":{schedule}}}"#
+            r#"{{"id":"start","type":"schedule","schedule":{schedule}}}"#
         ));
         let mut with = w.clone();
         with.nodes[0] = trigger.clone();
@@ -480,7 +480,7 @@ fn preview_accepts_json() {
         "name": w.name,
         "inputs": {"project": {"type": "project"}, "clickupList": {"type": "string", "description": "ClickUp list to pull from"}},
         "nodes": [
-            {"id": "trigger", "type": "schedule", "schedule": {"kind": "daily", "time": "10:30"}},
+            {"id": "start", "type": "schedule", "schedule": {"kind": "daily", "time": "10:30"}},
         ],
         "edges": [],
     })
@@ -490,7 +490,7 @@ fn preview_accepts_json() {
     assert_eq!(
         preview.workflow.nodes[0],
         node(
-            r#"{"id":"trigger","type":"schedule","schedule":{"scheduleKind":"daily","time":"10:30","minute":0,"dayOfWeek":1}}"#
+            r#"{"id":"start","type":"schedule","schedule":{"scheduleKind":"daily","time":"10:30","minute":0,"dayOfWeek":1}}"#
         )
     );
     assert_eq!(preview.workflow.edges, vec![]);
@@ -499,7 +499,7 @@ fn preview_accepts_json() {
 #[test]
 fn surfaces_validation_issues_without_rejecting_the_file() {
     let mut w = example();
-    w.edges.push(edge(r#"{"from":"trigger","to":"ghost"}"#));
+    w.edges.push(edge(r#"{"from":"start","to":"ghost"}"#));
     let preview = ok(&export_workflow(&w));
     assert!(!preview.issues.is_empty());
     assert!(preview.issues.iter().any(|i| i.message.contains("ghost")));
@@ -1413,7 +1413,7 @@ fn requires_round_trip_including_hints_that_need_quoting() {
 
 #[test]
 fn requires_in_a_json_file_import_too() {
-    let text = r#"{"monoptahWorkflow":1,"name":"W","requires":[{"cli":"gh","hint":"h"}],"nodes":[{"id":"trigger","type":"manual"}],"edges":[]}"#;
+    let text = r#"{"monoptahWorkflow":1,"name":"W","requires":[{"cli":"gh","hint":"h"}],"nodes":[{"id":"start","type":"manual"}],"edges":[]}"#;
     let preview = ok(text);
     assert_eq!(
         preview.workflow.requires,
@@ -1425,7 +1425,7 @@ fn requires_in_a_json_file_import_too() {
 fn a_malformed_requires_is_an_import_error_not_a_drop() {
     let file = |requires: &str| {
         format!(
-            "monoptahWorkflow: 1\nname: W\n{requires}\nnodes:\n  - id: trigger\n    type: manual\n"
+            "monoptahWorkflow: 1\nname: W\n{requires}\nnodes:\n  - id: start\n    type: manual\n"
         )
     };
     for bad in [
@@ -1445,7 +1445,7 @@ fn a_malformed_requires_is_an_import_error_not_a_drop() {
 
 #[test]
 fn an_unsafe_requirement_name_imports_with_a_validation_issue() {
-    let text = "monoptahWorkflow: 1\nname: W\nrequires:\n  - cli: \"gh; rm -rf ~\"\nnodes:\n  - id: trigger\n    type: manual\n";
+    let text = "monoptahWorkflow: 1\nname: W\nrequires:\n  - cli: \"gh; rm -rf ~\"\nnodes:\n  - id: start\n    type: manual\n";
     let preview = ok(text);
     assert!(messages(&preview.issues)
         .iter()
@@ -1497,7 +1497,7 @@ fn report_to_names_a_mono_of_this_computer_so_it_is_not_exported() {
 #[test]
 fn a_decision_model_without_a_harness_or_model_is_an_import_error_and_so_is_a_non_text_summary() {
     let file = |extra: &str| {
-        format!("monoptahWorkflow: 1\nname: W\n{extra}nodes:\n  - id: trigger\n    type: manual\n")
+        format!("monoptahWorkflow: 1\nname: W\n{extra}nodes:\n  - id: start\n    type: manual\n")
     };
     for bad in [
         "decisionModel: claude\n",
@@ -1517,7 +1517,7 @@ inputs:
   project:
     type: project
 nodes:
-  - id: trigger
+  - id: start
     type: manual
   - id: dev
     type: session
@@ -1531,7 +1531,7 @@ nodes:
     type: report
     template: \"Result: {{dev.note}}\"
 edges:
-  - from: trigger
+  - from: start
     to: dev
   - from: dev
     to: report
@@ -1546,10 +1546,10 @@ fn importing_a_report_node_drops_it_and_moves_its_template_to_the_summary_with_a
         .iter()
         .map(|n| n.id.as_str())
         .collect();
-    assert_eq!(ids, ["trigger", "dev"]);
+    assert_eq!(ids, ["start", "dev"]);
     assert_eq!(
         preview.workflow.edges,
-        vec![edge(r#"{"from":"trigger","to":"dev"}"#)]
+        vec![edge(r#"{"from":"start","to":"dev"}"#)]
     );
     assert_eq!(
         preview.workflow.summary_template.as_deref(),
@@ -1597,7 +1597,7 @@ fn an_explicit_summary_template_wins_over_the_one_of_a_report_node() {
 
 #[test]
 fn importing_an_ask_mono_node_is_refused_naming_the_switch_to_use_instead() {
-    let text = "monoptahWorkflow: 1\nname: Old\nnodes:\n  - id: trigger\n    type: manual\n  - id: pick\n    type: askMono\n    question: Ship it?\n    answers:\n      - yes\n";
+    let text = "monoptahWorkflow: 1\nname: Old\nnodes:\n  - id: start\n    type: manual\n  - id: pick\n    type: askMono\n    question: Ship it?\n    answers:\n      - yes\n";
     let message = error(text);
     assert!(
         message.contains("Node \"pick\" is an Ask Mono node"),
@@ -1617,7 +1617,7 @@ inputs:
   project:
     type: project
 nodes:
-  - id: trigger
+  - id: start
     type: manual
   - id: dev
     type: session
@@ -1634,7 +1634,7 @@ nodes:
     cases:
       - a
 edges:
-  - from: trigger
+  - from: start
     to: dev
   - from: dev
     to: gate

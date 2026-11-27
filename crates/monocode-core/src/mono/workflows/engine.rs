@@ -422,18 +422,12 @@ fn build_scope<'n>(
     info.insert("startedAt", Json::Number(run.started_at as f64));
     info.insert("round", Json::Number(f64::from(round)));
     scope.insert("run", Json::Object(info));
-    // `trigger` is what fired the run. A node named "trigger" keeps its own output fields in it.
-    let mut trigger = match scope.get("trigger") {
-        Some(Json::Object(own)) => own.clone(),
-        _ => OrderedMap::new(),
-    };
+    // `trigger` is what fired the run ("trigger" is a reserved node id, so nothing else uses it).
+    let mut trigger = OrderedMap::new();
     trigger.insert("node", Json::String(run.caller.trigger_node.clone()));
     trigger.insert("kind", Json::String(run.caller.kind.as_str().to_string()));
-    match &run.caller.item {
-        Some(item) => trigger.insert("item", item.clone()),
-        None => {
-            trigger.remove("item");
-        }
+    if let Some(item) = &run.caller.item {
+        trigger.insert("item", item.clone());
     }
     scope.insert("trigger", Json::Object(trigger));
     scope
@@ -1062,14 +1056,13 @@ fn firing_trigger<'a>(def: &'a Workflow, caller: &RunCaller) -> Option<&'a Node>
         .copied()
         .find(|n| n.id == caller.trigger_node)
         .or_else(|| {
-            triggers
-                .iter()
-                .copied()
-                .find(|n| match (&n.kind, caller.kind) {
-                    (NodeKind::Schedule { .. }, CallerKind::Schedule) => true,
-                    (NodeKind::Manual, CallerKind::Manual | CallerKind::Mono) => true,
-                    _ => false,
-                })
+            triggers.iter().copied().find(|n| {
+                matches!(
+                    (&n.kind, caller.kind),
+                    (NodeKind::Schedule { .. }, CallerKind::Schedule)
+                        | (NodeKind::Manual, CallerKind::Manual | CallerKind::Mono)
+                )
+            })
         })
         .or_else(|| triggers.first().copied())
 }
@@ -1126,6 +1119,7 @@ pub fn start_run(def: &Workflow, caller: RunCaller, now: u64, id: &str) -> Workf
         report_posted_at: None,
         error: None,
         cloud_instances: Vec::new(),
+        summary: None,
     };
     let mut d = draft_of(run, &definition, now);
     // A schedule trigger exposes when it fired; a manual one has nothing to expose.

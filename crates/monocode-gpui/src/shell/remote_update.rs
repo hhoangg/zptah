@@ -211,8 +211,8 @@ impl Shell {
                 })
                 .collect::<Vec<_>>();
         // Workflow runs that go on without a chat of their own.
-        let workflows = self.monos.iter().flat_map(|monos| {
-            monos
+        let workflows = self.workflows.iter().flat_map(|workflows| {
+            workflows
                 .read(cx)
                 .running_workflows()
                 .into_iter()

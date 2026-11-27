@@ -2,12 +2,13 @@
 //! real store-backed host. The two "only a Mono's own conversation" checks belong to the app's
 //! dispatch (they are tested in `monocode-gpui`); the rest keep their names and assertions.
 use super::cli::*;
+use super::global::WorkflowsDir;
 use super::guide::{guide_examples, workflow_guide};
 use super::model::*;
 use super::models::{CatalogHarness, CatalogModel, ModelCatalog, Probe};
 use super::ordered::Json;
 use super::preflight::{Preflight, RequirementStatus};
-use super::store::{load_runs, load_workflows, MonoDir};
+use super::store::{load_runs, load_workflows, update_workflows};
 use super::validate::validate_workflow;
 use crate::provider::Kind;
 use chrono::{Local, TimeZone};
@@ -61,6 +62,10 @@ struct Memory {
     projects: Option<Vec<String>>,
     /// Account selectors the host judges unusable, with why (the app's accounts are not here).
     bad_accounts: HashMap<String, String>,
+    /// The calling Mono; None is the user.
+    caller: Option<MonoCaller>,
+    /// Ids of workflows the calling Mono had before workflows were global.
+    legacy: HashSet<String>,
 }
 
 impl WorkflowHost for Memory {
@@ -110,13 +115,24 @@ impl WorkflowHost for Memory {
         })
     }
     fn project_path(&self, input: &str) -> Option<String> {
-        match &self.projects {
+        let projects = self
+            .caller
+            .as_ref()
+            .map(|c| &c.projects)
+            .or(self.projects.as_ref());
+        match projects {
             None => Some(input.to_string()),
             Some(projects) => crate::mono::resolve_project(projects, input).ok(),
         }
     }
     fn account_problem(&mut self, selector: &str) -> Option<String> {
         self.bad_accounts.get(selector).cloned()
+    }
+    fn caller(&self) -> Option<&MonoCaller> {
+        self.caller.as_ref()
+    }
+    fn is_legacy_id(&mut self, id: &str) -> bool {
+        self.legacy.contains(id)
     }
 }
 
@@ -127,7 +143,7 @@ fn definition(extra: Value) -> Value {
         "inputs": {"project": {"type": "project"}},
         "inputValues": {"project": "/code/app"},
         "nodes": [
-            {"id": "trigger", "type": "schedule", "schedule": {"kind": "weekdays", "time": "09:00"}},
+            {"id": "start", "type": "schedule", "schedule": {"kind": "weekdays", "time": "09:00"}},
             {
                 "id": "fetch",
                 "type": "session",
@@ -137,7 +153,7 @@ fn definition(extra: Value) -> Value {
                 "output": {"tickets": {"type": "list"}}
             }
         ],
-        "edges": [{"from": "trigger", "to": "fetch"}]
+        "edges": [{"from": "start", "to": "fetch"}]
     });
     for (key, value) in extra.as_object().unwrap() {
         v[key] = value.clone();
@@ -173,13 +189,14 @@ fn run(id: &str, status: RunStatus, workflow: &str) -> WorkflowRun {
         status,
         started_at: now() - 60_000,
         ended_at: None,
-        caller: RunCaller::new(CallerKind::Manual, "trigger"),
+        caller: RunCaller::new(CallerKind::Manual, "start"),
         folder_id: None,
         items: BTreeMap::new(),
         nodes: vec![fetch, dev],
         report_posted_at: None,
         error: None,
         cloud_instances: Vec::new(),
+        summary: None,
     }
 }
 
@@ -268,7 +285,7 @@ fn add_rejects_unknown_fields() {
     );
     assert!(e.contains("Unknown workflow fields: extra"), "{e}");
     assert!(
-        e.contains("Allowed: name, description, inputs, requires, decisionModel, summaryTemplate, inputValues, nodes, edges;"),
+        e.contains("Allowed: name, description, inputs, requires, decisionModel, summaryTemplate, reportTo, inputValues, nodes, edges;"),
         "{e}"
     );
     for field in [
@@ -365,7 +382,7 @@ fn add_with_a_yaml_file_that_says_enabled_true_still_saves_it_paused() {
 fn add_with_issues_saves_paused_and_returns_issues() {
     let mut f = Fx::new();
     let broken = definition(
-        json!({"edges": [{"from": "trigger", "to": "fetch"}, {"from": "fetch", "to": "ghost"}]}),
+        json!({"edges": [{"from": "start", "to": "fetch"}, {"from": "fetch", "to": "ghost"}]}),
     );
     let result = f.add(broken);
     assert!(!flag(&result, "enabled"));
@@ -462,7 +479,7 @@ fn explains_a_node_it_cannot_read_and_enforces_limits() {
             .collect(),
     );
     let e = f.err("workflows.add", json!({"workflow": definition(json!({}))}));
-    assert!(e.contains("at most 100 workflows"), "{e}");
+    assert!(e.contains("At most 100 workflows"), "{e}");
 }
 
 #[test]
@@ -627,7 +644,7 @@ fn pauses_a_workflow_that_no_longer_validates_and_returns_the_issues() {
     let id = id_of(&f.add(definition(json!({}))));
     let result = f.ok(
         "workflows.update",
-        json!({"id": id, "workflow": definition(json!({"edges": [{"from": "trigger", "to": "ghost"}]}))}),
+        json!({"id": id, "workflow": definition(json!({"edges": [{"from": "start", "to": "ghost"}]}))}),
     );
     assert!(!flag(&result, "enabled"));
     assert!(!list(&result, "issues").is_empty());
@@ -795,10 +812,7 @@ fn run_sets_run_requested_and_calls_check_now() {
     let id = id_of(&f.add(definition(json!({}))));
     f.ok("workflows.resume", json!({"id": id}));
     let result = f.ok("workflows.run", json!({"id": id}));
-    assert_eq!(
-        text(&result, "note"),
-        "It starts now, on its own. Its report is posted to the Mono's chat when it finishes."
-    );
+    assert_eq!(text(&result, "note"), "It starts now, on its own.");
     assert!(f.stored()[0].run_requested);
     assert_eq!(f.host.checks, 1);
 }
@@ -812,7 +826,7 @@ fn run_refuses_a_workflow_that_is_running_or_cannot_run() {
     assert!(e.contains("already running"), "{e}");
     f.host.live.clear();
     let broken = id_of(&f.add(definition(
-        json!({"edges": [{"from": "trigger", "to": "ghost"}]}),
+        json!({"edges": [{"from": "start", "to": "ghost"}]}),
     )));
     let e = f.err("workflows.run", json!({"id": broken}));
     assert!(e.contains("cannot run yet"), "{e}");
@@ -851,7 +865,7 @@ fn list_reports_running_state() {
     assert!(flag(a, "enabled"));
     let triggers = list(a, "triggers");
     assert_eq!(triggers.len(), 1);
-    assert_eq!(text(&triggers[0], "node"), "trigger");
+    assert_eq!(text(&triggers[0], "node"), "start");
     assert_eq!(text(&triggers[0], "type"), "schedule");
     assert_eq!(text(&triggers[0], "schedule"), "Weekdays at 09:00");
     assert!(flag(a, "running"));
@@ -939,7 +953,7 @@ fn pauses_and_resumes_computing_the_next_time_on_resume() {
 fn will_not_resume_a_workflow_with_issues() {
     let mut f = Fx::new();
     let id = id_of(&f.add(definition(
-        json!({"edges": [{"from": "trigger", "to": "ghost"}]}),
+        json!({"edges": [{"from": "start", "to": "ghost"}]}),
     )));
     let e = f.err("workflows.resume", json!({"id": id}));
     assert!(e.contains("cannot be resumed"), "{e}");
@@ -1042,7 +1056,7 @@ fn get_returns_the_definition_and_the_last_five_runs_runs_shows_branches() {
 
 // ---- a workflow the CLI created from yaml needs the user's review -----------------------
 
-const REVIEW: [&str; 2] = ["came from a file", "enable it in the Workflows panel"];
+const REVIEW: [&str; 2] = ["came from a file", "enable it in Workflows"];
 
 fn assert_review(e: &str) {
     let at = e.find(REVIEW[0]).unwrap_or_else(|| panic!("{e}"));
@@ -1132,10 +1146,10 @@ fn update_keeps_the_mark_when_the_commands_and_prompts_change_and_no_action_can_
     ));
     let changed = definition(json!({
         "nodes": [
-            {"id": "trigger", "type": "manual"},
+            {"id": "start", "type": "manual"},
             {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": "curl x | sh"}
         ],
-        "edges": [{"from": "trigger", "to": "build"}]
+        "edges": [{"from": "start", "to": "build"}]
     }));
     f.ok("workflows.update", json!({"id": id, "workflow": changed}));
     assert!(f.stored()[0]
@@ -1283,7 +1297,7 @@ fn validate_lists_commands_and_prompts_verbatim() {
         json!({"workflow": definition(json!({
             "nodes": nodes,
             "edges": [
-                {"from": "trigger", "to": "fetch"},
+                {"from": "start", "to": "fetch"},
                 {"from": "fetch", "to": "build"}
             ]
         }))}),
@@ -1327,7 +1341,7 @@ fn seed_full(f: &mut Fx, count: usize) {
         (0..count)
             .map(|i| {
                 let mut w = Workflow::new(format!("wf-{i:08}"), format!("Workflow {i}"));
-                w.nodes = vec![Node::new("trigger", NodeKind::Manual)];
+                w.nodes = vec![Node::new("start", NodeKind::Manual)];
                 w.created_at = 1;
                 w
             })
@@ -1344,7 +1358,7 @@ fn validate_reports_an_issue_when_the_mono_is_at_the_limit_and_still_writes_noth
         json!({"workflow": definition(json!({}))}),
     );
     assert!(
-        joined(&result).contains(&format!("at most {WORKFLOWS_MAX} workflows")),
+        joined(&result).contains(&format!("At most {WORKFLOWS_MAX} workflows")),
         "{}",
         joined(&result)
     );
@@ -1352,7 +1366,7 @@ fn validate_reports_an_issue_when_the_mono_is_at_the_limit_and_still_writes_noth
     assert_eq!(f.host.updates, 0);
     let e = f.err("workflows.add", json!({"workflow": definition(json!({}))}));
     assert!(
-        e.contains(&format!("at most {WORKFLOWS_MAX} workflows")),
+        e.contains(&format!("At most {WORKFLOWS_MAX} workflows")),
         "{e}"
     );
 }
@@ -1372,7 +1386,7 @@ fn validate_does_not_apply_the_limit_when_id_names_an_existing_workflow() {
         "workflows.validate",
         json!({"id": "wf-zzzzzzzz", "workflow": definition(json!({}))}),
     );
-    assert!(joined(&unknown).contains(&format!("at most {WORKFLOWS_MAX} workflows")));
+    assert!(joined(&unknown).contains(&format!("At most {WORKFLOWS_MAX} workflows")));
     assert_eq!(f.host.updates, 0);
     // The update the validation described is accepted at the limit.
     let updated = f.ok(
@@ -1524,9 +1538,9 @@ fn definition_errors_say_what_is_wrong() {
     );
     check(
         definition(
-            json!({"nodes": [{"id": "trigger", "type": "schedule", "schedule": {"kind": "monthly"}}]}),
+            json!({"nodes": [{"id": "start", "type": "schedule", "schedule": {"kind": "monthly"}}]}),
         ),
-        "Node \"trigger\": schedule.kind must be hourly, daily, weekdays, weekly or interval",
+        "Node \"start\": schedule.kind must be hourly, daily, weekdays, weekly or interval",
     );
     check(
         definition(json!({"name": "x".repeat(600_000)})),
@@ -1576,7 +1590,7 @@ fn a_run_summary_shows_its_end_time_and_error() {
     );
     assert_eq!(
         summary.get("caller").map(|c| text(c, "triggerNode")),
-        Some("trigger".to_string())
+        Some("start".to_string())
     );
     assert!(summary.get("nodes").is_none());
 }
@@ -1796,14 +1810,15 @@ fn store_host() -> (StoreHost, Arc<Signals>, std::path::PathBuf) {
     let root = std::env::temp_dir().join(format!("wf-cli-{}", crate::mono::new_id()));
     std::fs::create_dir_all(&root).unwrap();
     let signals = Arc::new(Signals::default());
-    let host = StoreHost::new(MonoDir::new(&root, "mono-1"), signals.clone()).with_probe(no_probe);
+    let host = StoreHost::new(WorkflowsDir::new(root.join("workflows")), signals.clone())
+        .with_probe(no_probe);
     (host, signals, root)
 }
 
 fn manual_workflow() -> Value {
     json!({
         "name": "Manual",
-        "nodes": [{"id": "trigger", "type": "manual"}],
+        "nodes": [{"id": "start", "type": "manual"}],
         "edges": []
     })
 }
@@ -1814,7 +1829,7 @@ fn the_store_host_saves_to_the_mono_files_and_signals_the_runner() {
     let mut call = |action: &str, input: Value| handle(action, &Json::from(&input), &mut host);
     let added = call("workflows.add", json!({"workflow": manual_workflow()})).unwrap();
     let id = id_of(&added);
-    let dir = MonoDir::new(&root, "mono-1");
+    let dir = WorkflowsDir::new(root.join("workflows"));
     let on_disk = load_workflows(&dir).unwrap().workflows;
     assert_eq!(on_disk.len(), 1);
     assert_eq!(on_disk[0].id, id);
@@ -1845,7 +1860,7 @@ fn the_store_host_saves_to_the_mono_files_and_signals_the_runner() {
 #[test]
 fn the_store_host_resumes_an_interrupted_run_through_the_file() {
     let (mut host, signals, root) = store_host();
-    let dir = MonoDir::new(&root, "mono-1");
+    let dir = WorkflowsDir::new(root.join("workflows"));
     let id = id_of(
         &handle(
             "workflows.add",
@@ -1886,7 +1901,7 @@ fn a_failure_clearing_the_history_does_not_block_a_removal() {
         .unwrap(),
     );
     // A file where the runs folder should be: clearing the history cannot write there.
-    std::fs::write(root.join("mono-1").join("workflow-runs"), "x").unwrap();
+    std::fs::write(root.join("workflows").join("runs"), "x").unwrap();
     let removed = handle(
         "workflows.remove",
         &Json::from(&json!({"id": id})),
@@ -2376,7 +2391,7 @@ fn needs_review_and_paused_still_win_over_a_missing_requirement() {
     assert!(f.host.preflights.is_empty());
 }
 
-const NEEDS_REVIEW_TEXT: &str = "This workflow came from a file and the user has not reviewed it yet. Ask the user to review it and enable it in the Workflows panel.";
+const NEEDS_REVIEW_TEXT: &str = "This workflow came from a file or from a Mono and the user has not reviewed it yet. Ask the user to review it and enable it in Workflows.";
 
 #[test]
 fn run_does_not_preflight_inside_the_hash_checked_update() {
@@ -2512,10 +2527,10 @@ fn get_shows_the_status_of_each_requirement_under_requires_status() {
 fn command_flow(command: &str, requires: Value) -> Value {
     definition(json!({
         "nodes": [
-            {"id": "trigger", "type": "manual"},
+            {"id": "start", "type": "manual"},
             {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": command}
         ],
-        "edges": [{"from": "trigger", "to": "build"}],
+        "edges": [{"from": "start", "to": "build"}],
         "requires": requires
     }))
 }
@@ -2604,7 +2619,7 @@ fn a_secret_in_the_environment_never_reaches_a_result_a_run_file_or_a_failure_te
     // The same machine behind a tick: the failed run's file and the chat text carry no value.
     let root = std::env::temp_dir().join(format!("wf-secret-{}", crate::mono::new_id()));
     std::fs::create_dir_all(&root).unwrap();
-    let disk = MonoDir::new(&root, "mono-1");
+    let disk = WorkflowsDir::new(root.join("workflows"));
     let mut w = f.host.stored[0].clone();
     w.run_requested = true;
     super::store::update_workflows(&disk, |_| Ok((vec![w.clone()], ()))).unwrap();
@@ -2652,7 +2667,10 @@ fn a_secret_in_the_environment_never_reaches_a_result_a_run_file_or_a_failure_te
 #[test]
 fn the_store_host_refuses_a_run_value_project_outside_the_assigned_projects() {
     let (host, _, root) = store_host();
-    let mut host = host.with_projects(vec!["/code/app".into(), "/code/other".into()]);
+    let mut host = host.with_caller(MonoCaller {
+        id: "mono-1".into(),
+        projects: vec!["/code/app".into(), "/code/other".into()],
+    });
     assert_eq!(host.project_path("other").as_deref(), Some("/code/other"));
     assert_eq!(host.project_path("/code/app").as_deref(), Some("/code/app"));
     assert_eq!(host.project_path("/elsewhere/x"), None);
@@ -2661,13 +2679,20 @@ fn the_store_host_refuses_a_run_value_project_outside_the_assigned_projects() {
         "inputs": {"project": {"type": "project"}},
         "inputValues": {"project": "/code/app"},
         "nodes": [
-            {"id": "trigger", "type": "manual"},
+            {"id": "start", "type": "manual"},
             {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": "true"}
         ],
-        "edges": [{"from": "trigger", "to": "build"}]
+        "edges": [{"from": "start", "to": "build"}]
     });
     let mut call = |action: &str, input: Value| handle(action, &Json::from(&input), &mut host);
     let id = id_of(&call("workflows.add", json!({"workflow": wf})).unwrap());
+    // What a Mono made waits for the user's review; here the user has approved it.
+    let dir = WorkflowsDir::new(root.join("workflows"));
+    update_workflows(&dir, |mut list| {
+        list[0].needs_review = false;
+        Ok((list, ()))
+    })
+    .unwrap();
     call("workflows.resume", json!({"id": id})).unwrap();
     let e = call(
         "workflows.run",
@@ -2678,7 +2703,6 @@ fn the_store_host_refuses_a_run_value_project_outside_the_assigned_projects() {
         e,
         "Choose one of this Mono's assigned projects by full path"
     );
-    let dir = MonoDir::new(&root, "mono-1");
     assert!(!load_workflows(&dir).unwrap().workflows[0].run_requested);
     call(
         "workflows.run",
@@ -2694,7 +2718,7 @@ fn the_store_host_refuses_a_run_value_project_outside_the_assigned_projects() {
         saved.input_values.get("project"),
         Some(&InputValue::String("/code/app".into()))
     );
-    // Without with_projects a value is accepted as given.
+    // Without a caller a value is accepted as given.
     let (plain, _, _) = store_host();
     assert_eq!(
         plain.project_path("/anywhere").as_deref(),
@@ -2718,7 +2742,7 @@ fn cloud_definition(first: Value, second: Value) -> Value {
     definition(json!({
         "nodes": nodes,
         "edges": [
-            {"from": "trigger", "to": "fetch"},
+            {"from": "start", "to": "fetch"},
             {"from": "fetch", "to": "next"}
         ]
     }))
@@ -2842,4 +2866,269 @@ fn a_workflow_with_several_triggers_validates_and_lists_them_all() {
         "{}",
         joined(&result)
     );
+}
+
+// ---- the global store with a Mono as the caller -----------------------------------------
+
+const OLD_REPORT_FILE: &str = "monoptahWorkflow: 1
+name: Old
+inputs:
+  project:
+    type: project
+nodes:
+  - id: start
+    type: manual
+  - id: dev
+    type: session
+    project: \"{{inputs.project}}\"
+    checkout: root
+    prompt: Go
+    output:
+      note:
+        type: string
+  - id: report
+    type: report
+    template: \"Result: {{dev.note}}\"
+edges:
+  - from: start
+    to: dev
+  - from: dev
+    to: report
+";
+
+/// A definition whose only project is `project`, given as the value of its project input (a
+/// step can only name a project through an input).
+fn in_project(project: &str) -> Value {
+    json!({
+        "name": "Literal",
+        "inputs": {"project": {"type": "project"}},
+        "inputValues": {"project": project},
+        "nodes": [
+            {"id": "start", "type": "manual"},
+            {"id": "work", "type": "session", "project": "{{inputs.project}}", "prompt": "Go", "checkout": "root"}
+        ],
+        "edges": [{"from": "start", "to": "work"}]
+    })
+}
+
+/// A host seen from Mono `mono-1`, which works on /code/app only, with `/code/app` and
+/// `/code/other` workflows already stored (reviewed and enabled, as the user left them).
+fn mono_fx() -> (Fx, String, String) {
+    let mut f = Fx::new();
+    let mine = id_of(&f.add(in_project("/code/app")));
+    let theirs = id_of(&f.add(in_project("/code/other")));
+    for w in f.host.stored.iter_mut() {
+        w.needs_review = false;
+        w.enabled = true;
+    }
+    f.host.caller = Some(MonoCaller {
+        id: "mono-1".into(),
+        projects: vec!["/code/app".into()],
+    });
+    (f, mine, theirs)
+}
+
+#[test]
+fn a_mono_lists_gets_and_reads_runs_of_every_workflow() {
+    let (mut f, mine, theirs) = mono_fx();
+    let listed = f.ok("workflows.list", json!({}));
+    assert_eq!(list(&listed, "workflows").len(), 2);
+    for id in [&mine, &theirs] {
+        assert_eq!(text(&f.ok("workflows.get", json!({"id": id})), "id"), *id);
+        f.ok("workflows.runs", json!({"id": id}));
+    }
+}
+
+#[test]
+fn a_mono_only_updates_and_runs_workflows_whose_projects_are_its_own() {
+    let (mut f, mine, theirs) = mono_fx();
+    let change = |name: &str, project: &str| {
+        let mut w = in_project(project);
+        w["name"] = json!(name);
+        w
+    };
+    f.ok(
+        "workflows.update",
+        json!({"id": mine, "workflow": change("Renamed", "/code/app")}),
+    );
+    f.ok("workflows.run", json!({"id": mine}));
+    assert!(f.stored().iter().any(|w| w.id == mine && w.run_requested));
+    for e in [
+        f.err(
+            "workflows.update",
+            json!({"id": theirs, "workflow": change("X", "/code/other")}),
+        ),
+        f.err(
+            "workflows.update",
+            json!({"id": mine, "workflow": change("Y", "/code/other")}),
+        ),
+        f.err("workflows.run", json!({"id": theirs})),
+    ] {
+        assert!(
+            e.contains("not this Mono's") && e.contains("/code/other"),
+            "{e}"
+        );
+    }
+    assert!(f
+        .stored()
+        .iter()
+        .all(|w| w.id != theirs || !w.run_requested));
+    assert_eq!(
+        f.stored().iter().find(|w| w.id == mine).unwrap().name,
+        "Renamed"
+    );
+}
+
+#[test]
+fn a_mono_adds_only_workflows_on_its_own_projects_and_they_are_saved_paused_for_review() {
+    let (mut f, _, _) = mono_fx();
+    let e = f.err(
+        "workflows.add",
+        json!({"workflow": in_project("/code/other")}),
+    );
+    assert!(e.contains("not this Mono's"), "{e}");
+    let added = f.add(in_project("/code/app"));
+    assert!(!flag(&added, "enabled"));
+    let made = f.stored().iter().find(|w| w.id == id_of(&added)).unwrap();
+    assert!(!made.enabled && made.needs_review);
+    // A Mono cannot enable it, and the user's own add through the app does not need review.
+    let mut enable = in_project("/code/app");
+    enable["enabled"] = json!(true);
+    let made_id = made.id.clone();
+    assert_eq!(
+        f.err(
+            "workflows.update",
+            json!({"id": made_id, "workflow": enable})
+        ),
+        NEEDS_REVIEW_TEXT
+    );
+    f.host.caller = None;
+    let theirs = f.add(in_project("/code/other"));
+    let user_made = f.stored().iter().find(|w| w.id == id_of(&theirs)).unwrap();
+    assert!(!user_made.needs_review);
+}
+
+#[test]
+fn a_project_a_step_takes_from_a_previous_step_cannot_be_checked_so_a_mono_may_not_use_it() {
+    let (mut f, _, _) = mono_fx();
+    let mut w = in_project("/code/app");
+    w["nodes"] = json!([
+        {"id": "start", "type": "manual"},
+        {"id": "fetch", "type": "command", "project": "/code/app", "command": "pwd"},
+        {"id": "work", "type": "session", "project": "{{fetch.dir}}", "prompt": "Go", "checkout": "root"}
+    ]);
+    w["edges"] = json!([{"from": "start", "to": "fetch"}, {"from": "fetch", "to": "work"}]);
+    let e = f.err("workflows.add", json!({"workflow": w}));
+    assert!(e.contains("previous step"), "{e}");
+}
+
+#[test]
+fn a_mono_run_records_the_mono_as_the_caller() {
+    let (mut f, mine, _) = mono_fx();
+    f.ok("workflows.run", json!({"id": mine}));
+    let w = f.stored().iter().find(|w| w.id == mine).unwrap();
+    let caller = w.run_caller.clone().expect("a caller is recorded");
+    assert_eq!(caller.kind, CallerKind::Mono);
+    assert_eq!(caller.mono_id.as_deref(), Some("mono-1"));
+    assert_eq!(caller.trigger_node, "start");
+    // The user's run records nothing: the tick starts it as manual.
+    f.host.caller = None;
+    f.host.stored.iter_mut().for_each(|w| w.run_caller = None);
+    f.host
+        .stored
+        .iter_mut()
+        .for_each(|w| w.run_requested = false);
+    f.ok("workflows.run", json!({"id": mine}));
+    assert!(f
+        .stored()
+        .iter()
+        .find(|w| w.id == mine)
+        .unwrap()
+        .run_caller
+        .is_none());
+}
+
+#[test]
+fn report_to_accepts_a_mono_naming_itself_and_refuses_it_naming_another() {
+    let (mut f, _, _) = mono_fx();
+    let mut own = in_project("/code/app");
+    own["reportTo"] = json!({"mono": "mono-1"});
+    let id = id_of(&f.add(own));
+    let saved = f.stored().iter().find(|w| w.id == id).unwrap();
+    assert_eq!(
+        saved.report_to.as_ref().and_then(|r| r.mono.as_deref()),
+        Some("mono-1")
+    );
+    let mut other = in_project("/code/app");
+    other["reportTo"] = json!({"mono": "mono-2"});
+    let e = f.err("workflows.add", json!({"workflow": other.clone()}));
+    assert!(e.contains("reportTo.mono can only be this Mono"), "{e}");
+    let mine = f.stored()[0].id.clone();
+    let e = f.err(
+        "workflows.update",
+        json!({"id": mine, "workflow": other.clone()}),
+    );
+    assert!(e.contains("reportTo.mono"), "{e}");
+    // The user may name any Mono.
+    f.host.caller = None;
+    let id = id_of(&f.add(other));
+    let saved = f.stored().iter().find(|w| w.id == id).unwrap();
+    assert_eq!(
+        saved.report_to.as_ref().and_then(|r| r.mono.as_deref()),
+        Some("mono-2")
+    );
+}
+
+#[test]
+fn an_old_per_mono_id_gets_the_clear_error_and_an_unknown_one_does_not() {
+    let (mut f, _, _) = mono_fx();
+    f.host.legacy.insert("old-1".into());
+    for action in [
+        "workflows.run",
+        "workflows.get",
+        "workflows.runs",
+        "workflows.stop",
+    ] {
+        assert_eq!(
+            f.err(action, json!({"id": "old-1"})),
+            "This workflow was per Mono and is no longer used; recreate it in Workflows"
+        );
+    }
+    let e = f.err("workflows.run", json!({"id": "never-existed"}));
+    assert!(e.contains("No workflow with that id"), "{e}");
+}
+
+#[test]
+fn a_node_called_trigger_is_refused_because_trigger_is_a_template_variable() {
+    let mut f = Fx::new();
+    let added = f.add(json!({
+        "name": "Clash",
+        "nodes": [
+            {"id": "trigger", "type": "manual"},
+            {"id": "work", "type": "command", "project": "/code/app", "command": "true"}
+        ],
+        "edges": [{"from": "trigger", "to": "work"}]
+    }));
+    assert!(
+        joined(&added).contains("Node id \"trigger\" is reserved"),
+        "{}",
+        joined(&added)
+    );
+}
+
+#[test]
+fn a_yaml_import_shows_what_the_import_changed() {
+    let mut f = Fx::new();
+    let added = f.ok(
+        "workflows.add",
+        json!({"yaml": OLD_REPORT_FILE, "values": {"project": "/code/app"}}),
+    );
+    let warnings = list(&added, "importWarnings");
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0]
+        .as_str()
+        .unwrap()
+        .contains("The Report node \"report\" was removed"));
+    let checked = f.ok("workflows.validate", json!({"yaml": OLD_REPORT_FILE}));
+    assert_eq!(list(&checked, "importWarnings").len(), 1);
 }

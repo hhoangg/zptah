@@ -1368,7 +1368,17 @@ pub fn run_with_controls(
 /// A bounded, separate conversation for titles and other background text work.
 /// Never resume the user's conversation or inherit its app capabilities/tools.
 pub fn run_text(request: Request, cancel: Arc<AtomicBool>) -> Result<String, String> {
-    run_text_inner(request, Vec::new(), cancel)
+    run_text_inner(request, Vec::new(), None, cancel)
+}
+
+/// Like [`run_text`], with the effort the caller chose (a workflow's decision model) instead of
+/// the default one.
+pub fn run_text_with_effort(
+    request: Request,
+    effort: Option<String>,
+    cancel: Arc<AtomicBool>,
+) -> Result<String, String> {
+    run_text_inner(request, Vec::new(), effort, cancel)
 }
 
 /// Like [`run_text`], but attaches `images` to the one prompt. Still a separate text-only,
@@ -1378,12 +1388,13 @@ pub fn run_text_with_images(
     images: Vec<PathBuf>,
     cancel: Arc<AtomicBool>,
 ) -> Result<String, String> {
-    run_text_inner(request, images, cancel)
+    run_text_inner(request, images, None, cancel)
 }
 
 fn run_text_inner(
     mut request: Request,
     attachments: Vec<PathBuf>,
+    effort: Option<String>,
     cancel: Arc<AtomicBool>,
 ) -> Result<String, String> {
     request.provider_id = None;
@@ -1391,7 +1402,7 @@ fn run_text_inner(
         account: request.settings.account.clone(),
         text_only: true,
         access: AccessMode::ReadOnly,
-        effort: (request.kind == Kind::Codex).then(|| "low".into()),
+        effort: effort.or_else(|| (request.kind == Kind::Codex).then(|| "low".into())),
         attachments,
         ..Default::default()
     };

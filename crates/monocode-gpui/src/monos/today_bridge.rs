@@ -74,7 +74,7 @@ impl Monos {
             habit: run
                 .map(|r| r.habit.clone())
                 .filter(|habit| habit != heartbeat::RUN_ID),
-            in_run: run.is_some() || self.workflow_live.asked_by(call.session).is_some(),
+            in_run: run.is_some(),
         }
     }
     /// Every Mono with its projects and habits, for Today's badges and Sources tab.

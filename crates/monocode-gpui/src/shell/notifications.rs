@@ -606,6 +606,28 @@ impl Shell {
         });
     }
 
+    /// A desktop notification that belongs to no session (the summary of a workflow run that
+    /// started none). Nothing opens when it is clicked.
+    pub(super) fn deliver_plain_notice(&mut self, subtitle: &str, body: &str) {
+        let prefs = &self.workspace.preferences;
+        if !delivery::should_notify(
+            prefs.notifications,
+            self.notification_state.permission,
+            self.window_active,
+            false,
+        ) {
+            return;
+        }
+        self.notification_state.sequence = self.notification_state.sequence.wrapping_add(1);
+        // The result of a native post is not waited for.
+        let _ = platform::show(platform::Notification {
+            tag: format!("workflow-{}", self.notification_state.sequence),
+            subtitle: subtitle.to_owned(),
+            body: delivery::clip_body(body),
+            sound: prefs.sounds,
+        });
+    }
+
     pub(super) fn deliver_session_notice(
         &mut self,
         summary: &Session,

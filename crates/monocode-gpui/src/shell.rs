@@ -106,6 +106,7 @@ mod tui_sessions;
 mod web_link;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod window_chrome;
+mod workflow_bridge;
 mod worktrees;
 
 use crate::{
@@ -668,6 +669,7 @@ struct SessionPreview {
 
 pub(crate) struct Shell {
     monos: Option<Entity<crate::monos::Monos>>,
+    workflows: Option<Entity<crate::workflows::Workflows>>,
     quick_open: Option<quick_open::Open>,
     image_lightbox: Option<(Entity<crate::image_lightbox::ImageLightbox>, Subscription)>,
     document_lightbox: Option<(
@@ -1243,6 +1245,7 @@ impl Shell {
             .unwrap_or_default();
         let mut this = Self {
             monos: None,
+            workflows: None,
             quick_open: None,
             image_lightbox: None,
             document_lightbox: None,
@@ -1625,6 +1628,12 @@ impl Shell {
                     cx.notify();
                 }
             }));
+        this.workflows = Some(crate::workflows::Workflows::create(
+            this.store.clone(),
+            cx.weak_entity(),
+            &monos,
+            cx,
+        ));
         this.monos = Some(monos);
         this.bind_notices(cx);
         this.init_app_bridge(cx);

@@ -1,5 +1,6 @@
 //! Mono workspaces: one runtime per identity, shared by the rail, title tabs,
 //! overview, settings and floating windows.
+mod ask_sweep;
 pub(crate) mod avatar;
 mod browser_approval;
 #[cfg(test)]
@@ -14,7 +15,7 @@ mod browser_ui;
 pub(crate) mod cards;
 mod changes;
 #[cfg(test)]
-mod cloud_tests;
+pub(crate) mod cloud_tests;
 pub(crate) mod color_picker;
 mod dashboard;
 #[cfg(test)]
@@ -45,11 +46,10 @@ mod search;
 #[cfg(all(target_os = "macos", not(test)))]
 mod status;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod today_bridge;
 mod work;
-mod workflow_runner;
-mod workflow_schedule;
+mod workflow_link;
 mod workflows_ui;
 use crate::{
     conversation::{Conversation, MonoSubmitted, SessionChanged},
@@ -89,8 +89,8 @@ pub(crate) struct ShowEmojiLibrary;
 pub(crate) struct NodePathChanged(pub String);
 /// A Mono's chat has opened, so a paired phone can follow it.
 pub(crate) struct ChatOpened;
+pub(crate) use host::{CLOUD_ACCOUNT_NEEDS_TOKEN, workflow_account_check};
 pub(crate) use notifications::{NotificationChanged, NotificationFinished, NotificationPosted};
-pub(crate) use workflow_schedule::begin_quit;
 #[derive(Clone, PartialEq)]
 pub(crate) struct OverviewChrome {
     active: Option<String>,
@@ -253,10 +253,13 @@ pub(crate) struct Monos {
     /// installed, so a `run`, `stop` or `resumeRun` request is acted on at once; the runner calls
     /// `set_running` when a run starts and ends.
     pub(crate) workflow_signals: std::sync::Arc<mono::workflows::cli::Signals>,
-    /// The live workflow runs, one per workflow.
-    workflows: workflow_runner::WorkflowRunner,
-    workflow_live: workflow_runner::Live,
-    workflow_checks: workflow_schedule::Checks,
+    /// The live workflow runs, one per workflow (shared with the `Workflows` entity that drives
+    /// them).
+    pub(crate) workflows: crate::workflows::WorkflowRunner,
+    /// How workflows are judged (model catalog and requirements), read by the `Workflows` entity.
+    pub(crate) workflow_live: crate::workflows::Probes,
+    /// The global workflow files.
+    pub(crate) workflow_dir: mono::workflows::global::WorkflowsDir,
     /// The Workflows tab and its pages.
     wf: workflows_ui::WorkflowsUi,
     /// The Today page's view of the Monos: its revision and every Mono's habits.
@@ -268,22 +271,6 @@ impl EventEmitter<ShowDetails> for Monos {}
 impl EventEmitter<ShowEmojiLibrary> for Monos {}
 impl EventEmitter<NodePathChanged> for Monos {}
 impl EventEmitter<ChatOpened> for Monos {}
-impl Monos {
-    /// Workflow runs going now, as `(run id, workflow name)`.
-    pub(crate) fn running_workflows(&self) -> Vec<(String, String)> {
-        self.workflows
-            .running()
-            .into_iter()
-            .map(|(workflow, run)| {
-                let name = self
-                    .workflows
-                    .with_run(&workflow, |run| run.definition.name.clone())
-                    .unwrap_or(workflow);
-                (run, name)
-            })
-            .collect()
-    }
-}
 impl Monos {
     #[cfg(test)]
     pub(crate) fn observation_count(&self) -> usize {
@@ -566,6 +553,10 @@ impl Monos {
         let manager = cx.entity();
         let details = cx.new(|cx| overview::Overview::new(manager, cx));
         let signals = std::sync::Arc::<mono::workflows::cli::Signals>::default();
+        let workflow_dir = match locked(&store) {
+            Ok(db) => mono::workflows::global::WorkflowsDir::for_store(&db),
+            Err(_) => mono::workflows::global::WorkflowsDir::new(root.join("workflows")),
+        };
         let mut this = Self {
             #[cfg(all(target_os = "macos", not(test)))]
             status: None,
@@ -672,15 +663,14 @@ impl Monos {
             app_results: HashMap::new(),
             app_pending: HashSet::new(),
             workflow_signals: signals.clone(),
-            workflows: workflow_runner::WorkflowRunner::new(signals),
-            workflow_live: workflow_runner::Live::new(),
-            workflow_checks: Default::default(),
+            workflows: crate::workflows::WorkflowRunner::new(signals),
+            workflow_live: crate::workflows::Probes::new(),
+            workflow_dir,
             wf: Default::default(),
             today: Default::default(),
         };
-        cx.set_global(workflow_schedule::QuitTarget(this.workflows.clone()));
         this.watch_emoji_library(cx);
-        this.start_workflow_checks(cx);
+        this.sweep_asks(cx);
         this.browser_approval_start(cx);
         if let Some(rx) = rx {
             this._bridge_task = Some(cx.spawn(async move |this, cx| {
@@ -2065,7 +2055,6 @@ impl gpui::Render for Monos {
                     .children(
                         self.attention_views(&mono.id, cx)
                             .into_iter()
-                            .chain(self.workflow_attention_views(&mono.id, cx))
                             .map(|view| view.update(cx, |v, cx| v.mono_attention(window, cx))),
                     )
                     .map(|d| {

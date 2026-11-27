@@ -1,16 +1,19 @@
-//! The scheduling cases of `useMonoWorkflows.test.ts` over a real `Monos` (real files, the real
-//! host, no provider): what a look starts, the waker, requests in the file, the startup sweep,
-//! quitting and deleting a Mono. The file-level cases are in core (`tick_tests`).
+//! The scheduling cases of `useMonoWorkflows.test.ts` over the global store (real files, the real
+//! host, no provider): what a look starts, the waker, requests in the file, the startup sweep and
+//! quitting. The file-level cases are in core (`tick_tests`).
 use super::*;
-use crate::monos::tests::{Setup, call, chat_rows, setup};
-use gpui::TestAppContext;
+use crate::monos::tests::{Setup, call, setup};
+use crate::workflows::Workflows;
+use gpui::{Entity, TestAppContext};
 use monocode_core::mono::workflows::{
     engine::{mark_interrupted, start_run},
     model::{CallerKind, RunCaller, RunStatus, Workflow, WorkflowRun},
+    models::Probe,
     ordered::Json,
     parse::parse_workflow,
-    store::{load_runs, load_workflows, update_runs, update_workflows},
+    store::{MonoDir, load_runs, load_workflows, update_runs, update_workflows},
 };
+use monocode_core::provider::Kind;
 use serde_json::{Value, json};
 
 fn definition(id: &str, nodes: Vec<Value>, edges: Vec<Value>, extra: Value) -> Workflow {
@@ -24,39 +27,56 @@ fn definition(id: &str, nodes: Vec<Value>, edges: Vec<Value>, extra: Value) -> W
     parse_workflow(&Json::from(&def)).expect("a workflow")
 }
 
-/// manual trigger -> report: runs to the end by itself.
+/// A manual trigger alone: runs to the end by itself.
 fn quick(id: &str, extra: Value) -> Workflow {
     definition(
         id,
-        vec![
-            json!({"id": "trigger", "type": "manual"}),
-            json!({"id": "report", "type": "report"}),
-        ],
-        vec![json!({"from": "trigger", "to": "report"})],
+        vec![json!({"id": "start", "type": "manual"})],
+        vec![],
         extra,
     )
 }
 
-/// manual trigger -> a question to the Mono -> report: stays running until stopped, because no
-/// provider answers the hidden session in a test.
-fn waiting(id: &str, extra: Value) -> Workflow {
-    definition(
-        id,
+fn with_project(mut extra: Value, project: Option<&str>) -> Value {
+    extra["inputs"] = json!({"repo": {"type": "project"}});
+    if let Some(project) = project {
+        extra["inputValues"] = json!({"repo": project});
+    }
+    extra
+}
+
+fn session_steps() -> (Vec<Value>, Vec<Value>) {
+    (
         vec![
-            json!({"id": "trigger", "type": "manual"}),
-            json!({"id": "ask", "type": "askMono", "question": "Ship it?", "answers": ["yes", "no"]}),
-            json!({"id": "report", "type": "report"}),
+            json!({"id": "start", "type": "manual"}),
+            json!({"id": "dev", "type": "session", "project": "{{inputs.repo}}", "prompt": "go",
+                "checkout": "root", "output": {}}),
         ],
-        vec![
-            json!({"from": "trigger", "to": "ask"}),
-            json!({"from": "ask", "to": "report"}),
-        ],
-        extra,
+        vec![json!({"from": "start", "to": "dev"})],
     )
 }
 
-fn dir(s: &Setup) -> MonoDir {
-    MonoDir::new(&s.root, &s.id)
+/// A manual trigger and a session step that never gets a turn in a test: the run stays going
+/// until it is stopped.
+fn waiting(s: &Setup, id: &str, extra: Value) -> Workflow {
+    let (nodes, edges) = session_steps();
+    definition(id, nodes, edges, with_project(extra, Some(&s.project)))
+}
+
+/// A workflow that cannot start: its project input has no value.
+fn broken(id: &str, extra: Value) -> Workflow {
+    let (nodes, edges) = session_steps();
+    definition(id, nodes, edges, with_project(extra, None))
+}
+
+fn workflows_of(s: &Setup, cx: &mut TestAppContext) -> Entity<Workflows> {
+    s.window
+        .update(cx, |shell, _, _| shell.workflows().expect("workflows"))
+        .unwrap()
+}
+
+fn dir(s: &Setup) -> WorkflowsDir {
+    s.workflows_dir()
 }
 
 fn put(s: &Setup, workflows: Vec<Workflow>) {
@@ -77,32 +97,31 @@ fn put_runs(s: &Setup, workflow: &str, list: Vec<WorkflowRun>) {
 
 /// A look, as the clock or the waker makes it, with everything it starts run to the end.
 fn look(s: &Setup, cx: &mut TestAppContext) {
-    cx.update(|cx| s.manager.update(cx, |m, cx| m.check_workflows(cx)));
+    let workflows = workflows_of(s, cx);
+    cx.update(|cx| workflows.update(cx, |w, cx| w.check_workflows(cx)));
     cx.run_until_parked();
 }
 
 fn running(s: &Setup, workflow: &str, cx: &mut TestAppContext) -> bool {
-    cx.update(|cx| s.manager.read(cx).workflows.is_running(workflow))
+    let workflows = workflows_of(s, cx);
+    cx.update(|cx| workflows.read(cx).is_running(workflow))
+}
+
+fn stop(s: &Setup, workflow: &str, cx: &mut TestAppContext) -> bool {
+    let workflows = workflows_of(s, cx);
+    cx.update(|cx| workflows.update(cx, |w, _| w.stop_run(workflow)))
 }
 
 fn forget_startup(s: &Setup, cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        s.manager.update(cx, |m, _| {
-            m.workflow_checks.swept = false;
-            m.workflow_checks.asks_swept = false;
-        })
-    });
-}
-
-fn reported(s: &Setup, heading: &str) -> bool {
-    chat_rows(s).iter().any(|row| row.starts_with(heading))
+    let workflows = workflows_of(s, cx);
+    cx.update(|cx| workflows.update(cx, |w, _| w.checks.swept = false));
 }
 
 const A: &str = "wf-aaaaaaaa";
 const B: &str = "wf-bbbbbbbb";
 
 #[gpui::test]
-fn a_requested_run_starts_on_the_look_and_its_report_reaches_the_chat(cx: &mut TestAppContext) {
+fn a_requested_run_starts_on_the_look_and_its_summary_is_kept_on_the_run(cx: &mut TestAppContext) {
     let s = setup(cx);
     put(&s, vec![quick(A, json!({"runRequested": true}))]);
     look(&s, cx);
@@ -111,29 +130,38 @@ fn a_requested_run_starts_on_the_look_and_its_report_reaches_the_chat(cx: &mut T
     assert_eq!(history[0].status, RunStatus::Done);
     assert_eq!(
         history[0].caller,
-        RunCaller::new(CallerKind::Manual, "trigger")
+        RunCaller::new(CallerKind::Manual, "start")
+    );
+    assert_eq!(
+        history[0].summary.as_ref().map(|s| s.title.as_str()),
+        Some("Ship it \u{b7} completed")
     );
     let after = &saved(&s)[0];
     assert!(!after.run_requested);
     assert_eq!(after.last_run_id.as_deref(), Some(history[0].id.as_str()));
     // A manual workflow stays paused; only the request ran it.
     assert!(!after.enabled);
-    assert!(
-        reported(&s, "## Ship it \u{b7} completed"),
-        "{:?}",
-        chat_rows(&s)
-    );
     assert!(!running(&s, A, cx));
+}
+
+#[gpui::test]
+fn a_run_a_mono_asked_for_records_it_as_the_caller(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut asked = quick(A, json!({"runRequested": true}));
+    asked.run_caller = Some(RunCaller::mono("mono-7", "start"));
+    put(&s, vec![asked]);
+    look(&s, cx);
+    assert_eq!(runs(&s, A)[0].caller, RunCaller::mono("mono-7", "start"));
 }
 
 #[gpui::test]
 fn a_due_schedule_is_claimed_and_run_once(cx: &mut TestAppContext) {
     let s = setup(cx);
-    let schedule = json!({"id": "trigger", "type": "schedule", "schedule": {"scheduleKind": "daily", "time": "09:00", "minute": 0, "dayOfWeek": 1}});
+    let schedule = json!({"id": "start", "type": "schedule", "schedule": {"scheduleKind": "daily", "time": "09:00", "minute": 0, "dayOfWeek": 1}});
     let due = definition(
         A,
-        vec![schedule, json!({"id": "report", "type": "report"})],
-        vec![json!({"from": "trigger", "to": "report"})],
+        vec![schedule],
+        vec![],
         json!({"enabled": true, "nextRunAt": monocode_core::time::now_ms() - 1_000}),
     );
     put(&s, vec![due]);
@@ -143,21 +171,18 @@ fn a_due_schedule_is_claimed_and_run_once(cx: &mut TestAppContext) {
     assert_eq!(history.len(), 1, "the second look finds it already claimed");
     assert_eq!(
         history[0].caller,
-        RunCaller::new(CallerKind::Schedule, "trigger")
+        RunCaller::new(CallerKind::Schedule, "start")
     );
     assert_eq!(history[0].status, RunStatus::Done);
     assert!(saved(&s)[0].next_run_at.unwrap() > monocode_core::time::now_ms());
 }
 
 #[gpui::test]
-fn a_workflow_that_cannot_start_gets_a_failed_run_and_a_message_in_the_chat(
+fn a_workflow_that_cannot_start_gets_a_failed_run_with_its_message_on_the_run_page(
     cx: &mut TestAppContext,
 ) {
     let s = setup(cx);
-    let mut broken = quick(A, json!({"runRequested": true}));
-    broken.nodes.retain(|n| n.id != "report");
-    broken.edges.clear();
-    put(&s, vec![broken]);
+    put(&s, vec![broken(A, json!({"runRequested": true}))]);
     look(&s, cx);
     let history = runs(&s, A);
     assert_eq!(history.len(), 1);
@@ -169,13 +194,12 @@ fn a_workflow_that_cannot_start_gets_a_failed_run_and_a_message_in_the_chat(
             .unwrap()
             .starts_with("The workflow is not valid: ")
     );
+    let summary = history[0].summary.as_ref().expect("a message on the run");
+    assert_eq!(summary.title, "Ship it \u{b7} failed");
     assert!(
-        reported(
-            &s,
-            "## Ship it \u{b7} failed\n\nThe workflow could not start. "
-        ),
-        "{:?}",
-        chat_rows(&s)
+        summary.text.contains("The workflow could not start. "),
+        "{}",
+        summary.text
     );
     assert!(!running(&s, A, cx));
 }
@@ -209,7 +233,7 @@ fn the_clock_looks_every_minute(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_second_run_of_a_workflow_waits_for_the_first(cx: &mut TestAppContext) {
     let s = setup(cx);
-    put(&s, vec![waiting(A, json!({"runRequested": true}))]);
+    put(&s, vec![waiting(&s, A, json!({"runRequested": true}))]);
     look(&s, cx);
     assert!(running(&s, A, cx));
     assert_eq!(runs(&s, A).len(), 1);
@@ -231,7 +255,7 @@ fn a_second_run_of_a_workflow_waits_for_the_first(cx: &mut TestAppContext) {
     assert_eq!(runs(&s, B)[0].status, RunStatus::Done);
     assert!(running(&s, A, cx));
     // Once the first ends the waiting request runs.
-    cx.update(|cx| s.manager.update(cx, |m, _| m.stop_workflow_run(A)));
+    stop(&s, A, cx);
     cx.run_until_parked();
     assert_eq!(runs(&s, A)[0].status, RunStatus::Stopped);
     look(&s, cx);
@@ -241,7 +265,7 @@ fn a_second_run_of_a_workflow_waits_for_the_first(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_stop_written_in_the_file_stops_the_run_that_is_going(cx: &mut TestAppContext) {
     let s = setup(cx);
-    put(&s, vec![waiting(A, json!({"runRequested": true}))]);
+    put(&s, vec![waiting(&s, A, json!({"runRequested": true}))]);
     look(&s, cx);
     assert!(running(&s, A, cx));
     update_workflows(&dir(&s), |mut list| {
@@ -253,7 +277,10 @@ fn a_stop_written_in_the_file_stops_the_run_that_is_going(cx: &mut TestAppContex
     assert_eq!(runs(&s, A)[0].status, RunStatus::Stopped);
     assert!(!saved(&s)[0].stop_requested);
     assert!(!running(&s, A, cx));
-    assert!(reported(&s, "## Ship it \u{b7} stopped"));
+    assert_eq!(
+        runs(&s, A)[0].summary.as_ref().map(|s| s.title.as_str()),
+        Some("Ship it \u{b7} stopped")
+    );
 }
 
 #[gpui::test]
@@ -262,7 +289,7 @@ fn a_resume_written_in_the_file_continues_an_interrupted_run(cx: &mut TestAppCon
     let def = quick(A, json!({}));
     let interrupted = mark_interrupted(&start_run(
         &def,
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         1_000,
         "run-old",
     ));
@@ -275,7 +302,6 @@ fn a_resume_written_in_the_file_continues_an_interrupted_run(cx: &mut TestAppCon
     assert_eq!(history[0].id, "run-old");
     assert_eq!(history[0].status, RunStatus::Done);
     assert_eq!(saved(&s)[0].resume_run_id, None);
-    assert!(reported(&s, "## Ship it \u{b7} completed"));
 }
 
 #[gpui::test]
@@ -286,125 +312,97 @@ fn the_first_look_interrupts_runs_a_previous_session_left_but_not_the_ones_it_dr
     put(
         &s,
         vec![
-            waiting(A, json!({"runRequested": true})),
+            waiting(&s, A, json!({"runRequested": true})),
             quick(B, json!({})),
         ],
     );
     look(&s, cx);
     assert!(running(&s, A, cx));
     let live_id = runs(&s, A)[0].id.clone();
-    let stale = start_run(
+    // A run a previous session of the app left going.
+    let mut stale = start_run(
         &quick(B, json!({})),
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         1_000,
         "run-stale",
     );
-    assert_eq!(stale.status, RunStatus::Running);
+    stale.status = RunStatus::Running;
     put_runs(&s, B, vec![stale]);
     forget_startup(&s, cx);
     look(&s, cx);
     assert_eq!(runs(&s, B)[0].status, RunStatus::Interrupted);
-    // An interrupted run says nothing until it is resumed.
-    assert!(!reported(&s, "## Ship it \u{b7} interrupted"));
     let driven = runs(&s, A);
     assert_eq!(
         (driven[0].id.as_str(), driven[0].status),
         (live_id.as_str(), RunStatus::Running)
     );
     // It is done once: a later look does not sweep again.
-    put_runs(
-        &s,
-        B,
-        vec![start_run(
-            &quick(B, json!({})),
-            RunCaller::new(CallerKind::Manual, "trigger"),
-            2_000,
-            "run-new",
-        )],
+    let mut newer = start_run(
+        &quick(B, json!({})),
+        RunCaller::new(CallerKind::Manual, "start"),
+        2_000,
+        "run-new",
     );
+    newer.status = RunStatus::Running;
+    put_runs(&s, B, vec![newer]);
     look(&s, cx);
     assert_eq!(runs(&s, B)[0].status, RunStatus::Running);
 }
 
 #[gpui::test]
-fn the_first_look_removes_question_sessions_a_quit_left_behind(cx: &mut TestAppContext) {
+fn what_an_old_per_mono_file_had_enabled_no_longer_fires_and_the_file_is_left_alone(
+    cx: &mut TestAppContext,
+) {
     let s = setup(cx);
-    let (leftover, lookalike) = {
-        let db = locked(&s.store).unwrap();
-        let leftover = db.create("codex", &s.project).unwrap();
-        db.title(leftover.id, "Mono \u{b7} workflow question")
-            .unwrap();
-        // A hidden session whose title only looks like one: the roster never recorded it.
-        let lookalike = db.create("codex", &s.project).unwrap();
-        db.title(lookalike.id, "Mono \u{b7} workflow question")
-            .unwrap();
-        (leftover.id, lookalike.id)
-    };
-    cx.update(|cx| {
-        s.manager.update(cx, |m, _| {
-            m.roster.hidden_sessions.extend([leftover, lookalike]);
-            m.roster.ask_sessions.push(leftover);
-        })
-    });
+    // The file the Mono's workflows lived in before they were global: a run is asked for and a
+    // schedule is overdue.
+    let old = MonoDir::new(&s.root, &s.id);
+    let due = definition(
+        B,
+        vec![
+            json!({"id": "start", "type": "schedule", "schedule": {"scheduleKind": "daily", "time": "09:00", "minute": 0, "dayOfWeek": 1}}),
+        ],
+        vec![],
+        json!({"enabled": true, "nextRunAt": 1}),
+    );
+    update_workflows(&old, |_| {
+        Ok((
+            vec![quick(A, json!({"runRequested": true})), due.clone()],
+            (),
+        ))
+    })
+    .unwrap();
+    let before = load_workflows(&old).unwrap();
+    look(&s, cx);
     forget_startup(&s, cx);
     look(&s, cx);
+    cx.executor().advance_clock(Duration::from_secs(61));
     cx.run_until_parked();
-    let (hidden, asks, sessions): (Vec<i64>, Vec<i64>, Vec<i64>) = (
-        cx.update(|cx| s.manager.read(cx).roster.hidden_sessions.clone()),
-        cx.update(|cx| s.manager.read(cx).roster.ask_sessions.clone()),
-        locked(&s.store)
-            .unwrap()
-            .sessions()
-            .unwrap()
-            .into_iter()
-            .map(|session| session.id)
-            .collect(),
-    );
-    assert!(!hidden.contains(&leftover) && !sessions.contains(&leftover));
-    assert!(!asks.contains(&leftover));
-    assert!(hidden.contains(&lookalike) && sessions.contains(&lookalike));
-    // The Mono's own chat is never taken for one.
-    assert!(hidden.contains(&s.session) && sessions.contains(&s.session));
-}
-
-#[gpui::test]
-fn a_question_is_recorded_while_it_waits_and_forgotten_when_it_ends(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    put(&s, vec![waiting(A, json!({"runRequested": true}))]);
-    look(&s, cx);
-    let recorded = cx.update(|cx| s.manager.read(cx).roster.ask_sessions.clone());
-    assert_eq!(recorded.len(), 1);
-    assert!(cx.update(|cx| {
-        s.manager
-            .read(cx)
-            .roster
-            .hidden_sessions
-            .contains(&recorded[0])
-    }));
-    cx.update(|cx| s.manager.update(cx, |m, _| m.stop_workflow_run(A)));
-    cx.executor().advance_clock(Duration::from_secs(3));
-    cx.run_until_parked();
-    // Stopping abandons the question; its session goes at its own timer, and is forgotten then.
-    cx.executor().advance_clock(Duration::from_secs(600));
-    cx.run_until_parked();
-    assert!(cx.update(|cx| s.manager.read(cx).roster.ask_sessions.is_empty()));
+    assert!(runs(&s, A).is_empty() && runs(&s, B).is_empty());
+    assert!(saved(&s).is_empty(), "the global store is its own file");
+    assert!(load_runs(&old, A).unwrap().is_empty());
+    assert!(load_runs(&old, B).unwrap().is_empty());
+    let after = load_workflows(&old).unwrap();
+    assert_eq!(before.hash, after.hash, "never written");
+    assert!(after.workflows[0].run_requested);
 }
 
 #[gpui::test]
 fn a_look_asked_for_during_a_look_follows_it_and_never_overlaps(cx: &mut TestAppContext) {
     let s = setup(cx);
     put(&s, vec![quick(A, json!({"runRequested": true}))]);
+    let workflows = workflows_of(&s, cx);
     cx.update(|cx| {
-        s.manager.update(cx, |m, cx| {
-            m.check_workflows(cx);
-            assert!(m.workflow_checks.checking);
-            m.check_workflows(cx);
-            assert!(m.workflow_checks.again);
+        workflows.update(cx, |w, cx| {
+            w.check_workflows(cx);
+            assert!(w.checks.checking);
+            w.check_workflows(cx);
+            assert!(w.checks.again);
         })
     });
     cx.run_until_parked();
     cx.update(|cx| {
-        let checks = &s.manager.read(cx).workflow_checks;
+        let checks = &workflows.read(cx).checks;
         assert!(!checks.checking && !checks.again);
     });
     assert_eq!(runs(&s, A).len(), 1);
@@ -415,30 +413,24 @@ fn quitting_leaves_a_run_running_in_its_file_and_the_next_start_interrupts_it(
     cx: &mut TestAppContext,
 ) {
     let s = setup(cx);
-    put(&s, vec![waiting(A, json!({"runRequested": true}))]);
+    put(&s, vec![waiting(&s, A, json!({"runRequested": true}))]);
     look(&s, cx);
     assert!(running(&s, A, cx));
-    let before = chat_rows(&s).len();
     cx.update(begin_quit);
     cx.run_until_parked();
     assert!(!running(&s, A, cx));
-    // No stop: the file says `running`, no report was posted.
+    // No stop: the file says `running`, no summary was written.
     assert_eq!(runs(&s, A)[0].status, RunStatus::Running);
-    assert_eq!(chat_rows(&s).len(), before);
+    assert_eq!(runs(&s, A)[0].summary, None);
     // The next start (another process: the free function stands in for its first look) marks it,
     // and it can be resumed.
     let signals = monocode_core::mono::workflows::cli::Signals::default();
-    let probe = |_: Kind| Probe {
-        installed: true,
-        models: None,
-    };
     let looked = look_at(
-        &s.root,
-        &[(s.id.clone(), true)],
+        &dir(&s),
         &[],
         true,
         &signals,
-        probes(probe),
+        probes(probe_nothing),
         monocode_core::time::now_ms(),
     );
     assert!(looked.swept);
@@ -446,9 +438,9 @@ fn quitting_leaves_a_run_running_in_its_file_and_the_next_start_interrupts_it(
 }
 
 #[gpui::test]
-fn the_quit_path_reaches_the_manager_through_the_app(cx: &mut TestAppContext) {
+fn the_quit_path_reaches_the_runner_through_the_app(cx: &mut TestAppContext) {
     let s = setup(cx);
-    put(&s, vec![waiting(A, json!({"runRequested": true}))]);
+    put(&s, vec![waiting(&s, A, json!({"runRequested": true}))]);
     look(&s, cx);
     assert!(running(&s, A, cx));
     cx.update(begin_quit);
@@ -458,99 +450,45 @@ fn the_quit_path_reaches_the_manager_through_the_app(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn deleting_a_mono_stops_its_workflow_runs(cx: &mut TestAppContext) {
+fn deleting_a_mono_leaves_the_workflow_runs_going(cx: &mut TestAppContext) {
     let s = setup(cx);
-    put(&s, vec![waiting(A, json!({"runRequested": true}))]);
+    put(&s, vec![waiting(&s, A, json!({"runRequested": true}))]);
     look(&s, cx);
     assert!(running(&s, A, cx));
-    assert_eq!(
-        cx.update(|cx| s.manager.read(cx).workflow_live.asks.len()),
-        1
-    );
-    let handle: gpui::AnyWindowHandle = s.window.into();
-    let id = s.id.clone();
-    handle
-        .update(cx, |_, window, cx| {
-            s.manager.update(cx, |m, cx| m.delete_mono(&id, window, cx))
-        })
-        .unwrap();
-    cx.simulate_prompt_answer("Delete");
-    cx.run_until_parked();
-    cx.update(|cx| {
-        let monos = s.manager.read(cx);
-        assert!(monos.roster.get(&s.id).is_none());
-        assert!(!monos.workflows.is_running(A));
-        assert!(!monos.workflow_signals.is_running(A));
-        assert!(
-            monos.workflow_live.asks.is_empty(),
-            "its question ended too"
-        );
-    });
-    assert_eq!(runs(&s, A)[0].status, RunStatus::Stopped);
-}
-
-#[gpui::test]
-fn deleting_a_mono_from_the_phone_stops_its_workflow_runs_too(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    put(&s, vec![waiting(A, json!({"runRequested": true}))]);
-    look(&s, cx);
-    assert!(running(&s, A, cx));
-    assert_eq!(
-        cx.update(|cx| s.manager.read(cx).workflow_live.asks.len()),
-        1
-    );
     let deleted = cx.update(|cx| s.manager.update(cx, |m, cx| m.mobile_delete(&s.id, cx)));
     assert_eq!(deleted, Ok(Value::Null));
     cx.run_until_parked();
-    cx.update(|cx| {
-        let monos = s.manager.read(cx);
-        assert!(monos.roster.get(&s.id).is_none());
-        assert!(!monos.workflows.is_running(A));
-        assert!(!monos.workflow_signals.is_running(A));
-        assert!(
-            monos.workflow_live.asks.is_empty(),
-            "its question ended too"
-        );
-    });
-    assert_eq!(runs(&s, A)[0].status, RunStatus::Stopped);
+    cx.update(|cx| assert!(s.manager.read(cx).roster.get(&s.id).is_none()));
+    // No Mono owns the run, so it goes on.
+    assert!(running(&s, A, cx));
+    assert_eq!(runs(&s, A)[0].status, RunStatus::Running);
 }
 
 #[test]
-fn a_look_over_missing_monos_is_empty_and_counts_as_swept() {
-    let root = std::env::temp_dir().join(format!("wf-look-{}", mono::new_id()));
+fn a_look_over_a_missing_store_is_empty_and_counts_as_swept() {
+    let root = std::env::temp_dir().join(format!("wf-look-{}", monocode_core::mono::new_id()));
+    let dir = WorkflowsDir::new(root.join("workflows"));
     let signals = monocode_core::mono::workflows::cli::Signals::default();
-    let probe = |_: Kind| Probe {
-        installed: true,
-        models: None,
-    };
-    let looked = look_at(
-        &root,
-        &[("nobody".into(), true)],
-        &[],
-        true,
-        &signals,
-        probes(probe),
-        1,
-    );
-    assert!(looked.swept && looked.monos.is_empty() && looked.errors.is_empty());
-    let looked = look_at(&root, &[], &[], false, &signals, probes(probe), 1);
+    let looked = look_at(&dir, &[], true, &signals, probes(probe_nothing), 1);
+    assert!(looked.swept && looked.found.is_none() && looked.errors.is_empty());
+    let looked = look_at(&dir, &[], false, &signals, probes(probe_nothing), 1);
     assert!(!looked.swept);
 }
 
 #[gpui::test]
-fn the_quit_does_not_need_the_manager_to_be_free(cx: &mut TestAppContext) {
-    // The tray's Quit runs inside an update of the manager.
+fn the_quit_does_not_need_the_entity_to_be_free(cx: &mut TestAppContext) {
+    // The tray's Quit runs inside an update of the entities.
     let s = setup(cx);
-    cx.update(|cx| s.manager.update(cx, |_, cx| begin_quit(cx)));
-    cx.update(|cx| assert!(s.manager.read(cx).workflows.is_quitting()));
+    let workflows = workflows_of(&s, cx);
+    cx.update(|cx| workflows.update(cx, |_, cx| begin_quit(cx)));
+    cx.update(|cx| assert!(workflows.read(cx).runner.is_quitting()));
 }
 
 #[gpui::test]
 fn after_the_quit_a_look_starts_nothing_and_writes_nothing(cx: &mut TestAppContext) {
     let s = setup(cx);
     put(&s, vec![quick(A, json!({"runRequested": true}))]);
-    let before = std::fs::read_to_string(s.root.join("monos").join(&s.id).join("workflows.json"))
-        .unwrap_or_default();
+    let before = std::fs::read_to_string(dir(&s).root().join("workflows.json")).unwrap_or_default();
     cx.update(begin_quit);
     look(&s, cx);
     let signals = cx.update(|cx| s.manager.read(cx).workflow_signals.clone());
@@ -559,8 +497,7 @@ fn after_the_quit_a_look_starts_nothing_and_writes_nothing(cx: &mut TestAppConte
     cx.run_until_parked();
     assert!(runs(&s, A).is_empty());
     assert!(saved(&s)[0].run_requested, "the request was not claimed");
-    let after = std::fs::read_to_string(s.root.join("monos").join(&s.id).join("workflows.json"))
-        .unwrap_or_default();
+    let after = std::fs::read_to_string(dir(&s).root().join("workflows.json")).unwrap_or_default();
     assert_eq!(before, after);
 }
 
@@ -568,12 +505,16 @@ fn after_the_quit_a_look_starts_nothing_and_writes_nothing(cx: &mut TestAppConte
 fn a_look_that_was_going_when_the_app_quit_starts_nothing(cx: &mut TestAppContext) {
     let s = setup(cx);
     // One that would be failed and reported, and one that would run.
-    let mut broken = quick(B, json!({"runRequested": true}));
-    broken.nodes.retain(|n| n.id != "report");
-    broken.edges.clear();
-    put(&s, vec![quick(A, json!({"runRequested": true})), broken]);
+    put(
+        &s,
+        vec![
+            quick(A, json!({"runRequested": true})),
+            broken(B, json!({"runRequested": true})),
+        ],
+    );
     // The look is under way (its claim may already be written) when the quit begins.
-    cx.update(|cx| s.manager.update(cx, |m, cx| m.check_workflows(cx)));
+    let workflows = workflows_of(&s, cx);
+    cx.update(|cx| workflows.update(cx, |w, cx| w.check_workflows(cx)));
     cx.update(begin_quit);
     cx.run_until_parked();
     assert!(
@@ -584,40 +525,6 @@ fn a_look_that_was_going_when_the_app_quit_starts_nothing(cx: &mut TestAppContex
         let monos = s.manager.read(cx);
         assert!(!monos.workflows.is_running(A) && !monos.workflow_signals.is_running(A));
     });
-    let rows = chat_rows(&s);
-    assert!(
-        rows.iter().all(|row| !row.starts_with("## Ship it")),
-        "{rows:?}"
-    );
-}
-
-#[gpui::test]
-fn a_leftover_question_that_is_already_gone_does_not_hold_up_the_others(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    let real = locked(&s.store)
-        .unwrap()
-        .create("codex", &s.project)
-        .unwrap()
-        .id;
-    let gone = real + 1000;
-    // Nothing failed: the missing one counts as deleted, the real one is deleted.
-    assert_eq!(
-        delete_asks(&s.store, &[gone, real]).unwrap(),
-        Vec::<i64>::new()
-    );
-    let remaining: Vec<i64> = locked(&s.store)
-        .unwrap()
-        .sessions()
-        .unwrap()
-        .into_iter()
-        .map(|session| session.id)
-        .collect();
-    assert!(!remaining.contains(&real));
-    // And the same ids again: nothing left, nothing fails.
-    assert_eq!(
-        delete_asks(&s.store, &[gone, real]).unwrap(),
-        Vec::<i64>::new()
-    );
 }
 
 fn probes(models: fn(Kind) -> Probe) -> Probes {
@@ -640,16 +547,13 @@ fn probe_nothing(_: Kind) -> Probe {
 }
 
 /// A look whose background half is done but whose runs are not started yet (what the model
-/// probing of a slow catalog leaves open), as the manager would be in the middle of it.
+/// probing of a slow catalog leaves open), as the entity would be in the middle of it.
 fn half_a_look(s: &Setup, cx: &mut TestAppContext) -> Looked {
-    cx.update(|cx| {
-        s.manager
-            .update(cx, |m, _| m.workflow_checks.checking = true)
-    });
+    let workflows = workflows_of(s, cx);
+    cx.update(|cx| workflows.update(cx, |w, _| w.checks.checking = true));
     let signals = cx.update(|cx| s.manager.read(cx).workflow_signals.clone());
     look_at(
-        &s.root,
-        &[(s.id.clone(), true)],
+        &dir(s),
         &[],
         false,
         &signals,
@@ -664,7 +568,11 @@ fn a_workflow_claimed_but_not_started_yet_counts_as_running(cx: &mut TestAppCont
     let signals = cx.update(|cx| s.manager.read(cx).workflow_signals.clone());
     put(
         &s,
-        vec![waiting(A, json!({"runRequested": true, "enabled": true}))],
+        vec![waiting(
+            &s,
+            A,
+            json!({"runRequested": true, "enabled": true}),
+        )],
     );
     let looked = half_a_look(&s, cx);
     assert!(signals.is_running(A), "marked at the claim");
@@ -686,7 +594,8 @@ fn a_workflow_claimed_but_not_started_yet_counts_as_running(cx: &mut TestAppCont
     );
     ask("stop-1", "workflows.stop", cx).unwrap();
     // The look in progress ends: the run starts, and the stop asked for meanwhile follows it.
-    cx.update(|cx| s.manager.update(cx, |m, cx| m.workflows_looked(looked, cx)));
+    let workflows = workflows_of(&s, cx);
+    cx.update(|cx| workflows.update(cx, |w, cx| w.workflows_looked(looked, cx)));
     cx.run_until_parked();
     let history = runs(&s, A);
     assert_eq!(history.len(), 1, "one run, not two");
@@ -700,42 +609,13 @@ fn a_workflow_claimed_but_not_started_yet_counts_as_running(cx: &mut TestAppCont
 fn a_claim_that_is_not_started_gives_the_mark_back(cx: &mut TestAppContext) {
     let s = setup(cx);
     let signals = cx.update(|cx| s.manager.read(cx).workflow_signals.clone());
-    put(&s, vec![waiting(A, json!({"runRequested": true}))]);
+    put(&s, vec![waiting(&s, A, json!({"runRequested": true}))]);
     let looked = half_a_look(&s, cx);
     assert!(signals.is_running(A));
-    // The Mono is gone by the time the look ends.
-    cx.update(|cx| {
-        s.manager.update(cx, |m, cx| {
-            m.roster.monos.clear();
-            m.workflows_looked(looked, cx);
-        })
-    });
+    // The app begins to quit before the look ends: nothing starts, and the mark goes.
+    cx.update(begin_quit);
+    let workflows = workflows_of(&s, cx);
+    cx.update(|cx| workflows.update(cx, |w, cx| w.workflows_looked(looked, cx)));
     assert!(!signals.is_running(A));
     assert!(runs(&s, A).is_empty());
-}
-
-#[gpui::test]
-fn forgetting_a_question_session_never_writes_over_a_newer_roster(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    let id = locked(&s.store)
-        .unwrap()
-        .create("codex", &s.project)
-        .unwrap()
-        .id;
-    cx.update(|cx| {
-        s.manager.update(cx, |m, cx| {
-            m.roster.ask_sessions.push(id);
-            m.forget_asks(vec![id], cx);
-            // A change made right after, saved through the manager's ordered writes.
-            m.roster.hidden_sessions.push(424_242);
-            m.save(cx);
-        })
-    });
-    cx.run_until_parked();
-    let roster = monocode_core::mono::Roster::load(&locked(&s.store).unwrap()).unwrap();
-    assert!(
-        roster.hidden_sessions.contains(&424_242),
-        "the newer write is the last"
-    );
-    assert!(!roster.ask_sessions.contains(&id));
 }

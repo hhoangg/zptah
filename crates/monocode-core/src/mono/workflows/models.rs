@@ -446,19 +446,19 @@ mod tests {
         workflow_from(&format!(
             r#"{{"id":"wf-abcd1234","name":"Models","inputs":{{"project":{{"type":"project"}}}},
                 "inputValues":{{"project":"/work/api"}},
-                "nodes":[{{"id":"trigger","type":"manual"}},
+                "nodes":[{{"id":"start","type":"manual"}},
                   {{"id":"hi","type":"session","project":"{{{{inputs.project}}}}","prompt":"hi","checkout":"root","output":{{}}{extra}}}],
-                "edges":[{{"from":"trigger","to":"hi"}}],
+                "edges":[{{"from":"start","to":"hi"}}],
                 "enabled":false,"createdAt":0}}"#
         ))
     }
 
     fn plain() -> Workflow {
-        workflow_from(&format!(
-            r#"{{"id":"wf-abcd1234","name":"Plain","inputs":{{}},"inputValues":{{}},
-                "nodes":[{{"id":"trigger","type":"manual"}}],
-                "edges":[],"enabled":false,"createdAt":0}}"#
-        ))
+        workflow_from(
+            r#"{"id":"wf-abcd1234","name":"Plain","inputs":{},"inputValues":{},
+                "nodes":[{"id":"start","type":"manual"}],
+                "edges":[],"enabled":false,"createdAt":0}"#,
+        )
     }
 
     fn unavailable(value: &str) -> String {

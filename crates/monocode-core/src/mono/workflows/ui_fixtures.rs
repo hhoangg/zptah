@@ -10,7 +10,7 @@ pub fn n(v: Value) -> Node {
 }
 
 pub fn manual() -> Node {
-    n(json!({"id": "trigger", "type": "manual"}))
+    n(json!({"id": "start", "type": "manual"}))
 }
 
 /// The last step of the fixtures: a command named `report` (there is no Report node any more,
@@ -25,7 +25,7 @@ pub fn report() -> Node {
 pub fn workflow() -> Workflow {
     let mut w = Workflow::new("wf-aaaaaaaa", "Nightly checks");
     w.nodes = vec![manual(), report()];
-    w.edges = vec![Edge::new("trigger", "report")];
+    w.edges = vec![Edge::new("start", "report")];
     w.enabled = true;
     w.created_at = 1;
     w
@@ -40,12 +40,13 @@ pub fn run() -> WorkflowRun {
         status: RunStatus::Done,
         started_at: 1_000_000,
         ended_at: Some(1_060_000),
-        caller: RunCaller::new(CallerKind::Manual, "trigger"),
+        caller: RunCaller::new(CallerKind::Manual, "start"),
         folder_id: None,
         items: BTreeMap::new(),
         nodes: Vec::new(),
         report_posted_at: None,
         error: None,
         cloud_instances: Vec::new(),
+        summary: None,
     }
 }

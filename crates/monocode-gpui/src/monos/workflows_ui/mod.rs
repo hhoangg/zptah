@@ -54,7 +54,7 @@ use monocode_core::mono::workflows::{
     cli::StoreHost,
     model::{Workflow, WorkflowRun},
     preflight::Preflight,
-    store::{MonoDir, load_runs, load_workflows},
+    store::{load_runs, load_workflows},
 };
 use std::collections::BTreeSet;
 
@@ -141,18 +141,12 @@ impl Monos {
         self.mono_workflows().map(Vec::len)
     }
 
-    /// The Mono's workflow files, with how this app probes the model catalog.
-    pub(super) fn workflow_store(&self, mono: &str) -> StoreHost {
-        let host = StoreHost::new(
-            MonoDir::new(&self.root, mono),
-            self.workflow_signals.clone(),
-        )
-        .with_probe(self.workflow_live.probe())
-        .with_preflight(self.workflow_live.preflight());
-        match self.roster.get(mono) {
-            Some(m) => host.with_projects(m.projects.clone()),
-            None => host,
-        }
+    /// The global workflow files, with how this app probes the model catalog. The user is the
+    /// caller: `_mono` only says which Mono's page asked.
+    pub(super) fn workflow_store(&self, _mono: &str) -> StoreHost {
+        StoreHost::new(self.workflow_dir.clone(), self.workflow_signals.clone())
+            .with_probe(self.workflow_live.probe())
+            .with_preflight(self.workflow_live.preflight())
     }
 
     /// Whether the tab or a workflow page is on screen.
@@ -242,7 +236,7 @@ impl Monos {
         };
         self.wf.revision += 1;
         let revision = self.wf.revision;
-        let dir = MonoDir::new(&self.root, mono.clone());
+        let dir = self.workflow_dir.clone();
         // The open page also shows the workflow's recent runs.
         // A run the runner holds is shown from there, not from its file.
         let wanted = match &self.route {

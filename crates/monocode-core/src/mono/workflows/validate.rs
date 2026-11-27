@@ -21,12 +21,12 @@ pub struct WorkflowIssue {
 
 const RUN_VARS: [&str; 3] = ["round", "id", "startedAt"];
 /// Template variables a node output must not shadow.
-const RESERVED_NODE_IDS: [&str; 3] = ["run", "inputs", "results"];
+const RESERVED_NODE_IDS: [&str; 4] = ["run", "inputs", "results", "trigger"];
 /// Extra `run` fields only the summary template gets (see `compose_report`).
 const REPORT_RUN_VARS: [&str; 4] = ["name", "status", "statusLabel", "endedAt"];
 const COMMAND_FIELDS: [&str; 3] = ["exitCode", "stdout", "stderr"];
 /// The fields of `{{trigger.*}}`: the trigger node that fired, what kind of caller started the run
-/// and, for an event run, the item. A node named "trigger" keeps its own output fields too.
+/// and, for an event run, the item. "trigger" is a reserved node id, so nothing else shares it.
 const TRIGGER_VARS: [&str; 3] = ["node", "kind", "item"];
 const FOR_EACH_FIELDS: [&str; 1] = ["results"];
 const PATH_ROOTS: [&str; 14] = [
@@ -408,7 +408,7 @@ impl<'a> Checker<'a> {
                 && (path.len() == 2 || field == Some("item"))
             {
                 // `trigger.item` holds whatever the event brought; its shape is not declared.
-            } else if head == "trigger" && !self.g.by_id.contains_key("trigger") {
+            } else if head == "trigger" {
                 self.add(
                     format!(
                         "{label} is not a trigger variable (use {})",

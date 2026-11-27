@@ -90,7 +90,7 @@ fn node_ids(nodes: &[&FlowNode]) -> Vec<String> {
 fn linear() -> Workflow {
     let mut w = workflow();
     w.nodes = vec![manual(), session("dev", json!({})), report()];
-    w.edges = vec![Edge::new("trigger", "dev"), Edge::new("dev", "report")];
+    w.edges = vec![Edge::new("start", "dev"), Edge::new("dev", "report")];
     w
 }
 
@@ -107,7 +107,7 @@ fn each_workflow() -> Workflow {
         report(),
     ];
     w.edges = vec![
-        Edge::new("trigger", "each"),
+        Edge::new("start", "each"),
         Edge::new("dev", "review"),
         Edge::new("each", "report"),
     ];
@@ -128,7 +128,7 @@ fn node_status(s: RunNodeStatus) -> NodeStatus {
 
 fn each_run(statuses: &[RunNodeStatus]) -> WorkflowRun {
     let mut nodes = vec![
-        nr("trigger"),
+        nr("start"),
         NodeRun {
             status: NodeStatus::Running,
             ..nr("each")
@@ -174,7 +174,7 @@ fn linear_run_maps_statuses_and_labels() {
     let r = WorkflowRun {
         definition: linear(),
         nodes: vec![
-            nr("trigger"),
+            nr("start"),
             NodeRun {
                 started_at: Some(1000),
                 ended_at: Some(13000),
@@ -185,14 +185,14 @@ fn linear_run_maps_statuses_and_labels() {
         ..run()
     };
     let RunGraph { nodes, edges } = graph(&r, RunView::Lanes);
-    assert_eq!(state_of_node(&nodes, "trigger").status, Done);
+    assert_eq!(state_of_node(&nodes, "start").status, Done);
     assert_eq!(state_of_node(&nodes, "dev").status, Done);
     assert!(state_of_node(&nodes, "dev").label.starts_with("Done"));
     assert!(state_of_node(&nodes, "dev").label.contains("12s"));
     assert_eq!(state_of_node(&nodes, "dev").node_run_key, "dev|");
     assert_eq!(state_of_node(&nodes, "report").status, Pending);
     assert_eq!(
-        edge_of(&edges, "trigger", "dev", None).run,
+        edge_of(&edges, "start", "dev", None).run,
         Some(RunEdgeState::Taken)
     );
     // Spec 5.1: a done source takes its edge even though the target has not started.
@@ -207,7 +207,7 @@ fn an_edge_out_of_a_done_node_is_taken_whether_its_target_is_pending_or_skipped(
     for target in [NodeStatus::Pending, NodeStatus::Skipped] {
         let r = WorkflowRun {
             definition: linear(),
-            nodes: vec![nr("trigger"), nr("dev"), nr_in("report", "", target)],
+            nodes: vec![nr("start"), nr("dev"), nr_in("report", "", target)],
             ..run()
         };
         let g = graph(&r, RunView::Lanes);
@@ -219,7 +219,7 @@ fn an_edge_out_of_a_done_node_is_taken_whether_its_target_is_pending_or_skipped(
     let not_done = WorkflowRun {
         definition: linear(),
         nodes: vec![
-            nr("trigger"),
+            nr("start"),
             nr_in("dev", "", NodeStatus::Failed),
             nr_in("report", "", NodeStatus::Pending),
         ],
@@ -242,14 +242,14 @@ fn if_marks_only_the_taken_side() {
         session("no", json!({})),
     ];
     w.edges = vec![
-        Edge::new("trigger", "check"),
+        Edge::new("start", "check"),
         super::fixtures::edge(r#"{"from": "check", "to": "yes", "handle": "true"}"#),
         super::fixtures::edge(r#"{"from": "check", "to": "no", "handle": "false"}"#),
     ];
     let r = WorkflowRun {
         definition: w,
         nodes: vec![
-            nr("trigger"),
+            nr("start"),
             NodeRun {
                 decision: Some(Decision {
                     value: "true".into(),
@@ -287,7 +287,7 @@ fn keeps_the_duration_next_to_a_decision_a_failure_or_a_stop() {
                 }),
                 started_at: Some(0),
                 ended_at: Some(12_000),
-                ..nr("trigger")
+                ..nr("start")
             },
             NodeRun {
                 error: Some("Exit code 2".into()),
@@ -305,7 +305,7 @@ fn keeps_the_duration_next_to_a_decision_a_failure_or_a_stop() {
     };
     let RunGraph { nodes, .. } = graph(&r, RunView::Lanes);
     assert_eq!(
-        state_of_node(&nodes, "trigger").label,
+        state_of_node(&nodes, "start").label,
         "Done · loop: needs tests · 12s"
     );
     assert_eq!(
@@ -322,7 +322,7 @@ fn running_node_and_active_edge() {
         definition: linear(),
         status: RunStatus::Running,
         nodes: vec![
-            nr("trigger"),
+            nr("start"),
             NodeRun {
                 started_at: Some(now - 180_000),
                 ..nr_in("dev", "", NodeStatus::Running)
@@ -335,7 +335,7 @@ fn running_node_and_active_edge() {
     assert_eq!(state_of_node(&nodes, "dev").status, Running);
     assert_eq!(state_of_node(&nodes, "dev").label, "Running 3m");
     assert_eq!(
-        edge_of(&edges, "trigger", "dev", None).run,
+        edge_of(&edges, "start", "dev", None).run,
         Some(RunEdgeState::Active)
     );
 }
@@ -346,7 +346,7 @@ fn asking_a_loop_question_shows_waiting() {
         definition: linear(),
         status: RunStatus::Running,
         nodes: vec![
-            nr("trigger"),
+            nr("start"),
             NodeRun {
                 started_at: Some(1),
                 ended_at: Some(2),
@@ -367,7 +367,7 @@ fn waiting_for_approval_and_a_failure_show_their_own_state() {
         definition: linear(),
         status: RunStatus::Running,
         nodes: vec![
-            nr("trigger"),
+            nr("start"),
             NodeRun {
                 error: Some("Exit code 2".into()),
                 ..nr_in("dev", "", NodeStatus::Failed)
@@ -610,7 +610,7 @@ fn empty_and_failed_for_each_have_no_lanes() {
         definition: each_workflow(),
         items: BTreeMap::new(),
         nodes: vec![
-            nr("trigger"),
+            nr("start"),
             NodeRun {
                 error: Some("Expected a list for {{trigger.tickets}}".into()),
                 ..nr_in("each", "", NodeStatus::Failed)
@@ -665,7 +665,7 @@ fn renders_a_run_saved_before_history_existed() {
         definition: each_workflow(),
         items: BTreeMap::new(),
         nodes: vec![
-            nr("trigger"),
+            nr("start"),
             nr_in("each", "", NodeStatus::Pending),
             nr_in("report", "", NodeStatus::Pending),
         ],
@@ -703,7 +703,7 @@ fn shows_the_round_on_a_node_that_looped_and_a_loop_edge_as_taken() {
         session("review", json!({})),
     ];
     w.edges = vec![
-        Edge::new("trigger", "dev"),
+        Edge::new("start", "dev"),
         Edge::new("dev", "review"),
         super::fixtures::edge(
             r#"{"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "mono"}}"#,
@@ -713,7 +713,7 @@ fn shows_the_round_on_a_node_that_looped_and_a_loop_edge_as_taken() {
         definition: w,
         status: RunStatus::Running,
         nodes: vec![
-            nr("trigger"),
+            nr("start"),
             NodeRun {
                 round: 2,
                 started_at: Some(NOW),
@@ -760,7 +760,7 @@ fn a_for_each_in_a_loop_whose_current_round_failed_shows_that_round() {
         definition: each_workflow(),
         items: items(json!({"each@r1": [{"title": "Old A"}]})),
         nodes: vec![
-            nr("trigger"),
+            nr("start"),
             NodeRun {
                 round: 2,
                 error: Some("Expected a list for {{trigger.tickets}}".into()),
@@ -802,7 +802,7 @@ fn no_items_is_only_for_a_for_each_that_expanded_to_an_empty_list() {
             definition: each_workflow(),
             items: BTreeMap::new(),
             nodes: vec![
-                nr("trigger"),
+                nr("start"),
                 NodeRun {
                     error: error.map(str::to_string),
                     ..nr_in("each", "", status)
@@ -815,7 +815,7 @@ fn no_items_is_only_for_a_for_each_that_expanded_to_an_empty_list() {
     let no_record = WorkflowRun {
         definition: each_workflow(),
         items: BTreeMap::new(),
-        nodes: vec![nr("trigger")],
+        nodes: vec![nr("start")],
         ..run()
     };
     assert_eq!(views(&no_record)[0].summary, "Not started");
@@ -825,7 +825,7 @@ fn no_items_is_only_for_a_for_each_that_expanded_to_an_empty_list() {
     let empty = WorkflowRun {
         definition: each_workflow(),
         items: items(json!({"each": []})),
-        nodes: vec![nr("trigger"), nr("each")],
+        nodes: vec![nr("start"), nr("each")],
         ..run()
     };
     assert_eq!(views(&empty)[0].summary, "No items");
@@ -857,7 +857,7 @@ fn moves_everything_a_grown_group_would_cover_cascading() {
         json!({"ui": {"x": 0, "y": 300.0 + 48.0 + 4.0}}),
     ));
     move_node(&mut w, "each", 0.0, 0.0);
-    move_node(&mut w, "trigger", 600.0, 400.0);
+    move_node(&mut w, "start", 600.0, 400.0);
     move_node(&mut w, "report", 600.0, 500.0);
     let r = WorkflowRun {
         definition: w,
@@ -897,7 +897,7 @@ fn moves_each_node_below_or_beside_a_widened_group_exactly_once() {
         );
     }
     move_node(&mut w, "each", 0.0, 0.0);
-    move_node(&mut w, "trigger", 700.0, 3000.0);
+    move_node(&mut w, "start", 700.0, 3000.0);
     move_node(&mut w, "report", 700.0, 3100.0);
     let r = WorkflowRun {
         definition: w.clone(),
@@ -1019,7 +1019,7 @@ fn a_loop_edge_whose_source_is_asking_is_active_and_one_not_looped_is_idle() {
         session("review", json!({})),
     ];
     w.edges = vec![
-        Edge::new("trigger", "dev"),
+        Edge::new("start", "dev"),
         Edge::new("dev", "review"),
         super::fixtures::edge(
             r#"{"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "mono"}}"#,
@@ -1028,7 +1028,7 @@ fn a_loop_edge_whose_source_is_asking_is_active_and_one_not_looped_is_idle() {
     let asking = WorkflowRun {
         definition: w.clone(),
         nodes: vec![
-            nr("trigger"),
+            nr("start"),
             nr("dev"),
             NodeRun {
                 started_at: Some(1),
@@ -1045,7 +1045,7 @@ fn a_loop_edge_whose_source_is_asking_is_active_and_one_not_looped_is_idle() {
     );
     let quiet = WorkflowRun {
         definition: w,
-        nodes: vec![nr("trigger"), nr("dev"), nr("review")],
+        nodes: vec![nr("start"), nr("dev"), nr("review")],
         ..run()
     };
     let g = graph(&quiet, RunView::Lanes);
@@ -1058,7 +1058,7 @@ fn a_loop_edge_whose_source_is_asking_is_active_and_one_not_looped_is_idle() {
 #[test]
 fn an_edge_between_a_lane_and_the_outside_is_left_out() {
     let mut w = each_workflow();
-    w.edges.push(Edge::new("trigger", "dev"));
+    w.edges.push(Edge::new("start", "dev"));
     let r = WorkflowRun {
         definition: w,
         ..each_run(&[Done, Done])
@@ -1067,7 +1067,7 @@ fn an_edge_between_a_lane_and_the_outside_is_left_out() {
     assert!(g
         .edges
         .iter()
-        .all(|e| !(e.source == "trigger" && e.target.starts_with("dev"))));
+        .all(|e| !(e.source == "start" && e.target.starts_with("dev"))));
 }
 
 #[test]
@@ -1076,7 +1076,7 @@ fn a_node_below_the_widened_part_of_a_group_moves_down() {
     w.nodes
         .push(session("corner", json!({"ui": {"x": 350, "y": 400}})));
     move_node(&mut w, "each", 0.0, 0.0);
-    move_node(&mut w, "trigger", 700.0, 3000.0);
+    move_node(&mut w, "start", 700.0, 3000.0);
     move_node(&mut w, "report", 700.0, 3100.0);
     let r = WorkflowRun {
         definition: w,
@@ -1177,7 +1177,7 @@ fn a_switch_marks_only_the_edge_of_the_case_or_default_it_took() {
         session("other", json!({})),
     ];
     w.edges = vec![
-        Edge::new("trigger", "route"),
+        Edge::new("start", "route"),
         super::fixtures::edge(r#"{"from": "route", "to": "fix", "handle": "bug"}"#),
         super::fixtures::edge(r#"{"from": "route", "to": "plan", "handle": "feature"}"#),
         super::fixtures::edge(r#"{"from": "route", "to": "other", "handle": "default"}"#),
@@ -1186,7 +1186,7 @@ fn a_switch_marks_only_the_edge_of_the_case_or_default_it_took() {
         let r = WorkflowRun {
             definition: w.clone(),
             nodes: vec![
-                nr("trigger"),
+                nr("start"),
                 NodeRun {
                     decision: Some(Decision {
                         value: decision.into(),
@@ -1218,16 +1218,16 @@ fn a_switch_marks_only_the_edge_of_the_case_or_default_it_took() {
     // A handle on an edge of a node that is not an If or Switch is ignored.
     let mut stray = w.clone();
     stray.edges.push(super::fixtures::edge(
-        r#"{"from": "trigger", "to": "other", "handle": "bug"}"#,
+        r#"{"from": "start", "to": "other", "handle": "bug"}"#,
     ));
     let r = WorkflowRun {
         definition: stray,
-        nodes: vec![nr("trigger"), nr_in("other", "", NodeStatus::Pending)],
+        nodes: vec![nr("start"), nr_in("other", "", NodeStatus::Pending)],
         ..run()
     };
     let RunGraph { edges, .. } = graph(&r, RunView::Lanes);
     assert_eq!(
-        edge_of(&edges, "trigger", "other", Some("bug")).run,
+        edge_of(&edges, "start", "other", Some("bug")).run,
         Some(Taken)
     );
 }

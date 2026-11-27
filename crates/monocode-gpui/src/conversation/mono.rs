@@ -398,11 +398,6 @@ impl Conversation {
     pub(crate) fn mono_settled(&self) -> bool {
         !self.busy && !self.stopping
     }
-    /// Makes the conversation look like a stopped turn is still finishing.
-    #[cfg(test)]
-    pub(crate) fn hold_working_for_test(&mut self, on: bool) {
-        self.stopping = on;
-    }
     /// Gives the conversation a Codex model whose reasoning efforts its settings can pick.
     #[cfg(test)]
     pub(crate) fn seed_mono_model_for_test(&mut self, id: &str, efforts: &[&str]) {

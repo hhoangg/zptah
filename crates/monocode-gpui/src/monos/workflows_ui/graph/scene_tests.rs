@@ -118,12 +118,12 @@ fn a_port_label_is_cut_to_fit_under_its_out() {
 #[test]
 fn an_edge_runs_from_the_bottom_of_a_card_to_the_top_of_the_next() {
     let w = workflow(
-        json!([{"id": "trigger", "type": "manual"}, session("dev"), {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
-        json!([{"from": "trigger", "to": "dev"}, {"from": "dev", "to": "report"}]),
+        json!([{"id": "start", "type": "manual"}, session("dev"), {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
+        json!([{"from": "start", "to": "dev"}, {"from": "dev", "to": "report"}]),
     );
     let scene = scene_of(&w);
     assert_eq!(scene.edges.len(), 2);
-    let (a, b) = (&node(&scene, "trigger").rect, &node(&scene, "dev").rect);
+    let (a, b) = (&node(&scene, "start").rect, &node(&scene, "dev").rect);
     let (start, end) = first_and_last(&scene.edges[0]);
     assert_eq!(
         start,
@@ -148,12 +148,12 @@ fn an_edge_runs_from_the_bottom_of_a_card_to_the_top_of_the_next() {
 fn the_two_outs_of_an_if_leave_from_28_and_72_percent_of_its_width() {
     let w = workflow(
         json!([
-            {"id": "trigger", "type": "manual"},
+            {"id": "start", "type": "manual"},
             {"id": "check", "type": "if", "condition": "{{trigger.x}} == 1"},
             session("yes"), session("no"),
         ]),
         json!([
-            {"from": "trigger", "to": "check"},
+            {"from": "start", "to": "check"},
             {"from": "check", "to": "yes", "handle": "true"},
             {"from": "check", "to": "no", "handle": "false"},
         ]),
@@ -163,7 +163,7 @@ fn the_two_outs_of_an_if_leave_from_28_and_72_percent_of_its_width() {
     let starts: Vec<f32> = scene
         .edges
         .iter()
-        .filter(|e| !e.id.starts_with("trigger"))
+        .filter(|e| !e.id.starts_with("start"))
         .map(|e| first_and_last(e).0.x - rect.x)
         .collect();
     assert_eq!(starts.len(), 2);
@@ -180,9 +180,9 @@ fn the_two_outs_of_an_if_leave_from_28_and_72_percent_of_its_width() {
 #[test]
 fn a_loop_edge_leaves_the_right_of_the_later_card_and_comes_back_into_the_earlier() {
     let w = workflow(
-        json!([{"id": "trigger", "type": "manual"}, session("dev"), session("review")]),
+        json!([{"id": "start", "type": "manual"}, session("dev"), session("review")]),
         json!([
-            {"from": "trigger", "to": "dev"},
+            {"from": "start", "to": "dev"},
             {"from": "dev", "to": "review"},
             {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
         ]),
@@ -221,9 +221,9 @@ fn a_loop_edge_leaves_the_right_of_the_later_card_and_comes_back_into_the_earlie
 #[test]
 fn a_compact_loop_edge_hugs_the_cards_and_has_no_label() {
     let w = workflow(
-        json!([{"id": "trigger", "type": "manual"}, session("dev"), session("review")]),
+        json!([{"id": "start", "type": "manual"}, session("dev"), session("review")]),
         json!([
-            {"from": "trigger", "to": "dev"},
+            {"from": "start", "to": "dev"},
             {"from": "dev", "to": "review"},
             {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
         ]),
@@ -276,20 +276,20 @@ fn the_loop_label_names_the_decider_and_cuts_a_long_condition() {
 fn a_for_each_takes_and_gives_its_lines_over_the_column_of_the_cards_inside() {
     let w = workflow(
         json!([
-            {"id": "trigger", "type": "manual"},
+            {"id": "start", "type": "manual"},
             {"id": "each", "type": "forEach", "in": "{{trigger.items}}"},
             {"id": "dev", "type": "session", "parent": "each", "project": "{{inputs.project}}",
              "prompt": "x", "checkout": "root", "output": {}},
             {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
-        json!([{"from": "trigger", "to": "each"}, {"from": "each", "to": "report"}]),
+        json!([{"from": "start", "to": "each"}, {"from": "each", "to": "report"}]),
     );
     let scene = scene_of(&w);
     let frame = node(&scene, "each").rect;
     let into = scene
         .edges
         .iter()
-        .find(|e| e.id.contains("each") && e.id.contains("trigger"))
+        .find(|e| e.id.contains("each") && e.id.contains("start"))
         .unwrap();
     assert_eq!(first_and_last(into).1.x, frame.x + GROUP_PAD + NODE_W / 2.);
     let out = scene
@@ -315,9 +315,9 @@ fn a_for_each_takes_and_gives_its_lines_over_the_column_of_the_cards_inside() {
 #[test]
 fn the_bounds_cover_the_cards_the_bars_and_the_loop_label() {
     let w = workflow(
-        json!([{"id": "trigger", "type": "manual"}, session("dev"), session("review")]),
+        json!([{"id": "start", "type": "manual"}, session("dev"), session("review")]),
         json!([
-            {"from": "trigger", "to": "dev"},
+            {"from": "start", "to": "dev"},
             {"from": "dev", "to": "review"},
             {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
         ]),
@@ -346,8 +346,8 @@ fn the_bounds_cover_the_cards_the_bars_and_the_loop_label() {
 #[test]
 fn run_states_travel_with_the_edges() {
     let w = workflow(
-        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
-        json!([{"from": "trigger", "to": "report"}]),
+        json!([{"id": "start", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
+        json!([{"from": "start", "to": "report"}]),
     );
     let flow = to_flow(&w);
     let mut edges = flow.edges.clone();
@@ -359,14 +359,14 @@ fn run_states_travel_with_the_edges() {
 #[test]
 fn an_edge_to_a_node_that_is_not_drawn_is_left_out() {
     let w = workflow(
-        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
-        json!([{"from": "trigger", "to": "report"}]),
+        json!([{"id": "start", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
+        json!([{"from": "start", "to": "report"}]),
     );
     let flow = to_flow(&w);
     let only_trigger: Vec<_> = flow
         .nodes
         .iter()
-        .filter(|n| n.id == "trigger")
+        .filter(|n| n.id == "start")
         .cloned()
         .collect();
     let scene = Scene::build(&only_trigger, &flow.edges, Vec::new(), "fit".into());
@@ -377,9 +377,9 @@ fn an_edge_to_a_node_that_is_not_drawn_is_left_out() {
 fn the_loop_label_never_covers_a_card_the_loop_passes() {
     // A loop from the third card back to the first runs past the second.
     let w = workflow(
-        json!([{"id": "trigger", "type": "manual"}, session("a"), session("b"), session("c")]),
+        json!([{"id": "start", "type": "manual"}, session("a"), session("b"), session("c")]),
         json!([
-            {"from": "trigger", "to": "a"},
+            {"from": "start", "to": "a"},
             {"from": "a", "to": "b"},
             {"from": "b", "to": "c"},
             {"from": "c", "to": "a", "loop": {"maxRounds": 3, "decide": "{{c.verdict}} != \"approve\" and a long reason"}},

@@ -188,7 +188,7 @@ mod tests {
         w
     }
 
-    const DAILY: &str = r#"{"id":"trigger","type":"schedule","schedule":{"scheduleKind":"daily","time":"09:00","minute":0,"dayOfWeek":1}}"#;
+    const DAILY: &str = r#"{"id":"start","type":"schedule","schedule":{"scheduleKind":"daily","time":"09:00","minute":0,"dayOfWeek":1}}"#;
 
     fn workflow() -> Workflow {
         workflow_with(DAILY, "")
@@ -249,7 +249,7 @@ mod tests {
 
         #[test]
         fn a_manual_workflow_has_no_schedule_to_move() {
-            let mut w = workflow_with(r#"{"id":"trigger","type":"manual"}"#, "");
+            let mut w = workflow_with(r#"{"id":"start","type":"manual"}"#, "");
             w.run_requested = true;
             w.next_run_at = None;
             let claimed = after_claim(&w, now(), Some("run-3"));
@@ -270,7 +270,7 @@ mod tests {
         #[test]
         fn an_interval_schedule_moves_to_its_next_slot() {
             let w = workflow_with(
-                r#"{"id":"trigger","type":"schedule","schedule":{"scheduleKind":"interval","time":"00:00","minute":0,"dayOfWeek":1,"intervalHours":6,"intervalFrom":"2026-10-01"}}"#,
+                r#"{"id":"start","type":"schedule","schedule":{"scheduleKind":"interval","time":"00:00","minute":0,"dayOfWeek":1,"intervalHours":6,"intervalFrom":"2026-10-01"}}"#,
                 "",
             );
             let moved = after_claim(&w, now(), Some("r")).next_run_at.unwrap();
@@ -285,7 +285,7 @@ mod tests {
         #[test]
         fn a_schedule_that_cannot_be_computed_leaves_no_time_to_fire_on() {
             let w = workflow_with(
-                r#"{"id":"trigger","type":"schedule","schedule":{"scheduleKind":"daily","time":"99:99","minute":0,"dayOfWeek":1}}"#,
+                r#"{"id":"start","type":"schedule","schedule":{"scheduleKind":"daily","time":"99:99","minute":0,"dayOfWeek":1}}"#,
                 "",
             );
             assert_eq!(after_claim(&w, now(), Some("r")).next_run_at, None);
@@ -324,7 +324,7 @@ mod tests {
             later.next_run_at = Some(now() + 1);
             let mut off = workflow();
             off.enabled = false;
-            let manual = workflow_with(r#"{"id":"trigger","type":"manual"}"#, "");
+            let manual = workflow_with(r#"{"id":"start","type":"manual"}"#, "");
             let list = [later, off, manual];
             let due = due_workflows(&list, now(), never);
             assert!(due.run.is_empty() && due.advance.is_empty());
@@ -397,13 +397,13 @@ mod tests {
         use super::*;
 
         fn two_schedules() -> Workflow {
-            let mut w = workflow_from(&format!(
-                r#"{{"id":"wf-abcd1234","name":"Ship it","inputs":{{}},"inputValues":{{}},
-                    "nodes":[{{"id":"hand","type":"manual"}},
-                      {{"id":"morning","type":"schedule","schedule":{{"scheduleKind":"daily","time":"08:00","minute":0,"dayOfWeek":1}}}},
-                      {{"id":"evening","type":"schedule","schedule":{{"scheduleKind":"daily","time":"18:00","minute":0,"dayOfWeek":1}}}}],
-                    "edges":[],"enabled":true,"createdAt":0}}"#
-            ));
+            let mut w = workflow_from(
+                r#"{"id":"wf-abcd1234","name":"Ship it","inputs":{},"inputValues":{},
+                    "nodes":[{"id":"hand","type":"manual"},
+                      {"id":"morning","type":"schedule","schedule":{"scheduleKind":"daily","time":"08:00","minute":0,"dayOfWeek":1}},
+                      {"id":"evening","type":"schedule","schedule":{"scheduleKind":"daily","time":"18:00","minute":0,"dayOfWeek":1}}],
+                    "edges":[],"enabled":true,"createdAt":0}"#,
+            );
             w.next_run_at = None;
             w
         }

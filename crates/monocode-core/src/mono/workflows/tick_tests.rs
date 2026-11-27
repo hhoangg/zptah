@@ -38,7 +38,7 @@ fn dir(root: &std::path::Path) -> MonoDir {
     MonoDir::new(root, "mono-1")
 }
 
-const DAILY: &str = r#"{"id":"trigger","type":"schedule","schedule":{"scheduleKind":"daily","time":"09:00","minute":0,"dayOfWeek":1}}"#;
+const DAILY: &str = r#"{"id":"start","type":"schedule","schedule":{"scheduleKind":"daily","time":"09:00","minute":0,"dayOfWeek":1}}"#;
 
 /// A valid scheduled workflow that is due (its time was a second ago). Its one step is a session
 /// the runner has to start, so a started run is still going.
@@ -47,7 +47,7 @@ fn workflow_with(id: &str, extra: Value) -> Workflow {
         r#"{{"id":"{id}","name":"Ship it","inputs":{{"repo":{{"type":"project"}}}},
             "inputValues":{{"repo":"/code/app"}},
             "nodes":[{DAILY},{{"id":"step","type":"session","project":"{{{{inputs.repo}}}}","prompt":"go","checkout":"root","output":{{}}}}],
-            "edges":[{{"from":"trigger","to":"step"}}],
+            "edges":[{{"from":"start","to":"step"}}],
             "enabled":true,"createdAt":1,"nextRunAt":{}}}"#,
         now() - 1_000
     ))
@@ -77,7 +77,7 @@ fn with_session(extra: &str) -> Workflow {
             r#"{{"id":"dev","type":"session","project":"{{{{inputs.repo}}}}","prompt":"go","checkout":"root",{extra}}}"#
         )),
     );
-    w.edges = vec![super::fixtures::edge(r#"{"from":"trigger","to":"dev"}"#)];
+    w.edges = vec![super::fixtures::edge(r#"{"from":"start","to":"dev"}"#)];
     assert_eq!(validate_workflow(&w), vec![]);
     w
 }
@@ -257,7 +257,7 @@ fn a_due_scheduled_workflow_is_claimed_and_started() {
     let (run, failure) = runs[0];
     assert!(failure.is_none());
     assert_eq!(run.workflow_id, ID);
-    assert_eq!(run.caller, RunCaller::new(CallerKind::Schedule, "trigger"));
+    assert_eq!(run.caller, RunCaller::new(CallerKind::Schedule, "start"));
     assert_eq!(run.status, RunStatus::Running);
     assert_eq!(run.started_at, now());
     let after = stored_one(&disk);
@@ -272,7 +272,7 @@ fn three_triggers(extra: Value) -> Workflow {
     let mut spec = json!({
         "inputs": {"repo": {"type": "project"}}, "inputValues": {"repo": "/code/app"},
         "nodes": [
-            {"id": "trigger", "type": "schedule",
+            {"id": "start", "type": "schedule",
              "schedule": {"scheduleKind": "daily", "time": "09:00", "minute": 0, "dayOfWeek": 1}},
             {"id": "evening", "type": "schedule",
              "schedule": {"scheduleKind": "daily", "time": "18:00", "minute": 0, "dayOfWeek": 1}},
@@ -281,7 +281,7 @@ fn three_triggers(extra: Value) -> Workflow {
              "checkout": "root", "output": {}}
         ],
         "edges": [
-            {"from": "trigger", "to": "dev"},
+            {"from": "start", "to": "dev"},
             {"from": "evening", "to": "dev"},
             {"from": "hand", "to": "dev"}
         ]
@@ -301,7 +301,7 @@ fn a_run_records_the_schedule_trigger_that_came_due() {
         &disk,
         &[three_triggers(json!({
             "nextRunAt": now() - 1_000,
-            "nextRunAtByNode": {"trigger": later, "evening": now() - 1_000}
+            "nextRunAtByNode": {"start": later, "evening": now() - 1_000}
         }))],
     );
     let found = look(&disk, &idle);
@@ -313,12 +313,12 @@ fn a_run_records_the_schedule_trigger_that_came_due() {
     // Only the one that came due ran; the other schedule and the manual trigger were skipped.
     let status = |id: &str| run.nodes.iter().find(|n| n.node_id == id).unwrap().status;
     assert_eq!(status("evening"), NodeStatus::Done);
-    assert_eq!(status("trigger"), NodeStatus::Skipped);
+    assert_eq!(status("start"), NodeStatus::Skipped);
     assert_eq!(status("hand"), NodeStatus::Skipped);
     // Claiming moved the one that ran on and left the other's time alone.
     let after = stored_one(&disk);
     assert!(after.next_run_at_by_node["evening"] > now());
-    assert_eq!(after.next_run_at_by_node["trigger"], later);
+    assert_eq!(after.next_run_at_by_node["start"], later);
     assert_eq!(
         after.next_run_at,
         after.next_run_at_by_node.values().min().copied()
@@ -365,7 +365,7 @@ fn a_requested_run_starts_even_when_the_schedule_is_not_due() {
     let runs = runs_of(&found);
     assert_eq!(
         runs[0].0.caller,
-        RunCaller::new(CallerKind::Manual, "trigger")
+        RunCaller::new(CallerKind::Manual, "start")
     );
     let after = stored_one(&disk);
     assert!(!after.run_requested);
@@ -380,12 +380,12 @@ fn a_manual_workflow_runs_on_request_and_stays_paused() {
     let disk = dir(&root);
     let manual = workflow(json!({"runRequested": true, "enabled": false, "nextRunAt": null}));
     let mut manual = manual;
-    manual.nodes[0] = super::fixtures::node(r#"{"id":"trigger","type":"manual"}"#);
+    manual.nodes[0] = super::fixtures::node(r#"{"id":"start","type":"manual"}"#);
     save(&disk, &[manual]);
     let found = look(&disk, &idle);
     assert_eq!(
         runs_of(&found)[0].0.caller,
-        RunCaller::new(CallerKind::Manual, "trigger")
+        RunCaller::new(CallerKind::Manual, "start")
     );
     let after = stored_one(&disk);
     assert!(!after.enabled && !after.run_requested);
@@ -541,7 +541,7 @@ fn an_invalid_workflow_gets_a_failed_run_and_a_message_for_the_chat() {
     let root = temp_root();
     let disk = dir(&root);
     let mut broken = workflow(json!({}));
-    broken.edges = vec![super::fixtures::edge(r#"{"from":"trigger","to":"ghost"}"#)];
+    broken.edges = vec![super::fixtures::edge(r#"{"from":"start","to":"ghost"}"#)];
     assert!(!validate_workflow(&broken).is_empty());
     save(&disk, &[broken]);
     let found = look(&disk, &idle);
@@ -614,7 +614,7 @@ fn the_catalog_is_only_probed_for_the_harnesses_the_workflow_uses() {
 fn interrupted(id: &str) -> WorkflowRun {
     mark_interrupted(&start_run(
         &workflow(json!({})),
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         1_000,
         id,
     ))
@@ -814,7 +814,7 @@ fn a_schedule_that_cannot_move_on_is_not_rewritten_every_look() {
     // but advancing it changes nothing.
     let mut broken = workflow(json!({"nextRunAt": null}));
     broken.nodes[0] = super::fixtures::node(
-        r#"{"id":"trigger","type":"schedule","schedule":{"scheduleKind":"daily","time":"99:99","minute":0,"dayOfWeek":1}}"#,
+        r#"{"id":"start","type":"schedule","schedule":{"scheduleKind":"daily","time":"99:99","minute":0,"dayOfWeek":1}}"#,
     );
     save(&counting.disk, &[broken]);
     for _ in 0..3 {
@@ -829,7 +829,7 @@ fn a_schedule_that_cannot_move_on_is_not_rewritten_every_look() {
 fn running(id: &str) -> WorkflowRun {
     start_run(
         &workflow(json!({})),
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         1_000,
         id,
     )
@@ -1009,7 +1009,7 @@ fn a_scheduled_run_with_a_missing_requirement_fails_with_a_chat_message_and_the_
     let found = look_pf(&disk, &idle, &all_missing);
     let (run, failure) = runs_of(&found)[0];
     assert_eq!(run.status, RunStatus::Failed);
-    assert_eq!(run.caller, RunCaller::new(CallerKind::Schedule, "trigger"));
+    assert_eq!(run.caller, RunCaller::new(CallerKind::Schedule, "start"));
     assert_eq!(run.ended_at, Some(now()));
     let error = run.error.as_deref().unwrap();
     assert_eq!(
@@ -1040,7 +1040,7 @@ fn a_requested_run_with_a_missing_requirement_fails_the_same_way_and_is_consumed
     );
     let found = look_pf(&disk, &idle, &all_missing);
     let (run, failure) = runs_of(&found)[0];
-    assert_eq!(run.caller, RunCaller::new(CallerKind::Manual, "trigger"));
+    assert_eq!(run.caller, RunCaller::new(CallerKind::Manual, "start"));
     assert_eq!(run.status, RunStatus::Failed);
     assert!(run
         .error
@@ -1087,7 +1087,7 @@ fn a_resume_is_refused_while_a_requirement_is_missing_and_the_run_stays_interrup
     }];
     let run = mark_interrupted(&start_run(
         &old,
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         1_000,
         "run-old",
     ));
@@ -1164,7 +1164,7 @@ fn a_resume_goes_ahead_when_the_requirements_are_met_with_the_values_it_started_
     let started = counted(json!({"requires": [{"cli": "gh"}], "runValues": {"count": 9}}));
     let run = mark_interrupted(&start_run(
         &super::model::with_run_values(&started),
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         1_000,
         "run-old",
     ));

@@ -10,6 +10,7 @@ use gpui::{TestAppContext, VisualTestContext};
 use monocode_core::catalog;
 use monocode_core::mono::workflows::{
     cli::Signals,
+    global::WorkflowsDir,
     model::{
         InputType, InputValue, RunStatus, WORKFLOWS_MAX, WorkflowInput, definition_fingerprint,
     },
@@ -46,8 +47,8 @@ pub(super) fn build(extra: Value, nodes: Value, edges: Value) -> Workflow {
 pub(super) fn workflow(extra: Value) -> Workflow {
     build(
         extra,
-        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
-        json!([{"from": "trigger", "to": "report"}]),
+        json!([{"id": "start", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
+        json!([{"from": "start", "to": "report"}]),
     )
 }
 
@@ -60,10 +61,10 @@ fn scheduled(extra: Value) -> Workflow {
     build(
         all,
         json!([
-            {"id": "trigger", "type": "schedule", "schedule": serde_json::from_str::<Value>(SCHEDULE).unwrap()},
+            {"id": "start", "type": "schedule", "schedule": serde_json::from_str::<Value>(SCHEDULE).unwrap()},
             {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
-        json!([{"from": "trigger", "to": "report"}]),
+        json!([{"from": "start", "to": "report"}]),
     )
 }
 
@@ -88,12 +89,12 @@ fn typed_model(extra: Value) -> Workflow {
             all
         },
         json!([
-            {"id": "trigger", "type": "manual"},
+            {"id": "start", "type": "manual"},
             {"id": "hi", "type": "session", "project": "{{inputs.project}}", "prompt": "hi",
              "checkout": "root", "output": {}, "model": MODEL},
             {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
-        json!([{"from": "trigger", "to": "hi"}, {"from": "hi", "to": "report"}]),
+        json!([{"from": "start", "to": "hi"}, {"from": "hi", "to": "report"}]),
     )
 }
 
@@ -117,7 +118,7 @@ pub(super) fn listing(_: Kind) -> Probe {
 
 /// A Mono's folder in a temp dir with the host the actions run over.
 pub(super) struct Disk {
-    pub(super) dir: MonoDir,
+    pub(super) dir: WorkflowsDir,
     pub(super) host: StoreHost,
     pub(super) signals: Arc<Signals>,
 }
@@ -125,7 +126,7 @@ pub(super) struct Disk {
 pub(super) fn disk(list: Vec<Workflow>) -> Disk {
     let root = std::env::temp_dir().join(format!("wf-ui-{}", monocode_core::mono::new_id()));
     std::fs::create_dir_all(&root).unwrap();
-    let dir = MonoDir::new(&root, "mono-1");
+    let dir = WorkflowsDir::new(root.join("workflows"));
     let signals = Arc::new(Signals::default());
     let host = StoreHost::new(dir.clone(), signals.clone()).with_probe(listing);
     update_workflows(&dir, |_| Ok((list.clone(), ()))).unwrap();
@@ -238,7 +239,7 @@ fn remove_takes_the_workflow_out_and_empties_its_history() {
         &workflow(json!({})),
         monocode_core::mono::workflows::model::RunCaller::new(
             monocode_core::mono::workflows::model::CallerKind::Manual,
-            "trigger",
+            "start",
         ),
         1,
         "run-1",
@@ -264,7 +265,7 @@ fn removing_a_workflow_first_names_the_instances_its_interrupted_runs_left() {
     let new_run = |id: &str, status: RunStatus, instance: &str| {
         let mut run = monocode_core::mono::workflows::engine::start_run(
             &workflow(json!({})),
-            RunCaller::new(CallerKind::Manual, "trigger"),
+            RunCaller::new(CallerKind::Manual, "start"),
             1,
             id,
         );
@@ -300,7 +301,7 @@ fn removing_a_workflow_from_its_own_page_still_shows_the_instances_it_left(
     put(&s, vec![workflow(json!({}))]);
     let mut run = monocode_core::mono::workflows::engine::start_run(
         &workflow(json!({})),
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         1,
         "run-1",
     );
@@ -312,10 +313,7 @@ fn removing_a_workflow_from_its_own_page_still_shows_the_instances_it_left(
         nodes: vec!["build".into()],
         sessions: vec!["remote:1".into()],
     }];
-    update_runs(&MonoDir::new(&s.root, &s.id), A, |_| {
-        Ok((vec![run.clone()], ()))
-    })
-    .unwrap();
+    update_runs(&s.workflows_dir(), A, |_| Ok((vec![run.clone()], ()))).unwrap();
     open_tab(&s, cx);
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
@@ -401,11 +399,11 @@ fn approve_changes_nothing_when_the_stored_definition_is_not_the_one_reviewed() 
         build(
             json!({"enabled": false, "needsReview": true, "inputs": {"project": {"type": "project"}}, "inputValues": {"project": "/work/api"}}),
             json!([
-                {"id": "trigger", "type": "manual"},
+                {"id": "start", "type": "manual"},
                 {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": text},
                 {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
             ]),
-            json!([{"from": "trigger", "to": "build"}, {"from": "build", "to": "report"}]),
+            json!([{"from": "start", "to": "build"}, {"from": "build", "to": "report"}]),
         )
     };
     let reviewed = command("npm test");
@@ -575,7 +573,7 @@ fn branches_count_nodes_at_work_not_the_group_itself() {
         &workflow(json!({})),
         monocode_core::mono::workflows::model::RunCaller::new(
             monocode_core::mono::workflows::model::CallerKind::Manual,
-            "trigger",
+            "start",
         ),
         1,
         "run-live",
@@ -669,21 +667,19 @@ fn hidden_characters_are_shown_in_what_the_review_prints() {
 // ---- the pages, in a real Monos -----------------------------------------------------------
 
 pub(super) fn put(s: &Setup, list: Vec<Workflow>) {
-    let dir = MonoDir::new(&s.root, &s.id);
+    let dir = s.workflows_dir();
     update_workflows(&dir, |_| Ok((list.clone(), ()))).unwrap();
 }
 
 pub(super) fn saved(s: &Setup) -> Vec<Workflow> {
-    load_workflows(&MonoDir::new(&s.root, &s.id))
-        .unwrap()
-        .workflows
+    load_workflows(&s.workflows_dir()).unwrap().workflows
 }
 
 pub(super) fn history(
     s: &Setup,
     id: &str,
 ) -> Vec<monocode_core::mono::workflows::model::WorkflowRun> {
-    load_runs(&MonoDir::new(&s.root, &s.id), id).unwrap()
+    load_runs(&s.workflows_dir(), id).unwrap()
 }
 
 /// The overview open on the Workflows tab with the Mono's files read.
@@ -890,23 +886,30 @@ fn remove_on_a_row_is_refused_while_a_run_is_going(cx: &mut TestAppContext) {
         .read_with(visual, |m, _| m.workflow_signals.set_running(A, false));
 }
 
-fn waiting(extra: Value) -> Workflow {
+/// manual trigger -> a session step that never gets a turn in a test, so a run of it stays live.
+pub(super) fn waiting_workflow(s: &Setup, extra: Value) -> Workflow {
+    waiting(s, extra)
+}
+
+fn waiting(s: &Setup, extra: Value) -> Workflow {
+    let mut extra = extra;
+    extra["inputs"] = json!({"project": {"type": "project"}});
+    extra["inputValues"] = json!({"project": s.project});
     build(
         extra,
         json!([
-            {"id": "trigger", "type": "manual"},
-            {"id": "ask", "type": "switch", "decide": "ai", "question": "Ship it?", "cases": ["yes", "no"]},
-            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
+            {"id": "start", "type": "manual"},
+            {"id": "ask", "type": "session", "project": "{{inputs.project}}", "prompt": "Ship it?", "checkout": "root", "output": {}},
         ]),
-        json!([{"from": "trigger", "to": "ask"}, {"from": "ask", "to": "report"}]),
+        json!([{"from": "start", "to": "ask"}]),
     )
 }
 
 #[gpui::test]
 fn a_running_row_offers_stop_and_stop_ends_the_run(cx: &mut TestAppContext) {
     let s = setup(cx);
-    put(&s, vec![waiting(json!({"runRequested": true}))]);
-    s.manager.update(cx, |m, cx| m.check_workflows(cx));
+    put(&s, vec![waiting(&s, json!({"runRequested": true}))]);
+    crate::monos::tests::check_workflows(&s, cx);
     cx.run_until_parked();
     assert!(s.manager.read_with(cx, |m, _| m.workflows.is_running(A)));
     open_tab(&s, cx);
@@ -937,7 +940,7 @@ fn a_running_row_offers_stop_and_stop_ends_the_run(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_list_follows_a_run_that_starts_and_ends_in_the_runner(cx: &mut TestAppContext) {
     let s = setup(cx);
-    put(&s, vec![waiting(json!({}))]);
+    put(&s, vec![waiting(&s, json!({}))]);
     open_tab(&s, cx);
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
@@ -946,13 +949,13 @@ fn the_list_follows_a_run_that_starts_and_ends_in_the_runner(cx: &mut TestAppCon
             .debug_bounds("mono-workflow-stop-wf-aaaaaaaa")
             .is_none()
     );
-    let dir = MonoDir::new(&s.root, &s.id);
+    let dir = s.workflows_dir();
     update_workflows(&dir, |mut list| {
         list[0].run_requested = true;
         Ok((list, ()))
     })
     .unwrap();
-    s.manager.update(visual, |m, cx| m.check_workflows(cx));
+    crate::monos::tests::check_workflows(&s, visual);
     visual.run_until_parked();
     // The clock notices the runner started a run.
     s.manager.update(visual, |m, cx| {
@@ -1045,7 +1048,7 @@ fn the_page_lists_recent_runs_newest_first_and_opens_one(cx: &mut TestAppContext
         &w,
         monocode_core::mono::workflows::model::RunCaller::new(
             monocode_core::mono::workflows::model::CallerKind::Manual,
-            "trigger",
+            "start",
         ),
         1_000,
         "run-1",
@@ -1055,7 +1058,7 @@ fn the_page_lists_recent_runs_newest_first_and_opens_one(cx: &mut TestAppContext
     let mut failed = done.clone();
     failed.id = "run-2".into();
     failed.status = RunStatus::Failed;
-    update_runs(&MonoDir::new(&s.root, &s.id), A, |_| {
+    update_runs(&s.workflows_dir(), A, |_| {
         Ok((vec![failed.clone(), done.clone()], ()))
     })
     .unwrap();

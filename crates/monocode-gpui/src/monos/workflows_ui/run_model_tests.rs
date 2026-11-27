@@ -41,7 +41,7 @@ pub(super) fn run_of(w: &Workflow, status: &str, items: Value, nodes: Value) -> 
     serde_json::from_value(json!({
         "id": "run-1", "workflowId": "wf-aaaaaaaa",
         "definition": serde_json::to_value(w).unwrap(),
-        "status": status, "startedAt": 1_000_000, "trigger": "manual",
+        "status": status, "startedAt": 1_000_000, "start": "manual",
         "items": items, "nodes": nodes,
     }))
     .expect("a run")
@@ -57,8 +57,8 @@ pub(super) fn nr(node_id: &str, branch: &str, status: &str, extra: Value) -> Val
 
 pub(super) fn linear() -> Workflow {
     workflow(
-        json!([{"id": "trigger", "type": "manual"}, session("dev", json!({})), {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
-        json!([{"from": "trigger", "to": "dev"}, {"from": "dev", "to": "report"}]),
+        json!([{"id": "start", "type": "manual"}, session("dev", json!({})), {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
+        json!([{"from": "start", "to": "dev"}, {"from": "dev", "to": "report"}]),
     )
 }
 
@@ -66,14 +66,14 @@ pub(super) fn linear() -> Workflow {
 pub(super) fn each_workflow() -> Workflow {
     workflow(
         json!([
-            {"id": "trigger", "type": "manual"},
+            {"id": "start", "type": "manual"},
             {"id": "each", "type": "forEach", "in": "{{trigger.tickets}}", "title": "Tickets"},
             session("dev", json!({"parent": "each"})),
             session("review", json!({"parent": "each"})),
             {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
         json!([
-            {"from": "trigger", "to": "each"},
+            {"from": "start", "to": "each"},
             {"from": "dev", "to": "review"},
             {"from": "each", "to": "report"},
         ]),
@@ -82,7 +82,7 @@ pub(super) fn each_workflow() -> Workflow {
 
 pub(super) fn each_run(count: usize) -> WorkflowRun {
     let mut nodes = vec![
-        nr("trigger", "", "done", json!({})),
+        nr("start", "", "done", json!({})),
         nr("each", "", "running", json!({})),
     ];
     for i in 0..count {
@@ -138,7 +138,7 @@ fn run_page_draws_one_card_per_run_node() {
         "running",
         json!({}),
         json!([
-            nr("trigger", "", "done", json!({})),
+            nr("start", "", "done", json!({})),
             nr("dev", "", "done", json!({})),
             nr("report", "", "pending", json!({}))
         ]),
@@ -161,7 +161,7 @@ fn run_page_draws_one_card_per_run_node() {
         vec![
             ("dev".into(), "done"),
             ("report".into(), "pending"),
-            ("trigger".into(), "done")
+            ("start".into(), "done")
         ]
     );
 }
@@ -343,7 +343,7 @@ fn bars_title_each_lane_and_the_round_selector_sits_over_the_group() {
 pub(super) fn lane_run() -> WorkflowRun {
     let w = workflow(
         json!([
-            {"id": "trigger", "type": "manual"},
+            {"id": "start", "type": "manual"},
             {"id": "each", "type": "forEach", "in": "{{trigger.tickets}}", "title": "Tickets"},
             session("dev", json!({"parent": "each"})),
             {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
@@ -355,7 +355,7 @@ pub(super) fn lane_run() -> WorkflowRun {
         "running",
         json!({"each": [{"title": "Fix login"}, {"name": "Billing"}, {}]}),
         json!([
-            nr("trigger", "", "done", json!({})),
+            nr("start", "", "done", json!({})),
             nr("each", "", "running", json!({})),
             nr(
                 "dev",
@@ -383,7 +383,7 @@ fn run_page_shows_one_card_per_item_node_titled_by_item_with_round_2() {
             "dev@each#2",
             "each",
             "report",
-            "trigger"
+            "start"
         ]
     );
     let titles: Vec<String> = s
@@ -439,7 +439,7 @@ fn the_rounds_of_a_for_each_a_loop_ran_again_can_be_picked() {
         ],
     );
     run.nodes = serde_json::from_value(json!([
-        nr("trigger", "", "done", json!({})),
+        nr("start", "", "done", json!({})),
         nr("each", "", "running", json!({"round": 2})),
         nr("dev", "each#0", "running", json!({"sessionId": "live-0"})),
         nr("dev", "each#1", "pending", json!({})),
@@ -506,7 +506,7 @@ fn pick_run(nodes: Value) -> WorkflowRun {
 #[test]
 fn details_start_on_the_running_node() {
     let run = pick_run(json!([
-        nr("trigger", "", "done", json!({})),
+        nr("start", "", "done", json!({})),
         nr("dev", "", "running", json!({})),
         nr("report", "", "pending", json!({}))
     ]));
@@ -516,14 +516,14 @@ fn details_start_on_the_running_node() {
 #[test]
 fn without_a_running_node_the_last_to_finish_is_picked() {
     let run = pick_run(json!([
-        nr("trigger", "", "done", json!({"endedAt": 10})),
+        nr("start", "", "done", json!({"endedAt": 10})),
         nr("dev", "", "done", json!({"endedAt": 30})),
         nr("report", "", "pending", json!({})),
     ]));
     assert_eq!(default_selection(&run).as_deref(), Some("dev|"));
     // Nothing finished: the last node there is.
     let fresh = pick_run(json!([
-        nr("trigger", "", "pending", json!({})),
+        nr("start", "", "pending", json!({})),
         nr("dev", "", "pending", json!({}))
     ]));
     assert_eq!(default_selection(&fresh).as_deref(), Some("dev|"));
@@ -553,7 +553,7 @@ fn details(run: &WorkflowRun, key: &str) -> Details {
 #[test]
 fn clicking_a_node_shows_its_details_and_round_history() {
     let run = pick_run(json!([
-        nr("trigger", "", "done", json!({})),
+        nr("start", "", "done", json!({})),
         nr(
             "dev",
             "",
@@ -661,16 +661,16 @@ fn an_output_that_is_not_text_is_shown_as_json() {
 
 fn command_run(output: Value) -> WorkflowRun {
     let w = workflow(
-        json!([{"id": "trigger", "type": "manual"},
+        json!([{"id": "start", "type": "manual"},
                {"id": "lint", "type": "command", "command": "npm run lint", "project": "{{inputs.project}}"}]),
-        json!([{"from": "trigger", "to": "lint"}]),
+        json!([{"from": "start", "to": "lint"}]),
     );
     run_of(
         &w,
         "failed",
         json!({}),
         json!([
-            nr("trigger", "", "done", json!({})),
+            nr("start", "", "done", json!({})),
             nr(
                 "lint",
                 "",

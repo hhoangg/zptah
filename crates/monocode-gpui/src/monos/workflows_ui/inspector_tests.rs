@@ -211,7 +211,7 @@ fn picking_an_effort_fixes_the_model_it_was_chosen_for_and_use_mono_default_clea
     }
     let s = setup(cx);
     s.manager.update(cx, |m, _| {
-        m.workflow_live = crate::monos::workflow_runner::Live::new().with_probe(efforts)
+        m.workflow_live = crate::workflows::Probes::new().with_probe(efforts)
     });
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
@@ -252,7 +252,7 @@ fn the_inspector_says_why_a_stored_model_is_not_available(cx: &mut TestAppContex
         *model = Some("claude-sonnet-5-5".into());
     }
     s.manager.update(cx, |m, _| {
-        m.workflow_live = crate::monos::workflow_runner::Live::new().with_probe(listing)
+        m.workflow_live = crate::workflows::Probes::new().with_probe(listing)
     });
     let mut visual = open_board(&s, &w, cx);
     let visual = &mut visual;
@@ -618,36 +618,31 @@ fn a_schedule_trigger_edits_its_kind_hours_and_time(cx: &mut TestAppContext) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
-    event(&s, visual, GraphEvent::Click("trigger".into()));
+    event(&s, visual, GraphEvent::Click("start".into()));
     pick(
         &s,
         visual,
-        BoardPick::ScheduleKind("trigger".into()),
+        BoardPick::ScheduleKind("start".into()),
         "interval",
     );
-    let NodeKind::Schedule { schedule } = node_of(&s, visual, "trigger").kind else {
+    let NodeKind::Schedule { schedule } = node_of(&s, visual, "start").kind else {
         panic!()
     };
     assert_eq!(
         (schedule.schedule_kind.as_str(), schedule.interval_hours),
         ("interval", Some(4))
     );
-    pick(&s, visual, BoardPick::ScheduleHours("trigger".into()), "6");
-    type_in(&s, visual, BoardField::Time("trigger".into()), "08:30");
-    let NodeKind::Schedule { schedule } = node_of(&s, visual, "trigger").kind else {
+    pick(&s, visual, BoardPick::ScheduleHours("start".into()), "6");
+    type_in(&s, visual, BoardField::Time("start".into()), "08:30");
+    let NodeKind::Schedule { schedule } = node_of(&s, visual, "start").kind else {
         panic!()
     };
     assert_eq!(
         (schedule.interval_hours, schedule.time.as_str()),
         (Some(6), "08:30")
     );
-    pick(
-        &s,
-        visual,
-        BoardPick::ScheduleKind("trigger".into()),
-        "daily",
-    );
-    let NodeKind::Schedule { schedule } = node_of(&s, visual, "trigger").kind else {
+    pick(&s, visual, BoardPick::ScheduleKind("start".into()), "daily");
+    let NodeKind::Schedule { schedule } = node_of(&s, visual, "start").kind else {
         panic!()
     };
     assert_eq!(schedule.interval_hours, None);

@@ -28,7 +28,7 @@ pub(super) fn ticket(extra: Value) -> Workflow {
     build(
         all,
         json!([
-            {"id": "trigger", "type": "schedule", "title": "Weekdays", "ui": {"x": 0, "y": 0},
+            {"id": "start", "type": "schedule", "title": "Weekdays", "ui": {"x": 0, "y": 0},
              "schedule": {"scheduleKind": "weekdays", "time": "09:00", "minute": 0, "dayOfWeek": 1}},
             {"id": "fetch", "type": "session", "title": "Fetch tickets", "project": "{{inputs.project}}",
              "model": "claude:sonnet-5", "checkout": "root", "output": {"tickets": {"type": "list"}},
@@ -44,7 +44,7 @@ pub(super) fn ticket(extra: Value) -> Workflow {
             {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "title": "Report to Mono", "ui": {"x": 0, "y": 480}},
         ]),
         json!([
-            {"from": "trigger", "to": "fetch"}, {"from": "fetch", "to": "each"},
+            {"from": "start", "to": "fetch"}, {"from": "fetch", "to": "each"},
             {"from": "dev", "to": "review"}, {"from": "each", "to": "report"},
             {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
         ]),
@@ -146,7 +146,7 @@ fn renders_one_card_per_workflow_node(cx: &mut TestAppContext) {
     let visual = &mut visual;
     assert_eq!(
         node_ids(&s, visual),
-        vec!["dev", "each", "fetch", "report", "review", "trigger"]
+        vec!["dev", "each", "fetch", "report", "review", "start"]
     );
     for selector in [
         "wf-node-trigger",
@@ -215,7 +215,7 @@ fn a_session_model_the_catalog_lacks_is_flagged_and_blocks_saving_enabled(cx: &m
         }
     }
     s.manager.update(cx, |m, _| {
-        m.workflow_live = crate::monos::workflow_runner::Live::new().with_probe(listing)
+        m.workflow_live = crate::workflows::Probes::new().with_probe(listing)
     });
     let mut visual = open_board(&s, &w, cx);
     let visual = &mut visual;
@@ -442,7 +442,7 @@ fn a_new_workflow_starts_with_a_manual_trigger_and_a_report_and_is_saved_paused(
     click(visual, "mono-workflow-new");
     settle(&s, visual);
     assert_eq!(route(&s, visual), Some(Route::NewWorkflow));
-    assert_eq!(node_ids(&s, visual), vec!["report", "trigger"]);
+    assert_eq!(node_ids(&s, visual), vec!["report", "start"]);
     assert_eq!(
         on_board(&s, visual, |b| b.meta.name.clone()),
         "New workflow"

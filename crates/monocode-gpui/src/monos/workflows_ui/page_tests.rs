@@ -82,12 +82,12 @@ fn two_runs(s: &crate::monos::tests::Setup) {
             &linear(),
             "done",
             json!({}),
-            json!([nr("trigger", "", "done", json!({}))]),
+            json!([nr("start", "", "done", json!({}))]),
         );
         r.id = id.into();
         r
     };
-    update_runs(&MonoDir::new(&s.root, &s.id), A, |_| {
+    update_runs(&s.workflows_dir(), A, |_| {
         Ok((vec![run("run-2"), run("run-1")], ()))
     })
     .unwrap();

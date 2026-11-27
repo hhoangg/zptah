@@ -42,7 +42,7 @@ fn def(nodes: Vec<Node>, edges: Vec<Edge>) -> Workflow {
 }
 
 fn trigger() -> Node {
-    n(json!({"id": "trigger", "type": "manual"}))
+    n(json!({"id": "start", "type": "manual"}))
 }
 
 /// `w` with a summary template.
@@ -97,13 +97,14 @@ fn run_of(definition: Workflow, nodes: Vec<NodeRun>) -> WorkflowRun {
         status: RunStatus::Done,
         started_at: 1_000,
         ended_at: Some(2_000),
-        caller: RunCaller::new(CallerKind::Manual, "trigger"),
+        caller: RunCaller::new(CallerKind::Manual, "start"),
         folder_id: None,
         items: BTreeMap::new(),
         nodes,
         report_posted_at: None,
         error: None,
         cloud_instances: Vec::new(),
+        summary: None,
     }
 }
 
@@ -125,7 +126,7 @@ fn fan_out() -> Workflow {
                 json!({"parent": "each", "output": {"pr_url": {"type": "string"}, "files": {"type": "list"}}}),
             ),
         ],
-        vec![e("trigger", "each")],
+        vec![e("start", "each")],
     )
 }
 
@@ -324,7 +325,7 @@ mod compose_report_tests {
                     json!({"output": {"digest": {"type": "string"}, "raw": {"type": "list"}}}),
                 ),
             ],
-            vec![e("trigger", "each"), e("each", "summary")],
+            vec![e("start", "each"), e("each", "summary")],
         );
         let nodes = vec![
             NodeRun {
@@ -359,7 +360,7 @@ mod compose_report_tests {
                 session("review", json!({"output": {"verdict": {"type": "string"}}})),
             ],
             vec![
-                e("trigger", "dev"),
+                e("start", "dev"),
                 e("dev", "review"),
                 lp("review", "dev", 3, "ai"),
             ],
@@ -402,7 +403,7 @@ mod compose_report_tests {
                 session("review", json!({})),
             ],
             vec![
-                e("trigger", "dev"),
+                e("start", "dev"),
                 e("dev", "review"),
                 lp("review", "dev", 3, "ai"),
             ],
@@ -454,7 +455,7 @@ mod compose_report_tests {
                 session("session_3", json!({})),
             ],
             vec![
-                e("trigger", "session"),
+                e("start", "session"),
                 e("session", "gate"),
                 eh("gate", "session_2", "true"),
                 eh("gate", "session_3", "false"),
@@ -498,7 +499,7 @@ mod compose_report_tests {
                     json!({"parent": "each", "output": {"pr_url": {"type": "string"}}}),
                 ),
             ],
-            vec![e("trigger", "each")],
+            vec![e("start", "each")],
         );
         let d = with_summary(d, "RUN {{run.id}} is {{run.status}}\n{{results}}");
         let mut run = run_of(
@@ -535,7 +536,7 @@ mod compose_report_tests {
                     }}),
                 ),
             ],
-            vec![e("trigger", "dev")],
+            vec![e("start", "dev")],
         );
         let run = run_of(
             d,
@@ -562,7 +563,7 @@ mod compose_report_tests {
                 trigger(),
                 session("dev", json!({"output": {"note": {"type": "string"}}})),
             ],
-            vec![e("trigger", "dev")],
+            vec![e("start", "dev")],
         );
         let run = run_of(
             d,
@@ -609,7 +610,7 @@ mod layout {
     fn one_session(output: Value) -> Workflow {
         def(
             vec![trigger(), session("dev", json!({ "output": output }))],
-            vec![e("trigger", "dev")],
+            vec![e("start", "dev")],
         )
     }
 
@@ -726,7 +727,7 @@ mod layout {
                 n(json!({"id": "a", "type": "forEach", "title": "Alpha", "in": "{{x}}"})),
                 n(json!({"id": "b", "type": "forEach", "in": "{{y}}"})),
             ],
-            vec![e("trigger", "a"), e("a", "b")],
+            vec![e("start", "a"), e("a", "b")],
         );
         let mut run = run_of(d, vec![]);
         run.items = items(json!({"a": [], "b": []}));
@@ -785,7 +786,7 @@ mod layout {
                     json!({"parent": "each", "output": {"pr": {"type": "string"}}}),
                 ),
             ],
-            vec![e("trigger", "each")],
+            vec![e("start", "each")],
         );
         let d = with_summary(d, "{{results}}");
         let mut run = run_of(
@@ -818,7 +819,7 @@ mod layout {
     fn branch_status_follows_the_most_urgent_node() {
         let d = def(
             vec![trigger(), session("a", json!({})), session("b", json!({}))],
-            vec![e("trigger", "a"), e("a", "b")],
+            vec![e("start", "a"), e("a", "b")],
         );
         let status = |nodes: Vec<NodeRun>| {
             let text = compose_report(&run_of(d.clone(), nodes)).text;

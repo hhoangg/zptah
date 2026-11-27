@@ -27,7 +27,7 @@ fn def(nodes: Vec<Node>, edges: Vec<Edge>) -> Workflow {
 }
 
 fn trigger() -> Node {
-    n(json!({"id": "trigger", "type": "manual"}))
+    n(json!({"id": "start", "type": "manual"}))
 }
 
 /// A session node; `extra` overrides or adds fields.
@@ -81,7 +81,7 @@ fn fan_out(max_parallel: u32, children: Option<Vec<Node>>, edges: Vec<Edge>) -> 
         })),
     ];
     nodes.extend(children);
-    let mut all = vec![e("trigger", "fetch"), e("fetch", "each")];
+    let mut all = vec![e("start", "fetch"), e("fetch", "each")];
     all.extend(edges);
     def(nodes, all)
 }
@@ -109,7 +109,7 @@ fn dev_review(decide: &str, max_rounds: u32, reuse_session: Option<bool>) -> Wor
             ),
         ],
         vec![
-            e("trigger", "dev"),
+            e("start", "dev"),
             e("dev", "review"),
             lp("review", "dev", max_rounds, decide),
         ],
@@ -238,7 +238,7 @@ fn node_of<'a>(run: &'a WorkflowRun, id: &str, branch: &str) -> &'a NodeRun {
 }
 
 fn begin(w: &Workflow) -> WorkflowRun {
-    start_run(w, RunCaller::new(CallerKind::Manual, "trigger"), AT, "r")
+    start_run(w, RunCaller::new(CallerKind::Manual, "start"), AT, "r")
 }
 
 fn start_session(
@@ -346,13 +346,13 @@ fn linear_trigger_fetch_report_emits_start_session_then_post_report_then_done() 
                 trigger(),
                 session("fetch", json!({"prompt": "Fetch for {{inputs.project}}"})),
             ],
-            vec![e("trigger", "fetch")],
+            vec![e("start", "fetch")],
         ),
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         AT,
         "run-1",
     );
-    assert_eq!(status_of(&run, "trigger", ""), Some(NodeStatus::Done));
+    assert_eq!(status_of(&run, "start", ""), Some(NodeStatus::Done));
     assert_eq!(
         next_actions(&run),
         vec![start_session("fetch", "", 1, "Fetch for /work/repo", None)]
@@ -375,16 +375,16 @@ fn linear_trigger_fetch_report_emits_start_session_then_post_report_then_done() 
 fn schedule_trigger_exposes_started_at() {
     let run = start_run(
         &def(
-            vec![n(json!({"id": "trigger", "type": "schedule",
+            vec![n(json!({"id": "start", "type": "schedule",
                     "schedule": {"scheduleKind": "hourly", "time": "00:00", "minute": 0, "dayOfWeek": 1}}))],
             vec![],
         ),
-        RunCaller::new(CallerKind::Schedule, "trigger"),
+        RunCaller::new(CallerKind::Schedule, "start"),
         5,
         "r",
     );
     assert_eq!(
-        node_of(&run, "trigger", "").output,
+        node_of(&run, "start", "").output,
         Some(out(json!({"startedAt": 5})))
     );
     assert_eq!(next_actions(&run), post_report());
@@ -397,11 +397,11 @@ fn appends_the_output_instruction_to_the_prompt_only_when_fields_are_declared() 
             trigger(),
             session("a", json!({"output": {"x": {"type": "string"}}})),
         ],
-        vec![e("trigger", "a")],
+        vec![e("start", "a")],
     ));
     let actions = next_actions(&run);
     assert!(prompt_of(&actions[0]).starts_with("Do a\n\nWhen you are finished"));
-    let bare = begin(&def(vec![trigger(), plain("a")], vec![e("trigger", "a")]));
+    let bare = begin(&def(vec![trigger(), plain("a")], vec![e("start", "a")]));
     assert_eq!(prompt_of(&next_actions(&bare)[0]), "Do a");
 }
 
@@ -412,7 +412,7 @@ fn cmd_flow(command: &str) -> Workflow {
             session("a", json!({"output": {"name": {"type": "string"}}})),
             n(json!({"id": "cmd", "type": "command", "project": PROJECT, "command": command})),
         ],
-        vec![e("trigger", "a"), e("a", "cmd")],
+        vec![e("start", "a"), e("a", "cmd")],
     )
 }
 
@@ -445,7 +445,7 @@ fn fails_a_command_whose_rendered_value_would_be_read_as_an_option() {
                 session("a", json!({"output": {"host": {"type": "string"}}})),
                 n(json!({"id": "cmd", "type": "command", "project": PROJECT, "command": command})),
             ],
-            vec![e("trigger", "a"), e("a", "cmd")],
+            vec![e("start", "a"), e("a", "cmd")],
         ))
     };
     let bad = complete(
@@ -796,7 +796,7 @@ fn a_round_record_leaves_out_what_the_node_did_in_an_earlier_round() {
             plain("review"),
         ],
         vec![
-            e("trigger", "dev"),
+            e("start", "dev"),
             e("dev", "gate"),
             eh("gate", "fixA", "true"),
             eh("gate", "fixB", "false"),
@@ -904,7 +904,7 @@ fn if_inside_a_loop_body_runs_the_other_side_in_round_2() {
             plain("escalate"),
         ],
         vec![
-            e("trigger", "dev"),
+            e("start", "dev"),
             e("dev", "gate"),
             eh("gate", "review", "true"),
             eh("gate", "escalate", "false"),
@@ -977,8 +977,8 @@ mod failed_branches_do_not_loop {
                 plain("merge"),
             ],
             vec![
-                e("trigger", "dev"),
-                e("trigger", "lint"),
+                e("start", "dev"),
+                e("start", "lint"),
                 e("dev", "review"),
                 e("review", "merge"),
                 e("lint", "merge"),
@@ -1090,7 +1090,7 @@ mod a_loop_around_a_for_each_keeps_the_earlier_rounds {
                 session("review", json!({"output": {"verdict": {"type": "string"}}})),
             ],
             vec![
-                e("trigger", "fetch"),
+                e("start", "fetch"),
                 e("fetch", "each"),
                 e("each", "review"),
                 lp("review", "each", max_rounds, "ai"),
@@ -1268,7 +1268,7 @@ fn if_true_false_skips_the_other_side() {
             plain("after"),
         ],
         vec![
-            e("trigger", "a"),
+            e("start", "a"),
             e("a", "gate"),
             eh("gate", "yes", "true"),
             eh("gate", "no", "false"),
@@ -1311,7 +1311,7 @@ fn if_decided_by_the_mono_asks_true_false() {
                 "question": "Is {{inputs.project}} fine?"})),
             plain("yes"),
         ],
-        vec![e("trigger", "gate"), eh("gate", "yes", "true")],
+        vec![e("start", "gate"), eh("gate", "yes", "true")],
     );
     let mut run = begin(&w);
     let asks = next_actions(&run);
@@ -1373,7 +1373,7 @@ fn failure_in_one_branch_does_not_stop_another_status_done_with_failures() {
 
 #[test]
 fn run_is_failed_when_no_session_or_command_succeeded() {
-    let mut run = begin(&def(vec![trigger(), plain("a")], vec![e("trigger", "a")]));
+    let mut run = begin(&def(vec![trigger(), plain("a")], vec![e("start", "a")]));
     run = failed(&started(&run, "a"), "a", "nope", "");
     assert_eq!(next_actions(&run), post_report());
     run = reported(&run, 5);
@@ -1382,7 +1382,7 @@ fn run_is_failed_when_no_session_or_command_succeeded() {
 
 #[test]
 fn a_run_ends_as_soon_as_nothing_is_left_and_then_asks_for_its_summary() {
-    let mut run = begin(&def(vec![trigger(), plain("a")], vec![e("trigger", "a")]));
+    let mut run = begin(&def(vec![trigger(), plain("a")], vec![e("start", "a")]));
     run = complete_at(&run, "a", json!({}), "", 7);
     assert_eq!(run.status, RunStatus::Done);
     assert_eq!(run.ended_at, Some(7));
@@ -1537,7 +1537,7 @@ fn stopped_event_ends_run_as_stopped_and_only_its_summary_is_left_to_post() {
 }
 
 fn single_session() -> Workflow {
-    def(vec![trigger(), plain("a")], vec![e("trigger", "a")])
+    def(vec![trigger(), plain("a")], vec![e("start", "a")])
 }
 
 #[test]
@@ -1574,7 +1574,7 @@ fn events_are_immutable_updates() {
 fn run_scope_exposes_inputs_run_the_loop_variable_and_branch_outputs() {
     let mut run = start_run(
         &default_fan_out(),
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         77,
         "run-x",
     );
@@ -1618,7 +1618,7 @@ fn run_round_is_the_current_round_of_the_node_inside_a_loop() {
 fn does_not_run_nodes_the_trigger_cannot_reach() {
     let run = begin(&def(
         vec![trigger(), plain("a"), plain("orphan")],
-        vec![e("trigger", "a")],
+        vec![e("start", "a")],
     ));
     assert_eq!(status_of(&run, "orphan", ""), Some(NodeStatus::Skipped));
     assert_eq!(session_node_ids(&next_actions(&run)), vec!["a".to_string()]);
@@ -1626,7 +1626,7 @@ fn does_not_run_nodes_the_trigger_cannot_reach() {
 
 #[test]
 fn ignores_events_for_unknown_nodes() {
-    let run = begin(&def(vec![trigger()], vec![e("trigger", "report")]));
+    let run = begin(&def(vec![trigger()], vec![e("start", "report")]));
     let bogus = EngineEvent::NodeFinished {
         node_id: "ghost".into(),
         branch: "".into(),
@@ -1658,7 +1658,7 @@ fn looped_node_ids_names_every_node_from_the_loop_s_target_to_its_source_and_no_
             plain("ship"),
         ],
         vec![
-            e("trigger", "prep"),
+            e("start", "prep"),
             e("prep", "dev"),
             e("dev", "lint"),
             e("lint", "review"),
@@ -1671,7 +1671,7 @@ fn looped_node_ids_names_every_node_from_the_loop_s_target_to_its_source_and_no_
 
 #[test]
 fn looped_node_ids_is_empty_without_a_loop() {
-    let w = def(vec![trigger(), plain("a")], vec![e("trigger", "a")]);
+    let w = def(vec![trigger(), plain("a")], vec![e("start", "a")]);
     assert!(looped_node_ids(&w).is_empty());
 }
 
@@ -1689,7 +1689,7 @@ fn looped_node_ids_stays_within_one_for_each() {
             session("review", json!({"parent": "each"})),
         ],
         vec![
-            e("trigger", "fetch"),
+            e("start", "fetch"),
             e("fetch", "each"),
             e("dev", "review"),
             lp("review", "dev", 3, "ai"),
@@ -1722,7 +1722,7 @@ fn an_engine_run_is_written_in_the_shape_the_react_app_reads() {
     assert_eq!(value["status"], "running");
     assert_eq!(
         value["caller"],
-        json!({"kind": "manual", "triggerNode": "trigger"})
+        json!({"kind": "manual", "triggerNode": "start"})
     );
     assert!(value.get("trigger").is_none());
     assert_eq!(value["startedAt"], 1_000);
@@ -1750,7 +1750,7 @@ fn rejects_answers_that_are_not_allowed() {
             trigger(),
             n(json!({"id": "gate", "type": "if", "decide": "ai"})),
         ],
-        vec![e("trigger", "gate")],
+        vec![e("start", "gate")],
     );
     let run = decided(&started(&begin(&gate), "gate"), "gate", "maybe");
     assert_eq!(
@@ -1785,7 +1785,7 @@ fn a_condition_error_fails_the_node() {
             trigger(),
             n(json!({"id": "gate", "type": "if", "condition": "{{a}} >> 1"})),
         ],
-        vec![e("trigger", "gate")],
+        vec![e("start", "gate")],
     );
     let run = begin(&w);
     assert_eq!(status_of(&run, "gate", ""), Some(NodeStatus::Failed));
@@ -1806,7 +1806,7 @@ fn a_for_each_list_expression_may_have_white_space_but_nothing_else() {
                 n(json!({"id": "each", "type": "forEach", "in": expression})),
                 session("dev", json!({"parent": "each"})),
             ],
-            vec![e("trigger", "fetch"), e("fetch", "each")],
+            vec![e("start", "fetch"), e("fetch", "each")],
         );
         let run = complete(&begin(&w), "fetch", json!({"tickets": [1]}));
         status_of(&run, "each", "")
@@ -1912,7 +1912,7 @@ fn an_unknown_loop_edge_target_or_cross_parent_loop_is_ignored() {
             session("b", json!({"parent": "each"})),
         ],
         vec![
-            e("trigger", "a"),
+            e("start", "a"),
             e("a", "each"),
             lp("a", "ghost", 3, "ai"),
             lp("b", "a", 3, "ai"),
@@ -1943,7 +1943,7 @@ fn switch_workflow(route: Value) -> Workflow {
             plain("other"),
         ],
         vec![
-            e("trigger", "triage"),
+            e("start", "triage"),
             e("triage", "route"),
             eh("route", "fix", "bug"),
             eh("route", "plan", "feature"),
@@ -2082,7 +2082,7 @@ fn switch_in_a_loop_is_decided_again_each_round() {
             plain("review"),
         ],
         vec![
-            e("trigger", "dev"),
+            e("start", "dev"),
             e("dev", "route"),
             eh("route", "fix", "bug"),
             eh("route", "plan", "feature"),
@@ -2136,7 +2136,7 @@ fn a_join_after_a_switch_runs_once_when_only_one_of_its_case_branches_is_live() 
             plain("join"),
         ],
         vec![
-            e("trigger", "triage"),
+            e("start", "triage"),
             e("triage", "route"),
             eh("route", "fix", "bug"),
             eh("route", "plan", "feature"),
@@ -2225,7 +2225,7 @@ fn many_triggers() -> Workflow {
             schedule_trigger("evening"),
             plain("a"),
         ],
-        vec![e("trigger", "a"), e("morning", "a"), e("evening", "a")],
+        vec![e("start", "a"), e("morning", "a"), e("evening", "a")],
     )
 }
 
@@ -2237,11 +2237,11 @@ fn caller(kind: CallerKind, trigger_node: &str) -> RunCaller {
 fn only_the_trigger_that_fired_runs_and_the_others_are_skipped() {
     let w = many_triggers();
     for (fired, others) in [
-        ("trigger", ["morning", "evening"]),
-        ("morning", ["trigger", "evening"]),
-        ("evening", ["trigger", "morning"]),
+        ("start", ["morning", "evening"]),
+        ("morning", ["start", "evening"]),
+        ("evening", ["start", "morning"]),
     ] {
-        let kind = if fired == "trigger" {
+        let kind = if fired == "start" {
             CallerKind::Manual
         } else {
             CallerKind::Schedule
@@ -2282,7 +2282,7 @@ fn a_schedule_trigger_that_fired_exposes_when_and_a_skipped_one_exposes_nothing(
         Some(out(json!({"startedAt": 77})))
     );
     assert_eq!(node_of(&run, "morning", "").output, None);
-    assert_eq!(node_of(&run, "trigger", "").output, None);
+    assert_eq!(node_of(&run, "start", "").output, None);
 }
 
 #[test]
@@ -2291,9 +2291,9 @@ fn a_caller_that_names_no_trigger_fires_the_first_one_of_its_kind_else_the_first
     let run = start_run(&w, caller(CallerKind::Schedule, "gone"), 1, "r");
     assert_eq!(run.caller.trigger_node, "morning");
     let run = start_run(&w, caller(CallerKind::Manual, ""), 1, "r");
-    assert_eq!(run.caller.trigger_node, "trigger");
+    assert_eq!(run.caller.trigger_node, "start");
     let run = start_run(&w, caller(CallerKind::Mono, ""), 1, "r");
-    assert_eq!(run.caller.trigger_node, "trigger");
+    assert_eq!(run.caller.trigger_node, "start");
     let schedules_only = def(
         vec![schedule_trigger("morning"), plain("a")],
         vec![e("morning", "a")],
@@ -2308,13 +2308,13 @@ fn a_caller_that_names_no_trigger_fires_the_first_one_of_its_kind_else_the_first
 fn the_run_records_who_called_it_for_every_kind() {
     let item = Json::from(&json!({"source": "clickup", "ref": "CU-1", "title": "Fix it"}));
     let callers = [
-        caller(CallerKind::Manual, "trigger"),
+        caller(CallerKind::Manual, "start"),
         caller(CallerKind::Schedule, "morning"),
         RunCaller {
             item: Some(item.clone()),
-            ..caller(CallerKind::Event, "trigger")
+            ..caller(CallerKind::Event, "start")
         },
-        RunCaller::mono("mono-7", "trigger"),
+        RunCaller::mono("mono-7", "start"),
     ];
     for caller in callers {
         let run = start_run(&many_triggers(), caller.clone(), 1, "r");
@@ -2334,20 +2334,20 @@ fn the_scope_has_the_trigger_node_kind_and_item() {
         &many_triggers(),
         RunCaller {
             item: Some(item.clone()),
-            ..caller(CallerKind::Event, "trigger")
+            ..caller(CallerKind::Event, "start")
         },
         1,
         "r",
     );
     let scope = run_scope(&run, "", None);
     let fired = scope.get("trigger").unwrap();
-    assert_eq!(fired.get("node"), Some(&Json::String("trigger".into())));
+    assert_eq!(fired.get("node"), Some(&Json::String("start".into())));
     assert_eq!(fired.get("kind"), Some(&Json::String("event".into())));
     assert_eq!(fired.get("item"), Some(&item));
     // Without an item there is no `item` key: it only exists for event runs.
     let manual = start_run(
         &many_triggers(),
-        caller(CallerKind::Manual, "trigger"),
+        caller(CallerKind::Manual, "start"),
         1,
         "r",
     );
@@ -2364,37 +2364,21 @@ fn the_scope_has_the_trigger_node_kind_and_item() {
                 json!({"prompt": "Fix {{trigger.item.title}} ({{trigger.kind}} via {{trigger.node}})"}),
             ),
         ],
-        vec![e("trigger", "a")],
+        vec![e("start", "a")],
     );
     let run = start_run(
         &w,
         RunCaller {
             item: Some(item),
-            ..caller(CallerKind::Event, "trigger")
+            ..caller(CallerKind::Event, "start")
         },
         1,
         "r",
     );
     assert_eq!(
         prompt_of(&next_actions(&run)[0]),
-        "Fix Bug (event via trigger)"
+        "Fix Bug (event via start)"
     );
-}
-
-#[test]
-fn a_node_named_trigger_keeps_its_own_output_next_to_the_trigger_variables() {
-    let w = def(
-        vec![
-            schedule_trigger("trigger"),
-            session(
-                "a",
-                json!({"prompt": "At {{trigger.startedAt}} by {{trigger.kind}}"}),
-            ),
-        ],
-        vec![e("trigger", "a")],
-    );
-    let run = start_run(&w, caller(CallerKind::Schedule, "trigger"), 99, "r");
-    assert_eq!(prompt_of(&next_actions(&run)[0]), "At 99 by schedule");
 }
 
 #[test]
@@ -2402,7 +2386,7 @@ fn a_settled_run_asks_for_its_summary_once_whatever_ended_it() {
     // Done with nothing to run at all.
     let run = start_run(
         &def(vec![trigger()], vec![]),
-        caller(CallerKind::Manual, "trigger"),
+        caller(CallerKind::Manual, "start"),
         1,
         "r",
     );
@@ -2449,11 +2433,7 @@ fn a_decision_action_names_no_mono_and_carries_the_question_and_the_context() {
             ),
             plain("deep"),
         ],
-        vec![
-            e("trigger", "a"),
-            e("a", "gate"),
-            eh("gate", "deep", "true"),
-        ],
+        vec![e("start", "a"), e("a", "gate"), eh("gate", "deep", "true")],
     );
     let mut run = complete(&begin(&w), "a", json!({"risky": true}));
     let asks = next_actions(&run);

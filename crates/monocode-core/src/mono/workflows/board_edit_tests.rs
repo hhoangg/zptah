@@ -46,7 +46,7 @@ mod add {
         w.nodes
             .retain(|n| !matches!(n.id.as_str(), "each" | "dev" | "review"));
         w.edges = vec![
-            edge(r#"{"from": "trigger", "to": "fetch"}"#),
+            edge(r#"{"from": "start", "to": "fetch"}"#),
             edge(r#"{"from": "fetch", "to": "report"}"#),
         ];
         let (flow, current) = board(&w);
@@ -75,14 +75,14 @@ mod add {
         let (flow, current) = board(&workflow());
         let (out, id) = add_node(&flow, &current, NodeType::Schedule);
         assert!(has_edge(&out, &id, "report"));
-        assert!(has_edge(&out, "trigger", "report"));
+        assert!(has_edge(&out, "start", "report"));
         let wired = from_flow(&current, &out.nodes, &out.edges);
         assert_eq!(wired.triggers().len(), 2);
         // The fixture's `report` step names a project input it does not declare; nothing is said
         // about the triggers.
         assert!(super::super::validate::validate_workflow(&wired)
             .iter()
-            .all(|i| !i.message.to_lowercase().contains("trigger")));
+            .all(|i| !i.message.to_lowercase().contains("start")));
     }
 
     #[test]
@@ -95,14 +95,14 @@ mod add {
         ));
         let (flow, current) = board(&w);
         let (out, id) = add_node(&flow, &current, NodeType::Command);
-        assert!(has_edge(&out, "trigger", &id));
+        assert!(has_edge(&out, "start", &id));
         assert!(has_edge(&out, "second", &id));
     }
 
     #[test]
     fn a_trigger_goes_above_everything() {
         let mut w = workflow();
-        w.nodes.retain(|n| n.id != "trigger");
+        w.nodes.retain(|n| n.id != "start");
         w.edges.clear();
         let (flow, current) = board(&w);
         let top = flow.nodes.iter().map(|n| n.position.y).fold(0., f32::min);
@@ -152,7 +152,7 @@ mod add {
         let mut w = ticket_workflow();
         w.nodes
             .retain(|n| !matches!(n.id.as_str(), "each" | "dev" | "review" | "report"));
-        w.edges = vec![edge(r#"{"from": "trigger", "to": "fetch"}"#)];
+        w.edges = vec![edge(r#"{"from": "start", "to": "fetch"}"#)];
         let (flow, current) = board(&w);
         let (out, id) = add_node(&flow, &current, NodeType::If);
         // fetch leads nowhere, so it feeds the If.
@@ -173,7 +173,7 @@ mod add {
     fn a_node_is_not_wired_after_a_node_that_already_leads_somewhere() {
         let (flow, current) = board(&workflow());
         // trigger -> report: the trigger leads on already.
-        let (out, id) = add_node(&selected(&flow, "trigger"), &current, NodeType::Schedule);
+        let (out, id) = add_node(&selected(&flow, "start"), &current, NodeType::Schedule);
         assert!(!out.edges.iter().any(|e| e.target == id));
     }
 }
@@ -198,7 +198,7 @@ mod connecting {
     fn an_invalid_connection_changes_nothing() {
         let (flow, current) = board(&ticket_workflow());
         assert!(matches!(
-            connect(&flow, &current, "fetch", "trigger", None),
+            connect(&flow, &current, "fetch", "start", None),
             Connected::Invalid
         ));
         assert!(matches!(
@@ -239,7 +239,7 @@ mod connecting {
     fn an_if_sends_true_and_false_to_one_place_each() {
         let mut w = workflow();
         w.nodes = vec![
-            n(json!({"id": "trigger", "type": "manual", "ui": {"x": 0, "y": 0}})),
+            n(json!({"id": "start", "type": "manual", "ui": {"x": 0, "y": 0}})),
             n(json!({"id": "check", "type": "if", "decide": "ai", "ui": {"x": 0, "y": 80}})),
             n(
                 json!({"id": "a", "type": "command", "project": "x", "command": "ls", "ui": {"x": 0, "y": 160}}),
@@ -249,7 +249,7 @@ mod connecting {
             ),
         ];
         w.edges = vec![
-            edge(r#"{"from": "trigger", "to": "check"}"#),
+            edge(r#"{"from": "start", "to": "check"}"#),
             edge(r#"{"from": "check", "to": "a", "handle": "true"}"#),
         ];
         let (flow, current) = board(&w);
@@ -360,7 +360,7 @@ mod dragging {
         let out = drag_stop(&over, "fetch");
         assert_eq!(node(&out, "fetch").parent_id.as_deref(), Some("each"));
         // trigger -> fetch is across the frame now; fetch -> each is a wire into its own frame.
-        assert!(!has_edge(&out, "trigger", "fetch"));
+        assert!(!has_edge(&out, "start", "fetch"));
         assert!(!has_edge(&out, "fetch", "each"));
     }
 
@@ -389,14 +389,11 @@ mod dragging {
         let group = node(&flow, "each");
         let over = moved(
             &flow,
-            "trigger",
+            "start",
             group.position.x + 40.,
             group.position.y + 40.,
         );
-        assert_eq!(
-            node(&drag_stop(&over, "trigger"), "trigger").parent_id,
-            None
-        );
+        assert_eq!(node(&drag_stop(&over, "start"), "start").parent_id, None);
     }
 }
 
@@ -447,14 +444,14 @@ mod deleting {
         let id = flow
             .edges
             .iter()
-            .find(|e| e.source == "trigger")
+            .find(|e| e.source == "start")
             .unwrap()
             .id
             .clone();
         let out = delete_selected(&select(&flow, None, Some(&id)));
         assert_eq!(out.nodes.len(), flow.nodes.len());
         assert_eq!(out.edges.len(), flow.edges.len() - 1);
-        assert!(!has_edge(&out, "trigger", "fetch"));
+        assert!(!has_edge(&out, "start", "fetch"));
     }
 
     #[test]
@@ -839,7 +836,7 @@ mod fields {
     fn an_input_a_step_leaves_goes_when_nothing_else_mentions_it() {
         let mut w = workflow();
         w.nodes = vec![
-            n(json!({"id": "trigger", "type": "manual"})),
+            n(json!({"id": "start", "type": "manual"})),
             n(
                 json!({"id": "dev", "type": "command", "project": "{{inputs.old}}", "command": "ls"}),
             ),
@@ -867,7 +864,7 @@ mod fields {
             project_path(&w, w.node("fetch").unwrap()).as_deref(),
             Some("/work/api")
         );
-        assert_eq!(project_path(&w, w.node("trigger").unwrap()), None);
+        assert_eq!(project_path(&w, w.node("start").unwrap()), None);
     }
 
     #[test]
@@ -1012,7 +1009,7 @@ mod switch {
     fn routed() -> Workflow {
         let mut w = workflow();
         w.nodes = vec![
-            n(json!({"id": "trigger", "type": "manual", "ui": {"x": 0, "y": 0}})),
+            n(json!({"id": "start", "type": "manual", "ui": {"x": 0, "y": 0}})),
             n(
                 json!({"id": "route", "type": "switch", "value": "{{inputs.x}}",
                 "cases": ["bug", "feature"], "ui": {"x": 0, "y": 80}}),
@@ -1028,7 +1025,7 @@ mod switch {
             ),
         ];
         w.edges = vec![
-            edge(r#"{"from": "trigger", "to": "route"}"#),
+            edge(r#"{"from": "start", "to": "route"}"#),
             edge(r#"{"from": "route", "to": "a", "handle": "bug"}"#),
             edge(r#"{"from": "route", "to": "b", "handle": "feature"}"#),
             edge(r#"{"from": "route", "to": "report", "handle": "default"}"#),
@@ -1107,7 +1104,7 @@ mod switch {
             "route.defect->a"
         );
         // Edges of other nodes are untouched, and the result is a valid workflow.
-        assert!(has_edge(&out, "trigger", "route"));
+        assert!(has_edge(&out, "start", "route"));
         let w = from_flow(&routed(), &out.nodes, &out.edges);
         assert_eq!(
             crate::mono::workflows::validate::validate_workflow(&w)
@@ -1158,7 +1155,7 @@ mod switch {
         let (flow, _) = board(&routed());
         assert_eq!(rename_switch_case(&flow, "a", "bug", "x"), flow);
         assert_eq!(remove_switch_case(&flow, "missing", "bug"), flow);
-        assert_eq!(add_switch_case(&flow, "trigger", "x"), flow);
+        assert_eq!(add_switch_case(&flow, "start", "x"), flow);
     }
 
     #[test]
@@ -1189,7 +1186,7 @@ mod switch {
     #[test]
     fn a_node_added_after_a_switch_is_not_wired_to_it() {
         let mut w = routed();
-        w.edges.retain(|e| e.from == "trigger");
+        w.edges.retain(|e| e.from == "start");
         w.nodes
             .retain(|n| n.id != "a" && n.id != "b" && n.id != "report");
         w.nodes.last_mut().unwrap().ui = Some(Ui { x: 0.0, y: 80.0 });

@@ -36,13 +36,13 @@ fn session_json(id: &str, extra: Value) -> Value {
 
 /// trigger -> each node in `middle`, as a stored workflow.
 fn chain(middle: Vec<Value>) -> Workflow {
-    let mut ids = vec!["trigger".to_string()];
+    let mut ids = vec!["start".to_string()];
     ids.extend(middle.iter().map(|n| n["id"].as_str().unwrap().to_string()));
     let edges: Vec<Value> = ids
         .windows(2)
         .map(|pair| value!({"from": pair[0], "to": pair[1]}))
         .collect();
-    let mut nodes = vec![value!({"id": "trigger", "type": "manual"})];
+    let mut nodes = vec![value!({"id": "start", "type": "manual"})];
     nodes.extend(middle);
     workflow_from(
         &value!({
@@ -361,8 +361,8 @@ fn same_as_must_name_an_earlier_cloud_step_of_the_same_kind() {
         "sameAs \"nope\" does not exist"
     ));
     assert!(has(
-        &chain(vec![a.clone(), same("trigger")]),
-        "sameAs \"trigger\" must be a session node"
+        &chain(vec![a.clone(), same("start")]),
+        "sameAs \"start\" must be a session node"
     ));
     assert!(has(
         &chain(vec![a.clone(), same("b")]),
@@ -698,10 +698,10 @@ fn a_same_as_step_must_use_the_project_input_of_its_source() {
             "inputs": {"project": {"type": "project"}, "other": {"type": "project"}},
             "inputValues": {"project": "/work/api", "other": "/work/web"},
             "nodes": [
-                {"id": "trigger", "type": "manual"}, build, check
+                {"id": "start", "type": "manual"}, build, check
             ],
             "edges": [
-                {"from": "trigger", "to": "build"},
+                {"from": "start", "to": "build"},
                 {"from": "build", "to": "check"}
             ],
             "enabled": false, "createdAt": 0

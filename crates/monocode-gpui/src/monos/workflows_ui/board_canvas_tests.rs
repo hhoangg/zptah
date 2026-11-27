@@ -33,7 +33,7 @@ fn connecting_validates_with_connection_kind(cx: &mut TestAppContext) {
         .unwrap();
     let before = edges_of(&s, visual);
     // Into a trigger, and across a For each boundary: nothing happens.
-    for (from, to) in [("fetch", "trigger"), ("fetch", "dev")] {
+    for (from, to) in [("fetch", "start"), ("fetch", "dev")] {
         event(
             &s,
             visual,
@@ -50,7 +50,7 @@ fn connecting_validates_with_connection_kind(cx: &mut TestAppContext) {
     // The canvas only lets a valid connection light up.
     let canvas = on_board(&s, visual, |b| b.canvas.clone());
     assert!(!canvas.read_with(visual, |c, _| c.may_connect("report", None, &command)));
-    assert!(!canvas.read_with(visual, |c, _| c.may_connect("fetch", None, "trigger")));
+    assert!(!canvas.read_with(visual, |c, _| c.may_connect("fetch", None, "start")));
     assert!(canvas.read_with(visual, |c, _| c.may_connect("fetch", None, &command)));
     // A forward connection adds the edge.
     event(
@@ -182,7 +182,7 @@ fn dragging_a_node_over_a_for_each_reparents_it_and_out_of_it_unparents_it(
     assert!(
         !edges_of(&s, visual)
             .iter()
-            .any(|e| e.0 == "trigger" && e.1 == "fetch")
+            .any(|e| e.0 == "start" && e.1 == "fetch")
     );
     // And out again.
     event(
@@ -380,8 +380,7 @@ fn dragging_from_a_handle_draws_a_connection_and_letting_go_on_a_card_connects(
 ) {
     let s = setup(cx);
     let mut w = ticket(json!({}));
-    w.edges
-        .retain(|e| !(e.from == "trigger" && e.to == "fetch"));
+    w.edges.retain(|e| !(e.from == "start" && e.to == "fetch"));
     let mut visual = open_board(&s, &w, cx);
     let visual = &mut visual;
     visual.refresh().unwrap();
@@ -399,7 +398,7 @@ fn dragging_from_a_handle_draws_a_connection_and_letting_go_on_a_card_connects(
     assert!(canvas.read_with(visual, |c, _| c.connecting()));
     visual.simulate_mouse_up(target, gpui::MouseButton::Left, Modifiers::default());
     visual.run_until_parked();
-    assert!(edges_of(&s, visual).contains(&("trigger".into(), "fetch".into(), false)));
+    assert!(edges_of(&s, visual).contains(&("start".into(), "fetch".into(), false)));
     assert!(!canvas.read_with(visual, |c, _| c.connecting()));
 }
 

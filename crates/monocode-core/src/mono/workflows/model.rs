@@ -978,6 +978,16 @@ pub struct WorkflowRun {
     /// interrupted and never resumed still says what it left running. Old records have none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cloud_instances: Vec<RunInstance>,
+    /// The summary the run ended with (what `compose_report` made of it), kept for the run page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<RunSummary>,
+}
+
+/// The summary of a finished run: a title line and Markdown text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunSummary {
+    pub title: String,
+    pub text: String,
 }
 
 /// One cloud instance a run used. The app never stops or deletes it on its own.

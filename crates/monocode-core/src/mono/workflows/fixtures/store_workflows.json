@@ -19,7 +19,7 @@
     },
     "nodes": [
       {
-        "id": "trigger",
+        "id": "start",
         "ui": {
           "x": 10,
           "y": 20.5
@@ -82,7 +82,7 @@
     ],
     "edges": [
       {
-        "from": "trigger",
+        "from": "start",
         "to": "fetch"
       },
       {

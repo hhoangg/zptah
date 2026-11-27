@@ -23,12 +23,12 @@ fn flagged(extra: Value) -> Workflow {
     build(
         all,
         json!([
-            {"id": "trigger", "type": "manual"},
+            {"id": "start", "type": "manual"},
             {"id": "build", "type": "command", "title": "Build it", "project": "{{inputs.project}}", "command": COMMAND},
             {"id": "fix", "type": "session", "project": "{{inputs.project}}", "checkout": "root", "prompt": "Fix what broke.", "output": {}},
         ]),
         json!([
-            {"from": "trigger", "to": "build"},
+            {"from": "start", "to": "build"},
             {"from": "build", "to": "fix"},
         ]),
     )
@@ -96,8 +96,7 @@ fn the_review_lists_a_session_model_the_catalog_does_not_have_as_a_problem(
     }
     put(&s, vec![w]);
     s.manager.update(cx, |m, _| {
-        m.workflow_live = std::mem::replace(&mut m.workflow_live, workflow_runner::Live::new())
-            .with_probe(listing)
+        m.workflow_live = m.workflow_live.with_probe(listing)
     });
     open_tab(&s, cx);
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
@@ -477,17 +476,15 @@ fn cancel_and_back_drop_the_review_and_read_the_files_again(cx: &mut TestAppCont
             &w,
             monocode_core::mono::workflows::model::RunCaller::new(
                 monocode_core::mono::workflows::model::CallerKind::Manual,
-                "trigger",
+                "start",
             ),
             1_000,
             selector,
         );
         run.status = monocode_core::mono::workflows::model::RunStatus::Done;
-        monocode_core::mono::workflows::store::update_runs(
-            &monocode_core::mono::workflows::store::MonoDir::new(&s.root, &s.id),
-            A,
-            |_| Ok((vec![run.clone()], ())),
-        )
+        monocode_core::mono::workflows::store::update_runs(&s.workflows_dir(), A, |_| {
+            Ok((vec![run.clone()], ()))
+        })
         .unwrap();
         click(visual, selector);
         assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));

@@ -123,7 +123,7 @@ mod to_flow_from_flow {
     fn keeps_the_true_and_false_handles_of_an_if_node() {
         let mut w = workflow();
         w.nodes = vec![
-            n(json!({"id": "trigger", "type": "manual", "ui": {"x": 0, "y": 0}})),
+            n(json!({"id": "start", "type": "manual", "ui": {"x": 0, "y": 0}})),
             n(
                 json!({"id": "check", "type": "if", "condition": "{{inputs.x}} == 1", "ui": {"x": 0, "y": 80}}),
             ),
@@ -132,7 +132,7 @@ mod to_flow_from_flow {
             ),
         ];
         w.edges = vec![
-            edge(r#"{"from": "trigger", "to": "check"}"#),
+            edge(r#"{"from": "start", "to": "check"}"#),
             edge(r#"{"from": "check", "to": "report", "handle": "true"}"#),
         ];
         let flow = to_flow(&w);
@@ -148,7 +148,7 @@ mod to_flow_from_flow {
         }
         let flow = to_flow(&w);
         let at = |id: &str| find(&flow.nodes, id).position;
-        assert!(at("fetch").y >= at("trigger").y + NODE_H);
+        assert!(at("fetch").y >= at("start").y + NODE_H);
         assert!(at("each").y >= at("fetch").y + NODE_H);
         assert!(at("review").y >= at("dev").y + NODE_H);
         // The report sits below the whole group.
@@ -222,7 +222,7 @@ mod connection_kind_rules {
     #[test]
     fn is_invalid_for_an_edge_into_a_trigger() {
         assert_eq!(
-            connection_kind(&ticket_workflow(), "fetch", "trigger", None),
+            connection_kind(&ticket_workflow(), "fetch", "start", None),
             ConnectionKind::Invalid
         );
     }
@@ -231,7 +231,7 @@ mod connection_kind_rules {
     fn is_invalid_into_a_trigger_and_into_itself() {
         let w = ticket_workflow();
         assert_eq!(
-            connection_kind(&w, "report", "trigger", None),
+            connection_kind(&w, "report", "start", None),
             ConnectionKind::Invalid
         );
         assert_eq!(
@@ -243,7 +243,7 @@ mod connection_kind_rules {
     #[test]
     fn is_invalid_for_an_edge_that_already_exists() {
         assert_eq!(
-            connection_kind(&ticket_workflow(), "trigger", "fetch", None),
+            connection_kind(&ticket_workflow(), "start", "fetch", None),
             ConnectionKind::Invalid
         );
     }
@@ -519,11 +519,8 @@ mod groups {
             x: group.x + 20.0,
             y: group.y + 60.0,
         };
-        let trigger = settle_drop(
-            &moved(&flow.nodes, "trigger", inside.x, inside.y),
-            "trigger",
-        );
-        assert_eq!(find(&trigger, "trigger").parent_id, None);
+        let trigger = settle_drop(&moved(&flow.nodes, "start", inside.x, inside.y), "start");
+        assert_eq!(find(&trigger, "start").parent_id, None);
         let mut second = find(&flow.nodes, "each").clone();
         second.id = "each2".into();
         second.position = inside;
@@ -734,13 +731,13 @@ mod keyboard_delete {
         let mut edges: Vec<FlowEdge> = flow
             .edges
             .iter()
-            .filter(|e| e.id != "trigger->fetch")
+            .filter(|e| e.id != "start->fetch")
             .cloned()
             .collect();
         let mut wire = flow
             .edges
             .iter()
-            .find(|e| e.id == "trigger->fetch")
+            .find(|e| e.id == "start->fetch")
             .unwrap()
             .clone();
         wire.selected = true;
@@ -749,7 +746,7 @@ mod keyboard_delete {
         assert_eq!(ids(&out.nodes, |n| &n.id), ["dev"]);
         let mut got = edge_ids(&out.edges);
         got.sort();
-        assert_eq!(got, ["dev->review", "review->dev~loop", "trigger->fetch"]);
+        assert_eq!(got, ["dev->review", "review->dev~loop", "start->fetch"]);
     }
 }
 
@@ -765,7 +762,7 @@ mod if_handles {
             report(),
         ];
         w.edges = vec![
-            edge(r#"{"from": "trigger", "to": "check"}"#),
+            edge(r#"{"from": "start", "to": "check"}"#),
             edge(r#"{"from": "check", "to": "report", "handle": "true"}"#),
         ];
         assert_eq!(
@@ -859,7 +856,7 @@ mod project_input_for_and_inputs_with_no_value {
         let mut looped = workflow();
         looped.inputs = project_inputs(&["api"]);
         looped.edges = vec![edge(
-            r#"{"from": "trigger", "to": "report", "loop": {"maxRounds": 2, "decide": "{{inputs.api}} == 1"}}"#,
+            r#"{"from": "start", "to": "report", "loop": {"maxRounds": 2, "decide": "{{inputs.api}} == 1"}}"#,
         )];
         assert_eq!(
             project_input_for(&looped, "/work/web", "web", None).reference,
@@ -912,7 +909,7 @@ mod whole_workflows {
         assert_eq!(w.name, "New workflow");
         assert!(!w.enabled);
         assert_eq!(w.created_at, 1234);
-        assert_eq!(ids(&w.nodes, |n| &n.id), ["trigger"]);
+        assert_eq!(ids(&w.nodes, |n| &n.id), ["start"]);
         assert_eq!(w.nodes[0].title.as_deref(), Some("Manual trigger"));
         assert_eq!(w.nodes[0].ui, Some(Ui { x: 0.0, y: 0.0 }));
         assert_eq!(w.edges, vec![]);
@@ -962,12 +959,12 @@ mod whole_workflows {
     #[test]
     fn duplicate_edges_get_numbered_ids() {
         let mut w = workflow();
-        w.edges.push(Edge::new("trigger", "report"));
-        w.edges.push(Edge::new("trigger", "report"));
+        w.edges.push(Edge::new("start", "report"));
+        w.edges.push(Edge::new("start", "report"));
         let flow = to_flow(&w);
         assert_eq!(
             edge_ids(&flow.edges),
-            ["trigger->report", "trigger->report#2", "trigger->report#3"]
+            ["start->report", "start->report#2", "start->report#3"]
         );
     }
 
@@ -1007,7 +1004,7 @@ mod switch {
     fn routed() -> Workflow {
         let mut w = workflow();
         w.nodes = vec![
-            n(json!({"id": "trigger", "type": "manual", "ui": {"x": 0, "y": 0}})),
+            n(json!({"id": "start", "type": "manual", "ui": {"x": 0, "y": 0}})),
             n(
                 json!({"id": "route", "type": "switch", "value": "{{inputs.x}}",
                 "cases": ["bug", "new feature"], "ui": {"x": 0, "y": 80}}),
@@ -1017,7 +1014,7 @@ mod switch {
             ),
         ];
         w.edges = vec![
-            edge(r#"{"from": "trigger", "to": "route"}"#),
+            edge(r#"{"from": "start", "to": "route"}"#),
             edge(r#"{"from": "route", "to": "report", "handle": "bug"}"#),
             edge(r#"{"from": "route", "to": "report", "handle": "new feature"}"#),
             edge(r#"{"from": "route", "to": "report", "handle": "default"}"#),
@@ -1036,7 +1033,7 @@ mod switch {
             out_handles(&n(json!({"id": "c", "type": "if", "decide": "mono"}))),
             vec!["true", "false"]
         );
-        assert!(out_handles(w.node("trigger").unwrap()).is_empty());
+        assert!(out_handles(w.node("start").unwrap()).is_empty());
         assert_eq!(
             NodeType::of(&w.node("route").unwrap().kind),
             NodeType::Switch
@@ -1076,7 +1073,7 @@ mod switch {
             "cases": ["loop-out"], "ui": {"x": 0, "y": 80}}),
         );
         w.edges = vec![
-            edge(r#"{"from": "trigger", "to": "route"}"#),
+            edge(r#"{"from": "start", "to": "route"}"#),
             edge(r#"{"from": "route", "to": "report", "handle": "loop-out"}"#),
             edge(r#"{"from": "route", "to": "report", "handle": "default"}"#),
         ];
@@ -1087,7 +1084,7 @@ mod switch {
     #[test]
     fn a_connection_from_a_switch_needs_one_of_its_handles() {
         let mut w = routed();
-        w.edges.retain(|e| e.from == "trigger");
+        w.edges.retain(|e| e.from == "start");
         w.nodes.push(n(
             json!({"id": "x", "type": "command", "project": "p", "command": "ls"}),
         ));

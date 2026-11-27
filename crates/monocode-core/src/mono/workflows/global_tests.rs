@@ -24,7 +24,7 @@ fn temp_root() -> PathBuf {
 fn workflow_with(id: &str, extra: serde_json::Value) -> Workflow {
     let mut v = json!({
         "id": id, "name": "Daily", "inputs": {}, "inputValues": {},
-        "nodes": [{"id": "trigger", "type": "manual"}],
+        "nodes": [{"id": "start", "type": "manual"}],
         "edges": [],
         "enabled": true, "createdAt": 1
     });
@@ -41,7 +41,7 @@ fn workflow() -> Workflow {
 fn run(id: &str, at: u64) -> WorkflowRun {
     let mut run = start_run(
         &workflow(),
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         at,
         id,
     );

@@ -17,7 +17,7 @@
   },
   "nodes": [
     {
-      "id": "trigger",
+      "id": "start",
       "type": "schedule",
       "schedule": {
         "scheduleKind": "weekdays",
@@ -95,7 +95,7 @@
   ],
   "edges": [
     {
-      "from": "trigger",
+      "from": "start",
       "to": "fetch"
     },
     {

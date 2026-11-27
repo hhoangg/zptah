@@ -3,14 +3,35 @@ use gpui::{TestAppContext, WindowHandle};
 use monocode_core::store::Store;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, mpsc};
-pub(super) struct Setup {
-    pub(super) window: WindowHandle<Shell>,
-    pub(super) manager: Entity<Monos>,
-    pub(super) id: String,
-    pub(super) project: String,
-    pub(super) session: i64,
-    pub(super) root: PathBuf,
-    pub(super) store: Database,
+pub(crate) struct Setup {
+    pub(crate) window: WindowHandle<Shell>,
+    pub(crate) manager: Entity<Monos>,
+    pub(crate) id: String,
+    pub(crate) project: String,
+    pub(crate) session: i64,
+    pub(crate) root: PathBuf,
+    pub(crate) store: Database,
+}
+
+/// A look at the global workflows now, as the clock or the waker makes it.
+pub(crate) fn check_workflows<C: gpui::AppContext>(s: &Setup, cx: &mut C) {
+    let workflows = s
+        .window
+        .update(cx, |shell, _, _| shell.workflows().expect("workflows"))
+        .unwrap();
+    workflows.update(cx, |w, cx| w.check_workflows(cx));
+}
+
+impl Setup {
+    /// The global workflow files, where the app keeps them.
+    pub(crate) fn workflows_dir(&self) -> monocode_core::mono::workflows::global::WorkflowsDir {
+        monocode_core::mono::workflows::global::WorkflowsDir::new(
+            self.root
+                .parent()
+                .expect("the Mono folder has a parent")
+                .join("workflows"),
+        )
+    }
 }
 
 #[gpui::test]
@@ -307,15 +328,15 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
         );
     }
 }
-pub(super) fn setup(cx: &mut TestAppContext) -> Setup {
+pub(crate) fn setup(cx: &mut TestAppContext) -> Setup {
     setup_with(cx, false)
 }
 /// `shared` opens the desktop database layout the app uses, not the legacy native one.
-pub(super) fn setup_with(cx: &mut TestAppContext, shared: bool) -> Setup {
+pub(crate) fn setup_with(cx: &mut TestAppContext, shared: bool) -> Setup {
     setup_prepared(cx, shared, |_| {})
 }
 /// `setup_with`, after `prepare` ran on the data folder and before the app starts.
-pub(super) fn setup_prepared(
+pub(crate) fn setup_prepared(
     cx: &mut TestAppContext,
     shared: bool,
     prepare: impl FnOnce(&std::path::Path),
@@ -400,7 +421,7 @@ fn heartbeat_runs_keep_the_monos_selected_permissions(cx: &mut TestAppContext) {
     }
 }
 
-pub(super) fn call(
+pub(crate) fn call(
     s: &Setup,
     request: &str,
     action: &str,
@@ -409,7 +430,7 @@ pub(super) fn call(
 ) -> mpsc::Receiver<Result<Value, String>> {
     call_from(s, s.session, request, action, input, cx)
 }
-pub(super) fn call_from(
+pub(crate) fn call_from(
     s: &Setup,
     session: i64,
     request: &str,
@@ -2347,10 +2368,10 @@ fn start(s: &Setup, request: &str, input: Value, cx: &mut TestAppContext) -> Res
         .try_recv()
         .unwrap()
 }
-pub(super) fn session_count(s: &Setup) -> usize {
+pub(crate) fn session_count(s: &Setup) -> usize {
     locked(&s.store).unwrap().sessions().unwrap().len()
 }
-pub(super) fn groups_of(
+pub(crate) fn groups_of(
     s: &Setup,
     cx: &mut TestAppContext,
 ) -> monocode_core::session_groups::Groups {
@@ -2364,7 +2385,7 @@ pub(super) fn groups_of(
             .mono_groups(&s.project)
     })
 }
-pub(super) fn edit_mono(s: &Setup, cx: &mut TestAppContext, edit: impl FnOnce(&mut mono::Mono)) {
+pub(crate) fn edit_mono(s: &Setup, cx: &mut TestAppContext, edit: impl FnOnce(&mut mono::Mono)) {
     cx.update(|cx| {
         s.manager.update(cx, |m, cx| {
             edit(m.roster.get_mut(&s.id).unwrap());
@@ -2397,7 +2418,7 @@ fn git_init(dir: &str) {
         .unwrap();
     assert!(out.status.success());
 }
-pub(super) fn started_link(s: &Setup, child: i64) -> Option<i64> {
+pub(crate) fn started_link(s: &Setup, child: i64) -> Option<i64> {
     locked(&s.store)
         .unwrap()
         .started_links()
@@ -2805,7 +2826,7 @@ fn start_rejects_a_malformed_parent_id(cx: &mut TestAppContext) {
     assert_eq!(session_count(&s), before);
 }
 
-pub(super) fn launch_of(session: i64, cwd: &str) -> mono::Launch {
+pub(crate) fn launch_of(session: i64, cwd: &str) -> mono::Launch {
     mono::Launch {
         session_id: session,
         cwd: cwd.into(),
@@ -3093,7 +3114,7 @@ fn the_habit_run_prompt_sends_session_reports_to_the_chat() {
     assert!(!prompt.contains("belongs to this habit"));
 }
 
-pub(super) fn launches_of(s: &Setup, cx: &mut TestAppContext) -> Vec<mono::Launch> {
+pub(crate) fn launches_of(s: &Setup, cx: &mut TestAppContext) -> Vec<mono::Launch> {
     cx.update(|cx| {
         s.manager
             .read(cx)
@@ -3105,7 +3126,7 @@ pub(super) fn launches_of(s: &Setup, cx: &mut TestAppContext) -> Vec<mono::Launc
     })
 }
 /// A habit run of the Mono, driven through its chat view (nothing is sent).
-pub(super) fn fake_run(s: &Setup, cx: &mut TestAppContext) -> i64 {
+pub(crate) fn fake_run(s: &Setup, cx: &mut TestAppContext) -> i64 {
     let run = locked(&s.store)
         .unwrap()
         .create("codex", &s.project)
@@ -3507,7 +3528,7 @@ fn finish_run(s: &Setup, run: i64, cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(cx.update(|cx| s.manager.read(cx).running.is_empty()));
 }
-pub(super) fn chat_rows(s: &Setup) -> Vec<String> {
+pub(crate) fn chat_rows(s: &Setup) -> Vec<String> {
     locked(&s.store)
         .unwrap()
         .load(s.session)
@@ -5011,17 +5032,15 @@ mod reset_flow {
 fn workflow_input(name: &str) -> Value {
     json!({"workflow": {
         "name": name,
-        "nodes": [{"id": "trigger", "type": "manual"}],
+        "nodes": [{"id": "start", "type": "manual"}],
         "edges": []
     }})
 }
 
 fn saved_workflows(s: &Setup) -> Vec<monocode_core::mono::workflows::model::Workflow> {
-    monocode_core::mono::workflows::store::load_workflows(
-        &monocode_core::mono::workflows::store::MonoDir::new(&s.root, &s.id),
-    )
-    .unwrap()
-    .workflows
+    monocode_core::mono::workflows::store::load_workflows(&s.workflows_dir())
+        .unwrap()
+        .workflows
 }
 
 #[gpui::test]
@@ -5058,17 +5077,13 @@ fn workflow_actions_work_from_the_mono_chat_and_signal_the_runner(cx: &mut TestA
     // The runner is woken, so the request is acted on at once and not on the next look: the
     // run it asked for was claimed and is in the run history.
     assert!(!saved_workflows(&s)[0].run_requested);
-    let runs = monocode_core::mono::workflows::store::load_runs(
-        &monocode_core::mono::workflows::store::MonoDir::new(&s.root, &s.id),
-        &id,
-    )
-    .unwrap();
+    let runs = monocode_core::mono::workflows::store::load_runs(&s.workflows_dir(), &id).unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(
         runs[0].caller,
         monocode_core::mono::workflows::model::RunCaller::new(
             monocode_core::mono::workflows::model::CallerKind::Manual,
-            "trigger"
+            "start"
         )
     );
     assert!(!signals.take_check_now(), "the look answered the request");
@@ -5090,7 +5105,7 @@ fn workflow_actions_work_from_the_mono_chat_and_signal_the_runner(cx: &mut TestA
 }
 
 /// Every `workflows.*` action the app takes.
-pub(super) const WORKFLOW_ACTIONS: [&str; 16] = [
+pub(crate) const WORKFLOW_ACTIONS: [&str; 16] = [
     "workflows.list",
     "workflows.guide",
     "workflows.get",
@@ -5177,11 +5192,7 @@ fn a_habit_run_can_read_and_run_workflows_but_not_change_them(cx: &mut TestAppCo
     let started = from_run("run", "workflows.run", json!({"id": id}), cx).unwrap();
     assert_eq!(started["id"], id.as_str());
     // The request was taken by the runner at once, so the run is in the history.
-    let runs = monocode_core::mono::workflows::store::load_runs(
-        &monocode_core::mono::workflows::store::MonoDir::new(&s.root, &s.id),
-        &id,
-    )
-    .unwrap();
+    let runs = monocode_core::mono::workflows::store::load_runs(&s.workflows_dir(), &id).unwrap();
     assert_eq!(runs.len(), 1);
     // A session that holds no capability at all gets no answer from this Mono.
     let outsider = call_from(&s, run + 1000, "x", "workflows.list", json!({}), cx)
@@ -5249,7 +5260,7 @@ fn a_habit_run_cannot_start_a_paused_or_unreviewed_workflow(cx: &mut TestAppCont
         "Resume the workflow before running it."
     );
     // A workflow made from a file waits for the user's review.
-    let dir = monocode_core::mono::workflows::store::MonoDir::new(&s.root, &s.id);
+    let dir = s.workflows_dir();
     monocode_core::mono::workflows::store::update_workflows(&dir, |mut list| {
         list[0].enabled = true;
         list[0].needs_review = true;
@@ -5317,11 +5328,7 @@ fn a_habit_run_starts_a_workflow_with_values_for_one_run_and_meets_its_requireme
     .try_recv()
     .unwrap()
     .unwrap();
-    let runs = monocode_core::mono::workflows::store::load_runs(
-        &monocode_core::mono::workflows::store::MonoDir::new(&s.root, &s.id),
-        &id,
-    )
-    .unwrap();
+    let runs = monocode_core::mono::workflows::store::load_runs(&s.workflows_dir(), &id).unwrap();
     assert_eq!(runs.len(), 1);
     let ran = serde_json::to_value(&runs[0]).unwrap().to_string();
     assert!(ran.contains("once"), "{ran}");

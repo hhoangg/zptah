@@ -34,7 +34,7 @@ const EXAMPLE_0: &str = r##"{
   "summaryTemplate": "Repo digest for run {{run.id}}\n\n{{digest.summary}}",
   "nodes": [
     {
-      "id": "trigger",
+      "id": "start",
       "type": "schedule",
       "schedule": {
         "scheduleKind": "weekdays",
@@ -61,7 +61,7 @@ const EXAMPLE_0: &str = r##"{
   ],
   "edges": [
     {
-      "from": "trigger",
+      "from": "start",
       "to": "digest"
     }
   ]
@@ -84,7 +84,7 @@ const EXAMPLE_1: &str = r##"{
   },
   "nodes": [
     {
-      "id": "trigger",
+      "id": "start",
       "type": "manual"
     },
     {
@@ -157,7 +157,7 @@ const EXAMPLE_1: &str = r##"{
   ],
   "edges": [
     {
-      "from": "trigger",
+      "from": "start",
       "to": "fetch"
     },
     {
@@ -197,7 +197,7 @@ const EXAMPLE_2: &str = r##"{
   "summaryTemplate": "Changes under {{inputs.pathspec}}\n\n{{assess.summary}}\n\n{{#if deep_review}}Deep review:\n{{deep_review.notes}}{{/if}}",
   "nodes": [
     {
-      "id": "trigger",
+      "id": "start",
       "type": "manual"
     },
     {
@@ -251,7 +251,7 @@ const EXAMPLE_2: &str = r##"{
   ],
   "edges": [
     {
-      "from": "trigger",
+      "from": "start",
       "to": "recent"
     },
     {
@@ -284,7 +284,7 @@ const EXAMPLE_3: &str = r##"{
   "summaryTemplate": "Cloud build for run {{run.id}}\n\n{{check.notes}}",
   "nodes": [
     {
-      "id": "trigger",
+      "id": "start",
       "type": "manual"
     },
     {
@@ -331,7 +331,7 @@ const EXAMPLE_3: &str = r##"{
   ],
   "edges": [
     {
-      "from": "trigger",
+      "from": "start",
       "to": "build"
     },
     {

@@ -5,7 +5,7 @@ use super::graph::{BarKind, GraphCanvas, GraphEvent};
 use super::run_model_tests::{
     each_run, each_workflow, lane_run, linear, nr, run_of, workflow as wf,
 };
-use super::tests::{A, build, history, put, route, saved};
+use super::tests::{A, history, put, route, saved};
 use super::tests::{click, open_tab, page_notice, settle};
 use super::*;
 use crate::monos::tests::{Setup, setup};
@@ -17,7 +17,7 @@ use monocode_core::mono::workflows::{
 use serde_json::json;
 
 fn put_run(s: &Setup, run: &WorkflowRun) {
-    update_runs(&MonoDir::new(&s.root, &s.id), &run.workflow_id, |_| {
+    update_runs(&s.workflows_dir(), &run.workflow_id, |_| {
         Ok((vec![run.clone()], ()))
     })
     .unwrap();
@@ -86,7 +86,7 @@ fn run_page_draws_one_card_per_run_node(cx: &mut TestAppContext) {
         "running",
         json!({}),
         json!([
-            nr("trigger", "", "done", json!({})),
+            nr("start", "", "done", json!({})),
             nr("dev", "", "done", json!({})),
             nr("report", "", "pending", json!({}))
         ]),
@@ -100,7 +100,7 @@ fn run_page_draws_one_card_per_run_node(cx: &mut TestAppContext) {
         vec![
             ("dev".into(), "done"),
             ("report".into(), "pending"),
-            ("trigger".into(), "done")
+            ("start".into(), "done")
         ]
     );
     for selector in ["wf-node-trigger", "wf-node-dev", "wf-node-report"] {
@@ -139,7 +139,7 @@ fn no_switch_without_a_for_each(cx: &mut TestAppContext) {
         &linear(),
         "done",
         json!({}),
-        json!([nr("trigger", "", "done", json!({}))]),
+        json!([nr("start", "", "done", json!({}))]),
     );
     saved_run(&s, &linear(), &run, cx);
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
@@ -239,7 +239,7 @@ fn picking_a_round_of_a_for_each_a_loop_ran_again(cx: &mut TestAppContext) {
         )],
     );
     run.nodes = serde_json::from_value(json!([
-        nr("trigger", "", "done", json!({})),
+        nr("start", "", "done", json!({})),
         nr("each", "", "running", json!({"round": 2})),
         nr("dev", "each#0", "running", json!({})),
         nr("dev", "each#0@r1", "failed", json!({"error": "boom"})),
@@ -277,7 +277,7 @@ fn clicking_a_node_shows_its_details_and_round_history(cx: &mut TestAppContext) 
         "running",
         json!({}),
         json!([
-            nr("trigger", "", "done", json!({})),
+            nr("start", "", "done", json!({})),
             nr(
                 "dev",
                 "",
@@ -333,7 +333,7 @@ fn a_nodes_session_opens_in_the_panel_and_back_returns_to_the_run(cx: &mut TestA
         "done",
         json!({}),
         json!([
-            nr("trigger", "", "done", json!({})),
+            nr("start", "", "done", json!({})),
             nr("dev", "", "done", json!({"sessionId": session.to_string()})),
             nr("report", "", "done", json!({})),
         ]),
@@ -420,16 +420,16 @@ fn the_details_collapse_and_open_again(cx: &mut TestAppContext) {
 fn a_command_shows_its_exit_code_and_tails(cx: &mut TestAppContext) {
     let s = setup(cx);
     let w = wf(
-        json!([{"id": "trigger", "type": "manual"},
+        json!([{"id": "start", "type": "manual"},
                {"id": "lint", "type": "command", "command": "npm run lint", "project": "{{inputs.project}}"}]),
-        json!([{"from": "trigger", "to": "lint"}]),
+        json!([{"from": "start", "to": "lint"}]),
     );
     let run = run_of(
         &w,
         "failed",
         json!({}),
         json!([
-            nr("trigger", "", "done", json!({})),
+            nr("start", "", "done", json!({})),
             nr(
                 "lint",
                 "",
@@ -454,9 +454,12 @@ fn a_running_run_offers_stop_run_and_stop_ends_it(cx: &mut TestAppContext) {
     // A manual workflow that waits for an answer, so its run stays live.
     put(
         &s,
-        vec![super::tests::workflow(json!({"runRequested": true})).tap_waiting()],
+        vec![super::tests::waiting_workflow(
+            &s,
+            json!({"runRequested": true}),
+        )],
     );
-    s.manager.update(cx, |m, cx| m.check_workflows(cx));
+    crate::monos::tests::check_workflows(&s, cx);
     cx.run_until_parked();
     let run_id = s
         .manager
@@ -483,30 +486,13 @@ fn a_running_run_offers_stop_run_and_stop_ends_it(cx: &mut TestAppContext) {
     assert_eq!(history(&s, A)[0].status, RunStatus::Stopped);
 }
 
-trait Waiting {
-    fn tap_waiting(self) -> Workflow;
-}
-impl Waiting for Workflow {
-    fn tap_waiting(self) -> Workflow {
-        build(
-            json!({"runRequested": true}),
-            json!([
-                {"id": "trigger", "type": "manual"},
-                {"id": "ask", "type": "switch", "decide": "ai", "question": "Ship it?", "cases": ["yes", "no"]},
-                {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
-            ]),
-            json!([{"from": "trigger", "to": "ask"}, {"from": "ask", "to": "report"}]),
-        )
-    }
-}
-
 fn interrupted(w: &Workflow) -> WorkflowRun {
     run_of(
         w,
         "interrupted",
         json!({}),
         json!([
-            nr("trigger", "", "done", json!({})),
+            nr("start", "", "done", json!({})),
             nr("report", "", "pending", json!({}))
         ]),
     )
@@ -581,7 +567,7 @@ fn a_finished_run_names_its_instances_in_its_report_not_with_a_warning(cx: &mut 
         &linear(),
         "done",
         json!({}),
-        json!([nr("trigger", "", "done", json!({}))]),
+        json!([nr("start", "", "done", json!({}))]),
     );
     finished.ended_at = Some(finished.started_at + 1_000);
     finished.cloud_instances = vec![octo_run()];
@@ -687,7 +673,7 @@ fn the_meta_row_and_an_error_show_for_a_failed_run(cx: &mut TestAppContext) {
         &linear(),
         "failed",
         json!({}),
-        json!([nr("trigger", "", "done", json!({}))]),
+        json!([nr("start", "", "done", json!({}))]),
     );
     run.ended_at = Some(run.started_at + 61_000);
     run.error = Some("The run could not make progress.".into());
@@ -741,7 +727,7 @@ fn dragging_the_background_pans_and_a_drag_over_a_card_does_not_pick_it(cx: &mut
         "done",
         json!({}),
         json!([
-            nr("trigger", "", "done", json!({})),
+            nr("start", "", "done", json!({})),
             nr("dev", "", "done", json!({})),
             nr("report", "", "done", json!({}))
         ]),
@@ -792,13 +778,13 @@ fn the_loop_edge_has_its_label_in_the_single_view_and_none_in_lanes(cx: &mut Tes
     let s = setup(cx);
     let w = wf(
         json!([
-            {"id": "trigger", "type": "manual"},
+            {"id": "start", "type": "manual"},
             {"id": "each", "type": "forEach", "in": "{{trigger.tickets}}"},
             super::run_model_tests::session("dev", json!({"parent": "each"})),
             super::run_model_tests::session("review", json!({"parent": "each"})),
         ]),
         json!([
-            {"from": "trigger", "to": "each"},
+            {"from": "start", "to": "each"},
             {"from": "dev", "to": "review"},
             {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
         ]),
@@ -808,7 +794,7 @@ fn the_loop_edge_has_its_label_in_the_single_view_and_none_in_lanes(cx: &mut Tes
         "running",
         json!({"each": [{"title": "One"}, {"title": "Two"}]}),
         json!([
-            nr("trigger", "", "done", json!({})),
+            nr("start", "", "done", json!({})),
             nr("each", "", "running", json!({})),
             nr("dev", "each#0", "running", json!({})),
             nr("review", "each#0", "pending", json!({})),
@@ -868,7 +854,7 @@ fn running_labels_follow_the_clock_between_events(cx: &mut TestAppContext) {
         "running",
         json!({}),
         json!([
-            nr("trigger", "", "done", json!({})),
+            nr("start", "", "done", json!({})),
             nr("dev", "", "running", json!({"startedAt": started})),
             nr("report", "", "pending", json!({})),
         ]),
@@ -908,7 +894,7 @@ fn enter_on_a_focused_card_picks_it(cx: &mut TestAppContext) {
         "running",
         json!({}),
         json!([
-            nr("trigger", "", "done", json!({})),
+            nr("start", "", "done", json!({})),
             nr("dev", "", "running", json!({})),
             nr("report", "", "pending", json!({})),
         ]),

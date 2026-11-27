@@ -41,7 +41,7 @@ fn build_then_check() -> Workflow {
                 json!({"target": {"kind": "codespace", "instance": {"sameAs": "build"}}}),
             ),
         ],
-        vec![edge("trigger", "build"), edge("build", "check")],
+        vec![edge("start", "build"), edge("build", "check")],
     )
 }
 
@@ -70,7 +70,7 @@ fn cloud_loop(target: Value, reuse: Option<bool>) -> Workflow {
             session("review", json!({"verdict": {"type": "string"}}), json!({})),
         ],
         vec![
-            edge("trigger", "dev"),
+            edge("start", "dev"),
             edge("dev", "review"),
             json!({"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "{{review.verdict}} != \"approve\""}}),
         ],
@@ -191,7 +191,7 @@ fn each_item_of_a_for_each_gets_an_instance_of_its_own(cx: &mut TestAppContext) 
                 json!({"parent": "each", "target": {"kind": "codespace", "instance": "new"}}),
             ),
         ],
-        vec![edge("trigger", "fetch"), edge("fetch", "each")],
+        vec![edge("start", "fetch"), edge("fetch", "each")],
     );
     let rig = Rig::new(&[
         &fenced(
@@ -220,7 +220,7 @@ fn a_same_as_step_fails_when_its_source_has_no_session(cx: &mut TestAppContext) 
     // `build` finished without ever having had a session.
     let mut run = start_run(
         &def,
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         1_000,
         "run-1",
     );
@@ -283,7 +283,7 @@ fn a_cloud_step_that_slipped_past_validation_fails_and_creates_nothing(cx: &mut 
                     json!({"target": target, "checkout": checkout}),
                 ),
             ],
-            vec![edge("trigger", "dev")],
+            vec![edge("start", "dev")],
         );
         let rig = Rig::new(&[]);
         assert!(rig.start(cx, &def));
@@ -326,7 +326,7 @@ fn stopping_while_the_instance_starts_launches_nothing_later(cx: &mut TestAppCon
     assert!(!w.posts[0].text.contains("codespace-1"));
     assert!(w.posts[1].title.ends_with("cloud instance left running"));
     // The chat shows only the text, so it names the workflow itself.
-    let name = &w.posts[1].workflow_name;
+    let name = &w.posts[1].run.definition.name;
     assert!(
         w.posts[1].text.starts_with(&format!("**{name}**\n\n")),
         "{}",
@@ -460,7 +460,7 @@ fn a_resumed_run_goes_on_in_the_instance_of_the_session_it_was_interrupted_in(
     // Round 1 of `build` was running in cloud session s9 when the app closed.
     let mut run = start_run(
         &def,
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         1_000,
         "run-old",
     );
@@ -487,10 +487,7 @@ fn a_resumed_run_goes_on_in_the_instance_of_the_session_it_was_interrupted_in(
     let rig = Rig::new(&["one", "two"]);
     rig.fake.knows_cloud("s9", "codespace", "codespace-9");
     let host: Rc<dyn WorkflowHost> = Rc::new(rig.fake.clone());
-    assert!(
-        rig.runner
-            .resume(host, &cx.to_async(), "mono-1", &interrupted)
-    );
+    assert!(rig.runner.resume(host, &cx.to_async(), &interrupted));
     cx.run_until_parked();
     assert_eq!(rig.last_run().status, RunStatus::Done);
     let w = rig.fake.world();
@@ -529,7 +526,7 @@ fn branch_then_build(target: Value, extra: Value) -> Workflow {
             session("fetch", json!({"branch": {"type": "string"}}), json!({})),
             session("build", json!({}), build),
         ],
-        vec![edge("trigger", "fetch"), edge("fetch", "build")],
+        vec![edge("start", "fetch"), edge("fetch", "build")],
     )
 }
 
@@ -635,7 +632,7 @@ fn a_template_in_an_option_that_cannot_hold_one_fails_the_step_and_creates_nothi
                 trigger(),
                 session("dev", json!({}), json!({"target": target})),
             ],
-            vec![edge("trigger", "dev")],
+            vec![edge("start", "dev")],
         );
         let rig = Rig::new(&[]);
         assert!(rig.start(cx, &def));
@@ -762,7 +759,7 @@ fn an_account_that_slipped_past_validation_fails_the_step_and_creates_nothing(
                     json!({"target": target, "account": account}),
                 ),
             ],
-            vec![edge("trigger", "dev")],
+            vec![edge("start", "dev")],
         );
         let rig = Rig::new(&[]);
         assert!(rig.start(cx, &def));
@@ -847,7 +844,7 @@ fn a_resumed_run_that_is_stopped_names_the_instances_of_the_interrupted_one_and_
     let def = build_then_check();
     let mut run = start_run(
         &def,
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         1_000,
         "run-old",
     );
@@ -873,10 +870,7 @@ fn a_resumed_run_that_is_stopped_names_the_instances_of_the_interrupted_one_and_
     rig.fake.knows_cloud("s9", "codespace", "octo-run");
     rig.fake.hold();
     let host: Rc<dyn WorkflowHost> = Rc::new(rig.fake.clone());
-    assert!(
-        rig.runner
-            .resume(host, &cx.to_async(), "mono-1", &interrupted)
-    );
+    assert!(rig.runner.resume(host, &cx.to_async(), &interrupted));
     cx.run_until_parked();
     assert!(rig.runner.stop(WF));
     cx.run_until_parked();
@@ -903,7 +897,7 @@ fn the_report_names_an_instance_its_session_no_longer_tells_about() {
     let def = build_then_check();
     let mut run = start_run(
         &def,
-        RunCaller::new(CallerKind::Manual, "trigger"),
+        RunCaller::new(CallerKind::Manual, "start"),
         1_000,
         "run-1",
     );
