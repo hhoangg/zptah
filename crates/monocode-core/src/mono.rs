@@ -86,7 +86,7 @@ pub struct Mono {
     /// (spec 9.1). Not the emoji-library setting above. `None`: the mascot's emoji.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub badge_emoji: Option<String>,
-    /// Real Chrome through the zptah Browser extension (see `browser::MonoBrowser`).
+    /// The Mono's Ardia browser (see `browser::MonoBrowser`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub browser: Option<browser::MonoBrowser>,
 }
@@ -350,6 +350,10 @@ pub struct Roster {
 impl Roster {
     pub fn load(store: &Store) -> Result<Self, String> {
         let text = store.setting("mono-roster")?;
+        // The Playwright-era token secret is not used any more: delete it (cheap, idempotent).
+        if let Ok(secrets) = browser::MonoBrowserStore::for_store(store) {
+            let _ = secrets.delete_secrets_named(browser::LEGACY_TOKEN_SECRET);
+        }
         let mut roster: Self = text
             .map(|text| {
                 serde_json::from_str(&text).map_err(|e| format!("Cannot read Mono roster: {e}"))

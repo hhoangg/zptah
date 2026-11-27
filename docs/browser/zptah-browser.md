@@ -69,7 +69,8 @@ Mono used, the step fails and the Mono takes a new snapshot. Then it decides:
 - The Mono never types passwords or one-time codes. zptah refuses it, with no approval that
   overrides it, and on a login page it asks before typing into a field it cannot identify.
 - Navigation a page starts by itself (a script, a redirect) to a blocked site is caught after the
-  call: the Mono's tab is closed, the turn's further browser calls stop and the audit log records it.
+  call: further browser calls in that tab stop for the turn, a tab the Mono opened is closed
+  (your own tab is unbound, never closed) and the audit log records it.
 - Page content is data, never instructions: it is fenced, scanned for prompt injection, and a turn
   that read untrusted content asks before acting on anything it did not declare first.
 

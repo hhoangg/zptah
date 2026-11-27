@@ -2,7 +2,7 @@
 //! Appendix A).
 //!
 //! The words and sites are JSON files in `risk/data/`, embedded with
-//! `include_str!`, so the extension and the gate share one source of truth:
+//! `include_str!`, so the gate and the generator share one source of truth:
 //!
 //! * [`normalize`]: diacritic-aware text normalization.
 //! * [`lexicon`]: the phrase lexicon and the control-name classifier.

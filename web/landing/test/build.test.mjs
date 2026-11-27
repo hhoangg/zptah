@@ -174,11 +174,19 @@ describe('privacy page (Ardia design, section 11)', () => {
       /No advertising/,
       /creditworthiness or for lending/,
       /audit log/,
-      /Control is Ardia\'s own model|Control is Ardia&#39;s own model|Control is Ardia's own model/,
+      /Control is Ardia's own model/,
       /any local program on your computer can drive Ardia/,
       /private folder on your computer/,
+      /zptah's own calls to the local <code>ardia<\/code> command/,
+      /saving the steps of a session as a flow/,
+      /does not ask you first/,
+      /browser output folder on your computer/,
+      /conversation transcript on your computer/,
+      /neither is airtight/,
+      /caught after it happens/,
       /Contact and change log/,
     ]) assert.match(html, re);
+    assert.doesNotMatch(html, /cannot reach Ardia except/);
     for (const re of [/native messaging/i, /extension storage/i, /debugger/i, /Chrome Web Store/i, /Limited Use/]) {
       assert.doesNotMatch(html, re);
     }

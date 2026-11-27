@@ -38,7 +38,7 @@ const START_TIMEOUT_SECONDS: u32 = 90;
 /// rules (`browser_route`, `browser_unroute`) or reshape the user's real window
 /// (`browser_resize`; the Mono scrolls instead).
 pub const ALWAYS_BLOCKED_TOOLS: [&str; 3] = ["browser_route", "browser_unroute", "browser_resize"];
-/// The only keys `browser_press_key` may press at Level 1: they scroll a page and, unlike Enter,
+/// The only keys a scroll may press at Level 1: they scroll a page and, unlike Enter,
 /// Space or Tab, do not press a focused button or move focus.
 pub const SCROLL_KEYS: [&str; 6] = ["PageDown", "PageUp", "Home", "End", "ArrowDown", "ArrowUp"];
 /// Whether `key` is one of [`SCROLL_KEYS`] (exact name, no modifiers).
@@ -211,6 +211,10 @@ pub(crate) fn drop_retired_tables(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 const UNAVAILABLE: &str = "Browser storage is unavailable.";
+
+/// The secret v0.1.x of the Playwright backend saved for each Mono. It is deleted whenever the
+/// roster loads ([`MonoBrowserStore::delete_secrets_named`]), so an old install loses it too.
+pub const LEGACY_TOKEN_SECRET: &str = "playwright-extension-token";
 
 /// The associated data a secret is sealed under: moving a row to another Mono breaks opening.
 pub(crate) fn secret_aad(mono_id: &str, name: &str) -> Vec<u8> {
@@ -473,7 +477,7 @@ pub fn audit_entry(tool_name: &str, input: &str, session_id: i64) -> Option<Audi
 pub struct Runtime {
     /// The Mono's trust level when this runtime was resolved.
     pub trust: BrowserLevel,
-    /// The URL the agent connects to: the Mono's gate, which fronts the extension link.
+    /// The URL the agent connects to: the Mono's gate, which fronts Ardia.
     pub endpoint: String,
     /// The bearer token the gate requires in `Authorization`. Never put it in a URL or on argv.
     pub token: String,

@@ -1,7 +1,7 @@
 //! The risk lexicon and the name classifier (spec 7.3).
 //!
 //! The data is `data/risk-lexicon.json`, embedded with `include_str!`
-//! so the extension and the gate match the same words. Matching rules, in the order they apply:
+//! so the gate and the tests match the same words. Matching rules, in the order they apply:
 //!
 //! 1. Text and phrases are normalized by [`normalize`](super::normalize). A segment with
 //!    Vietnamese diacritics is compared with diacritics; one without any is compared stripped.

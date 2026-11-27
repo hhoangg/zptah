@@ -33,7 +33,7 @@ pub(super) fn trust_label(trust: BrowserLevel, lang: copy::Lang) -> &'static str
 }
 
 /// Drops the Mono's gate (its browser was turned off or changed). It is the app's own state, so
-/// this never touches the user's Chrome.
+/// this never touches the user's Ardia.
 ///
 /// `end_sessions` also closes the tabs the Mono opened in Ardia: for a browser turned off, a new
 /// profile or a removed Mono, never for an edit of the origin lists.
@@ -604,7 +604,7 @@ impl Monos {
         if setting.enabled {
             sections.extend(self.browser_ardia_cards(mono, cx));
             sections.push(self.browser_safety_card(&setting, window, cx));
-            sections.extend(self.browser_extension_cards(mono, &setting, cx));
+            sections.extend(self.browser_approval_cards(mono, &setting, cx));
             sections.push(self.browser_audit_card());
         }
         div()

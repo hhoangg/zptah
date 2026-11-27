@@ -584,7 +584,7 @@ fn the_rules_tell_the_mono_about_fences_and_no_longer_about_intents_or_recipes()
     };
     let rules = prompt_block(&browser);
     assert!(rules.contains("<untrusted-content-"));
-    // Act tools, declared intents and recipes come back (or go) in later milestones.
+    // Declared intents are not in the rules, and recipes are gone.
     assert!(!rules.contains("browser_declare_intent"));
     assert!(!rules.contains("Save as recipe?") && !rules.contains("recipe_"));
     browser.trust = BrowserLevel::ReadOnly;
@@ -645,15 +645,26 @@ fn rule_changes_that_are_not_additions_wait_for_the_user() {
 fn a_roster_with_every_retired_field_loads_and_the_next_save_drops_them() {
     // The settings of the extension era (design spec section 3): profileDir, profileName,
     // showActions, ready, connection, migrationNotice, migrated and suggestNewDefaults.
-    let stored = r#"{"id":"m","browser":{"enabled":true,"trust":"readOnly","blockedOrigins":["https://a.example"],
-        "profileDir":"Profile 6","profileName":"Work","showActions":false,"ready":true,
-        "connection":"link-1","migrationNotice":true,"migrated":2,"suggestNewDefaults":true}}"#;
-    let mono: Mono = serde_json::from_str(stored).unwrap();
-    let loaded = mono.browser.as_ref().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let store = crate::store::Store::open_monocode(&root.path().join("monocode.db")).unwrap();
+    let stored = r#"{"monos":[{"id":"m","browser":{"enabled":true,"trust":"readOnly",
+        "blockedOrigins":["https://a.example"],"ardiaProfile":"p-1","ardiaProfileName":"Work",
+        "profileDir":"Profile 6","profileName":"Old","showActions":false,"ready":true,
+        "connection":"link-1","migrationNotice":true,"migrated":2,"suggestNewDefaults":true}}]}"#;
+    store.save_setting("mono-roster", stored).unwrap();
+    let roster = crate::mono::Roster::load(&store).unwrap();
+    let loaded = roster.monos[0].browser.as_ref().unwrap();
     assert!(loaded.enabled && loaded.trust == BrowserLevel::ReadOnly);
     assert_eq!(loaded.blocked_origins, ["https://a.example"]);
-    assert!(loaded.ardia_profile.is_empty() && !loaded.active());
-    let saved = serde_json::to_string(&mono).unwrap();
+    assert_eq!(
+        (
+            loaded.ardia_profile.as_str(),
+            loaded.ardia_profile_name.as_str()
+        ),
+        ("p-1", "Work")
+    );
+    roster.save(&store).unwrap();
+    let saved = store.setting("mono-roster").unwrap().unwrap();
     for gone in [
         "profileDir",
         "profileName",
@@ -666,71 +677,133 @@ fn a_roster_with_every_retired_field_loads_and_the_next_save_drops_them() {
     ] {
         assert!(!saved.contains(gone), "{gone} is still written: {saved}");
     }
+    assert!(
+        saved.contains("\"ardiaProfile\":\"p-1\"")
+            && saved.contains("\"ardiaProfileName\":\"Work\"")
+    );
     assert!(saved.contains("\"blockedOrigins\":[\"https://a.example\"]"));
 }
 
+/// The DDL the extension-era recipes and suggestions created, as shipped (recipe/store.rs and
+/// defense.rs at e6b4ebac).
+const OLD_TABLES: &str = "
+CREATE TABLE mono_browser_recipe_approvals(
+  mono_id TEXT NOT NULL, recipe_id TEXT NOT NULL, hash TEXT NOT NULL, approved_at INTEGER NOT NULL,
+  PRIMARY KEY(mono_id, recipe_id));
+CREATE TABLE mono_browser_recipe_hashes(
+  mono_id TEXT NOT NULL, recipe_id TEXT NOT NULL, hash TEXT NOT NULL, approved_at INTEGER NOT NULL,
+  PRIMARY KEY(mono_id, recipe_id, hash));
+CREATE TABLE mono_browser_recipe_verified(
+  mono_id TEXT NOT NULL, recipe_id TEXT NOT NULL, hash TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY(mono_id, recipe_id, hash));
+CREATE TABLE mono_browser_recipe_outside(
+  mono_id TEXT NOT NULL, recipe_id TEXT NOT NULL, source TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY(mono_id, recipe_id));
+CREATE TABLE mono_browser_recipe_dryrun(
+  mono_id TEXT NOT NULL, recipe_id TEXT NOT NULL, hash TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY(mono_id, recipe_id, hash));
+CREATE TABLE mono_browser_task_shapes(
+  mono_id TEXT NOT NULL, origin TEXT NOT NULL, shape TEXT NOT NULL, seen INTEGER NOT NULL,
+  PRIMARY KEY(mono_id, origin, shape));
+CREATE TABLE mono_browser_no_suggest(
+  mono_id TEXT NOT NULL, origin TEXT NOT NULL, PRIMARY KEY(mono_id, origin));
+INSERT INTO mono_browser_recipe_approvals VALUES('mono-a','r1','h',1);
+INSERT INTO mono_browser_recipe_hashes VALUES('mono-a','r1','h',1);
+INSERT INTO mono_browser_recipe_verified VALUES('mono-a','r1','h',1);
+INSERT INTO mono_browser_recipe_outside VALUES('mono-a','r1','src',1);
+INSERT INTO mono_browser_recipe_dryrun VALUES('mono-a','r1','h',1);
+INSERT INTO mono_browser_task_shapes VALUES('mono-a','https://a.example','click',2);
+INSERT INTO mono_browser_no_suggest VALUES('mono-a','https://a.example');";
+
 #[test]
-fn opening_a_store_drops_the_retired_recipe_tables_and_keeps_everything_else() {
+fn opening_the_production_store_drops_the_retired_tables_and_keeps_everything_else() {
     let root = tempfile::tempdir().unwrap();
     let db = root.path().join("monocode.db");
-    drop(crate::store::Store::open(&db).unwrap());
-    let retired = [
-        "mono_browser_recipe_approvals",
-        "mono_browser_recipe_hashes",
-        "mono_browser_recipe_verified",
-        "mono_browser_recipe_outside",
-        "mono_browser_recipe_dryrun",
-        "mono_browser_task_shapes",
-        "mono_browser_no_suggest",
-    ];
-    let conn = Connection::open(&db).unwrap();
-    for table in retired {
-        conn.execute_batch(&format!(
-            "CREATE TABLE {table}(mono_id TEXT NOT NULL, note TEXT);
-             INSERT INTO {table}(mono_id, note) VALUES('mono-a', 'old row');"
-        ))
-        .unwrap();
-    }
-    conn.execute(
-        "INSERT INTO mono_browser_audit(mono_id,session_id,ts,tool,url,summary) VALUES('mono-a',1,1,'browser_open','','kept')",
-        [],
+    // The sidecar database that `MonoBrowserStore::for_store` uses.
+    let sidecar = {
+        let store = crate::store::Store::open_monocode(&db).unwrap();
+        let secrets = MonoBrowserStore::for_store(&store).unwrap();
+        secrets.set_secret("mono-a", "some-secret", "x").unwrap();
+        secrets
+            .record(
+                "mono-a",
+                &AuditEntry {
+                    ts_ms: 1,
+                    session_id: 1,
+                    tool: "browser_open".into(),
+                    url: String::new(),
+                    summary: "kept".into(),
+                },
+            )
+            .unwrap();
+        secrets.database().to_path_buf()
+    };
+    assert!(
+        sidecar.to_string_lossy().ends_with("gpui.sqlite3"),
+        "{sidecar:?}"
+    );
+    let conn = Connection::open(&sidecar).unwrap();
+    conn.execute_batch(OLD_TABLES).unwrap();
+    conn.execute_batch(
+        "INSERT INTO mono_browser_grants VALUES('mono-a',1,'a.example','payment',1);
+         INSERT INTO mono_browser_rules VALUES('mono-a','ask: x','h',1);",
     )
     .unwrap();
-    drop(conn);
-    let tables = |db: &Path| -> Vec<String> {
-        let conn = Connection::open(db).unwrap();
+    let master = |conn: &Connection| -> Vec<(String, String)> {
         let mut query = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+            .prepare("SELECT type,name FROM sqlite_master ORDER BY type,name")
             .unwrap();
-        let names = query
-            .query_map([], |row| row.get::<_, String>(0))
+        let rows = query
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .unwrap()
             .flatten()
             .collect();
-        names
+        rows
     };
-    assert!(retired
+    let before = master(&conn);
+    drop(conn);
+    let retired = |name: &str| {
+        name.starts_with("mono_browser_recipe_")
+            || name.starts_with("sqlite_autoindex_mono_browser_recipe_")
+            || name.contains("mono_browser_task_shapes")
+            || name.contains("mono_browser_no_suggest")
+    };
+    assert!(before.iter().any(|(_, n)| retired(n)));
+    let expected: Vec<(String, String)> = before
         .iter()
-        .all(|t| tables(&db).contains(&(*t).to_owned())));
-    // Opening drops them; opening again is fine.
+        .filter(|(_, n)| !retired(n))
+        .cloned()
+        .collect();
     for _ in 0..2 {
-        drop(crate::store::Store::open(&db).unwrap());
-        let after = tables(&db);
-        assert!(
-            retired.iter().all(|t| !after.contains(&(*t).to_owned())),
-            "{after:?}"
-        );
-        for kept in [
-            "mono_secrets",
-            "mono_browser_audit",
-            "mono_browser_grants",
-            "mono_browser_rules",
-            "native_settings",
-        ] {
-            assert!(after.contains(&kept.to_owned()), "{kept}");
-        }
+        drop(crate::store::Store::open_monocode(&db).unwrap());
+        let conn = Connection::open(&sidecar).unwrap();
+        assert_eq!(master(&conn), expected);
     }
-    let rows = MonoBrowserStore::at(db).recent("mono-a", 10);
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].summary, "kept");
+    let store = crate::store::Store::open_monocode(&db).unwrap();
+    let secrets = MonoBrowserStore::for_store(&store).unwrap();
+    assert!(secrets.has_secret("mono-a", "some-secret"));
+    assert_eq!(secrets.recent("mono-a", 10)[0].summary, "kept");
+    let conn = Connection::open(&sidecar).unwrap();
+    for table in ["mono_browser_grants", "mono_browser_rules"] {
+        let rows: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "{table}");
+    }
+}
+
+#[test]
+fn the_playwright_era_token_secret_is_deleted_when_the_roster_loads() {
+    let root = tempfile::tempdir().unwrap();
+    let store = crate::store::Store::open_monocode(&root.path().join("monocode.db")).unwrap();
+    let secrets = MonoBrowserStore::for_store(&store).unwrap();
+    secrets
+        .set_secret("mono-a", LEGACY_TOKEN_SECRET, "old")
+        .unwrap();
+    secrets.set_secret("mono-a", "keep-me", "x").unwrap();
+    for _ in 0..2 {
+        crate::mono::Roster::load(&store).unwrap();
+        assert!(!secrets.has_row("mono-a", LEGACY_TOKEN_SECRET));
+        assert!(secrets.has_row("mono-a", "keep-me"));
+    }
 }

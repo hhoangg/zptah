@@ -149,7 +149,7 @@ Migration: none. The extension was never used outside development (confirmed by 
 
 - Old fields in `mono-roster` are ignored on load (serde skips unknown keys) and dropped on the
   next save. A Mono with `enabled` but no `ardiaProfile` simply shows the profile picker.
-- The Playwright-era `migration.rs` and its settings keys are deleted with the code.
+- The Playwright-era `migration.rs` and its settings keys are deleted with the code. The one thing kept: the secret `playwright-extension-token` (shipped in v0.1.x) is still deleted from `mono_secrets` whenever the roster loads, cheap and idempotent.
 - Recipe tables (`mono_browser_recipe_*`) are no longer created; existing ones are dropped with
   `DROP TABLE IF EXISTS` at store open. `<mono>/recipes/` and `_shared_recipes/` are not touched.
 - Leftovers on development machines (native messaging manifests, keychain service
@@ -341,7 +341,7 @@ a flow name.
 - Ardia already wraps page content in nonce markers. The gate does not fence `ardia browse`
   output again; it still runs `strip_invisible`, `redact_secrets` and the injection scan on it,
   and keeps the per-turn taint guard.
-- `defense.rs` stays whole: the Chief spec reuses its helpers.
+- `defense.rs` stays except for the recipe-suggestion helpers (`typed_summary`, `useful_steps`, `shape_of`, the task-shape and no-suggest store methods) and four `Turn` fields (`suggested`, `save_ok`, `save_notice_due`, `seen_before`), which went with the recipe code (M4). The helpers the Chief spec reuses (`fence`, `neutralize`, `strip_invisible`, `redact_secrets`) stay.
 
 ## 9. Stop
 
@@ -383,7 +383,7 @@ Access checks, Show cursor, Recipes section.
 - `GPUI`: `monos/browser_connect*`, `monos/browser_migration.rs`, `monos/recipes_ui.rs`, the
   stopped banner in `conversation/browser_cards.rs`, Resume in `monos/browser_approval.rs`.
 - Cargo: `test-support` browser e2e feature and the `browser_e2e_app` example.
-- Store: recipe tables (dropped at store open, section 3).
+- Store: recipe tables and the two suggestion tables `mono_browser_task_shapes` and `mono_browser_no_suggest` (dropped at store open, section 3).
 
 Kept: `gate.rs` (with a new `Upstream`), `gate/guard.rs`, `gate/http.rs`, `defense.rs`, `trust/`,
 `risk/`, `soul_rules.rs`, `copy.rs`, `output.rs`, `server.rs`, `provider/browser_gate.rs`,

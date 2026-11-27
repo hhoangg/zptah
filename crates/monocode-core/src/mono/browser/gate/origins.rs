@@ -63,7 +63,7 @@ pub fn origin_of(url: &str) -> Option<String> {
     Some(parsed.origin().ascii_serialization())
 }
 
-/// The browser extension stores are never read.
+/// The browser extension stores (Chrome Web Store, Edge Add-ons) are never read.
 fn is_web_store(url: &str) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
         return false;
@@ -78,8 +78,8 @@ fn is_web_store(url: &str) -> bool {
 /// The sentence the Mono gets when [`Origins::check`] refuses a page.
 pub(crate) fn refusal_text(refusal: ReadRefusal) -> &'static str {
     match refusal {
-        ReadRefusal::Restricted => "This is a browser page (or a file): zptah Browser never reads it.",
-        ReadRefusal::Blocked => "This site is on this Mono's blocked list, so zptah Browser does not read it.",
+        ReadRefusal::Restricted => "This is a browser page (or a file): zptah never reads it.",
+        ReadRefusal::Blocked => "This site is on this Mono's blocked list, so zptah does not read it.",
         ReadRefusal::NotAllowed => "This Mono may only use the sites on its allowed list, and this page is not one of them.",
     }
 }

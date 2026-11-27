@@ -102,7 +102,7 @@ pub(super) struct ApprovalUi {
     ticks: u64,
     /// "Keep the old rules" answers, by Mono: the changed lines the prompt was hidden for.
     kept: HashMap<String, Vec<String>>,
-    /// The last rule status of each Mono that uses the extension.
+    /// The last rule status of each Mono that has its browser on.
     rules: HashMap<String, RuleStatus>,
     /// What each conversation was last given, to skip identical pushes.
     keys: HashMap<String, String>,
@@ -199,7 +199,7 @@ impl Monos {
     }
 
     /// The Mono's browser is on.
-    fn browser_uses_extension(&self, mono_id: &str) -> bool {
+    fn browser_is_on(&self, mono_id: &str) -> bool {
         self.roster
             .get(mono_id)
             .and_then(|m| m.browser.as_ref())
@@ -229,7 +229,7 @@ impl Monos {
     /// Reads the soul and the confirmed rules on a worker, then refreshes the Mono's surface.
     /// `rules::status` also records a first or pure-addition set as confirmed.
     fn browser_rules_reload(&mut self, mono_id: &str, cx: &mut Context<Self>) {
-        if !self.browser_uses_extension(mono_id) {
+        if !self.browser_is_on(mono_id) {
             self.browser_ui.approval.rules.remove(mono_id);
             return;
         }
@@ -266,7 +266,7 @@ impl Monos {
         with_rules: bool,
         cx: &mut Context<Self>,
     ) {
-        let uses = self.browser_uses_extension(mono_id);
+        let uses = self.browser_is_on(mono_id);
         if with_rules {
             self.browser_rules_reload(mono_id, cx);
         }
@@ -469,8 +469,8 @@ impl Monos {
         self.browser_repaint_chats(cx);
     }
 
-    /// The cards of the Browser page that belong to the extension: language, rule review, grants.
-    pub(super) fn browser_extension_cards(
+    /// The cards of the Browser page of the Mono's browser: language, rule review, grants.
+    pub(super) fn browser_approval_cards(
         &mut self,
         mono: &Mono,
         browser: &MonoBrowser,

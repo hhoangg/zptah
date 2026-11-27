@@ -384,7 +384,7 @@ fn ordinary_clicks_are_forwarded_with_one_upstream_session_and_the_page_is_remem
     let sessions = upstream.sessions.lock().unwrap().clone();
     assert_eq!(sessions[0], None);
     assert!(sessions[2..].iter().all(|s| s.as_deref() == Some("sess-1")));
-    // The extension upstream decides finance pages and card numbers itself: the gate forwards.
+    // The upstream decides finance pages and card numbers itself: the gate forwards.
     call(&gate, "browser_navigate", json!({"url": FINANCE}));
     let result = call(
         &gate,
@@ -743,7 +743,7 @@ fn a_gate_is_kept_per_mono_and_follows_its_settings() {
     let servers = BrowserServers::new();
     let start = |id: &str, trust| {
         servers
-            .gate_for(id, "extension-1", upstream.clone(), policy(trust))
+            .gate_for(id, "ardia-1", upstream.clone(), policy(trust))
             .unwrap()
     };
     let first = start("m1", BrowserLevel::Act);
@@ -917,7 +917,7 @@ fn reading_a_page_taints_the_turn_and_a_new_turn_clears_it() {
     assert!(tainted(&gate));
 }
 
-// ---- With a workspace: audit and the recipe suggestion ----
+// ---- With a workspace: audit ----
 
 struct Workspaced {
     gate: Arc<Gate>,
@@ -999,7 +999,7 @@ fn a_snapshot_saved_to_a_file_is_scanned_and_fenced_in_the_file() {
     )
     .unwrap();
     let reply = call(&rig.gate, "browser_snapshot", json!({}));
-    // The extension upstream makes every write of the run ask (category `injection`).
+    // The Ardia upstream makes every write of the run ask (category `injection`).
     assert_eq!(upstream.injections.load(Ordering::SeqCst), 1);
     let saved = std::fs::read_to_string(&file).unwrap();
     assert!(fenced(&saved), "{saved}");
