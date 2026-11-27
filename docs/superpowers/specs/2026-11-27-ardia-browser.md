@@ -458,6 +458,12 @@ Output and exit codes (section 5):
 - `ardia call ... --json` prints the bare result; exit 1 on refusal (message on stderr), 2 when
   unreachable (`ardia: Ardia isn't running, ...` on stderr). `ardia tabs open/close --json` reply
   like `apply`: `{ok, applied, results, tabs, groups, windows}`.
+- Arguments (measured 2026-11-28): every option goes before the command and every value after a
+  `--`: `ardia browse --session <s> --json <cmd> [flags] -- <values...>`. After `--` everything
+  is taken literally, including `--json`, so nothing may follow the values. Without `--` a value
+  like `-5` or `--session=x` happened to be filled literally too, but the gate does not rely on
+  that. Checked with `fill`, `type`, `press`, `open`, `scroll`, `screenshot`, `get attr`, `click`,
+  `upload`, `hover`, `check`, `flow show`.
 - Act replies carry `changes` (`document`, `url {from,to}`, `title`, added/removed/changed nodes,
   `network` with the POSTs caused). `fill` into a password field succeeds and reports
   `verify.kind: "password"` after the fact: Ardia itself does not stop it.
