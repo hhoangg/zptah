@@ -88,6 +88,8 @@ pub struct Attrs {
     pub autocomplete: Option<String>,
     pub href: Option<String>,
     pub formaction: Option<String>,
+    /// The `target` of a link (`_blank`, a window name ...).
+    pub target: Option<String>,
     /// The `name` attribute of the field (from `form`).
     pub field_name: Option<String>,
     /// The `label` of the field (from `form`).
@@ -99,6 +101,7 @@ pub struct Attrs {
     pub autocomplete_unreadable: bool,
     pub href_unreadable: bool,
     pub formaction_unreadable: bool,
+    pub target_unreadable: bool,
 }
 
 /// How one `get attr` ended.
@@ -236,6 +239,8 @@ pub struct FormActions {
     /// more forms than were read, or the page's field list was cut: the gate can not say where a
     /// submit goes.
     pub complete: bool,
+    /// How many forms the page has (`get count form`; `None`: not read).
+    pub count: Option<usize>,
 }
 impl FormActions {
     /// The readable actions of every form.
@@ -400,6 +405,22 @@ pub fn is_submit_key(key: &str) -> bool {
     )
 }
 
+/// Delete or Backspace in any chord: it removes text, or acts as a shortcut where no field has the
+/// focus.
+pub fn is_delete_key(key: &str) -> bool {
+    matches!(
+        chord_key(key).to_ascii_lowercase().as_str(),
+        "delete" | "backspace"
+    )
+}
+
+/// Whether a link's `target` makes it open a window of its own: anything set that is not
+/// `_self`, `_top` or `_parent` (a window name, `_blank`).
+pub fn opens_new_window(target: &str) -> bool {
+    let target = target.trim().to_ascii_lowercase();
+    !target.is_empty() && !matches!(target.as_str(), "_self" | "_top" | "_parent")
+}
+
 /// Space in any chord: it presses a focused button or checkbox, or types a space.
 pub fn is_space_key(key: &str) -> bool {
     let last = chord_key(key);
@@ -530,26 +551,6 @@ pub fn writes_of(changes: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The tabs an action opened (a `target=_blank` link, `window.open`), as far as `changes` says so:
-/// `changes.opened` (or `newTabs`, `tabsOpened`) as a list of ids or of objects with an `id` or
-/// `tabId`. The shape is not measured: an unknown one reads as none. These tabs are never bound
-/// and never closed by the gate (they could be the user's).
-pub fn new_tabs_of(changes: &Value) -> Vec<String> {
-    ["opened", "newTabs", "tabsOpened"]
-        .iter()
-        .find_map(|key| changes[*key].as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|tab| {
-            tab.as_str()
-                .or_else(|| tab["id"].as_str())
-                .or_else(|| tab["tabId"].as_str())
-                .map(|t| t.chars().take(60).collect())
-        })
-        .take(5)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -641,14 +642,24 @@ mod tests {
     }
 
     #[test]
-    fn new_tabs_are_read_from_the_changes_when_they_say_so() {
-        let changes = json!({"opened": [{"id": "tab-x"}, "tab-y"]});
-        assert_eq!(
-            new_tabs_of(&changes),
-            vec!["tab-x".to_owned(), "tab-y".into()]
-        );
-        assert!(new_tabs_of(&json!({"url": null})).is_empty());
+    fn a_link_target_opens_a_window_unless_it_is_the_same_page() {
+        for target in ["_blank", "popup", " _BLANK "] {
+            assert!(opens_new_window(target), "{target}");
+        }
+        for target in ["", "  ", "_self", "_TOP", "_parent"] {
+            assert!(!opens_new_window(target), "{target}");
+        }
         assert!(is_javascript(" JavaScript:void(0)") && !is_javascript("https://a.example/"));
+    }
+
+    #[test]
+    fn delete_keys_are_found_in_any_chord() {
+        for key in ["Delete", "Backspace", "Control+Backspace", "shift+delete"] {
+            assert!(is_delete_key(key), "{key}");
+        }
+        for key in ["a", "Enter", "Tab", "Escape"] {
+            assert!(!is_delete_key(key), "{key}");
+        }
     }
 
     #[test]

@@ -46,6 +46,12 @@ pub(super) struct Read {
     pub form_cut: bool,
     /// The action may submit a form (the form actions were read).
     pub submit_like: bool,
+    /// A click on a link that opens a new window (`target` set and not `_self`, `_top` or
+    /// `_parent`): the resolved address, which the gate loads in the session's own tab instead.
+    pub new_window: Option<String>,
+    /// The full snapshot could not be matched to the target: its line is not there exactly once
+    /// with the same role and name, or the page is modal and the dialog could not be found.
+    pub ctx_unreliable: bool,
 }
 
 /// What a key does once it lands.
@@ -61,9 +67,18 @@ pub(super) enum PressEffect {
     Submits,
     /// The focus could not be identified, so what Enter or Space does is not known.
     Unknown,
+    /// A character key (not Space) whose target is not known to be a text field: nothing is sent.
+    Refused,
+    /// Delete or Backspace outside a text field, or with a focus that is not known: asks.
+    Unclear,
 }
 
 /// What the key of `plan` does, given what was read.
+///
+/// A character key (not Space) is sent only into a text field the gate can see: anywhere else it
+/// may be a page shortcut or land in a field the gate could not read. Delete and Backspace outside
+/// a text field, or with an unknown focus, ask. Tab, the arrows, Escape, PageUp, PageDown, Home and
+/// End are never judged.
 pub(super) fn press_effect(plan: &Plan, read: &Read) -> PressEffect {
     let Some(key) = plan.key.as_deref() else {
         return PressEffect::Nothing;
@@ -71,9 +86,21 @@ pub(super) fn press_effect(plan: &Plan, read: &Read) -> PressEffect {
     let prints = fresh::is_printable_key(key);
     let enter = fresh::is_submit_key(key);
     let activates = enter || fresh::is_space_key(key);
-    if !prints && !enter {
+    let deletes = fresh::is_delete_key(key);
+    if !prints && !enter && !deletes {
         return PressEffect::Nothing;
     }
+    let character = prints && !fresh::is_space_key(key);
+    // What a key does where it is neither typed into a text field nor presses a control.
+    let elsewhere = || {
+        if character {
+            PressEffect::Refused
+        } else if deletes {
+            PressEffect::Unclear
+        } else {
+            PressEffect::Nothing
+        }
+    };
     if plan.ref_.is_some() {
         return if is_field_role(&read.role) {
             if enter {
@@ -82,13 +109,15 @@ pub(super) fn press_effect(plan: &Plan, read: &Read) -> PressEffect {
                 } else {
                     PressEffect::Submits
                 }
+            } else if deletes {
+                PressEffect::Nothing
             } else {
                 PressEffect::Types
             }
         } else if activates {
             PressEffect::Presses
         } else {
-            PressEffect::Nothing
+            elsewhere()
         };
     }
     match &read.focus {
@@ -96,11 +125,10 @@ pub(super) fn press_effect(plan: &Plan, read: &Read) -> PressEffect {
             if activates {
                 PressEffect::Unknown
             } else {
-                // A character with a focus that is not known: the caller refuses it.
-                PressEffect::Types
+                elsewhere()
             }
         }
-        Some(Focus::Nothing) => PressEffect::Nothing,
+        Some(Focus::Nothing) => elsewhere(),
         Some(Focus::Element(el)) => {
             if el.is_text_entry() {
                 if enter {
@@ -109,6 +137,8 @@ pub(super) fn press_effect(plan: &Plan, read: &Read) -> PressEffect {
                     } else {
                         PressEffect::Submits
                     }
+                } else if deletes {
+                    PressEffect::Nothing
                 } else {
                     PressEffect::Types
                 }
@@ -116,15 +146,19 @@ pub(super) fn press_effect(plan: &Plan, read: &Read) -> PressEffect {
                 if activates {
                     PressEffect::Presses
                 } else {
-                    PressEffect::Nothing
+                    elsewhere()
                 }
             } else if el.tag.eq_ignore_ascii_case("select") {
-                PressEffect::Nothing
+                if activates {
+                    PressEffect::Nothing
+                } else {
+                    elsewhere()
+                }
             } else if activates {
                 // A custom control (a `div` with a role): what it does is not known.
                 PressEffect::Unknown
             } else {
-                PressEffect::Nothing
+                elsewhere()
             }
         }
     }
@@ -174,7 +208,9 @@ impl ArdiaUpstream {
     /// The focused element, by one fixed `eval` (the snapshot never marks the focus). Anything
     /// but a clear answer is [`Focus::Unknown`].
     fn focus_now(&self, id: i64) -> Result<Focus, String> {
-        match self.browse(id, &["eval"], &[focus::FOCUS_SCRIPT]) {
+        // `--isolated`: without it the script runs in the page's own world, where a page that
+        // replaced `JSON.stringify` could make a focused password field read as `BODY`.
+        match self.browse(id, &["eval", "--isolated"], &[focus::FOCUS_SCRIPT]) {
             Ok(data) => Ok(focus::parse(&data)),
             Err(Failure::Refused { .. }) => Ok(Focus::Unknown),
             Err(other) => Err(self.fail(id, other)),
@@ -195,6 +231,7 @@ impl ArdiaUpstream {
         let mut out = FormActions {
             per_form: Vec::new(),
             complete: true,
+            count: None,
         };
         let count = match self.browse(id, &["get", "count"], &["form"]) {
             Ok(data) => data["count"].as_u64().map(|n| n as usize),
@@ -208,6 +245,7 @@ impl ArdiaUpstream {
             out.complete = false;
             return Ok(out);
         };
+        out.count = Some(count);
         if form.more {
             out.complete = false;
         }
@@ -242,6 +280,25 @@ impl ArdiaUpstream {
     }
 
     pub(super) fn fresh_read(&self, id: i64, tab: &str, plan: &Plan) -> Result<Read, String> {
+        self.fresh_read_rows(id, tab, plan, true)
+    }
+
+    /// [`ArdiaUpstream::fresh_read`]; with `rows` false a refusal writes no audit row (the read
+    /// made again after a card: the caller writes the one row).
+    pub(super) fn fresh_read_rows(
+        &self,
+        id: i64,
+        tab: &str,
+        plan: &Plan,
+        rows: bool,
+    ) -> Result<Read, String> {
+        let refuse = |read: &Read, decision: AuditDecision, reason: &str, text: String| {
+            if rows {
+                self.refuse(id, plan, read, decision, reason, text)
+            } else {
+                text
+            }
+        };
         let mut read = Read {
             tab: tab.to_owned(),
             url: self.url_now(id)?,
@@ -254,9 +311,7 @@ impl ArdiaUpstream {
                 "{} Nothing was done: the tab is on a page this Mono may not use.",
                 tabs_origin_refusal(refusal)
             );
-            return Err(self.refuse(
-                id,
-                plan,
+            return Err(refuse(
                 &read,
                 AuditDecision::Blocked,
                 "the page the action would happen on is not allowed",
@@ -269,7 +324,9 @@ impl ArdiaUpstream {
             Err(other) => return Err(self.fail(id, other)),
         };
         let key = plan.key.as_deref();
-        let key_acts = key.is_some_and(|k| fresh::is_printable_key(k) || fresh::is_submit_key(k));
+        let key_acts = key.is_some_and(|k| {
+            fresh::is_printable_key(k) || fresh::is_submit_key(k) || fresh::is_delete_key(k)
+        });
         if plan.ref_.is_none() && !key_acts {
             return Ok(read);
         }
@@ -278,9 +335,7 @@ impl ArdiaUpstream {
                 .conv(id, |c| c.seen.get(tab).cloned())
                 .unwrap_or_default();
             if !seen.refs.contains_key(r) {
-                return Err(self.refuse(
-                    id,
-                    plan,
+                return Err(refuse(
                     &read,
                     AuditDecision::Blocked,
                     "the ref was never in a snapshot",
@@ -288,9 +343,7 @@ impl ArdiaUpstream {
                 ));
             }
             if seen.url != read.url {
-                return Err(self.refuse(
-                    id,
-                    plan,
+                return Err(refuse(
                     &read,
                     AuditDecision::Blocked,
                     "the tab URL changed since the snapshot",
@@ -308,9 +361,7 @@ impl ArdiaUpstream {
                     read.ref_ = Some(r.clone());
                 }
                 _ => {
-                    return Err(self.refuse(
-                        id,
-                        plan,
+                    return Err(refuse(
                         &read,
                         AuditDecision::Blocked,
                         "the ref no longer resolves to what the snapshot showed",
@@ -352,6 +403,10 @@ impl ArdiaUpstream {
                     &mut a.formaction_unreadable,
                 )?;
                 self.probe(id, at, "href", &mut a.href, &mut a.href_unreadable)?;
+                // A link with a `target` opens a window of its own: read where it would go.
+                if a.href.as_deref().is_some_and(|h| !fresh::is_javascript(h)) {
+                    self.probe(id, at, "target", &mut a.target, &mut a.target_unreadable)?;
+                }
             } else if as_field {
                 self.probe(id, at, "type", &mut a.input_type, &mut a.type_unreadable)?;
                 self.probe(
@@ -391,6 +446,12 @@ impl ArdiaUpstream {
             }
             .to_owned();
             read.name = el.shown_name();
+        }
+        if let (Some(href), Some(target)) = (&read.attrs.href, &read.attrs.target) {
+            if !fresh::is_javascript(href) && fresh::opens_new_window(target) {
+                read.new_window =
+                    Some(fresh::resolve(&read.url, href).unwrap_or_else(|| href.clone()));
+            }
         }
         let effect = (plan.op == Op::Press).then(|| press_effect(plan, read));
         let needs_form = match plan.op {
@@ -486,7 +547,12 @@ impl ArdiaUpstream {
         }
         match self.browse(id, &["snapshot"], &[]) {
             Ok(data) => {
-                read.ctx = page::context_of(data["snapshot"].as_str().unwrap_or(""), &r);
+                read.ctx = page::context_of(
+                    data["snapshot"].as_str().unwrap_or(""),
+                    &r,
+                    &read.role,
+                    &read.name,
+                );
             }
             Err(Failure::Refused { code, .. }) if is_stale_code(code.as_deref()) => {
                 return Err(CHANGED.to_owned())
@@ -495,6 +561,9 @@ impl ArdiaUpstream {
             Err(Failure::Refused { .. }) => {}
             Err(other) => return Err(self.fail(id, other)),
         }
+        // The page says it is modal but no dialog around the control was found (or the line was
+        // not the control's): the text read does not describe it.
+        read.ctx_unreliable = read.ctx.mismatch || (read.modal && !read.ctx.in_dialog);
         Ok(())
     }
 }

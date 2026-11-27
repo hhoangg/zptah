@@ -24,8 +24,12 @@ struct Node {
 /// What the page says around one element.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PageContext {
-    /// The element was found in the snapshot.
+    /// The element was found in the snapshot: its line is there exactly once, with the role and
+    /// the name the refs of `snapshot -i` gave.
     pub found: bool,
+    /// The ref is in the snapshot more than once, or its line has another role or name than the
+    /// refs said: the text around it can not be trusted to belong to it.
+    pub mismatch: bool,
     pub in_dialog: bool,
     /// The name and the text of the dialog the element is in.
     pub dialog_text: String,
@@ -86,7 +90,12 @@ fn parse_line(line: &str) -> Option<Node> {
             match c {
                 '\\' => {
                     if let Some((_, next)) = chars.next() {
-                        out.push(next);
+                        out.push(match next {
+                            'n' => '\n',
+                            't' => '\t',
+                            'r' => '\r',
+                            other => other,
+                        });
                     }
                 }
                 '"' => {
@@ -121,12 +130,28 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The context of `target` (a ref such as `e2`) in the full snapshot `text`.
-pub fn context_of(text: &str, target: &str) -> PageContext {
+/// The context of `target` (a ref such as `e2`, with the `role` and `name` the refs of
+/// `snapshot -i` gave it) in the full snapshot `text`. The ref must be on exactly one line, with
+/// that role and that name, or the context is `mismatch` and says nothing about the element.
+pub fn context_of(text: &str, target: &str, role: &str, name: &str) -> PageContext {
     let nodes: Vec<Node> = text.lines().filter_map(parse_line).collect();
-    let Some(at) = nodes.iter().position(|n| n.ref_.as_deref() == Some(target)) else {
-        return PageContext::default();
+    let mut hits = nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.ref_.as_deref() == Some(target));
+    let (Some((at, node)), None) = (hits.next(), hits.next()) else {
+        // Not there, or there more than once.
+        return PageContext {
+            mismatch: nodes.iter().any(|n| n.ref_.as_deref() == Some(target)),
+            ..PageContext::default()
+        };
     };
+    if !node.role.eq_ignore_ascii_case(role) || one_line(&node.name) != one_line(name) {
+        return PageContext {
+            mismatch: true,
+            ..PageContext::default()
+        };
+    }
     let mut ctx = PageContext {
         found: true,
         ..PageContext::default()
@@ -213,7 +238,7 @@ mod tests {
 
     #[test]
     fn a_dialog_gives_its_text_and_its_other_buttons() {
-        let ctx = context_of(DIALOG, "e2");
+        let ctx = context_of(DIALOG, "e2", "button", "Confirm");
         assert!(ctx.found && ctx.in_dialog && ctx.readable());
         assert!(ctx.dialog_text.contains("Pay 5,000,000 VND to Shop?"));
         assert!(ctx.dialog_text.contains("Payment"));
@@ -223,7 +248,7 @@ mod tests {
 
     #[test]
     fn a_button_outside_the_dialog_is_not_in_it() {
-        let ctx = context_of(DIALOG, "e9");
+        let ctx = context_of(DIALOG, "e9", "button", "Help");
         assert!(ctx.found && !ctx.in_dialog && ctx.dialog_text.is_empty());
         assert!(ctx.readable(), "the heading above is context");
     }
@@ -231,17 +256,17 @@ mod tests {
     #[test]
     fn siblings_of_the_target_are_its_nearby_text() {
         let text = "- main\n  - paragraph \"Delete your account for good\"\n  - button \"Yes\" [ref=e4]\n- footer\n  - paragraph \"Other\"\n";
-        let ctx = context_of(text, "e4");
+        let ctx = context_of(text, "e4", "button", "Yes");
         assert_eq!(ctx.nearby_text, "Delete your account for good");
         assert!(!ctx.in_dialog);
     }
 
     #[test]
     fn an_unknown_ref_or_a_page_with_no_text_is_not_readable() {
-        assert!(!context_of(DIALOG, "e77").found);
-        let bare = context_of("- button \"OK\" [ref=e1]\n", "e1");
+        assert!(!context_of(DIALOG, "e77", "button", "x").found);
+        let bare = context_of("- button \"OK\" [ref=e1]\n", "e1", "button", "OK");
         assert!(bare.found && !bare.readable());
-        assert!(!context_of("", "e1").readable());
+        assert!(!context_of("", "e1", "button", "OK").readable());
     }
 
     #[test]
@@ -250,5 +275,59 @@ mod tests {
             &serde_json::json!({"modal": {"role": "dialog", "name": "Payment", "ref": null}})
         ));
         assert!(!is_modal(&serde_json::json!({"modal": null})));
+    }
+
+    /// Recorded 2026-11-28 on Ardia 0.7.0 (names are test words).
+    const MODAL_NO_NAME: &str = include_str!("../fixtures/browse_snapshot_dialog_unnamed.json");
+    const MODAL_NAMED: &str = include_str!("../fixtures/browse_snapshot_dialog_named.json");
+    const QUOTED: &str = include_str!("../fixtures/browse_snapshot_quoted_name.json");
+
+    fn snapshot_of(fixture: &str) -> (String, serde_json::Value) {
+        let reply: serde_json::Value = serde_json::from_str(fixture).unwrap();
+        (
+            reply["data"]["snapshot"].as_str().unwrap().to_owned(),
+            reply["data"].clone(),
+        )
+    }
+
+    #[test]
+    fn a_dialog_with_no_name_gives_its_text_and_is_modal() {
+        let (text, data) = snapshot_of(MODAL_NO_NAME);
+        assert!(is_modal(&data));
+        let ctx = context_of(&text, "e1", "button", "OK");
+        assert!(ctx.found && ctx.in_dialog && !ctx.mismatch, "{ctx:?}");
+        assert_eq!(ctx.dialog_text, "Remove \"all\" items?");
+    }
+
+    #[test]
+    fn a_named_dialog_gives_its_name_and_text() {
+        let (text, data) = snapshot_of(MODAL_NAMED);
+        assert_eq!(data["modal"]["name"], "Payment");
+        let ctx = context_of(&text, "e2", "button", "Confirm");
+        assert!(ctx.in_dialog, "{ctx:?}");
+        assert!(ctx.dialog_text.contains("Payment") && ctx.dialog_text.contains("5,000,000"));
+    }
+
+    #[test]
+    fn an_escaped_quote_in_a_name_does_not_make_a_second_ref() {
+        let (text, data) = snapshot_of(QUOTED);
+        assert_eq!(text.matches("[ref=e99]").count(), 1, "the name holds one");
+        assert_eq!(data["refs"]["e3"]["name"], "x\" [ref=e99]");
+        let ctx = context_of(&text, "e3", "button", "x\" [ref=e99]");
+        assert!(ctx.found && !ctx.mismatch, "{ctx:?}");
+        // The ref the name mentions is not on a line of its own.
+        let fake = context_of(&text, "e99", "button", "x");
+        assert!(!fake.found, "{fake:?}");
+    }
+
+    #[test]
+    fn a_ref_on_two_lines_or_with_another_role_or_name_is_a_mismatch() {
+        let twice = "- button \"Pay\" [ref=e2]\n- button \"Cancel\" [ref=e2]\n";
+        assert!(context_of(twice, "e2", "button", "Pay").mismatch);
+        let one = "- dialog \"Payment\"\n  - button \"Confirm\" [ref=e2]\n";
+        assert!(context_of(one, "e2", "button", "Delete").mismatch);
+        assert!(context_of(one, "e2", "link", "Confirm").mismatch);
+        let ok = context_of(one, "e2", "BUTTON", "Confirm");
+        assert!(ok.found && !ok.mismatch);
     }
 }

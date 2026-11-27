@@ -17,6 +17,11 @@ pub struct UserTab {
 }
 
 /// The active tab of the focused normal window (`None`: no focused window or no active tab).
+///
+/// Measured 2026-11-28: `ardia call windows` reports `focused: true` for Ardia's last focused
+/// window even while Ardia is hidden and another app is in front, so "focused" means the window
+/// the user used last, not the one on screen. That is still the right window for "the user's
+/// tab": the user approves it on a card that shows its address before anything is bound.
 pub fn active_tab(windows: &Value) -> Option<UserTab> {
     let window = windows
         .as_array()?

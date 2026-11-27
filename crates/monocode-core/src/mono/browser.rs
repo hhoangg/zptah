@@ -1022,6 +1022,8 @@ fn attach_ardia(
         }),
         project_dirs: ctx.mono.projects.iter().map(PathBuf::from).collect(),
         home: None,
+        // The private copies of uploaded files: deleted when the conversation ends.
+        staging_dir: Some(ctx.root.join("_ardia").join("uploads")),
     });
     let gate = match servers.gate_for_ardia(&ctx.mono.id, upstream, browser.policy()) {
         Ok(gate) => gate,

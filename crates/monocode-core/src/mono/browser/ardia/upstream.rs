@@ -23,7 +23,7 @@ use super::controller::{controller, Controller, Readiness};
 use super::runner::{plain_value, web_url, CancelToken, Failure, BROWSE_TIMEOUT};
 use crate::mono::browser::gate::{ActConfig, APPROVAL_TOOL};
 use crate::mono::browser::trust::grants::GrantBook;
-use crate::mono::browser::trust::TrustState;
+use crate::mono::browser::trust::{BrowserLevel, TrustState};
 use crate::mono::browser::{AuditEntry, MonoBrowserStore};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -37,6 +37,7 @@ mod focus;
 mod fresh;
 mod judge;
 mod page;
+mod popups;
 mod read;
 mod uploads;
 mod user_tab;
@@ -98,6 +99,9 @@ pub struct Config {
     pub project_dirs: Vec<PathBuf>,
     /// The user's home folder (where credentials live). `None`: the process's own.
     pub home: Option<PathBuf>,
+    /// Where the gate keeps the private copies of the files an upload sends (`<monos
+    /// root>/_ardia/uploads`). `None`: no upload runs.
+    pub staging_dir: Option<PathBuf>,
 }
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -163,8 +167,11 @@ struct Conv {
     seen: HashMap<String, fresh::SeenRefs>,
     /// The user's own tab the Mono asked for and the user approved (never closed, only unbound).
     user_tab: Option<String>,
-    /// The user's tabs already approved in this conversation (no second card for the same tab).
-    approved_user_tabs: HashSet<String>,
+    /// The user's tabs already approved in this conversation, by tab id and the site the tab
+    /// showed then (no second card for the same tab on the same site).
+    approved_user_tabs: HashSet<(String, String)>,
+    /// How many uploads this conversation staged (the folder number of the next one).
+    upload_seq: u32,
     /// What the user wrote in this conversation (a path in it may be uploaded).
     user_messages: Vec<String>,
     /// A browser call was made in this turn and the turn has not ended: the "Working in Ardia"
@@ -181,12 +188,9 @@ pub struct ArdiaUpstream {
     convs: Mutex<HashMap<i64, Conv>>,
     /// What the gate remembers per conversation: grants, task domains, taint.
     trust: Mutex<HashMap<i64, TrustState>>,
-    /// What each conversation's turn has read and declared (`browser_declare_intent`): an act
-    /// after untrusted content asks unless it was declared first.
-    turns: Mutex<HashMap<i64, defense::Turn>>,
-    /// Tests of other features skip the untrusted-content rule.
-    #[cfg(test)]
-    taint_exempt: std::sync::atomic::AtomicBool,
+    /// The trust level the gate's policy enforces now (`None`: not told yet, the launch-time
+    /// level of the config counts). Set by [`Upstream::policy_changed`].
+    level: Mutex<Option<BrowserLevel>>,
     shots: AtomicU64,
     bind_delay: Duration,
 }
@@ -272,9 +276,7 @@ impl ArdiaUpstream {
             config: Mutex::new(Config::default()),
             convs: Mutex::new(HashMap::new()),
             trust: Mutex::new(HashMap::new()),
-            turns: Mutex::new(HashMap::new()),
-            #[cfg(test)]
-            taint_exempt: std::sync::atomic::AtomicBool::new(false),
+            level: Mutex::new(None),
             shots: AtomicU64::new(0),
             bind_delay,
         });
@@ -293,9 +295,15 @@ impl ArdiaUpstream {
             *current = config;
             changed
         };
+        // A new launch carries the level of the setting as it is now.
+        *self.level.lock().unwrap_or_else(|e| e.into_inner()) = None;
         if let Some(old_profile) = changed {
             // The tabs belong to the old profile: closed by the controller, which keeps the tab
             // book, and forgotten here.
+            let ended: Vec<i64> = self.convs().keys().copied().collect();
+            for conversation in ended {
+                self.remove_staged(conversation);
+            }
             self.convs().clear();
             self.controller
                 .end_mono_in_background(&self.mono_id, Some(&old_profile));
@@ -307,12 +315,6 @@ impl ArdiaUpstream {
         for id in ids {
             self.end_conversation(id);
         }
-    }
-    /// Tests of other features skip the untrusted-content rule (`false` turns it back on).
-    #[cfg(test)]
-    pub fn set_taint_exempt(&self, exempt: bool) {
-        self.taint_exempt
-            .store(exempt, std::sync::atomic::Ordering::SeqCst);
     }
     /// The controller this upstream runs on.
     pub fn controller(&self) -> &Arc<Controller> {
@@ -379,6 +381,9 @@ impl ArdiaUpstream {
         self.convs().remove(&conversation);
         self.controller.turn_ended(&self.turn_key(conversation));
         self.end_trust(conversation);
+        // The private copies of uploaded files go when the conversation ends, not right after
+        // the upload: the page reads the file when the form is submitted.
+        self.remove_staged(conversation);
     }
 
     // ---- Stop (design spec section 9) ----
@@ -704,6 +709,13 @@ impl ArdiaUpstream {
     /// The page the tab is on after an action could not be read: where it is is not known, so it
     /// counts as a hit and the tab is stopped like one on a blocked page.
     fn halt_unknown(&self, id: i64, tab: &str, before: &str, action: &str) -> String {
+        // The read failed because the user pressed Stop: nothing is known to be wrong, so the tab
+        // is not closed.
+        if self.not_stopped(id).is_err() {
+            return format!(
+                "{STOPPED} The last action ran: look at the page before trying anything again."
+            );
+        }
         self.conv(id, |c| c.page = before.to_owned());
         self.halt(
             id,
@@ -1113,13 +1125,16 @@ impl Upstream for ArdiaUpstream {
         true
     }
     fn run_started(&self, session: i64, user_message: &str) {
+        let typed = !user_message.trim().is_empty();
         self.conv(session, |c| {
             c.halted.clear();
             c.active = false;
-            // A new user message ends a Stop: the turn may use the browser again.
-            c.stopped = false;
-            c.cancel = CancelToken::new();
-            if !user_message.trim().is_empty() {
+            // Only a message the user wrote (or an automation's stored prompt, which is the
+            // user's own text) ends a Stop. A scheduler, workflow, internal or Mono-to-Mono run
+            // brings no words of the user's and leaves the browser stopped.
+            if typed {
+                c.stopped = false;
+                c.cancel = CancelToken::new();
                 c.user_messages.push(user_message.to_owned());
                 let extra = c.user_messages.len().saturating_sub(50);
                 c.user_messages.drain(..extra);
@@ -1136,8 +1151,8 @@ impl Upstream for ArdiaUpstream {
     fn injection_found(&self, session: i64) {
         self.flag_injection(session);
     }
-    fn intent_declared(&self, session: i64, intent: &defense::Intent, approved: bool) {
-        self.with_turn(session, |turn| turn.declare(intent.clone(), approved));
+    fn policy_changed(&self, level: BrowserLevel) {
+        *self.level.lock().unwrap_or_else(|e| e.into_inner()) = Some(level);
     }
 }
 

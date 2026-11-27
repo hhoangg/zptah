@@ -21,20 +21,20 @@ const FORM_LOGIN: &str = include_str!("fixtures/browse_form_login.json");
 
 /// Conversation ids for the tests that go through the gate (the "Working in Ardia" lookup is by
 /// conversation id, process-wide, so each test takes its own).
-static SESSIONS: AtomicI64 = AtomicI64::new(41_000);
+pub(super) static SESSIONS: AtomicI64 = AtomicI64::new(41_000);
 
-fn field(r: &str, role: &str, label: &str, ty: &str, name: &str) -> Value {
+pub(super) fn field(r: &str, role: &str, label: &str, ty: &str, name: &str) -> Value {
     json!({"ref": r, "role": role, "label": label, "type": ty, "name": name, "value": "", "checked": null, "disabled": false, "required": false, "readonly": false, "invalid": "", "options": null, "optionLabels": null})
 }
 
-fn form(fields: Vec<Value>, submits: Vec<(&str, &str)>) -> Value {
+pub(super) fn form(fields: Vec<Value>, submits: Vec<(&str, &str)>) -> Value {
     json!({"url": LOGIN_URL, "count": fields.len(), "more": false, "stopped": null,
         "fields": fields,
         "submits": submits.iter().map(|(r, l)| json!({"ref": r, "label": l, "disabled": false})).collect::<Vec<_>>()})
 }
 
 /// A search box whose form has two submit buttons, the second one risky.
-fn delete_page() -> Page {
+pub(super) fn delete_page() -> Page {
     Page {
         title: "Account".into(),
         elements: vec![
@@ -53,16 +53,16 @@ fn delete_page() -> Page {
     }
 }
 
-fn categories(card: &PendingApproval) -> Vec<Category> {
+pub(super) fn categories(card: &PendingApproval) -> Vec<Category> {
     card.facts.categories.clone()
 }
 
-fn focus_in_form(index: usize, submit: &str) -> Value {
+pub(super) fn focus_in_form(index: usize, submit: &str) -> Value {
     json!({"tag": "INPUT", "type": "email", "ac": null, "name": "email", "label": "Email",
         "text": null, "ce": false, "sh": false, "fi": index, "sb": submit, "fa": null, "hr": null})
 }
 
-fn gate_for(a: &Act, session: i64, level: BrowserLevel) -> (Arc<Gate>, String) {
+pub(super) fn gate_for(a: &Act, session: i64, level: BrowserLevel) -> (Arc<Gate>, String) {
     let gate = Gate::start(
         a.up.clone(),
         Policy::ardia(level, vec![]),
@@ -73,7 +73,7 @@ fn gate_for(a: &Act, session: i64, level: BrowserLevel) -> (Arc<Gate>, String) {
     (gate, route)
 }
 
-fn gate_tool(gate: &Gate, route: &str, name: &str, args: Value) -> Value {
+pub(super) fn gate_tool(gate: &Gate, route: &str, name: &str, args: Value) -> Value {
     gate.handle(
         route,
         json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": args}}),
@@ -275,7 +275,10 @@ fn a_focus_the_page_cannot_vouch_for_is_unknown_and_never_echoed() {
     for raw in ["not json", "{}", "[1]"] {
         a.r.runner.lock().focus_raw = Some(raw.into());
         let (error, text) = a.call("browser_press", json!({"key": "x"}));
-        assert!(error && text.contains("could not tell"), "{raw}: {text}");
+        assert!(
+            error && text.contains("only sent into a text field"),
+            "{raw}: {text}"
+        );
     }
     assert!(a.sent().is_empty());
     // The result of the eval is page text: it never reaches the Mono.
@@ -978,9 +981,9 @@ fn a_stop_that_arrives_before_the_card_posts_no_card() {
     assert!(a.sent().is_empty());
 }
 
-// ---- 12: declared intents ----
+// ---- 12: declared intents (the per-turn intent guard is gone: see review2_tests) ----
 
-fn save_page() -> Page {
+pub(super) fn save_page() -> Page {
     let mut page = delete_page();
     page.elements
         .push(El::new("e60", "button", "Save settings").attr("type", "button"));
@@ -988,49 +991,9 @@ fn save_page() -> Page {
 }
 
 #[test]
-fn a_declared_intent_lets_the_matching_act_through_after_a_read() {
-    let session = SESSIONS.fetch_add(1, Ordering::SeqCst);
-    let a = act();
-    a.up.set_taint_exempt(false);
-    a.set_page(save_page());
-    let (gate, route) = gate_for(&a, session, BrowserLevel::Act);
-    let visit = |gate: &Gate, route: &str| {
-        gate_tool(gate, route, "browser_open", json!({"url": LOGIN_URL}));
-        gate_tool(
-            gate,
-            route,
-            "browser_snapshot",
-            json!({"interactive": true}),
-        );
-    };
-    // Declared before the read: it goes.
-    gate.begin_turn(&route, "save my settings on shop.example");
-    let declared = gate_tool(
-        &gate,
-        &route,
-        "browser_declare_intent",
-        json!({"actions": [{"kind": "write", "target_desc": "Save settings", "url": LOGIN_URL}]}),
-    );
-    assert!(declared["isError"] != true, "{declared}");
-    visit(&gate, &route);
-    let done = gate_tool(&gate, &route, "browser_click", json!({"ref": "e60"}));
-    assert!(done["isError"] != true, "{done}");
-    assert!(a.cards().is_empty(), "a declared action needs no card");
-    // The next turn declares nothing: after the read the same click asks.
-    gate.begin_turn(&route, "have a look at the settings");
-    visit(&gate, &route);
-    let done = gate_tool(&gate, &route, "browser_click", json!({"ref": "e60"}));
-    assert!(done["isError"] != true, "{done}");
-    let cards = a.cards();
-    assert_eq!(cards.len(), 1, "an undeclared write after a read asks");
-    assert!(categories(&cards[0]).contains(&Category::Tainted));
-}
-
-#[test]
 fn a_benign_click_after_a_read_does_not_ask() {
     let session = SESSIONS.fetch_add(1, Ordering::SeqCst);
     let a = act();
-    a.up.set_taint_exempt(false);
     a.set_page(save_page());
     let (gate, route) = gate_for(&a, session, BrowserLevel::Act);
     gate.begin_turn(&route, "look around");
@@ -1191,24 +1154,6 @@ fn a_page_that_cannot_be_read_after_an_act_stops_the_tab() {
     assert!(a.r.runner.lock().tabs.is_empty(), "an own tab is closed");
     let (error, _) = a.call("browser_read", json!({}));
     assert!(error, "further calls in the tab are refused for the turn");
-}
-
-#[test]
-fn a_tab_a_click_opened_is_noted_never_bound_and_never_closed() {
-    let a = act();
-    let mut page = login_page();
-    page.elements.push(
-        El::new("e72", "button", "Popup")
-            .attr("type", "button")
-            .attr("opens_tab", "yes"),
-    );
-    a.on(page);
-    let (error, text) = a.call("browser_click", json!({"ref": "e72"}));
-    assert!(!error, "{text}");
-    assert!(text.contains("opened a new tab"), "{text}");
-    let row = &a.rows_of("browser_click")[0];
-    assert!(row.summary.contains("opened a new tab"), "{row:?}");
-    assert_eq!(a.r.runner.count("tab-popup-9"), 0, "not bound, not closed");
 }
 
 #[test]

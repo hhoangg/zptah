@@ -34,6 +34,7 @@ const SCROLL: &str = include_str!("fixtures/browse_scroll.json");
 const SHOT: &str = include_str!("fixtures/browse_screenshot.json");
 const BACK: &str = include_str!("fixtures/browse_back.json");
 const DAEMON_GONE: &str = include_str!("fixtures/browse_daemon_unreachable.json");
+const SWITCHED: &str = include_str!("fixtures/windows_switch_profile.json");
 const EVENTS: &str = include_str!("fixtures/events.jsonl");
 const CONTROL_OFF: &str = include_str!("fixtures/call_control_off.stderr.txt");
 const UNREACHABLE: &str = include_str!("fixtures/call_unreachable.stderr.txt");
@@ -138,6 +139,22 @@ pub(super) struct State {
     pub act_error: Option<String>,
     /// The POSTs `press Enter` reports (URLs), when it navigates.
     pub posts: Vec<String>,
+    /// The profile the window shows (`""`: `default`). A click on an element with `opens_popup`
+    /// (or a link with a `target`) switches it to the Mono's profile, as Ardia 0.7.0 did.
+    pub window_profile: String,
+    /// Page targets `tab list` shows that have no `appTabId` (a popup): `(targetId, url)`.
+    pub popups: Vec<(String, String)>,
+    /// Every `windows.switchProfile` the fake got.
+    pub switches: Vec<Value>,
+    /// Every `Target.closeTarget` the fake got (the target id).
+    pub target_closes: Vec<String>,
+    /// How many times a click reached a link that has a `target`.
+    pub popup_clicks: usize,
+    /// `Target.closeTarget` is refused.
+    pub close_target_fails: bool,
+    /// Page targets `tab list` shows that DO have an `appTabId` (a tab, never closed by the
+    /// gate): `(targetId, appTabId, url)`.
+    pub new_tabs: Vec<(String, String, String)>,
 }
 
 pub(super) struct FakeRunner {
@@ -258,6 +275,11 @@ impl Runner for FakeRunner {
                         .user_tab_profile
                         .clone()
                         .unwrap_or_else(|| PROFILE.to_owned());
+                    let window_profile = if st.window_profile.is_empty() {
+                        "default".to_owned()
+                    } else {
+                        st.window_profile.clone()
+                    };
                     let (id, url, title) = st
                         .user_tab
                         .clone()
@@ -268,7 +290,15 @@ impl Runner for FakeRunner {
                     for own in &st.tabs {
                         tabs.push(json!({"id": own, "url": st.url, "title": "Mono tab", "profile": PROFILE, "active": false, "pinned": false, "group": null, "targetId": null, "pageGeneration": 1}));
                     }
-                    ok(json!([{"id": "w-1", "kind": "normal", "focused": true, "profile": "default", "profileName": "Main", "tabs": tabs}]).to_string())
+                    ok(json!([{"id": "w-1", "kind": "normal", "focused": true, "profile": window_profile, "profileName": "Main", "tabs": tabs}]).to_string())
+                }
+                "windows.switchProfile" => {
+                    let params: Value = serde_json::from_str(arg(3)).unwrap();
+                    st.window_profile = params["profile"].as_str().unwrap().to_owned();
+                    st.switches.push(params);
+                    let mut reply = json_of(SWITCHED);
+                    reply["profile"] = json!(st.window_profile);
+                    ok(reply.to_string())
                 }
                 "settings.get" if st.settings_fail => Ok(Output {
                     code: 1,
@@ -348,9 +378,15 @@ impl Runner for FakeRunner {
                         if let Some(url) = &st.listed_url {
                             reply["data"]["tabs"][0]["url"] = json!(url);
                         }
+                        for (target, app, url) in &st.new_tabs {
+                            reply["data"]["tabs"].as_array_mut().unwrap().push(json!({"tabId": format!("t-{target}"), "appTabId": app, "label": null, "targetId": target, "title": "Tab", "url": url, "type": "page", "active": false, "openedBySession": false, "openedBy": null, "usedBy": []}));
+                        }
                         if let (true, Some((id, url, title))) = (st.bound_user, st.user_tab.clone())
                         {
-                            reply["data"]["tabs"] = json!([{"tabId": "t9", "appTabId": id, "title": title, "url": url, "type": "page", "active": true, "openedBySession": false}]);
+                            reply["data"]["tabs"] = json!([{"tabId": "t9", "appTabId": id, "targetId": "TARGETUSER1", "title": title, "url": url, "type": "page", "active": true, "openedBySession": false}]);
+                        }
+                        for (target, url) in &st.popups {
+                            reply["data"]["tabs"].as_array_mut().unwrap().push(json!({"tabId": format!("t-{target}"), "appTabId": null, "label": null, "targetId": target, "title": "Popup", "url": url, "type": "page", "active": false, "openedBySession": false, "openedBy": null, "usedBy": []}));
                         }
                         ok(reply.to_string())
                     }

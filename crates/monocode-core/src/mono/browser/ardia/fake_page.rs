@@ -9,6 +9,10 @@
 //! answers `count: 0` and no `submits`; with an open dialog `snapshot -i` is scoped to it and says
 //! so in `modal`, and the full `snapshot` shows its text.
 //!
+//! Also measured and kept: `eval` is always sent with `--isolated`; `press @eN Enter` and
+//! `Control+Enter` answer `{pressed, in, changes}`; with a dialog open the full snapshot nests
+//! its text under the `- dialog` line; a `target=_blank` click opens a target no tab lists.
+//!
 //! Not measured against a real Ardia (marked where used): the reply of `hover` on success (the
 //! key that names the act is a guess: the gate does not read it).
 use super::runner::{Output, RunFailure};
@@ -33,6 +37,9 @@ const SNAPSHOT_I: &str = include_str!("fixtures/browse_snapshot_interactive.json
 const GET_TITLE: &str = include_str!("fixtures/browse_get_title.json");
 const GET_ATTR: &str = include_str!("fixtures/get_attr_type.json");
 const FORM: &str = include_str!("fixtures/browse_form_login.json");
+const CDP_CLOSE: &str = include_str!("fixtures/cdp_close_target.json");
+const PRESS_IN_ENTER: &str = include_str!("fixtures/act_press_in_enter.json");
+const PRESS_IN_CTRL_ENTER: &str = include_str!("fixtures/act_press_in_ctrl_enter.json");
 const DAEMON_GONE: &str = include_str!("fixtures/browse_daemon_unreachable.json");
 
 /// One element of the fake page.
@@ -195,7 +202,8 @@ impl State {
                     }
                 }))
             }
-            (["eval"], [script]) => {
+            (["eval"], _) => panic!("an eval without --isolated: the page's own world can lie"),
+            (["eval", "--isolated"], [script]) => {
                 self.evals.push(script.to_string());
                 assert_eq!(
                     *script,
@@ -207,16 +215,33 @@ impl State {
                         r#"{"success":false,"data":null,"error":"eval is unavailable","code":"command_failed"}"#,
                     ));
                 }
+                let forms = self.page.forms.len();
                 let result = self.focus_raw.clone().unwrap_or_else(|| {
-                    self.page
+                    let mut focus = self
+                        .page
                         .focus
                         .clone()
-                        .unwrap_or_else(|| json!({"tag": "BODY"}))
-                        .to_string()
+                        .unwrap_or_else(|| json!({"tag": "BODY"}));
+                    // The script also reports `document.forms.length`.
+                    if focus.get("fl").is_none() {
+                        focus["fl"] = json!(forms);
+                    }
+                    focus.to_string()
                 });
                 Some(ok(
                     json!({"success": true, "data": {"origin": "file://", "result": result}, "error": null}),
                 ))
+            }
+            (["cdp", "--param", param, "--target", "browser"], ["Target.closeTarget"]) => {
+                let target = param.strip_prefix("targetId=").unwrap_or("").to_owned();
+                self.target_closes.push(target.clone());
+                if self.close_target_fails {
+                    return Some(refused(
+                        r#"{"success":false,"data":null,"error":"No target with that id","code":"command_failed"}"#,
+                    ));
+                }
+                self.popups.retain(|(id, _)| *id != target);
+                Some(ok(json_of(CDP_CLOSE)))
             }
             (["get", "count"], ["form"]) => Some(ok(
                 json!({"success": true, "data": {"count": self.page.forms.len(), "selector": "form"}, "error": null}),
@@ -333,9 +358,10 @@ impl State {
         let url = self.url.clone();
         match cmd {
             "click"
-                if el.attrs.contains_key("navigates_to")
-                    || (el.role == "link"
-                        && el.attrs.get("href").is_some_and(|h| h.starts_with("http"))) =>
+                if !el.attrs.contains_key("target")
+                    && (el.attrs.contains_key("navigates_to")
+                        || (el.role == "link"
+                            && el.attrs.get("href").is_some_and(|h| h.starts_with("http")))) =>
             {
                 let to = el
                     .attrs
@@ -355,17 +381,32 @@ impl State {
                     d["changes"]["url"] = json!({"from": url, "to": to});
                 })
             }
-            "click" => with_data(CLICK_ADD, |d| {
-                d["clicked"] = json!(target);
-                // Not measured: how `changes` reports a tab the click opened.
-                if el.attrs.contains_key("opens_tab") {
-                    d["changes"]["opened"] = json!([{"id": "tab-popup-9"}]);
+            "click" => {
+                // Measured: a `target=_blank` link (or `window.open`) opens a page target that
+                // `tab list` shows with no `appTabId`, `changes` says nothing, and the user's
+                // window switches to the Mono's profile.
+                if el.attrs.contains_key("target") {
+                    self.popup_clicks += 1;
                 }
-                // The recorded click inserted a button `e12`; only an element that does so here.
-                if !el.attrs.contains_key("adds") {
-                    d["changes"]["added"] = json!([]);
+                if el.attrs.contains_key("target") || el.attrs.contains_key("opens_popup") {
+                    let url = el
+                        .attrs
+                        .get("href")
+                        .or_else(|| el.attrs.get("opens_popup"))
+                        .cloned()
+                        .unwrap_or_default();
+                    let n = self.popups.len() + self.target_closes.len() + 1;
+                    self.popups.push((format!("POPUP{n:04}"), url));
+                    self.window_profile = super::tests::PROFILE.to_owned();
                 }
-            }),
+                with_data(CLICK_ADD, |d| {
+                    d["clicked"] = json!(target);
+                    // The recorded click inserted a button `e12`; only an element that does so here.
+                    if !el.attrs.contains_key("adds") {
+                        d["changes"]["added"] = json!([]);
+                    }
+                })
+            }
             "fill"
                 if el.attrs.get("type").map(String::as_str) == Some("password")
                     || el.attrs.contains_key("hidden_password") =>
@@ -426,11 +467,18 @@ impl State {
                 });
             }
         }
-        with_data(PRESS_TAB, |d| {
-            d["pressed"] = json!(key);
-            if let Some(target) = target {
-                d["in"] = json!(target);
+        match (target, key) {
+            // Measured: a key pressed in an element reports where it landed.
+            (Some(target), "Enter") => with_data(PRESS_IN_ENTER, |d| d["in"] = json!(target)),
+            (Some(target), "Control+Enter") => {
+                with_data(PRESS_IN_CTRL_ENTER, |d| d["in"] = json!(target))
             }
-        })
+            _ => with_data(PRESS_TAB, |d| {
+                d["pressed"] = json!(key);
+                if let Some(target) = target {
+                    d["in"] = json!(target);
+                }
+            }),
+        }
     }
 }

@@ -100,9 +100,9 @@ pub(super) fn act_with(level: BrowserLevel, origins: Origins) -> Act {
         _sub: sub,
         dir,
     };
+    // Nothing is exempt: the gate's taint rules (data carried to another site, injection, read
+    // only domains) run as they do in production.
     a.configure(vec![a.path("home/proj")]);
-    // These tests are about the tools; the untrusted-content rule has its own tests.
-    a.up.set_taint_exempt(true);
     a
 }
 pub(super) fn act() -> Act {
@@ -119,6 +119,7 @@ impl Act {
             act: Some(self.cfg.clone()),
             project_dirs,
             home: Some(self.path("home")),
+            staging_dir: Some(self.path("staging")),
         });
     }
     pub(super) fn call(&self, tool: &str, args: Value) -> (bool, String) {
@@ -780,11 +781,17 @@ fn a_character_key_is_refused_in_a_password_field_and_when_the_focus_is_unknown(
     // Focus the page could not name (an eval that fails, or an iframe): lean to refusing.
     a.r.runner.lock().focus_fails = true;
     let (error, text) = a.call("browser_press", json!({"key": "a"}));
-    assert!(error && text.contains("could not tell"), "{text}");
+    assert!(
+        error && text.contains("only sent into a text field"),
+        "{text}"
+    );
     a.r.runner.lock().focus_fails = false;
     a.r.runner.lock().page.focus = Some(json!({"tag": "IFRAME"}));
     let (error, text) = a.call("browser_press", json!({"key": "a"}));
-    assert!(error && text.contains("could not tell"), "{text}");
+    assert!(
+        error && text.contains("only sent into a text field"),
+        "{text}"
+    );
     assert!(a.sent().is_empty());
     // Focus in an ordinary field: allowed.
     a.r.runner.lock().page.focus = Some(focus_input("text", Some("nolabel"), Some("Field X")));
@@ -1116,15 +1123,15 @@ fn an_upload_from_the_project_or_the_output_folder_always_asks_and_shows_path_an
         "{details}"
     );
     assert!(matches!(cards[0].facts.action, ActionDesc::Upload { .. }));
-    // The path that reaches `ardia` is the one that was checked.
-    assert_eq!(
-        a.sent()[0],
-        vec![
-            "upload".to_owned(),
-            "@e11".into(),
-            canonical.to_string_lossy().into_owned()
-        ]
-    );
+    // What reaches `ardia` is the gate's private copy of the file that was approved, never the
+    // original: the same bytes under the staging folder, named like the file.
+    let sent = &a.sent()[0];
+    assert_eq!(&sent[..2], ["upload", "@e11"]);
+    let copy = std::path::PathBuf::from(&sent[2]);
+    assert_ne!(copy, canonical);
+    assert!(copy.starts_with(a.path("staging")), "{}", copy.display());
+    assert_eq!(copy.file_name(), canonical.file_name());
+    assert_eq!(std::fs::read(&copy).unwrap(), vec![b'x'; 2048]);
 }
 
 #[test]

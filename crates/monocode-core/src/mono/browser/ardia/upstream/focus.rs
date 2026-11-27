@@ -6,12 +6,14 @@
 //! content-editable element or a shadow host is [`Focus::Unknown`].
 use serde_json::Value;
 
-/// The script the gate sends. Fixed: no part of it comes from the Mono or the page. It returns a
+/// The script the gate sends. Fixed: no part of it comes from the Mono or the page. It is always sent with
+/// `eval --isolated` (the page's own world could answer for a page that replaced `JSON.stringify`). It returns a
 /// JSON string with the tag, `type`, `autocomplete`, `name`, `aria-label` and (for a button or a
-/// link) the visible text of the focused element, the index of its form among `document.forms`,
-/// the text of that form's default submit button and the resolved `formAction` and `href`. It
+/// link) the visible text of the focused element, the index of its form among `document.forms` together
+/// with `document.forms.length` (the gate trusts the index only when the length is the count
+/// `get count form` gave), the text of that form's default submit button and the resolved `formAction` and `href`. It
 /// never reads the value of a field.
-pub const FOCUS_SCRIPT: &str = r#"JSON.stringify((function(e){return e?{tag:e.tagName,type:e.type||null,ac:e.autocomplete||null,name:e.name||null,label:e.getAttribute("aria-label"),text:(/^(BUTTON|A)$/.test(e.tagName)||/^(submit|button|reset|image)$/.test(e.type))?(e.innerText||e.value||"").slice(0,80):null,ce:e.isContentEditable===true,sh:!!e.shadowRoot,fi:e.form?Array.prototype.indexOf.call(document.forms,e.form):null,sb:(function(f){var b=f&&f.querySelector('button:not([type]),button[type=submit],input[type=submit],input[type=image]');return b?(b.innerText||b.value||b.getAttribute("aria-label")||"").slice(0,80):null})(e.form),fa:e.formAction||null,hr:e.href||null}:null})(document.activeElement))"#;
+pub const FOCUS_SCRIPT: &str = r#"JSON.stringify((function(e){return e?{tag:e.tagName,type:e.type||null,ac:e.autocomplete||null,name:e.name||null,label:e.getAttribute("aria-label"),text:(/^(BUTTON|A)$/.test(e.tagName)||/^(submit|button|reset|image)$/.test(e.type))?(e.innerText||e.value||"").slice(0,80):null,ce:e.isContentEditable===true,sh:!!e.shadowRoot,fi:e.form?Array.prototype.indexOf.call(document.forms,e.form):null,fl:document.forms.length,sb:(function(f){var b=f&&f.querySelector('button:not([type]),button[type=submit],input[type=submit],input[type=image]');return b?(b.innerText||b.value||b.getAttribute("aria-label")||"").slice(0,80):null})(e.form),fa:e.formAction||null,hr:e.href||null}:null})(document.activeElement))"#;
 
 /// What has the focus.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,6 +37,8 @@ pub struct FocusEl {
     pub text: Option<String>,
     /// Index of its form among the page's forms (`document.forms`).
     pub form: Option<usize>,
+    /// `document.forms.length` when the focus was read.
+    pub forms_len: Option<usize>,
     /// Text of the default submit button of its form.
     pub default_submit: Option<String>,
     /// The resolved `formAction` of a button or input.
@@ -142,6 +146,7 @@ pub fn parse(data: &Value) -> Focus {
         label: text("label"),
         text: text("text"),
         form: value["fi"].as_u64().map(|i| i as usize),
+        forms_len: value["fl"].as_u64().map(|n| n as usize),
         default_submit: text("sb"),
         form_action: text("fa"),
         href: text("hr"),

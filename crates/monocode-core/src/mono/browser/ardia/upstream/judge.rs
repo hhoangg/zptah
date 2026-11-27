@@ -12,15 +12,16 @@
 //! * An Enter, or a line break in typed text, submits: every form's `action` in scope is checked
 //!   and every submit button in scope is classified as a click (the categories of all of them are
 //!   joined). The form of the focused element is its own when the page says which it is.
-//! * After untrusted content was read, an action that was not declared first asks
-//!   ([`defense::Turn::check`], fed by `browser_declare_intent`).
+//! * What the extension backend also did for a normal call stays, and nothing more: the shared
+//!   classifier's Tainted category (data read on one site typed or put in an address of
+//!   another), Injection (a pattern found in a page of the turn) and the read-only domains. There
+//!   is no per-turn intent guard: `browser_declare_intent` never makes a card here.
 use super::act::{classifier_name, is_checkable_role, is_field_role, Op, Plan};
 use super::focus::Focus;
 use super::fresh::{self, Attrs, ElementInput};
 use super::read::{press_effect, PressEffect, Read};
 use super::uploads;
 use super::*;
-use crate::mono::browser::defense::{self, Action as TaintAction};
 use crate::mono::browser::gate::extension::act::looks_vietnamese;
 use crate::mono::browser::risk::decide::Decision;
 use crate::mono::browser::risk::lexicon::{lexicon, ControlKind};
@@ -33,8 +34,6 @@ use std::collections::BTreeSet;
 /// What was decided, and what to compare after the user answered.
 pub(super) struct Judged {
     pub ev: Evaluation,
-    /// The action as the taint rule saw it, when it asked (to note an approval).
-    pub taint: Option<TaintAction>,
     /// Everything the decision rested on: after a card the same read must give the same one.
     pub sig: Sig,
 }
@@ -62,9 +61,16 @@ enum Scope {
     Any,
 }
 
+/// The form a submit reaches. A focused element's form index counts only when the page's form
+/// count (`document.forms.length`, read by the focus script) is the same number `get count form`
+/// gave: when they differ a form came or went between the two reads and the index may point at
+/// another form, and when the index is unknown the answer is any form of the page (the union).
 fn scope_of(read: &Read) -> Scope {
     match &read.focus {
-        Some(Focus::Element(el)) if el.form.is_some() => Scope::Own(el.form.unwrap_or(0)),
+        Some(Focus::Element(el)) => match (el.form, el.forms_len, read.actions.count) {
+            (Some(index), Some(seen), Some(counted)) if seen == counted => Scope::Own(index),
+            _ => Scope::Any,
+        },
         _ if read.actions.per_form.len() == 1 => Scope::Own(0),
         _ => Scope::Any,
     }
@@ -94,13 +100,30 @@ impl ArdiaUpstream {
         id: i64,
         plan: &Plan,
         read: &Read,
+        files: Option<&[uploads::UploadFile]>,
+    ) -> Result<Judged, String> {
+        self.evaluate_rows(id, plan, read, files, true)
+    }
+
+    /// [`ArdiaUpstream::evaluate`]; with `rows` false a refusal writes no audit row and posts no
+    /// notice (the decision made again after a card: the caller writes the one row).
+    pub(super) fn evaluate_rows(
+        &self,
+        id: i64,
+        plan: &Plan,
+        read: &Read,
         _files: Option<&[uploads::UploadFile]>,
+        rows: bool,
     ) -> Result<Judged, String> {
         let page = &read.url;
         let name = clean(&read.name);
         let origins = self.config().origins;
         let deny = |decision: AuditDecision, reason: &str, text: String| {
-            self.refuse(id, plan, read, decision, reason, text)
+            if rows {
+                self.refuse(id, plan, read, decision, reason, text)
+            } else {
+                text
+            }
         };
         let key = plan.key.as_deref();
         let effect = (plan.op == Op::Press).then(|| press_effect(plan, read));
@@ -127,14 +150,11 @@ impl ArdiaUpstream {
                 ),
             ));
         }
-        if effect == Some(PressEffect::Types)
-            && plan.ref_.is_none()
-            && !matches!(read.focus, Some(Focus::Element(_)))
-        {
+        if effect == Some(PressEffect::Refused) {
             return Err(deny(
                 AuditDecision::Blocked,
-                "a character key with a focus that could not be read",
-                "A character key is not sent: zptah could not tell which element has the focus, and the key could land in a password field. Use browser_type or browser_fill with the ref of the field, or press it with the ref of the field.".into(),
+                "a character key whose target is not known to be a text field",
+                "A character key is only sent into a text field zptah can see: here the focus is on nothing, on something that is not a text field, or on something zptah could not read, and a page can act on a key (shortcuts) or the key could land in a password field. Use browser_type or browser_fill with the ref of the field, or press it with the ref of the field.".into(),
             ));
         }
         if types {
@@ -146,7 +166,9 @@ impl ArdiaUpstream {
                 ));
             }
             if let Some(why) = fresh::secret_field(&name, &read.attrs) {
-                self.post_password_notice(page);
+                if rows {
+                    self.post_password_notice(page);
+                }
                 return Err(deny(
                     AuditDecision::Invariant,
                     why,
@@ -241,6 +263,9 @@ impl ArdiaUpstream {
             if read.attrs.href_unreadable || read.attrs.formaction_unreadable {
                 unclear.get_or_insert("the address of the control could not be read");
             }
+            if read.attrs.target_unreadable {
+                unclear.get_or_insert("whether the link opens in a new window could not be read");
+            }
             if let Some(url) = &element.form_action {
                 if submit_like {
                     destinations.push(("the button", url.clone()));
@@ -287,11 +312,32 @@ impl ArdiaUpstream {
             }
         }
 
+        // A link that opens a new window is loaded in the session's own tab instead: it has to be
+        // an address `open` takes.
+        if let Some(url) = &read.new_window {
+            if let Err(why) = web_url(url) {
+                return Err(deny(
+                    AuditDecision::Blocked,
+                    "a link that opens a new window is not a web address",
+                    format!("Not done: the link opens a new window and {why}"),
+                ));
+            }
+        }
+
         // The classifier's inputs.
         let mut ext: BTreeSet<Category> = BTreeSet::new();
         let mut declared: BTreeSet<Category> = BTreeSet::new();
         if matches!(effect, Some(PressEffect::Unknown)) {
             unclear.get_or_insert("the focus could not be identified");
+        }
+        if matches!(effect, Some(PressEffect::Unclear)) {
+            unclear.get_or_insert(
+                "a Delete or Backspace key where no text field is known to have the focus",
+            );
+        }
+        if read.ctx_unreliable {
+            unclear
+                .get_or_insert("what the page says around this control could not be matched to it");
         }
         let vi = looks_vietnamese(&format!("{} {} {}", read.title, name, element.nearby_text));
         // A bare word (Confirm, OK, Yes ...) takes its meaning from the dialog or the page.
@@ -323,10 +369,12 @@ impl ArdiaUpstream {
                 element: element.clone(),
             }),
             Op::Press => match effect.unwrap_or(PressEffect::Nothing) {
-                PressEffect::Nothing => cands.push(Cand {
-                    kind: None,
-                    element: element.clone(),
-                }),
+                PressEffect::Nothing | PressEffect::Unclear | PressEffect::Refused => {
+                    cands.push(Cand {
+                        kind: None,
+                        element: element.clone(),
+                    })
+                }
                 PressEffect::Types => cands.push(Cand {
                     kind: Some(ActionKind::Type(field_kind())),
                     element: element.clone(),
@@ -369,23 +417,10 @@ impl ArdiaUpstream {
             }
         }
 
-        // After untrusted content was read, an action that was not declared asks.
-        let mut taint = None;
         let mut taint_note = String::new();
-        if let Some(action) = self.taint_action(plan, read, effect, &name, &cands) {
-            if let Some(why) = self.taint_check(id, &action) {
-                ext.insert(why.1);
-                taint_note = why.0;
-                taint = Some(action);
-            }
-        }
         if let Some(why) = unclear {
             ext.insert(Category::Unclear);
-            taint_note = if taint_note.is_empty() {
-                why.to_owned()
-            } else {
-                format!("{taint_note}; {why}")
-            };
+            taint_note = why.to_owned();
         }
         // Pasting puts text the gate never sees into the field.
         if key.is_some_and(fresh::is_paste_chord) {
@@ -420,7 +455,7 @@ impl ArdiaUpstream {
                 self.with_trust(id, |state, cfg| {
                     state.evaluate(
                         &TrustConfig {
-                            level: cfg.level,
+                            level: self.level_now(cfg),
                             rules: &cfg.rules,
                         },
                         &action,
@@ -468,17 +503,19 @@ impl ArdiaUpstream {
             } else {
                 AuditDecision::Blocked
             };
-            self.row(
-                id,
-                &plan.tool,
-                page,
-                &plan.summary,
-                self.is_user_tab(id, &read.tab),
-                Some(&ev),
-                audit,
-                reason,
-                None,
-            );
+            if rows {
+                self.row(
+                    id,
+                    &plan.tool,
+                    page,
+                    &plan.summary,
+                    self.is_user_tab(id, &read.tab),
+                    Some(&ev),
+                    audit,
+                    reason,
+                    None,
+                );
+            }
             return Err(format!("Not allowed: {reason}."));
         }
         let mut ev = ev;
@@ -496,68 +533,6 @@ impl ArdiaUpstream {
             focus: read.focus.clone(),
             categories: ev.categories.clone(),
         };
-        Ok(Judged { ev, taint, sig })
-    }
-
-    /// The call as the taint rule describes it (`None`: it changes nothing).
-    fn taint_action(
-        &self,
-        plan: &Plan,
-        read: &Read,
-        effect: Option<PressEffect>,
-        name: &str,
-        cands: &[Cand],
-    ) -> Option<TaintAction> {
-        let label = |c: &Cand| format!("{} {}", c.element.role, c.element.name);
-        let mut element = format!("{} {}", read.role, name).trim().to_owned();
-        let tool = match plan.op {
-            Op::Hover => return None,
-            Op::Click | Op::Check => "browser_click",
-            Op::Select => "browser_select_option",
-            Op::Upload => "browser_file_upload",
-            Op::Type | Op::Fill => "browser_type",
-            Op::Press => match effect? {
-                PressEffect::Nothing => return None,
-                PressEffect::Types => "browser_type",
-                PressEffect::Presses => "browser_click",
-                PressEffect::Submits | PressEffect::Unknown => {
-                    element = cands.iter().map(label).collect::<Vec<_>>().join(" ");
-                    "browser_click"
-                }
-            },
-        };
-        let mut args = json!({"ref": plan.ref_.as_deref().unwrap_or("e0"), "element": element});
-        if let Some(typed) = &plan.typed {
-            args["text"] = json!(typed);
-        }
-        let resolved = element.clone();
-        let mut action =
-            TaintAction::describe_with(tool, &args, &read.url, &|_| Some(resolved.clone()));
-        if matches!(plan.op, Op::Press)
-            && matches!(effect, Some(PressEffect::Submits | PressEffect::Unknown))
-            && action.kind.is_none()
-        {
-            // A submit of a form whose button could not be named is a write that must be declared.
-            action.kind = Some(defense::Kind::Write);
-        }
-        Some(action)
-    }
-
-    /// The taint rule on one action: why it asks, and the category that says so.
-    fn taint_check(&self, id: i64, action: &TaintAction) -> Option<(String, Category)> {
-        #[cfg(test)]
-        if self.taint_exempt.load(std::sync::atomic::Ordering::SeqCst) {
-            return None;
-        }
-        self.with_turn(id, |turn| {
-            turn.check(action).map(|why| {
-                let category = if turn.flagged() {
-                    Category::Injection
-                } else {
-                    Category::Tainted
-                };
-                (why.text, category)
-            })
-        })
+        Ok(Judged { ev, sig })
     }
 }

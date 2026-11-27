@@ -605,6 +605,10 @@ pub trait Upstream: Send + Sync {
     /// The Mono declared an intent (`browser_declare_intent`) in app session `session`; `approved`
     /// is false for one declared after a read that the user did not approve.
     fn intent_declared(&self, _session: i64, _intent: &defense::Intent, _approved: bool) {}
+    /// The gate's policy was set or changed: `level` is the trust level it enforces now. An
+    /// upstream that judges actions itself follows it on its next call, and an open card checks
+    /// it again after the user answered.
+    fn policy_changed(&self, _level: BrowserLevel) {}
 }
 
 thread_local! {
@@ -874,20 +878,32 @@ impl Gate {
 
     /// Applies a new policy to the calls that follow, keeping the server.
     pub fn set_policy(&self, policy: Policy) {
-        self.inner.lock_state().policy = policy;
+        let level = policy.trust;
+        let upstream = {
+            let mut state = self.inner.lock_state();
+            state.policy = policy;
+            state.upstream.clone()
+        };
+        // An upstream that judges actions itself follows the level at once, also while a card is open.
+        upstream.policy_changed(level);
     }
 
     /// Applies the Mono's current trust level and blocked origins, and which backend is behind the
     /// gate (a new one gives a new key). Takes effect on the next call.
     pub fn configure(&self, policy: Policy, upstream_key: &str, upstream: Arc<dyn Upstream>) {
-        let mut state = self.inner.lock_state();
-        state.policy = policy;
-        if state.upstream_key != upstream_key {
-            state.upstream_key = upstream_key.to_owned();
-            state.upstream = upstream;
-            state.session = None;
-            state.page.clear();
-        }
+        let level = policy.trust;
+        let current = {
+            let mut state = self.inner.lock_state();
+            state.policy = policy;
+            if state.upstream_key != upstream_key {
+                state.upstream_key = upstream_key.to_owned();
+                state.upstream = upstream;
+                state.session = None;
+                state.page.clear();
+            }
+            state.upstream.clone()
+        };
+        current.policy_changed(level);
     }
 
     /// Routes the approval requests of `route` to the calling run until the result is dropped.

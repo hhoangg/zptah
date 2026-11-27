@@ -16,16 +16,23 @@
 //!    rule and the level work as for the extension backend). No card is posted for a turn that
 //!    was stopped;
 //! 4. after the user answered, the fresh read and the decision again: the same destinations and
-//!    categories and no new refusal, or the call fails as changed. An upload's files are checked
-//!    again too (the same file, not swapped for a link);
-//! 5. the command, then the URL after it, the origin check of the page it left the tab on
-//!    ([`ArdiaUpstream::after`]) and one audit row.
+//!    categories and no new refusal, or the call fails as changed (one audit row for the act, not
+//!    one per read). The level is read again too: a level lowered while the card was open stops
+//!    the act. An upload's files are copied into the gate's private folder, checked on the open
+//!    file (the same file, not swapped for a link), and `ardia` gets the copies;
+//! 5. the command (a link that opens a window of its own is loaded in the session's tab instead),
+//!    then the URL after it, the origin check of the page it left the tab on
+//!    ([`ArdiaUpstream::after`]), the closing of any window the page opened ([`super::popups`])
+//!    and one audit row.
+//!
+//! The risk inputs are the shared classifier's: the extension backend's Tainted (data read on one
+//! site carried to another), Injection and read-only domains. There is no per-turn intent guard.
 //!
 //! An act call is never repeated: when its outcome is unknown (Ardia went away after the command
 //! was sent, a timeout) the Mono is told it may or may not have run.
 use super::fresh::{self, CHANGED};
 use super::judge::Judged;
-use super::read::Read;
+use super::read::{press_effect, PressEffect, Read};
 use super::uploads;
 use super::user_tab;
 use super::*;
@@ -278,31 +285,22 @@ impl ArdiaUpstream {
         Some(f(state, &act))
     }
 
+    /// `message` is what the user typed (empty for a run no user message started).
     pub(super) fn begin_run_trust(&self, session: i64, message: &str) {
         self.with_trust(session, |state, _| state.begin_run(message));
-        // A new turn: nothing read, nothing declared. `message` is what the user typed (empty for
-        // a run no user message started).
-        let page = self.conv(session, |c| c.page.clone());
-        self.turns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(session, defense::Turn::new(message, &page));
     }
+    /// What the Mono read is remembered (in memory), to spot it being sent to another site.
     pub(super) fn note_read(&self, session: i64, url: &str, text: &str) {
         self.with_trust(session, |state, _| state.note_read(url, text));
-        // What the Mono read is untrusted content: from now on an action it did not declare asks.
-        self.with_turn(session, |turn| {
-            turn.note_page(url);
-            turn.read(text, true);
-        });
     }
 
-    /// The conversation's turn (what it has read and declared), created on first use.
-    pub(super) fn with_turn<R>(&self, session: i64, f: impl FnOnce(&mut defense::Turn) -> R) -> R {
-        let mut turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
-        f(turns
-            .entry(session)
-            .or_insert_with(|| defense::Turn::new("", "")))
+    /// The trust level in force now: the gate's policy once it told this upstream
+    /// ([`Upstream::policy_changed`]), else the level of the launch-time config.
+    pub(super) fn level_now(&self, act: &ActConfig) -> BrowserLevel {
+        self.level
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or(act.level)
     }
     pub(super) fn flag_injection(&self, session: i64) {
         self.with_trust(session, |state, _| state.flag_injection());
@@ -310,10 +308,6 @@ impl ArdiaUpstream {
     /// The conversation ended: its grants and what the gate remembered end, its cards are
     /// withdrawn.
     pub(super) fn end_trust(&self, conversation: i64) {
-        self.turns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&conversation);
         let removed = self.trust_map().remove(&conversation);
         let act = self.config().act;
         match (removed, &act) {
@@ -451,7 +445,7 @@ impl ArdiaUpstream {
                 "{tool} is not available: this browser has no act settings loaded."
             ));
         };
-        if act.level != BrowserLevel::Act {
+        if self.level_now(&act) != BrowserLevel::Act {
             let page = self.conv(id, |c| c.page.clone());
             self.row(
                 id,
@@ -511,9 +505,6 @@ impl ArdiaUpstream {
                     let granted = self
                         .with_trust(id, |state, _| state.commit(&judged.ev, answer))
                         .unwrap_or_default();
-                    if let Some(action) = &judged.taint {
-                        self.with_turn(id, |turn| turn.note_approved(action));
-                    }
                     let how = if answer == Answer::AllowedTask && !granted.is_empty() {
                         AuditDecision::AskedAllowedTask
                     } else {
@@ -522,10 +513,13 @@ impl ArdiaUpstream {
                     (Some(card), how)
                 }
             };
-        if let Some(files) = &files {
-            // Right before the command: the same files as were checked, not swapped since.
-            for file in files {
-                if let Err(why) = file.recheck() {
+        // Right before the command the approved files are copied into the gate's private folder
+        // (the same files as were approved, checked on the open file) and `ardia` gets the copies,
+        // never the originals: a file swapped after the approval does not reach the page.
+        let staged = match &files {
+            Some(files) => match self.stage_files(id, files) {
+                Ok(staged) => Some(staged),
+                Err(why) => {
                     self.row(
                         id,
                         &plan.tool,
@@ -539,8 +533,9 @@ impl ArdiaUpstream {
                     );
                     return Err(format!("Not done: {why}. Nothing was uploaded."));
                 }
-            }
-        }
+            },
+            None => None,
+        };
         self.run_act(
             id,
             &plan,
@@ -549,7 +544,42 @@ impl ArdiaUpstream {
             decision,
             approval_id,
             files.as_deref(),
+            staged.as_deref(),
         )
+    }
+
+    // ---- the private copies of uploaded files ----
+
+    /// The folder of a conversation's copies: `<staging>/<hash of the session name>`.
+    fn staging_folder(&self, conversation: i64) -> Option<PathBuf> {
+        use sha2::{Digest, Sha256};
+        let root = self.config().staging_dir?;
+        let digest = Sha256::digest(self.session(conversation).as_bytes());
+        let hash: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+        Some(root.join(hash))
+    }
+
+    /// Copies each approved file into its own folder, `<staging>/<session hash>/<n>/<basename>`.
+    fn stage_files(&self, id: i64, files: &[uploads::UploadFile]) -> Result<Vec<PathBuf>, String> {
+        let folder = self
+            .staging_folder(id)
+            .ok_or("uploads are not available: this Mono has no private folder for the copies")?;
+        let mut staged = Vec::new();
+        for file in files {
+            let n = self.conv(id, |c| {
+                c.upload_seq += 1;
+                c.upload_seq
+            });
+            staged.push(file.stage(&folder.join(n.to_string()))?);
+        }
+        Ok(staged)
+    }
+
+    /// The conversation ended: its private copies are deleted.
+    pub(super) fn remove_staged(&self, conversation: i64) {
+        if let Some(folder) = self.staging_folder(conversation) {
+            let _ = std::fs::remove_dir_all(folder);
+        }
     }
 
     /// After a card: the fresh read and the decision once more. The same destinations and
@@ -580,10 +610,26 @@ impl ArdiaUpstream {
         };
         self.not_stopped(id)
             .inspect_err(|_| row("stopped while the user was asked"))?;
-        let again = self.fresh_read(id, tab, plan).inspect_err(|_| {
-            row("the page could not be read again after the user answered");
-        })?;
-        let second = match self.evaluate(id, plan, &again, files) {
+        // The level may have been lowered while the card was open.
+        if self
+            .config()
+            .act
+            .is_none_or(|act| self.level_now(&act) != BrowserLevel::Act)
+        {
+            row("the browser level was changed to read only while the user was asked");
+            return Err(format!(
+                "{} is not available any more: the browser level was changed to read only while the user was asked, so nothing was done.",
+                plan.tool
+            ));
+        }
+        // Exactly one audit row for this act: the reads below stay quiet and the row above or
+        // below is the one that is written.
+        let again = self
+            .fresh_read_rows(id, tab, plan, false)
+            .inspect_err(|_| {
+                row("the page could not be read again after the user answered");
+            })?;
+        let second = match self.evaluate_rows(id, plan, &again, files, false) {
             Ok(second) => second,
             Err(_) => {
                 row("a new refusal appeared while the user was asked");
@@ -628,6 +674,22 @@ impl ArdiaUpstream {
 
     fn upload_files(&self, id: i64, plan: &Plan) -> Result<Vec<uploads::UploadFile>, String> {
         let config = self.config();
+        if config.staging_dir.is_none() {
+            let text = "browser_upload is not available: this Mono has no private folder for the copies of uploaded files.".to_owned();
+            let page = self.conv(id, |c| c.page.clone());
+            self.row(
+                id,
+                &plan.tool,
+                &page,
+                &plan.summary,
+                false,
+                None,
+                AuditDecision::Blocked,
+                &text,
+                None,
+            );
+            return Err(text);
+        }
         let mut allowed = config.project_dirs.clone();
         allowed.extend(config.output_dir.clone());
         let rules = uploads::Rules {
@@ -862,17 +924,34 @@ impl ArdiaUpstream {
         decision: AuditDecision,
         approval_id: Option<String>,
         files: Option<&[uploads::UploadFile]>,
+        staged: Option<&[PathBuf]>,
     ) -> Result<String, String> {
         let user_tab = self.is_user_tab(id, &read.tab);
-        // An upload sends the paths as they were resolved and checked, never the ones given.
+        // An upload sends the private copies the gate made, never the paths the Mono named or
+        // the originals.
         let mut values = plan.values.clone();
-        if let Some(files) = files {
+        if let Some(staged) = staged {
             values.truncate(1);
-            values.extend(files.iter().map(|f| f.path.to_string_lossy().into_owned()));
+            values.extend(staged.iter().map(|p| p.to_string_lossy().into_owned()));
+        }
+        let mut cmd = plan.cmd.clone();
+        // A link that opens a window of its own is not clicked: its address is loaded in the
+        // session's own tab (the origin check of the address was part of the decision).
+        let in_this_tab = read
+            .new_window
+            .as_ref()
+            .filter(|_| plan.op == Op::Click || press_effect(plan, read) == PressEffect::Presses);
+        if let Some(url) = in_this_tab {
+            cmd = vec!["open"];
+            values = vec![url.clone()];
         }
         let value_refs: Vec<&str> = values.iter().map(String::as_str).collect();
         let reason = ev.reason.clone();
-        let data = match self.browse(id, &plan.cmd, &value_refs) {
+        // What the act may do outside the tab (a new window, the window's profile).
+        let watch = (in_this_tab.is_none()
+            && matches!(plan.op, Op::Click | Op::Press | Op::Select | Op::Check))
+        .then(|| self.watch_before(id, &read.tab));
+        let data = match self.browse(id, &cmd, &value_refs) {
             Ok(data) => data,
             Err(Failure::Refused { code, message }) => {
                 // The command refused: it did not run.
@@ -906,6 +985,10 @@ impl ArdiaUpstream {
                 // Unreachable after the command was sent, a timeout, an unreadable reply, a
                 // Stop: nobody knows whether it ran. Never repeated (see `call_tool`).
                 let stopped = matches!(other, Failure::Cancelled);
+                if let Some(watch) = watch {
+                    // A window the act may have opened is closed all the same.
+                    let _ = self.watch_after(id, &read.tab, watch);
+                }
                 let unreachable = matches!(other, Failure::Unreachable(_));
                 let _ = self.fail(id, other);
                 if unreachable {
@@ -931,32 +1014,38 @@ impl ArdiaUpstream {
             }
         };
 
+        let effects = watch
+            .map(|watch| self.watch_after(id, &read.tab, watch))
+            .unwrap_or_default();
         let changes = &data["changes"];
         // The URL after the action. A page that can not be read is a hit: where the tab is now is
-        // not known, so it is stopped like a blocked page.
+        // not known, so it is stopped like a blocked page. When `get url` fails but the act's own
+        // reply says where the tab went (`changes.url.to`), that address is used.
         let after = match self.url_now(id) {
             Ok(url) if !url.is_empty() => url,
-            _ => {
-                self.row(
-                    id,
-                    &plan.tool,
-                    &read.url,
-                    &format!("{}; url after: unknown", plan.summary),
-                    user_tab,
-                    Some(ev),
-                    decision,
-                    &format!("{reason}; the page after the action could not be read"),
-                    approval_id,
-                );
-                return Err(self.halt_unknown(id, &read.tab, &read.url, &plan.tool));
-            }
+            _ => match changes["url"]["to"].as_str().filter(|u| !u.is_empty()) {
+                Some(reported) if self.not_stopped(id).is_ok() => reported.to_owned(),
+                _ => {
+                    self.row(
+                        id,
+                        &plan.tool,
+                        &read.url,
+                        &format!("{}; url after: unknown", plan.summary),
+                        user_tab,
+                        Some(ev),
+                        decision,
+                        &format!("{reason}; the page after the action could not be read"),
+                        approval_id,
+                    );
+                    return Err(self.halt_unknown(id, &read.tab, &read.url, &plan.tool));
+                }
+            },
         };
         let title = changes["title"]["to"]
             .as_str()
             .map(str::to_owned)
             .unwrap_or_else(|| read.title.clone());
         let writes = fresh::writes_of(changes);
-        let opened = fresh::new_tabs_of(changes);
         let mut head = plan.summary.clone();
         if matches!(plan.op, Op::Type | Op::Fill) {
             head = head.replace(
@@ -992,11 +1081,17 @@ impl ArdiaUpstream {
         if !writes.is_empty() {
             summary = format!("{summary}; wrote: {}", writes.join(", "));
         }
-        if !opened.is_empty() {
+        if in_this_tab.is_some() {
+            summary = format!("{summary}; the link opens a new window: loaded in this tab");
+        }
+        if !effects.closed.is_empty() {
             summary = format!(
-                "{summary}; opened a new tab ({}), not bound and not closed",
-                opened.join(", ")
+                "{summary}; closed {} new window(s) the page opened",
+                effects.closed.len()
             );
+        }
+        if effects.profile_restored {
+            summary = format!("{summary}; put the window back on its profile");
         }
         self.row(
             id,
@@ -1065,8 +1160,24 @@ impl ArdiaUpstream {
         if navigated {
             body.push_str("- The page changed: the refs of the old page no longer work.\n");
         }
-        if !opened.is_empty() {
-            body.push_str("- The action opened a new tab. It is not this conversation's tab and zptah did not bind it; use browser_open for a page you want to work in.\n");
+        if let Some(url) = in_this_tab {
+            body.push_str(&format!(
+                "- That link opens in a new window, so zptah did not click it: it loaded {} in this same tab.\n",
+                defense::redact_url_secrets(&one_line(url))
+            ));
+        }
+        for url in &effects.closed {
+            body.push_str(&format!(
+                "- The page opened a new window ({url}); zptah closed it. Use browser_navigate with that address if you need it (it is checked like any address).\n"
+            ));
+        }
+        for url in &effects.left_open {
+            body.push_str(&format!(
+                "- The page opened a new window ({url}) that zptah could not close. Tell the user.\n"
+            ));
+        }
+        if effects.profile_restored {
+            body.push_str("- The click had switched the user's window to another profile; zptah put it back.\n");
         }
         if let Some(files) = files {
             body.push_str(&format!("- Attached {} file(s).\n", files.len()));
@@ -1196,7 +1307,12 @@ impl ArdiaUpstream {
             ));
         }
         let mut approval = None;
-        if !self.conv(id, |c| c.approved_user_tabs.contains(&tab)) {
+        // Approved by tab id and the site it shows: the same tab on another site asks again.
+        let approved_key = (
+            tab.clone(),
+            registrable_domain_of(&url).unwrap_or_else(|| url.clone()),
+        );
+        if !self.conv(id, |c| c.approved_user_tabs.contains(&approved_key)) {
             let ev = Evaluation {
                 decision: Decision::Ask(Vec::new()),
                 tier: Tier::Always,
@@ -1217,7 +1333,7 @@ impl ArdiaUpstream {
             match self.ask_card(&act, id, "browser_tabs", facts, &ev) {
                 Ok((_, card)) => {
                     // Recorded before anything else can fail, so a retry does not ask again.
-                    self.conv(id, |c| c.approved_user_tabs.insert(tab.clone()));
+                    self.conv(id, |c| c.approved_user_tabs.insert(approved_key.clone()));
                     approval = Some(card);
                 }
                 Err((text, audit, card)) => {
@@ -1241,7 +1357,7 @@ impl ArdiaUpstream {
         let bound = self.bind(id, &tab)?;
         self.conv(id, |c| {
             c.user_tab = Some(tab.clone());
-            c.approved_user_tabs.insert(tab.clone());
+            c.approved_user_tabs.insert(approved_key.clone());
         });
         self.row(
             id,
@@ -1285,7 +1401,7 @@ impl ArdiaUpstream {
             .with_trust(id, |state, cfg| {
                 state.evaluate(
                     &TrustConfig {
-                        level: cfg.level,
+                        level: self.level_now(cfg),
                         rules: &cfg.rules,
                     },
                     &action,
@@ -1371,7 +1487,7 @@ impl ArdiaUpstream {
             .with_trust(id, |state, cfg| {
                 state.evaluate(
                     &TrustConfig {
-                        level: cfg.level,
+                        level: self.level_now(cfg),
                         rules: &cfg.rules,
                     },
                     &action,

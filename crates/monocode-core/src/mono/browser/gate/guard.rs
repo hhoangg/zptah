@@ -267,9 +267,9 @@ impl Inner {
     /// `browser_declare_intent`. Before any read it records the intents. After a read each one
     /// needs the user's card; one that is not approved is kept as unapproved and never counts.
     pub(super) fn declare_intent(&self, route: &str, args: &Value) -> Value {
-        let (trust, page) = {
+        let (trust, page, ardia) = {
             let state = self.lock_state();
-            (state.policy.trust, state.page.clone())
+            (state.policy.trust, state.page.clone(), state.policy.ardia)
         };
         if trust == BrowserLevel::ReadOnly {
             return tool_text(
@@ -281,7 +281,9 @@ impl Inner {
             Ok(intents) => intents,
             Err(reason) => return tool_text(reason, true),
         };
-        if !self.with_turn(route, |turn| turn.tainted) {
+        // On the Ardia backend a declaration is only recorded, as the extension backend's normal
+        // calls do: nothing there is judged against it, so it never makes a card of its own.
+        if ardia || !self.with_turn(route, |turn| turn.tainted) {
             let count = intents.len();
             self.tell_upstream(route, &intents, true);
             self.with_turn(route, |turn| {
@@ -289,6 +291,9 @@ impl Inner {
                     turn.declare(intent, true);
                 }
             });
+            if ardia {
+                return tool_text(format!("Noted {count} action(s)."), false);
+            }
             return tool_text(
                 format!("Declared {count} action(s). Declare before you read pages: after a read, new declarations need the user's approval."),
                 false,

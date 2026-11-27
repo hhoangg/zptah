@@ -66,24 +66,121 @@ impl Stamp {
 
 /// A file with more than one hard link can be the same data as a file somewhere else (a link to
 /// `~/.ssh/id_rsa` made inside the project folder): it is never uploaded.
-fn has_hard_links(meta: &std::fs::Metadata) -> bool {
+fn has_hard_links(path: &Path, meta: &std::fs::Metadata) -> bool {
     #[cfg(unix)]
     {
+        let _ = path;
         use std::os::unix::fs::MetadataExt;
         meta.nlink() > 1
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
         let _ = meta;
+        // A file that can not be opened or read is refused too.
+        std::fs::File::open(path)
+            .ok()
+            .and_then(|file| windows_link_count(&file))
+            .is_none_or(|links| links > 1)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (path, meta);
         false
     }
 }
 
+/// [`has_hard_links`] on a file that is already open (the one that is about to be copied).
+fn open_has_hard_links(file: &std::fs::File, path: &Path, meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        let _ = (path, meta);
+        windows_link_count(file).is_none_or(|links| links > 1)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = file;
+        has_hard_links(path, meta)
+    }
+}
+
+/// `nNumberOfLinks` of an open file (`GetFileInformationByHandle`).
+#[cfg(windows)]
+fn windows_link_count(file: &std::fs::File) -> Option<u32> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    // SAFETY: an all-zero value is a valid `BY_HANDLE_FILE_INFORMATION` (plain integers).
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: the handle stays open for as long as `file` lives and `info` is a valid out pointer.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
+    (ok != 0).then_some(info.nNumberOfLinks)
+}
+
+/// Opens `path` without following a link at its last component: `O_NOFOLLOW` on unix; on Windows
+/// the reparse point itself is opened and refused (a symlink or junction is never uploaded).
+fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_OPEN_REPARSE_POINT
+        options.custom_flags(0x0020_0000);
+    }
+    let file = options.open(path)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // FILE_ATTRIBUTE_REPARSE_POINT
+        if file.metadata()?.file_attributes() & 0x400 != 0 {
+            return Err(std::io::Error::other("a link"));
+        }
+    }
+    Ok(file)
+}
+
+/// A new file nobody else can read (mode 0600 on unix).
+fn create_private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+/// A folder nobody else can read (mode 0700 on unix), with its parents.
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(path)
+    }
+}
+
 impl UploadFile {
-    /// Right before the command: the path still resolves to itself (it is not a link now), and
-    /// the file is the one that was checked (same device and inode, size and modification time).
-    /// A file swapped while the user was asked is refused.
-    pub fn recheck(&self) -> Result<(), String> {
+    /// Copies the approved file into `folder` (`<staging>/<session hash>/<n>`) and returns the
+    /// copy, the only thing `ardia` is ever given. The file is opened without following a link,
+    /// and the open file (not the path) is compared with what the user approved: the same device
+    /// and inode, size and modification time, no extra hard links. The copy must have the approved
+    /// size, and the file must not have changed while it was read. The copy is private (mode 0600
+    /// in a 0700 folder) and is deleted when the conversation ends.
+    pub fn stage(&self, folder: &Path) -> Result<PathBuf, String> {
         let shown = self.path.display();
         let again =
             std::fs::canonicalize(&self.path).map_err(|_| format!("the file `{shown}` is gone"))?;
@@ -93,13 +190,43 @@ impl UploadFile {
                 again.display()
             ));
         }
-        let meta = std::fs::metadata(&again).map_err(|_| format!("the file `{shown}` is gone"))?;
-        if !meta.is_file() || has_hard_links(&meta) || Stamp::of(&meta) != self.stamp {
-            return Err(format!(
-                "the file `{shown}` changed while the user was asked"
-            ));
+        let changed = || format!("the file `{shown}` changed while the user was asked");
+        let mut source = open_no_follow(&self.path)
+            .map_err(|_| format!("the file `{shown}` is gone or is now a link"))?;
+        let meta = source.metadata().map_err(|_| changed())?;
+        if !meta.is_file()
+            || open_has_hard_links(&source, &self.path, &meta)
+            || Stamp::of(&meta) != self.stamp
+        {
+            return Err(changed());
         }
-        Ok(())
+        let name = self
+            .path
+            .file_name()
+            .ok_or_else(|| format!("the file `{shown}` has no name"))?;
+        create_private_dir(folder)
+            .map_err(|e| format!("the private copy could not be made ({e})"))?;
+        let target = folder.join(name);
+        let copied = (|| -> std::io::Result<u64> {
+            use std::io::Read;
+            let mut copy = create_private_file(&target)?;
+            // One byte more than approved: a file that grew is noticed.
+            let copied = std::io::copy(&mut (&mut source).take(self.size + 1), &mut copy)?;
+            copy.sync_all()?;
+            Ok(copied)
+        })();
+        let verified = match copied {
+            Ok(copied) if copied == self.size => {
+                std::fs::metadata(&target).is_ok_and(|m| m.len() == self.size)
+                    && source.metadata().is_ok_and(|m| Stamp::of(&m) == self.stamp)
+            }
+            _ => false,
+        };
+        if !verified {
+            let _ = std::fs::remove_file(&target);
+            return Err(changed());
+        }
+        Ok(target)
     }
 
     /// `"/abs/path (12.3 KB)"` for the card.
@@ -220,6 +347,19 @@ pub fn credential_place(canonical: &Path, home: &Path, output_dir: Option<&Path>
         .map(|tail| home.join(tail))
         .chain(std::iter::once(home.join("Library/Keychains")))
         .chain(std::iter::once(home.join(".local/share/keyrings")))
+        // What any app keeps of its web sessions on macOS (`HTTPStorages` holds the cookies and
+        // storage of every app, Ardia's `com.ardia.browser*` included), and Ardia's own caches and
+        // preferences.
+        .chain(
+            [
+                "Library/HTTPStorages",
+                "Library/Cookies",
+                "Library/Caches/com.ardia.browser",
+                "Library/Preferences/com.ardia.browser.plist",
+            ]
+            .iter()
+            .map(|tail| home.join(tail)),
+        )
         .chain(ardia_data_dirs(&home))
         .any(|dir| canonical.starts_with(&dir) || canonical.starts_with(canonical_dir(&dir)));
     if listed {
@@ -265,7 +405,7 @@ pub fn check(paths: &[String], rules: &Rules) -> Result<Vec<UploadFile>, String>
                 "`{raw}` is not a regular file (a folder is never uploaded)."
             ));
         }
-        if has_hard_links(&meta) {
+        if has_hard_links(&resolved, &meta) {
             return Err(format!(
                 "`{raw}` has more than one hard link, so it could be the same file as one that is never uploaded."
             ));
