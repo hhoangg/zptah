@@ -928,28 +928,48 @@ impl Conversation {
         let mono = self.settings.mono.is_some();
         let work = cx.background_executor().spawn(async move {
             let probe = crate::perf_switch::clock();
-            let settings = locked(&store).and_then(|s| s.agent_settings(id));
+            // One lock and one read of the history for everything the chat
+            // needs; the transcript is prepared after the lock is released.
+            let read = locked(&store).map(|s| {
+                let opened = s.load_for_open(id, true);
+                let history = opened.transcript.and_then(|history| {
+                    let edits = if mono {
+                        Vec::new()
+                    } else {
+                        git_actions::restored_session_edits(&s, id, &history.rows)?
+                    };
+                    Ok((history, edits))
+                });
+                (
+                    history,
+                    opened.settings,
+                    s.context_usage(id),
+                    // Asked for, so always present.
+                    opened.follow_ups.unwrap_or_else(|| Ok(Default::default())),
+                    s.history_before(id),
+                )
+            });
+            let (history, settings, context, follow_ups, before) = match read {
+                Ok(read) => read,
+                Err(error) => (
+                    Err(error.clone()),
+                    Err(error.clone()),
+                    Err(error.clone()),
+                    Err(error.clone()),
+                    Err(error),
+                ),
+            };
             let loaded = (
-                locked(&store)
-                    .and_then(|s| {
-                        let history = s.load(id)?;
-                        let edits = if mono {
-                            Vec::new()
-                        } else {
-                            git_actions::restored_session_edits(&s, id, &history.rows)?
-                        };
-                        Ok((history, edits))
-                    })
-                    .map(|(history, edits)| {
-                        (
-                            crate::transcript::PreparedHistory::new(history.rows, mono),
-                            edits,
-                        )
-                    }),
+                history.map(|(history, edits)| {
+                    (
+                        crate::transcript::PreparedHistory::new(history.rows, mono),
+                        edits,
+                    )
+                }),
                 settings,
-                locked(&store).and_then(|s| s.context_usage(id)),
-                locked(&store).and_then(|s| s.follow_ups(id)),
-                locked(&store).and_then(|s| s.history_before(id)),
+                context,
+                follow_ups,
+                before,
             );
             crate::perf_switch::job(id, probe);
             loaded

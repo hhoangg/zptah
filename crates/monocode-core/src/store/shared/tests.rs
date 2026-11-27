@@ -1902,3 +1902,422 @@ fn a_shared_session_records_when_it_was_created() {
     // A remote session (negative id) has none here.
     assert_eq!(store.session_created_at(-1).unwrap(), None);
 }
+
+/// A history with every kind of block the open path reads metadata from: a
+/// hidden block, rich prompts with receipts, a steer, an operator prompt, an
+/// internal prompt, an interjection, tools, a Mono card and a draft in the
+/// middle, with long multi-row Unicode text.
+fn open_corpus() -> Vec<Value> {
+    let long = "🙂 café 漢字 \"quoted\" back\\slash\n".repeat(400);
+    vec![
+        json!({"id":"hidden","role":"system","text":"","future":true}),
+        json!({"id":"first","role":"user","text":"Saved prompt","sentAt":90,"startedAt":100,
+               "durationMs":9500,"providerTurnId":"provider-turn",
+               "turnModel":{"harness":"claude","id":"claude:old-model","name":"Saved Model","future":true},
+               "turnMetrics":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":40,"cacheHitPercent":40.5},
+               "noteCard":{"id":"note-one","title":"Saved context"},
+               "attachments":[{"id":"a","path":"/image.png","mimeType":"image/png","kind":"image","size":50}]}),
+        json!({"id":"reasoning","role":"reasoning","text":"Thinking about it"}),
+        json!({"id":"tool","role":"tool","text":"Read file","tool":{"callId":"call","kind":"read","title":"Read file",
+               "status":"completed","detail":long,"preview":{"path":"/source.rs"}}}),
+        json!({"id":"answer","role":"assistant","text":long}),
+        json!({"id":"note","role":"system","text":"Heads up","interjection":{"customType":"hint","severity":"info"}}),
+        json!({"id":"steer","role":"user","text":"Also do this","sentAt":150}),
+        json!({"id":"operator","role":"user","text":"/mono Run the plan","sentAt":200,"startedAt":210,"durationMs":50,
+               "turnModel":{"harness":"codex","id":"codex:model","name":"Model"}}),
+        json!({"id":"draft","role":"user","text":"Unsent draft","draft":true,"futureDraft":"keep"}),
+        json!({"id":"card","role":"assistant","text":"","monoCard":{"id":"card-one","title":"Card"}}),
+        json!({"id":"completion","role":"user","text":"Completion","internal":true,"startedAt":20000,"durationMs":0,
+               "turnModel":{"harness":"codex","id":"codex:actual-model","name":"Actual Model"}}),
+        json!({"id":"reply","role":"assistant","text":"Done"}),
+        json!({"id":"error","role":"system","text":"It failed","notice":"error"}),
+        json!({"id":"legacy","role":"user","text":"Unknown old model"}),
+        json!({"id":"legacy-answer","role":"assistant","text":"Old answer"}),
+    ]
+}
+
+/// Everything a chat reads when it opens, in a form that compares.
+type Opened = (Vec<Row>, Value, Value, Option<HistoryRevision>);
+
+fn revision(store: &Store, id: i64) -> Option<HistoryRevision> {
+    store
+        .shared
+        .as_ref()
+        .unwrap()
+        .snapshots
+        .borrow()
+        .get(&id)
+        .copied()
+}
+/// The three readers a chat used to call on open, in that order.
+fn read_separately(store: &Store, id: i64) -> Opened {
+    let settings = store.agent_settings(id).unwrap();
+    let rows = store.load(id).unwrap().rows;
+    let follow_ups = store.follow_ups(id).unwrap();
+    (
+        rows,
+        serde_json::to_value(settings).unwrap(),
+        serde_json::to_value(follow_ups).unwrap(),
+        revision(store, id),
+    )
+}
+fn read_for_open(store: &Store, id: i64) -> Opened {
+    let opened = store.load_for_open(id, true);
+    (
+        opened.transcript.unwrap().rows,
+        serde_json::to_value(opened.settings.unwrap()).unwrap(),
+        serde_json::to_value(opened.follow_ups.unwrap().unwrap()).unwrap(),
+        revision(store, id),
+    )
+}
+fn blob(store: &Store, original: &str) -> String {
+    store
+        .conn
+        .query_row(
+            "SELECT blocks_json FROM sessions WHERE id=?1",
+            [original],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn opening_a_blob_history_matches_the_separate_readers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("monocode.db");
+    let blocks = open_corpus();
+    let (id, original) = {
+        let store = Store::open_monocode(&path).unwrap();
+        let (id, original) = saved(&store, json!(blocks));
+        let queued = json!([
+            {"id":"queued","text":"Next","attachments":[{"id":"image","path":"/image.png"}]},
+            {"id":"delivered","text":"Already sent"}
+        ]);
+        store
+            .conn
+            .execute(
+                "UPDATE sessions SET queued_messages_json=?2,is_draft=1 WHERE id=?1",
+                params![original, queued.to_string()],
+            )
+            .unwrap();
+        store
+            .save_setting(&format!("mono-delivered:{id}:delivered"), "1")
+            .unwrap();
+        (id, original)
+    };
+    // Two fresh stores, as two launches would see the file.
+    let separate = Store::open_monocode(&path).unwrap();
+    let combined = Store::open_monocode(&path).unwrap();
+    let before = blob(&combined, &original);
+    let expected = read_separately(&separate, id);
+    let opened = read_for_open(&combined, id);
+    assert_eq!(opened.0, expected.0, "rows");
+    assert_eq!(opened.1, expected.1, "settings");
+    assert_eq!(opened.2, expected.2, "follow-ups");
+    assert_eq!(opened.3, expected.3, "revision");
+    assert_eq!(
+        opened.3,
+        Some(HistoryRevision::of(&combined.shared_blocks(id).unwrap()))
+    );
+    // The corpus really exercises what the open path computes.
+    let settings: Value = opened.1.clone();
+    assert!(settings["operator_enabled"] == true || settings["operatorEnabled"] == true);
+    assert!(settings["turns"].as_object().unwrap().len() >= 4);
+    let queue = opened.2.clone();
+    assert_eq!(queue["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(queue["draft"]["text"], "Unsent draft");
+    assert!(queue["draft"]["at"].as_u64().unwrap() > 3);
+    assert_eq!(
+        blob(&combined, &original),
+        before,
+        "blocks_json is untouched"
+    );
+    assert_eq!(blob(&separate, &original), before);
+    // Without the queue, the other two parts are the same.
+    let without = combined.load_for_open(id, false);
+    assert!(without.follow_ups.is_none());
+    assert_eq!(without.transcript.unwrap().rows, expected.0);
+    assert_eq!(
+        serde_json::to_value(without.settings.unwrap()).unwrap(),
+        expected.1
+    );
+}
+
+#[test]
+fn opening_an_original_desktop_schema_blob_matches_the_separate_readers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("monocode.db");
+    let blocks = open_corpus();
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(LEGACY_SESSION_STORE_MIGRATION_V1)
+            .unwrap();
+        conn.execute(
+            "INSERT INTO sessions VALUES('old-string-id','/project','codex','codex:old','{}','supervised','Old title','thread',?1,1,2)",
+            [json!(blocks).to_string()],
+        )
+        .unwrap();
+    }
+    let original = std::fs::read(&path).unwrap();
+    let separate = Store::open_monocode(&path).unwrap();
+    let combined = Store::open_monocode(&path).unwrap();
+    let id = separate.sessions().unwrap().pop().unwrap().id;
+    assert_eq!(combined.sessions().unwrap().pop().unwrap().id, id);
+    let expected = read_separately(&separate, id);
+    let opened = read_for_open(&combined, id);
+    assert_eq!(opened.0, expected.0, "rows");
+    assert_eq!(opened.1, expected.1, "settings");
+    assert_eq!(opened.2, expected.2, "follow-ups");
+    assert_eq!(opened.3, expected.3, "revision");
+    assert!(opened.3.is_some());
+    drop((separate, combined));
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        original,
+        "no migration or write"
+    );
+}
+
+#[test]
+fn opening_an_indexed_mono_keeps_its_window_reader() {
+    let mut store = Store::open_monocode(Path::new(":memory:")).unwrap();
+    let (id, _, blocks) = indexed_mono(&mut store, 30);
+    let opened = read_for_open(&store, id);
+    // A new launch: no window or revision chosen yet.
+    store.shared.as_ref().unwrap().windows.borrow_mut().clear();
+    store
+        .shared
+        .as_ref()
+        .unwrap()
+        .snapshots
+        .borrow_mut()
+        .clear();
+    let expected = read_separately(&store, id);
+    assert_eq!(opened.0, expected.0, "rows");
+    assert_eq!(opened.1, expected.1, "settings");
+    assert_eq!(opened.2, expected.2, "follow-ups");
+    assert_eq!(opened.3, expected.3, "revision");
+    assert!(
+        opened.0.len() < blocks.len(),
+        "only the newest turns are read, {} of {} rows",
+        opened.0.len(),
+        blocks.len()
+    );
+}
+
+#[test]
+fn opening_reads_the_blob_history_once() {
+    use rusqlite::hooks::{AuthAction, Authorization};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let store = Store::open_monocode(Path::new(":memory:")).unwrap();
+    let (id, _) = saved(&store, json!(open_corpus()));
+    let reads = Arc::new(AtomicUsize::new(0));
+    let counter = reads.clone();
+    store
+        .conn
+        .authorizer(Some(move |context: rusqlite::hooks::AuthContext<'_>| {
+            if matches!(
+                context.action,
+                AuthAction::Read {
+                    table_name: "sessions",
+                    column_name: "blocks_json"
+                }
+            ) {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+            Authorization::Allow
+        }))
+        .unwrap();
+    let _ = read_separately(&store, id);
+    assert!(
+        reads.swap(0, Ordering::SeqCst) >= 3,
+        "the counter sees the separate readers' reads"
+    );
+    store
+        .shared
+        .as_ref()
+        .unwrap()
+        .snapshots
+        .borrow_mut()
+        .clear();
+    let _ = read_for_open(&store, id);
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn opening_keeps_the_write_revision_guard() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("monocode.db");
+    let mut store = Store::open_monocode(&path).unwrap();
+    let (id, original) = saved(&store, json!(open_corpus()));
+    let mut transcript = store.load_for_open(id, true).transcript.unwrap();
+    let from = transcript.begin("user");
+    transcript.append("Continue the same conversation");
+    store
+        .write_rows(id, from, &transcript.rows[from..])
+        .unwrap();
+    assert_eq!(
+        store.shared_blocks(id).unwrap().last().unwrap()["text"],
+        "Continue the same conversation"
+    );
+    // Another window edits the history; the next write must refuse.
+    Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE sessions SET blocks_json=json_set(blocks_json,'$[0].future','edited') WHERE id=?1",
+            [&original],
+        )
+        .unwrap();
+    let from = transcript.begin("user");
+    transcript.append("Another message");
+    let error = store
+        .write_rows(id, from, &transcript.rows[from..])
+        .unwrap_err();
+    assert!(error.contains("changed in another window"), "{error}");
+}
+
+#[test]
+fn an_unreadable_blob_history_fails_without_recording_a_revision() {
+    let store = Store::open_monocode(Path::new(":memory:")).unwrap();
+    let (id, original) = saved(&store, json!([]));
+    store
+        .conn
+        .execute(
+            "UPDATE sessions SET blocks_json='[{\"id\":' WHERE id=?1",
+            [&original],
+        )
+        .unwrap();
+    let opened = store.load_for_open(id, true);
+    assert!(opened.transcript.is_err());
+    assert_eq!(
+        opened.transcript.unwrap_err(),
+        store.load(id).unwrap_err(),
+        "the same error as the separate reader"
+    );
+    assert!(opened.follow_ups.unwrap().is_err());
+    assert_eq!(revision(&store, id), None);
+}
+
+/// A timing breakdown of opening a long blob chat, for choosing what to
+/// optimise. Run it on a release build against a database that holds one:
+///
+///   MONOCODE_PERF_DB=/path/zptah.db cargo test --profile release \
+///     --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-core \
+///     perf_blob_open_phases -- --ignored --nocapture
+///
+/// The longest chat in the database is read; nothing is written.
+#[test]
+#[ignore = "a benchmark: set MONOCODE_PERF_DB to a database with a long chat"]
+fn perf_blob_open_phases() {
+    use std::time::{Duration, Instant};
+    let Some(path) = std::env::var_os("MONOCODE_PERF_DB") else {
+        eprintln!("MONOCODE_PERF_DB is not set");
+        return;
+    };
+    let store = Store::read_monocode(Path::new(&path)).unwrap();
+    let id = store
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .max_by_key(|session| {
+            let original = store.persisted_session_id(session.id).unwrap();
+            blob(&store, &original).len()
+        })
+        .unwrap()
+        .id;
+    let original = store.persisted_session_id(id).unwrap();
+    let raw = blob(&store, &original);
+    eprintln!("chat {id}: {:.1} MiB", raw.len() as f64 / 1048576.);
+    const RUNS: usize = 11;
+    fn report(name: &str, mut times: Vec<Duration>) {
+        times.sort();
+        let ms = |d: Duration| d.as_secs_f64() * 1000.;
+        eprintln!(
+            "{name:<42} min {:>7.1}  p50 {:>7.1}  p95 {:>7.1} ms",
+            ms(times[0]),
+            ms(times[times.len() / 2]),
+            ms(times[(times.len() * 95).div_ceil(100) - 1]),
+        );
+    }
+    fn timed<R>(mut step: impl FnMut() -> R) -> Vec<Duration> {
+        (0..RUNS)
+            .map(|_| {
+                let started = Instant::now();
+                std::hint::black_box(step());
+                started.elapsed()
+            })
+            .collect()
+    }
+    report(
+        "blob read (SELECT blocks_json)",
+        timed(|| blob(&store, &original)),
+    );
+    report(
+        "parse to Vec<Value>",
+        timed(|| parse::<Vec<Value>>(&raw).unwrap()),
+    );
+    report(
+        "raw split to Vec<&RawValue>",
+        timed(|| serde_json::from_str::<Vec<&serde_json::value::RawValue>>(&raw).unwrap()),
+    );
+    let blocks: Vec<Value> = parse(&raw).unwrap();
+    let raws: Vec<&serde_json::value::RawValue> = serde_json::from_str(&raw).unwrap();
+    report(
+        "parse every raw element to Value",
+        timed(|| {
+            raws.iter()
+                .map(|raw| serde_json::from_str::<Value>(raw.get()).unwrap())
+                .collect::<Vec<_>>()
+        }),
+    );
+    report(
+        "blocks::project, all blocks",
+        timed(|| blocks::project(&blocks).unwrap()),
+    );
+    report("project_turns", timed(|| project_turns(&blocks).unwrap()));
+    report(
+        "HistoryRevision::of",
+        timed(|| HistoryRevision::of(&blocks)),
+    );
+    let tail = blocks.len().saturating_sub(blocks.len() / 40 * 10);
+    report(
+        "tail only: raw split + parse + project",
+        timed(|| {
+            let raws: Vec<&serde_json::value::RawValue> = serde_json::from_str(&raw).unwrap();
+            let tail: Vec<Value> = raws[tail..]
+                .iter()
+                .map(|raw| serde_json::from_str(raw.get()).unwrap())
+                .collect();
+            blocks::project(&tail).unwrap()
+        }),
+    );
+    report(
+        "drop of the parsed Values",
+        (0..RUNS)
+            .map(|_| {
+                let values: Vec<Value> = parse(&raw).unwrap();
+                let started = Instant::now();
+                drop(std::hint::black_box(values));
+                started.elapsed()
+            })
+            .collect(),
+    );
+    report("follow_ups", timed(|| store.follow_ups(id).unwrap()));
+    report(
+        "today: agent_settings + load + follow_ups",
+        timed(|| {
+            (
+                store.agent_settings(id).unwrap(),
+                store.load(id).unwrap(),
+                store.follow_ups(id).unwrap(),
+            )
+        }),
+    );
+    report(
+        "load_for_open(follow_ups)",
+        timed(|| store.load_for_open(id, true)),
+    );
+}

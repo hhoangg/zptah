@@ -98,6 +98,15 @@ pub struct Session {
     pub surface: crate::surface::Surface,
 }
 
+/// A chat's history, settings and queue as `Store::load_for_open` reads them.
+/// Each part keeps its own error, as it would from its own reader.
+pub struct OpenedHistory {
+    pub transcript: Result<Transcript, String>,
+    pub settings: Result<Option<crate::agent::Settings>, String>,
+    /// Only when the caller asked for the queue.
+    pub follow_ups: Option<Result<crate::follow_up::State, String>>,
+}
+
 /// A session's pending or delivered reminder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reminder {
@@ -964,6 +973,31 @@ impl Store {
             return Ok(HistoryPage::default());
         }
         self.shared_load_before(session, before, all)
+    }
+    /// Everything a chat needs when it opens, in the order the separate
+    /// readers (`agent_settings`, `load`, `follow_ups`) would give it, each
+    /// with its own error. An ordinary local chat is read once instead of
+    /// three times; remote, Mono and prototype histories, and any history that
+    /// cannot be read, use the separate readers. `follow_ups` says whether to
+    /// read the queue too.
+    pub fn load_for_open(&self, session: i64, follow_ups: bool) -> OpenedHistory {
+        if self.shared.is_some()
+            && session >= 0
+            && self
+                .remote_session(session)
+                .is_ok_and(|remote| remote.is_none())
+        {
+            if let Some(opened) = self.shared_load_for_open(session, follow_ups) {
+                return opened;
+            }
+        }
+        let settings = self.agent_settings(session);
+        let transcript = self.load(session);
+        OpenedHistory {
+            transcript,
+            settings,
+            follow_ups: follow_ups.then(|| self.follow_ups(session)),
+        }
     }
     pub fn load(&self, session: i64) -> Result<Transcript, String> {
         if let Some(remote) = self.remote_session(session)? {

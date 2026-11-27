@@ -129,9 +129,10 @@ impl Conversation {
             let probe = crate::perf_switch::clock();
             let (history, turns, before) = {
                 let store = locked(&store)?;
+                let opened = store.load_for_open(id, false);
                 (
-                    store.load(id)?,
-                    store.agent_settings(id)?.unwrap_or_default().turns,
+                    opened.transcript?,
+                    opened.settings?.unwrap_or_default().turns,
                     store.history_before(id)?,
                 )
             };

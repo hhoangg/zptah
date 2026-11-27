@@ -89,7 +89,10 @@ impl TranscriptView {
     }
     /// Read after the list lays out, like the React rail's deferred measure.
     pub(super) fn update_outline(&mut self, cx: &mut Context<Self>) {
-        if self.mono || !self.visible || self.viewport.size.height <= px(0.) {
+        // A rail that is not shown has no use for the active prompt, and
+        // finding it walks every prompt.
+        if !self.outline_visible_at(self.viewport.size.width) || self.viewport.size.height <= px(0.)
+        {
             return;
         }
         let active = self.measure_active();
@@ -513,6 +516,27 @@ mod tests {
         source.push(row("user", "three", true));
         outline.patched(&source, 2);
         assert_eq!(outline.prompts, [0, 3]);
+    }
+
+    #[gpui::test]
+    fn a_hidden_outline_does_not_measure_the_active_prompt(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|_| TranscriptView::new());
+        view.update(cx, |view, cx| {
+            view.visible = true;
+            view.viewport.size = gpui::size(px(MIN_PANE_WIDTH - 1.), px(700.));
+            view.patch(
+                0,
+                vec![
+                    row("user", "one", true),
+                    row("assistant", "first", true),
+                    row("user", "two", true),
+                ],
+                cx,
+            );
+            assert!(view.measure_active().is_some());
+            view.update_outline(cx);
+            assert_eq!(view.outline.active, None);
+        });
     }
 
     #[test]
