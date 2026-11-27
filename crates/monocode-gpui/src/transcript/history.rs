@@ -255,6 +255,7 @@ impl TranscriptView {
             }
         };
         map(&mut self.visuals, f);
+        map(&mut self.tool_agents, f);
         map(&mut self.prepared_parsers, f);
         map(&mut self.entrances, f);
         map(&mut self.reactions, f);
@@ -413,6 +414,7 @@ impl TranscriptView {
             following: self.list.is_following_tail(),
         });
         self.source = Vec::new();
+        self.tool_agents = HashMap::new();
         self.source_bytes = 0;
         self.history_start = 0;
         self.history_loading = false;
@@ -464,6 +466,7 @@ impl TranscriptView {
         self.drop_older_history();
         // Reopening also handles a source that became empty in another window.
         self.source = Vec::new();
+        self.tool_agents = HashMap::new();
         self.source_bytes = 0;
         self.yielded = 0;
         self.yield_mark = 0;

@@ -38,6 +38,8 @@ pub(super) struct Patch {
 
 thread_local! {
     static PATCH: Cell<Option<Patch>> = const { Cell::new(None) };
+    #[cfg(test)]
+    static LAST: Cell<Patch> = Cell::new(Patch::default());
 }
 
 /// True when `MONOCODE_PERF_TRANSCRIPT=1`; read once per process.
@@ -116,6 +118,8 @@ pub(super) fn finish(started: Option<Instant>) {
     let micros = started.elapsed().as_micros();
     let Some(patch) = PATCH.take() else { return };
     if cfg!(test) {
+        #[cfg(test)]
+        LAST.set(patch);
         return;
     }
     let [agent, phase, row] = patch.parse;
@@ -147,4 +151,19 @@ pub(super) fn finish(started: Option<Instant>) {
         row.calls,
         row.bytes,
     );
+}
+
+#[cfg(test)]
+pub(super) fn last() -> Patch {
+    LAST.get()
+}
+
+#[cfg(test)]
+impl Patch {
+    pub(super) fn tool_parses(self) -> usize {
+        self.parse
+            .iter()
+            .map(|site| site.calls + site.legacy_calls)
+            .sum()
+    }
 }
