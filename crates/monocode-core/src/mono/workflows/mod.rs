@@ -21,6 +21,9 @@ mod data_passing_tests;
 pub mod engine;
 #[cfg(test)]
 mod engine_tests;
+pub mod event;
+#[cfg(test)]
+mod event_tests;
 #[cfg(test)]
 mod fixtures;
 pub mod global;

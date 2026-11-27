@@ -30,6 +30,8 @@ mod edit;
 mod shared;
 mod side_threads;
 mod thread_files;
+mod workflow_claims;
+pub use workflow_claims::WorkflowClaim;
 mod today;
 pub use today::{NotePlan, NoteSaved};
 mod today_mention;
@@ -208,6 +210,7 @@ impl Store {
             .map_err(|e| e.to_string())?;
         conn.execute_batch(crate::mobile::identity_store::MOBILE_IDENTITY_TABLE)
             .map_err(|e| e.to_string())?;
+        workflow_claims::ensure_workflow_claims_table(&conn).map_err(|e| e.to_string())?;
         if let Some(dir) = path.parent() {
             crate::accounts::register_database(dir, path);
         }

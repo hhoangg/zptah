@@ -377,6 +377,7 @@ impl Store {
             }
         }
         if !read_only {
+            sql(super::workflow_claims::ensure_workflow_claims_table(&conn))?;
             super::restrict_database_files(path);
         }
         let (extras, extras_db) = settings::open(path, read_only)?;
