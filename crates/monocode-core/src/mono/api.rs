@@ -50,7 +50,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "sessions.archive"=>"sessionId project cloud backup",
         "sessions.delete"=>"sessionId project providerFiles removeWorktree cloud",
         "worktrees.create"=>"branch base existing project",
-        "app.update"=>"mode force confirm",
+        "app.update"=>"mode",
         "projects.add"=>"path name",
         "terminals.list"=>"project",
         "terminals.open"=>"label action command cwd place beside direction reveal project",

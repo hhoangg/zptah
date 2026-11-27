@@ -21,7 +21,9 @@ mod mascot;
 mod measurements;
 mod mono_divider;
 mod outline;
+pub(crate) mod patch_perf;
 mod perf_scroll;
+mod perf_switch;
 pub(crate) mod phases;
 mod provider_switch;
 mod remote_plans;
@@ -702,6 +704,12 @@ pub(crate) struct TranscriptView {
     work_item_cards: user_links::Cards,
     source: Vec<Row>,
     source_bytes: usize,
+    /// Panel classifications from the first row of a tool message.
+    ///
+    /// Derived state keyed by source row offsets must follow in-place edits,
+    /// history prepend/rebase, and source replacement/eviction; tool-role
+    /// changes and equal-length payload replacements invalidate it.
+    tool_agents: HashMap<usize, bool>,
     attachment_images: HashMap<String, gpui::Entity<attachments::Photo>>,
     visuals: HashMap<usize, visuals::CachedVisual>,
     /// Visual ids the answers place in their prose.
@@ -727,6 +735,10 @@ pub(crate) struct TranscriptView {
     /// The last page read failed; only a scroll retries it.
     history_failed: bool,
     history_search: Option<(usize, String)>,
+    /// A prompt above the loaded window that a jump is waiting to page in.
+    history_prompt: Option<usize>,
+    /// Set on a display-only preview: whether the reader has scrolled it.
+    history_preview_scrolled: Option<bool>,
     prepared_parsers: HashMap<usize, MarkdownParser>,
     mono: bool,
     /// The Mono's emoji library, for `:emo[..]` tokens in its replies.
@@ -946,6 +958,8 @@ impl TranscriptView {
         self.rebuild(0, cx);
     }
     pub(crate) fn reveal_search(&mut self, row: usize, query: &str, cx: &mut Context<Self>) {
+        self.history_search = None;
+        self.history_prompt = None;
         if row < self.history_start {
             self.history_search = Some((row, query.into()));
             self.list.pause_following_tail();
@@ -2695,6 +2709,7 @@ impl TranscriptView {
             work_item_cards: Default::default(),
             source: Vec::new(),
             source_bytes: 0,
+            tool_agents: HashMap::new(),
             attachment_images: HashMap::new(),
             visuals: HashMap::new(),
             placed: HashSet::new(),
@@ -2711,6 +2726,8 @@ impl TranscriptView {
             history_pager: None,
             history_failed: false,
             history_search: None,
+            history_prompt: None,
+            history_preview_scrolled: None,
             prepared_parsers: HashMap::new(),
             mono: false,
             emoji: None,
@@ -2864,11 +2881,12 @@ impl TranscriptView {
             .iter()
             .rposition(Row::is_prompt)
             .map_or(0, |at| at + 1);
-        for row in self
+        for (ix, row) in self
             .source
             .iter_mut()
+            .enumerate()
             .skip(start)
-            .filter(|row| row.role == "tool")
+            .filter(|(_, row)| row.role == "tool")
         {
             if let Ok(mut tool) = serde_json::from_str::<ToolCall>(&row.text)
                 && tool.state == ToolState::Running
@@ -2879,6 +2897,7 @@ impl TranscriptView {
                 }
                 let previous_bytes = row.text.len();
                 row.text = serde_json::to_string(&tool).unwrap_or_else(|_| row.text.clone());
+                self.tool_agents.remove(&ix);
                 self.source_bytes = self
                     .source_bytes
                     .saturating_sub(previous_bytes)
@@ -3184,6 +3203,42 @@ impl TranscriptView {
     pub(crate) fn patch(&mut self, start: usize, rows: Vec<Row>, cx: &mut Context<Self>) {
         self.patch_view(self.base + start, rows, cx);
     }
+    /// An already visible reply owns the whole projected tail when older tool
+    /// cards, including those moved below the work line, all precede its cut.
+    ///
+    /// The suffix rebuild (`live_reply_tail`, `rebuild_rows_with_reply`)
+    /// reuses the projected prefix only when the same visible reply owns the
+    /// whole display suffix and the fold target is stable after advancing the
+    /// reveal; keep the wider rebuild for a changed fold, a moved or removed
+    /// card, or an exiting row.
+    fn live_reply_tail(&self) -> Option<usize> {
+        if !self.streaming
+            || self.mono
+            || self.phase_toggle.is_some()
+            || self.motions.values().any(|motion| !motion.opening)
+        {
+            return None;
+        }
+        let message_ix = self.messages.len().checked_sub(1)?;
+        let message = &self.messages[message_ix];
+        let answer = message.start;
+        if message.role != "assistant"
+            || answer < self.live_start
+            || !self
+                .source
+                .get(answer)
+                .is_some_and(|row| row.first && row.role == "assistant")
+        {
+            return None;
+        }
+        let tail = self.rows.get(message.display_start..)?;
+        (tail.iter().any(|row| matches!(row.body, Body::Markdown(_)))
+            && tail
+                .iter()
+                .all(|row| row.message == message_ix && row.key.0 == answer))
+        .then_some(answer)
+    }
+
     fn patch_view(&mut self, start: usize, rows: Vec<Row>, cx: &mut Context<Self>) {
         if rows.is_empty() {
             return;
@@ -3192,12 +3247,36 @@ impl TranscriptView {
             start <= self.source.len(),
             "transcript patches must be contiguous"
         );
+        let measured = patch_perf::begin(start, &rows, self.streaming);
         let known = self.source.len();
+        // The provider appends into the last storage row and adds continuation
+        // rows when it fills. A replacement or a new block can move the fold.
+        let live_reply = (start >= known.saturating_sub(1) && rows[0].role == "assistant")
+            .then(|| self.live_reply_tail())
+            .flatten()
+            .filter(|&answer| {
+                start >= answer
+                    && rows.iter().enumerate().all(|(ix, row)| {
+                        row.role == "assistant" && row.first == (start + ix == answer)
+                    })
+                    && self.source.get(start).is_none_or(|old| {
+                        old.role == "assistant"
+                            && old.first == rows[0].first
+                            && rows[0].text.starts_with(old.text.as_str())
+                    })
+            });
         for (ix, row) in rows.into_iter().enumerate() {
             let ix = start + ix;
             let bytes = row.text.capacity().saturating_add(row.role.capacity());
             if ix < self.source.len() {
                 let old = &self.source[ix];
+                if old.role == "tool"
+                    && old.first
+                    && self.tool_agents.contains_key(&ix)
+                    && (row.role != old.role || row.first != old.first || row.text != old.text)
+                {
+                    self.tool_agents.remove(&ix);
+                }
                 self.source_bytes = self
                     .source_bytes
                     .saturating_sub(old.text.capacity().saturating_add(old.role.capacity()));
@@ -3363,7 +3442,9 @@ impl TranscriptView {
         } else {
             start
         };
-        self.rebuild(start, cx);
+        self.rebuild_rows_with_reply(start, live_reply.filter(|_| !placed), cx);
+        cx.notify();
+        patch_perf::finish(measured);
     }
     fn rebuild(&mut self, start: usize, cx: &mut Context<Self>) {
         self.rebuild_rows(start, cx);
@@ -3371,6 +3452,14 @@ impl TranscriptView {
     }
     /// `rebuild` for a caller that notifies itself.
     fn rebuild_rows(&mut self, start: usize, cx: &mut Context<Self>) {
+        self.rebuild_rows_with_reply(start, None, cx);
+    }
+    fn rebuild_rows_with_reply(
+        &mut self,
+        start: usize,
+        live_reply: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
         #[cfg(test)]
         {
             self.rebuild_passes += 1;
@@ -3418,6 +3507,9 @@ impl TranscriptView {
                 .any(|r| r.role == "tool")
         });
         let layout_changed = self.fold_targets.get(&current_turn).copied().flatten() != target;
+        // Check after advancing the reveal: showing the first words can move
+        // the fold and park previously visible tool rows at the new answer.
+        let stable_reply = !layout_changed && live_reply.is_some() && live_reply == candidate;
         let known_message = self.messages.iter().any(|m| {
             m.start <= start
                 && m.role == "assistant"
@@ -3461,18 +3553,24 @@ impl TranscriptView {
             }
         }
         if !self.mono
-            && (self.source[current_turn..current_end].iter().any(|row| {
+            && !stable_reply
+            && ((current_turn..current_end).any(|at| {
+                let row = &self.source[at];
                 row.role == "tool"
                     && row.first
-                    && serde_json::from_str::<ToolCall>(&row.text)
-                        .is_ok_and(|call| matches!(call.panel(), Some(Panel::Agent(_))))
+                    && *self.tool_agents.entry(at).or_insert_with(|| {
+                        patch_perf::parse(patch_perf::Site::Agent, &row.text).is_ok_and(|call| {
+                            matches!(patch_perf::panel(patch_perf::Site::Agent, &call), Some(Panel::Agent(_)))
+                        })
+                    })
             }) || self.rows.iter().any(|row| {
                 self.messages
                     .get(row.message)
                     .is_some_and(|message| message.turn == current_turn)
                     && matches!(
                         &row.body,
-                        Body::Tool { call, .. } if matches!(call.panel(), Some(Panel::Agent(_)))
+                        Body::Tool { call, .. }
+                            if matches!(patch_perf::panel(patch_perf::Site::Agent, call), Some(Panel::Agent(_)))
                     )
             }))
         {
@@ -3855,7 +3953,7 @@ impl TranscriptView {
                 }
                 // WorkFoldLine puts earlier commentary and work behind its receipt.
             } else if role == "tool"
-                && let Ok(tool) = serde_json::from_str::<ToolCall>(&text)
+                && let Ok(tool) = patch_perf::parse(patch_perf::Site::Row, &text)
             {
                 self.rows.push(UiRow {
                     key: (0, 0),
@@ -4260,6 +4358,13 @@ impl TranscriptView {
                 next_work_sibling = row.work;
             }
         }
+        patch_perf::rebuilt(
+            source_start,
+            self.source.len(),
+            display_start,
+            self.rows.len(),
+            pinned_answers.len(),
+        );
         let target = self.rows.split_off(display_start);
         let merged = if self.visible && !cx.reduce_motion() {
             let replaced_work = self
@@ -4662,7 +4767,8 @@ impl TranscriptView {
             }
         }
         if let Some(start) = changed {
-            self.rebuild_rows(start, cx);
+            let reply = self.live_reply_tail().filter(|&answer| start == answer);
+            self.rebuild_rows_with_reply(start, reply, cx);
         }
         let mut removed = Vec::new();
         let offset = self.list.logical_scroll_top();
@@ -5628,7 +5734,12 @@ impl TranscriptView {
                         || self.clamped_prompts.contains(&message_start)
                         || self.prompt_lines(&text, window) > 4);
                 let bubble = div()
+                    // Under photos the bubble shrinks to its text, so nothing
+                    // stretches it to the column. A long message (seen with a
+                    // link in it) then took its unwrapped width and spilled out
+                    // of the column. The cap makes it wrap inside the column.
                     .when(photo_body.is_none(), |d| d.w_full())
+                    .when(photo_body.is_some(), |d| d.min_w_0().max_w_full())
                     .relative()
                     .flex()
                     .flex_col()
@@ -6098,8 +6209,9 @@ impl TranscriptView {
             .into_any_element()
     }
     fn update_jump(&mut self, cx: &mut Context<Self>) {
-        let show =
-            !self.list.is_following_tail() && self.list.max_offset_for_scrollbar().y > px(1.);
+        let show = self.history_preview_scrolled.is_none()
+            && !self.list.is_following_tail()
+            && self.list.max_offset_for_scrollbar().y > px(1.);
         if self.show_jump != show {
             self.show_jump = show;
             cx.notify();
@@ -6205,6 +6317,9 @@ impl Render for TranscriptView {
                 // Read the final scroll geometry in our trailing layout probe.
                 .set_scroll_handler(cx.listener(|this, _, _, cx| {
                     this.selection.clear();
+                    if let Some(scrolled) = &mut this.history_preview_scrolled {
+                        *scrolled = true;
+                    }
                     this.history_requested =
                         this.history_start > 0 || this.history_before.is_some();
                     cx.notify()
@@ -6316,6 +6431,7 @@ impl Render for TranscriptView {
                         let _ = after.update(cx, |this, cx| {
                             this.update_jump(cx);
                             this.update_outline(cx);
+                            this.perf_switch_frame(cx);
                         });
                     },
                     |bounds, _, window, _| paint_edge_fade(bounds, false, window),
@@ -6526,6 +6642,206 @@ mod scroll_tests {
         view.rebuild(0, cx);
     }
 
+    fn stable_reply_after_tools(cx: &mut TestAppContext, agent: bool) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|_| TranscriptView::new())
+            })
+            .unwrap()
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.streaming(true, cx);
+                let tool = |name: &str| {
+                    let mut call = ToolCall::new(name, name);
+                    call.input = "{}".into();
+                    call.output = "Example output. ".repeat(250);
+                    call.state = ToolState::Completed;
+                    row("tool", &serde_json::to_string(&call).unwrap())
+                };
+                let mut source = vec![row("user", "Inspect"), tool("Read"), tool("Read")];
+                if agent {
+                    source.insert(2, tool("Agent"));
+                }
+                let answer = source.len();
+                source.push(row("assistant", "The first part of the answer."));
+                view.patch(0, source, cx);
+                assert_eq!(view.fold_targets.get(&1), Some(&Some(answer)));
+                assert_eq!(patch_perf::last().pinned, usize::from(agent));
+
+                let read_at = view
+                    .rows
+                    .iter()
+                    .position(|r| r.key.0 == if agent { 2 } else { 0 })
+                    .unwrap();
+                let reading = view.rows[read_at].key;
+                view.list.pause_following_tail();
+                view.list.scroll_to(ListOffset {
+                    item_ix: read_at,
+                    offset_in_item: px(0.),
+                });
+                let mut continuation = row("assistant", "\n\nA second paragraph.");
+                continuation.first = false;
+                view.patch(
+                    answer,
+                    vec![
+                        row("assistant", "The first part of the answer. More text."),
+                        continuation,
+                    ],
+                    cx,
+                );
+                let patch = patch_perf::last();
+                assert_eq!(patch.tool_parses(), 0, "{patch:?}");
+                assert_eq!(patch.source_start, answer, "{patch:?}");
+                assert_eq!(view.fold_targets.get(&1), Some(&Some(answer)));
+                assert_eq!(
+                    view.rows
+                        .iter()
+                        .filter(
+                            |r| matches!(&r.body, Body::Tool { call, .. } if call.name == "Agent")
+                        )
+                        .count(),
+                    usize::from(agent)
+                );
+                let cutoff = view.rows.iter().position(|r| r.key.0 == answer).unwrap();
+                assert!(read_at < cutoff);
+                assert_eq!(
+                    view.rows[view.list.logical_scroll_top().item_ix].key,
+                    reading
+                );
+                let incremental = view.rows.clone();
+                view.rebuild(0, cx);
+                assert_eq!(view.rows.len(), incremental.len());
+                for (after, before) in view.rows.iter().zip(&incremental) {
+                    assert_eq!(after.key, before.key);
+                    assert_eq!(after.work_tail, before.work_tail);
+                    if matches!(before.body, Body::Markdown(_)) {
+                        assert!(measurements::same_layout(before, after));
+                    }
+                }
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn streaming_text_reuses_ordinary_tools(cx: &mut TestAppContext) {
+        stable_reply_after_tools(cx, false);
+    }
+
+    #[gpui::test]
+    fn streaming_text_reuses_the_pinned_agent(cx: &mut TestAppContext) {
+        stable_reply_after_tools(cx, true);
+    }
+
+    #[gpui::test]
+    fn streaming_tool_panel_tracks_equal_size_replacement_and_history(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let view = cx.new(|_| TranscriptView::new());
+        view.update(cx, |view, cx| {
+            let tool = |name: &str| {
+                let mut call = ToolCall::new("same-id", name);
+                call.input = "{}".into();
+                row("tool", &serde_json::to_string(&call).unwrap())
+            };
+            let ordinary = tool("Bashx");
+            let agent = tool("Agent");
+            assert_eq!(ordinary.text.len(), agent.text.len());
+            view.streaming(true, cx);
+            view.patch(
+                0,
+                vec![
+                    row("user", "Inspect"),
+                    agent.clone(),
+                    row("assistant", "Reply."),
+                ],
+                cx,
+            );
+            assert_eq!(view.tool_agents.get(&1), Some(&true));
+            assert_eq!(patch_perf::last().pinned, 1);
+            view.patch(1, vec![ordinary], cx);
+            assert_eq!(view.tool_agents.get(&1), Some(&false));
+            assert!(
+                !view
+                    .rows
+                    .iter()
+                    .any(|r| matches!(&r.body, Body::Tool { call, .. } if call.name == "Agent"))
+            );
+
+            view.patch(1, vec![agent], cx);
+            assert_eq!(view.tool_agents.get(&1), Some(&true));
+            view.prepend_history(
+                monocode_core::store::HistoryPage {
+                    rows: vec![row("user", "Earlier"), row("assistant", "Earlier answer.")],
+                    ..Default::default()
+                },
+                HashMap::new(),
+                cx,
+            );
+            assert_eq!(view.tool_agents.get(&3), Some(&true));
+            assert!(!view.tool_agents.contains_key(&1));
+            view.stop_streaming(cx);
+            assert!(view.rows.iter().any(|r| {
+                matches!(&r.body, Body::Tool { call, .. }
+                    if call.name == "Agent" && call.state == ToolState::Cancelled)
+            }));
+
+            view.replace_history(vec![row("user", "Reset"), row("assistant", "New.")], cx);
+            assert!(view.tool_agents.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn suspend_history_resets_the_tool_classification_cache(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let view = cx.new(|_| TranscriptView::new());
+        view.update(cx, |view, cx| {
+            let tool = |name: &str| {
+                let mut call = ToolCall::new("same-id", name);
+                call.input = "{}".into();
+                row("tool", &serde_json::to_string(&call).unwrap())
+            };
+            let ordinary = tool("Bashx");
+            let agent = tool("Agent");
+            assert_eq!(ordinary.text.len(), agent.text.len());
+            view.streaming(true, cx);
+            view.patch(
+                0,
+                vec![
+                    row("user", "Inspect"),
+                    agent.clone(),
+                    row("assistant", "Reply."),
+                ],
+                cx,
+            );
+            assert_eq!(view.tool_agents.get(&1), Some(&true));
+            view.streaming(false, cx);
+            view.visible(false, cx);
+            assert!(view.suspend_history(cx));
+            assert!(view.tool_agents.is_empty());
+
+            // Same offset and payload length, different tool.
+            view.restore_history(
+                vec![
+                    row("user", "Inspect"),
+                    ordinary.clone(),
+                    row("assistant", "Reply."),
+                ],
+                cx,
+            );
+            view.visible(true, cx);
+            view.streaming(true, cx);
+            view.patch(2, vec![row("assistant", "Reply, longer.")], cx);
+            assert_eq!(view.tool_agents.get(&1), Some(&false));
+            assert!(
+                !view
+                    .rows
+                    .iter()
+                    .any(|r| matches!(&r.body, Body::Tool { call, .. } if call.name == "Agent"))
+            );
+        });
+    }
+
     #[gpui::test]
     fn expanded_user_chunks_paint_one_aligned_bubble(cx: &mut TestAppContext) {
         // Compare settled bubble geometry rather than per-row resize glides.
@@ -6633,6 +6949,103 @@ mod scroll_tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_long_message_under_photos_wraps_inside_its_bubble(cx: &mut TestAppContext) {
+        // Photos above a bubble made it as wide as its text unwrapped: the
+        // text ran off the column's left edge on one line.
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let window = cx.update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        point(px(0.), px(0.)),
+                        size(px(900.), px(700.)),
+                    ))),
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|_| TranscriptView::new()),
+            )
+            .unwrap()
+        });
+        let manifest = Row {
+            role: monocode_core::transcript::attachments::ROLE.into(),
+            text: monocode_core::transcript::attachments::from_paths(&[
+                std::path::PathBuf::from("/tmp/one.png"),
+                std::path::PathBuf::from("/tmp/two.png"),
+            ])
+            .to_string(),
+            first: true,
+            sent_at: None,
+        };
+        let long = "a long message that has to wrap ".repeat(24);
+        let bubble_of = |text: &str, expand: bool, cx: &mut TestAppContext| {
+            let rows = vec![
+                row("user", text),
+                manifest.clone(),
+                row("assistant", "Answer"),
+            ];
+            window
+                .update(cx, |view, _, cx| {
+                    *view = TranscriptView::new();
+                    view.mono_mode("cat", 0xe86b5f, "MonoCat");
+                    view.patch(0, rows, cx);
+                    if expand {
+                        view.toggle_prompt(0, cx);
+                    }
+                    settle(view, cx);
+                })
+                .unwrap();
+            for _ in 0..2 {
+                window.update(cx, |_, _, cx| cx.notify()).unwrap();
+                cx.refresh().unwrap();
+                cx.run_until_parked();
+            }
+            window
+                .update(cx, |_, window, _| {
+                    let scale = window.scale_factor();
+                    let bubbles: Vec<_> = window
+                        .painted_quads()
+                        .into_iter()
+                        .filter(|quad| quad.background == user_bubble_fill().into())
+                        .collect();
+                    assert_eq!(bubbles.len(), 1, "one bubble under the photos");
+                    let bounds = bubbles[0].bounds;
+                    (
+                        bounds.left().0 / scale,
+                        bounds.right().0 / scale,
+                        bounds.size.height.0 / scale,
+                    )
+                })
+                .unwrap()
+        };
+        // A link in the text and an expanded message each take another path
+        // through the bubble's text than a clamped plain one.
+        let with_link = format!("see https://example.com/page then {long}");
+        for (name, text, expand) in [
+            ("plain", long.clone(), false),
+            ("expanded", long.clone(), true),
+            ("with a link", with_link, false),
+        ] {
+            let (left, right, height) = bubble_of(&text, expand, cx);
+            assert!(
+                right - left <= f32::from(PROMPT_BUBBLE_MAX),
+                "{name}: the bubble stays within its cap, got {}",
+                right - left
+            );
+            assert!(
+                left >= 0. && right <= 900.,
+                "{name}: inside the window: {left}..{right}"
+            );
+            assert!(
+                height > 3. * 20.,
+                "{name}: the text wraps onto several lines, got {height}"
+            );
+        }
+        let (left, right, height) = bubble_of("oke", false, cx);
+        assert!(right - left < 96., "a short message still hugs its text");
+        assert!(height < 48., "and stays on one line, got {height}");
     }
 
     #[gpui::test]

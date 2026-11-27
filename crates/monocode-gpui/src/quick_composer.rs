@@ -18,8 +18,6 @@ use monocode_core::{
     agent::AccessMode, git::Snapshot, project_appearance::ProjectAppearance, provider::Kind,
 };
 use std::{collections::HashMap, path::PathBuf};
-#[cfg(all(target_os = "macos", not(test)))]
-mod hotkey;
 
 pub(crate) const WIDTH: f32 = 680.;
 pub(crate) const INITIAL_HEIGHT: f32 = 128.;
@@ -128,7 +126,7 @@ pub(crate) struct Controller {
     pub events: Option<Subscription>,
     config: String,
     #[cfg(all(target_os = "macos", not(test)))]
-    registration: Option<hotkey::Registration>,
+    registration: Option<crate::global_hotkey::Registration>,
 }
 impl Controller {
     pub fn configure(
@@ -151,7 +149,7 @@ impl Controller {
         {
             self.registration = None;
             if prefs.quick_composer && !shortcut.is_empty() {
-                match hotkey::Registration::new(&shortcut) {
+                match crate::global_hotkey::Registration::channel(&shortcut, "Quick composer") {
                     Ok((registration, rx)) => {
                         self.registration = Some(registration);
                         return Some(rx);

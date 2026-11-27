@@ -12,7 +12,12 @@ Environment:
   REPLAY_INTERVAL_MS  time between deltas (default 40, like Claude's ~25 Hz)
   REPLAY_CHARS        characters per delta (default 16, about 4 tokens)
   REPLAY_MARK         a file to create when a reply starts streaming
+  REPLAY_DONE         a file to create after emitting the final result
+  REPLAY_TOOLS        text, tools, or agent (default text)
+  REPLAY_TOOL_COUNT   number of ordinary tool results (default 24)
+  REPLAY_TOOL_BYTES   ASCII bytes in each tool result (default 49152)
 """
+import hashlib
 import json
 import os
 import sys
@@ -24,6 +29,9 @@ INTERVAL = float(os.environ.get("REPLAY_INTERVAL_MS", "40")) / 1000
 CHARS = max(1, int(os.environ.get("REPLAY_CHARS", "16")))
 MODEL = "claude-replay"
 SESSION = str(uuid.uuid4())
+TOOLS = os.environ.get("REPLAY_TOOLS", "text")
+TOOL_COUNT = int(os.environ.get("REPLAY_TOOL_COUNT", "24"))
+TOOL_BYTES = int(os.environ.get("REPLAY_TOOL_BYTES", "49152"))
 
 
 def emit(frame):
@@ -71,11 +79,36 @@ def reply_text():
     return "".join(parts)[:total]
 
 
+def provider_message(role, content):
+    emit({"type": role, "session_id": SESSION, "parent_tool_use_id": None,
+          "message": {"model": MODEL, "role": role, "content": content}})
+
+
+def stream_tools():
+    calls = [
+        {"type": "tool_use", "id": f"read-{i}", "name": "Read",
+         "input": {"file_path": f"fixture-{i}.txt"}}
+        for i in range(TOOL_COUNT)
+    ]
+    if TOOLS == "agent":
+        calls.append({"type": "tool_use", "id": "delegated", "name": "Agent",
+                      "input": {"description": "Check the fixtures", "prompt": "Read the fixtures"}})
+    provider_message("assistant", calls)
+    for call in calls:
+        line = f'row "{call["id"]}" \\ sample output\n'
+        output = (line * (TOOL_BYTES // len(line) + 1))[:TOOL_BYTES]
+        provider_message("user", [{"type": "tool_result", "tool_use_id": call["id"],
+                                   "content": output, "is_error": False}])
+
+
 def stream_reply():
     text = reply_text()
+    if TOOLS in ("tools", "agent"):
+        stream_tools()
     mark = os.environ.get("REPLAY_MARK")
     if mark:
-        open(mark, "a").close()
+        with open(mark, "w") as marker:
+            marker.write(hashlib.sha256(text.encode()).hexdigest())
     emit({"type": "stream_event", "session_id": SESSION, "parent_tool_use_id": None,
           "event": {"type": "message_start", "message": {"model": MODEL, "role": "assistant"}}})
     emit({"type": "stream_event", "session_id": SESSION, "parent_tool_use_id": None,
@@ -102,6 +135,9 @@ def stream_reply():
           "result": text, "duration_ms": int((time.monotonic() - started) * 1000),
           "usage": {"input_tokens": 1000, "output_tokens": len(text) // 4},
           "modelUsage": {MODEL: {"contextWindow": 200000}}})
+    done = os.environ.get("REPLAY_DONE")
+    if done:
+        open(done, "a").close()
 
 
 def main():

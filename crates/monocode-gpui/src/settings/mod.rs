@@ -72,6 +72,7 @@ pub(crate) struct SettingsContext {
     pub projects: Vec<(String, String)>,
     pub sessions: Vec<(i64, String, bool)>,
     pub quick_error: Option<String>,
+    pub mono_hotkey_error: Option<String>,
     pub catalogs: HashMap<String, Vec<(String, String)>>,
     pub inbox_connections: HashMap<String, (bool, String)>,
     /// The web app link, or `None` when this desktop cannot offer it.
@@ -113,6 +114,7 @@ impl PartialEq for SettingsContext {
             && self.projects == other.projects
             && self.sessions == other.sessions
             && self.quick_error == other.quick_error
+            && self.mono_hotkey_error == other.mono_hotkey_error
             && self.catalogs == other.catalogs
             && self.inbox_connections == other.inbox_connections
             && self.web == other.web
@@ -342,6 +344,14 @@ pub(crate) struct SettingsView {
     mcp_result: Option<pages::mcp::SignInResult>,
     mcp_details_open: bool,
     mcp_health: Option<Task<()>>,
+    /// The Claude account the MCP page shows, when the user picked one; else the account new
+    /// sessions in the project use.
+    mcp_account: Option<String>,
+    /// "Sign in for all accounts" in progress.
+    mcp_batch: Option<pages::mcp::Batch>,
+    mcp_batch_token: u64,
+    mcp_menu: Option<pages::mcp::McpMenu>,
+    mcp_menu_anchors: RefCell<HashMap<usize, AnchorSlot>>,
     discovery: data::Discovery,
     discovery_loading: bool,
     discovery_task: Option<Task<()>>,
@@ -505,6 +515,11 @@ impl SettingsView {
             mcp_result: None,
             mcp_details_open: false,
             mcp_health: None,
+            mcp_account: None,
+            mcp_batch: None,
+            mcp_batch_token: 0,
+            mcp_menu: None,
+            mcp_menu_anchors: RefCell::new(HashMap::new()),
             discovery: data::Discovery::default(),
             discovery_loading: false,
             discovery_task: None,
@@ -557,10 +572,11 @@ impl SettingsView {
             self.refresh_cloud(cx);
         }
         let cwd = self.selected_project.clone();
+        let account = self.mcp_profile(cx);
         self.discovery_loading = true;
         let work = cx
             .background_executor()
-            .spawn(async move { data::discover(&cwd) });
+            .spawn(async move { data::discover(&cwd, account.as_ref()) });
         self.discovery_task = Some(cx.spawn(async move |this, cx| {
             let data = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -1347,6 +1363,7 @@ impl Render for SettingsView {
             })
             .children(self.management_overlay(window, cx))
             .children(self.notification_overlay(cx))
+            .children(self.mcp_overlay(cx))
             .children(self.fix_overlay(window))
     }
 }

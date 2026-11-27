@@ -30,6 +30,7 @@ mod habit_share;
 mod habit_share_tests;
 mod habit_stop;
 mod host;
+pub(crate) mod hotkeys;
 pub(crate) mod html;
 mod memory_ui;
 mod mobile;
@@ -115,9 +116,24 @@ struct RunningHabit {
     /// The user's stop request; it belongs to this run alone.
     stop: Option<habit_stop::StopMode>,
 }
+/// What the registered Mono shortcuts were built from.
+#[cfg(all(target_os = "macos", not(test)))]
+struct HotkeyState {
+    monos: bool,
+    pref: Option<Option<String>>,
+    ids: Vec<String>,
+}
 pub(crate) struct Monos {
     #[cfg(all(target_os = "macos", not(test)))]
     status: Option<status::Status>,
+    #[cfg(all(target_os = "macos", not(test)))]
+    hotkey_registrations: Vec<crate::global_hotkey::Registration>,
+    #[cfg(all(target_os = "macos", not(test)))]
+    hotkey_state: Option<HotkeyState>,
+    #[cfg(all(target_os = "macos", not(test)))]
+    hotkey_task: Option<gpui::Task<()>>,
+    /// Why the Mono shortcuts could not be registered, for Keybindings.
+    pub(crate) hotkey_error: Option<String>,
     parent_window: Option<gpui::AnyWindowHandle>,
     owner: WeakEntity<Shell>,
     store: Database,
@@ -257,6 +273,22 @@ impl EventEmitter<ShowEmojiLibrary> for Monos {}
 impl EventEmitter<NodePathChanged> for Monos {}
 impl EventEmitter<ChatOpened> for Monos {}
 impl Monos {
+    /// Workflow runs going now, as `(run id, workflow name)`.
+    pub(crate) fn running_workflows(&self) -> Vec<(String, String)> {
+        self.workflows
+            .running()
+            .into_iter()
+            .map(|(workflow, run)| {
+                let name = self
+                    .workflows
+                    .with_run(&workflow, |run| run.definition.name.clone())
+                    .unwrap_or(workflow);
+                (run, name)
+            })
+            .collect()
+    }
+}
+impl Monos {
     #[cfg(test)]
     pub(crate) fn observation_count(&self) -> usize {
         self.observations.len()
@@ -314,9 +346,88 @@ impl Monos {
             }
         });
     }
+    /// The shortcut key equivalents the tray shows, one per Mono.
+    #[cfg(all(target_os = "macos", not(test)))]
+    fn hotkey_modifiers(&self) -> Option<String> {
+        if !self.prefs.monos {
+            return None;
+        }
+        hotkeys::modifiers(&self.prefs.keybindings)
+    }
+    /// Pressing a Mono's shortcut: hides the panel showing it, else opens it.
+    #[cfg(any(target_os = "macos", test))]
+    pub(super) fn toggle_floating(&mut self, id: String, cx: &mut Context<Self>) {
+        match hotkeys::press(self.floating_shows(&id, cx)) {
+            hotkeys::Press::Hide => self.hide_floating(&id, cx),
+            hotkeys::Press::Open => self.open_floating(id, cx),
+        }
+    }
+    /// Registers the system-wide shortcuts for the first nine Monos, whether or
+    /// not the menu bar icon is on. Runs again only when they would change.
+    #[cfg(all(target_os = "macos", not(test)))]
+    fn sync_hotkeys(&mut self, cx: &mut Context<Self>) {
+        // Runs on every render of the shell, so compare without allocating.
+        let ids = || {
+            self.roster
+                .monos
+                .iter()
+                .take(hotkeys::MAX)
+                .map(|m| m.id.as_str())
+        };
+        if self.hotkey_state.as_ref().is_some_and(|s| {
+            s.monos == self.prefs.monos
+                && s.pref.as_ref() == self.prefs.keybindings.get(hotkeys::COMMAND)
+                && s.ids.iter().map(String::as_str).eq(ids())
+        }) {
+            return;
+        }
+        // Kept even when registering fails, so a failure is retried on a
+        // preference or roster change, not on every render.
+        self.hotkey_state = Some(HotkeyState {
+            monos: self.prefs.monos,
+            pref: self.prefs.keybindings.get(hotkeys::COMMAND).cloned(),
+            ids: ids().map(str::to_string).collect(),
+        });
+        let modifiers = self.hotkey_modifiers();
+        let assigned = hotkeys::assignments(ids());
+        self.hotkey_registrations.clear();
+        self.hotkey_task = None;
+        self.hotkey_error = None;
+        let Some(modifiers) = modifiers else {
+            return;
+        };
+        let (tx, rx) = async_channel::bounded::<String>(16);
+        for (id, digit) in assigned {
+            let tx = tx.clone();
+            let mono = id.clone();
+            match crate::global_hotkey::Registration::new(
+                &hotkeys::shortcut(&modifiers, digit),
+                "Mono shortcut",
+                move || {
+                    let _ = tx.try_send(mono.clone());
+                },
+            ) {
+                Ok(registration) => self.hotkey_registrations.push(registration),
+                Err(e) => {
+                    self.hotkey_error = Some(e);
+                    break;
+                }
+            }
+        }
+        if self.hotkey_error.is_some() {
+            self.hotkey_registrations.clear();
+        } else {
+            self.hotkey_task = Some(cx.spawn(async move |this, cx| {
+                while let Ok(id) = rx.recv().await {
+                    let _ = this.update(cx, |this, cx| this.toggle_floating(id, cx));
+                }
+            }));
+        }
+    }
     fn sync_status(&mut self, _cx: &mut Context<Self>) {
         #[cfg(all(target_os = "macos", not(test)))]
         {
+            self.sync_hotkeys(_cx);
             if !self.prefs.mono_menu_bar_icon {
                 self.status = None;
                 return;
@@ -356,8 +467,11 @@ impl Monos {
                 .iter()
                 .map(|m| (m.id.clone(), m.label()))
                 .collect::<Vec<_>>();
+            let modifiers = self
+                .hotkey_modifiers()
+                .filter(|_| self.hotkey_error.is_none());
             if let Some(status) = &mut self.status {
-                status.update(&monos, run);
+                status.update(&monos, modifiers.as_deref(), run);
             }
         }
     }
@@ -459,6 +573,13 @@ impl Monos {
         let mut this = Self {
             #[cfg(all(target_os = "macos", not(test)))]
             status: None,
+            #[cfg(all(target_os = "macos", not(test)))]
+            hotkey_registrations: Vec::new(),
+            #[cfg(all(target_os = "macos", not(test)))]
+            hotkey_state: None,
+            #[cfg(all(target_os = "macos", not(test)))]
+            hotkey_task: None,
+            hotkey_error: None,
             parent_window: None,
             owner,
             store,
@@ -626,6 +747,12 @@ impl Monos {
         if was && !self.prefs.monos {
             self.active = None;
         }
+        // Try again after a failed registration, whatever changed.
+        #[cfg(all(target_os = "macos", not(test)))]
+        if self.hotkey_error.is_some() {
+            self.hotkey_state = None;
+        }
+        self.sync_status(cx);
         cx.notify();
     }
     /// Arms the Mono chats that are waiting on a usage limit.

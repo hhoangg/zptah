@@ -621,18 +621,14 @@ fn app_update_is_documented_validated_and_captioned() {
         crate::tool::app_activity("app.update", false),
         ("Updated", "the app")
     );
-    for input in [
-        json!({}),
-        json!({"mode": "check"}),
-        json!({"mode": "install", "force": true}),
-        json!({"mode": "install", "confirm": true}),
-    ] {
+    for input in [json!({}), json!({"mode": "check"})] {
         assert_eq!(api::validate("app.update", &input), Ok(()), "{input}");
     }
     // No version and no URL can be named: the feed alone decides.
     for input in [
         json!({"mode": "downgrade"}),
-        json!({"mode": "install", "force": "yes"}),
+        json!({"mode": "install", "force": true}),
+        json!({"mode": "install", "confirm": true}),
         json!({"mode": "install", "version": "0.0.1"}),
         json!({"url": "https://example.test/app.zip"}),
     ] {
