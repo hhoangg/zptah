@@ -20,6 +20,10 @@ pub(super) struct McpServer {
     pub path: PathBuf,
     pub transport: String,
     pub status: String,
+    /// How the server signs in (the kind only, never a credential).
+    pub auth: monocode_core::mcp::AuthKind,
+    /// The server exists in the CLI login but not in the account the page shows.
+    pub only_cli: bool,
 }
 #[derive(Default)]
 pub(super) struct Discovery {
@@ -44,7 +48,9 @@ pub(super) struct ResultTrees {
     pub main: String,
     pub error: Option<String>,
 }
-pub(super) fn discover(cwd: &str) -> Discovery {
+/// `account` is the Claude account whose servers are listed (the one sessions use, or the one the
+/// page selector chose); `None` reads the CLI login's config.
+pub(super) fn discover(cwd: &str, account: Option<&monocode_core::accounts::Profile>) -> Discovery {
     let mut data = Discovery {
         binaries: Kind::ALL
             .into_iter()
@@ -67,7 +73,7 @@ pub(super) fn discover(cwd: &str) -> Discovery {
             }
         })
         .collect();
-    match monocode_core::mcp::mcp_discover(cwd.into()) {
+    match monocode_core::mcp::mcp_discover_for(cwd.into(), account) {
         Ok(servers) => {
             data.mcp = servers
                 .into_iter()
@@ -78,10 +84,31 @@ pub(super) fn discover(cwd: &str) -> Discovery {
                     path: s.config_path.into(),
                     transport: s.transport,
                     status: if s.enabled { "Configured" } else { "Disabled" }.into(),
+                    auth: s.auth,
+                    only_cli: false,
                 })
                 .collect()
         }
         Err(e) => data.mcp_error = Some(e),
+    }
+    if let Some(account) = account {
+        let cli_config =
+            monocode_core::mcp::config_file(&monocode_core::accounts::Profile::default())
+                .unwrap_or_default();
+        data.mcp.extend(
+            monocode_core::mcp::only_in_cli_login_for(cwd, account)
+                .into_iter()
+                .map(|s| McpServer {
+                    name: s.name,
+                    provider: "claude".into(),
+                    scope: s.scope,
+                    path: cli_config.clone(),
+                    transport: s.transport,
+                    status: super::pages::mcp_row::STATUS_ONLY_CLI.into(),
+                    auth: s.auth,
+                    only_cli: true,
+                }),
+        );
     }
     if !cwd.is_empty() {
         match git::snapshot(Path::new(cwd)) {

@@ -2919,3 +2919,48 @@ fn a_launch_card_marks_a_session_that_runs_in_the_cloud(cx: &mut TestAppContext)
     assert!(visual.debug_bounds("mono-launch-card-cloud-776").is_some());
     assert!(visual.debug_bounds("mono-launch-card-cloud-777").is_none());
 }
+
+fn turns(count: usize) -> Vec<Row> {
+    (0..count)
+        .flat_map(|turn| {
+            [
+                row("user", &format!("Question {turn}")),
+                row(
+                    "assistant",
+                    &format!("Answer {turn}.\n\nA second paragraph."),
+                ),
+            ]
+        })
+        .collect()
+}
+
+/// A chat that installs its history after it is on screen, the way a freshly
+/// opened one does, must paint it without anything else asking for a frame.
+#[gpui::test]
+fn a_bounded_history_installed_into_a_visible_view_paints_by_itself(cx: &mut TestAppContext) {
+    for rows in [turns(5), turns(50)] {
+        let window = chat_mode(cx, false);
+        window
+            .update(cx, |view, _, cx| view.visible(true, cx))
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        let before = window.update(cx, |view, _, _| view.render_passes).unwrap();
+        window
+            .update(cx, |view, _, cx| {
+                view.install_prepared_history(PreparedHistory::new(rows.clone(), false), cx)
+            })
+            .unwrap();
+        // No refresh: only what the install itself asked for.
+        cx.run_until_parked();
+        let (passes, shown) = window
+            .update(cx, |view, _, _| (view.render_passes, view.rendered))
+            .unwrap();
+        assert!(
+            passes > before,
+            "{} turns: no frame after install",
+            rows.len() / 2
+        );
+        assert!(shown > 0, "{} turns: nothing was laid out", rows.len() / 2);
+    }
+}

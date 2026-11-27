@@ -118,9 +118,32 @@ impl State {
     }
 }
 
+/// Drops the queued messages and the draft that `delivered` says a Mono
+/// already sent, and leaves the queue paused until the user resumes it.
+pub(crate) fn without_delivered(
+    mut state: State,
+    delivered: impl Fn(&str) -> Result<bool, String>,
+) -> Result<State, String> {
+    let mut remaining = Vec::new();
+    for message in state.messages {
+        if !delivered(&message.id)? {
+            remaining.push(message);
+        }
+    }
+    state.messages = remaining;
+    if let Some(draft) = &state.draft {
+        if delivered(&draft.id)? {
+            state.draft = None;
+        }
+    }
+    // Recovery is always explicit, as in React's deserializeSession.
+    state.paused = !state.messages.is_empty();
+    Ok(state)
+}
+
 impl crate::store::Store {
     pub fn follow_ups(&self, session: i64) -> Result<State, String> {
-        let mut state: State = if self.uses_monocode_schema() && session >= 0 {
+        let state: State = if self.uses_monocode_schema() && session >= 0 {
             self.shared_follow_ups(session)?
         } else {
             self.setting(&format!("follow-up:{session}"))?
@@ -128,27 +151,11 @@ impl crate::store::Store {
                 .transpose()?
                 .unwrap_or_default()
         };
-        let mut remaining = Vec::new();
-        for message in state.messages {
-            if self
-                .setting(&format!("mono-delivered:{session}:{}", message.id))?
-                .is_none()
-            {
-                remaining.push(message);
-            }
-        }
-        state.messages = remaining;
-        if let Some(draft) = &state.draft {
-            if self
-                .setting(&format!("mono-delivered:{session}:{}", draft.id))?
-                .is_some()
-            {
-                state.draft = None;
-            }
-        }
-        // Recovery is always explicit, as in React's deserializeSession.
-        state.paused = !state.messages.is_empty();
-        Ok(state)
+        without_delivered(state, |message| {
+            Ok(self
+                .setting(&format!("mono-delivered:{session}:{message}"))?
+                .is_some())
+        })
     }
     pub fn save_follow_ups(&self, session: i64, state: &State) -> Result<(), String> {
         if self.uses_monocode_schema() && session >= 0 {

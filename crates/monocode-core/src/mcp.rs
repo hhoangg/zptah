@@ -4,6 +4,14 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::scm::shell::dirs_home;
+
+mod account;
+pub use account::{
+    account_env, add_from_cli_login, approve, approve_for, auth_kind, claude_health_for,
+    config_file, only_in_cli_login, only_in_cli_login_for, plain_login_error, AuthKind, CliOnly,
+    LoginCommand,
+};
+
 fn expand_home(path: &str) -> PathBuf {
     crate::scm::expand_home(Path::new(path))
 }
@@ -97,6 +105,18 @@ pub fn mcp_add(
     name: String,
     config: String,
 ) -> Result<(), String> {
+    mcp_add_for(cwd, provider, scope, name, config, None)
+}
+
+/// [`mcp_add`] where a Claude server goes into `account`'s own config instead of the CLI login's.
+pub fn mcp_add_for(
+    cwd: String,
+    provider: String,
+    scope: String,
+    name: String,
+    config: String,
+    account: Option<&crate::accounts::Profile>,
+) -> Result<(), String> {
     let (name, server) = server_from_json(&provider, &name, &config)?;
     let binary_path = crate::provider::resolve(crate::provider::Kind::from_id(&provider))
         .map(|p| p.to_string_lossy().into_owned());
@@ -140,6 +160,7 @@ pub fn mcp_add(
                 &name,
                 &server,
                 binary_path.as_deref(),
+                account.filter(|_| provider == "claude"),
             ),
             _ => Err("Unsupported MCP provider".into()),
         }
@@ -337,7 +358,7 @@ fn write_opencode_server(path: &Path, name: &str, server: Value, major: u32) -> 
         if servers.contains_key(name) {
             return Err(format!("{name} is already configured in this file"));
         }
-        servers.insert(name.to_owned(), server);
+        servers.insert(name.to_owned(), server.clone());
         Ok(())
     })
 }
@@ -356,66 +377,118 @@ fn write_json_server(path: &Path, name: &str, server: Value) -> Result<(), Strin
         if servers.contains_key(name) {
             return Err(format!("{name} is already configured in this file"));
         }
-        servers.insert(name.to_owned(), server);
+        servers.insert(name.to_owned(), server.clone());
         Ok(())
     })
 }
 
+/// Rewrites a JSON config for servers we manage. Files get mode 0600.
 fn write_json_config(
     path: &Path,
-    update: impl FnOnce(&mut Value) -> Result<(), String>,
+    update: impl FnMut(&mut Value) -> Result<(), String>,
+) -> Result<(), String> {
+    write_json_file(path, update, false)
+}
+
+/// What a file looked like when it was read, to notice another process writing it meanwhile.
+fn stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// Read, edit and atomically replace a JSON file.
+///
+/// - The target is resolved through symlinks first, so a linked config stays a link.
+/// - The advisory lock lives in the temp dir (named by a hash of the real path), never next to the
+///   user's file. It is never deleted, because another process may hold it.
+/// - The only file created next to the target is the temp file for the rename, removed on every
+///   failure path.
+/// - A running Claude rewrites its config often: if the file changed between the read and the
+///   rename, the edit is applied again to the new content (a few times), then it fails.
+/// - `keep_mode` keeps the permissions of an existing file; a new file is always 0600.
+fn write_json_file(
+    path: &Path,
+    mut update: impl FnMut(&mut Value) -> Result<(), String>,
+    keep_mode: bool,
 ) -> Result<(), String> {
     let parent = path.parent().ok_or("Invalid config path")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let lock_path = parent.join(format!(
-        ".{}.lock",
-        path.file_name()
-            .and_then(|part| part.to_str())
-            .unwrap_or("mcp")
-    ));
-    let lock = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(lock_path)
-        .map_err(|e| e.to_string())?;
-    lock.lock().map_err(|e| e.to_string())?;
-    let mut root: Value = if path.exists() {
-        let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&raw)
-            .or_else(|_| serde_json::from_str(&strip_jsonc(&raw)))
-            .map_err(|e| format!("Existing config is invalid JSON: {e}"))?
-    } else {
-        serde_json::json!({})
+    let name = path
+        .file_name()
+        .ok_or("Invalid config path")?
+        .to_os_string();
+    let path = match std::fs::canonicalize(path) {
+        Ok(real) => real,
+        Err(_) => std::fs::canonicalize(parent)
+            .map_err(|e| e.to_string())?
+            .join(&name),
     };
-    update(&mut root)?;
-    let encoded = serde_json::to_vec_pretty(&root).map_err(|e| e.to_string())?;
-    let temporary = parent.join(format!(
-        ".{}.{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("mcp"),
-        rand::random::<u128>()
-    ));
-    let result = (|| -> std::io::Result<()> {
-        use std::io::Write;
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
+    let parent = path.parent().ok_or("Invalid config path")?;
+    let lock = {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(path.to_string_lossy().as_bytes());
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(std::env::temp_dir().join(format!("zptah-config-{}.lock", &hex[..32])))
+            .map_err(|e| e.to_string())?
+    };
+    lock.lock().map_err(|e| e.to_string())?;
+    for _ in 0..5 {
+        let before = stamp(&path);
+        let mut root: Value = if path.exists() {
+            let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            serde_json::from_str(&raw)
+                .or_else(|_| serde_json::from_str(&strip_jsonc(&raw)))
+                .map_err(|e| format!("Existing config is invalid JSON: {e}"))?
+        } else {
+            serde_json::json!({})
+        };
+        update(&mut root)?;
+        let encoded = serde_json::to_vec_pretty(&root).map_err(|e| e.to_string())?;
+        let temporary = parent.join(format!(
+            ".{}.{}.tmp",
+            name.to_string_lossy(),
+            rand::random::<u128>()
+        ));
+        let result = (|| -> std::io::Result<bool> {
+            use std::io::Write;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&temporary)?;
+            file.write_all(&encoded)?;
+            file.sync_all()?;
+            if keep_mode {
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    std::fs::set_permissions(&temporary, meta.permissions())?;
+                }
+            }
+            if stamp(&path) != before {
+                return Ok(false);
+            }
+            std::fs::rename(&temporary, &path)?;
+            Ok(true)
+        })();
+        match result {
+            Ok(true) => return Ok(()),
+            Ok(false) => {
+                let _ = std::fs::remove_file(&temporary);
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&temporary);
+                return Err(e.to_string());
+            }
         }
-        let mut file = options.open(&temporary)?;
-        file.write_all(&encoded)?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, path)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
     }
-    result.map_err(|e| e.to_string())
+    Err("The config file keeps changing (is Claude running?). Close it and try again.".into())
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -427,25 +500,41 @@ pub struct McpConnection {
     pub config_path: String,
     pub transport: String,
     pub enabled: bool,
+    /// How the server signs in. Only the kind, never a credential.
+    pub auth: AuthKind,
 }
 
 pub fn mcp_discover(cwd: String) -> Result<Vec<McpConnection>, String> {
+    mcp_discover_for(cwd, None)
+}
+
+/// [`mcp_discover`] where Claude's user and local servers come from `account`'s own config.
+pub fn mcp_discover_for(
+    cwd: String,
+    account: Option<&crate::accounts::Profile>,
+) -> Result<Vec<McpConnection>, String> {
     {
         let home = dirs_home().ok_or("Home directory not found")?;
         let project = expand_home(&cwd);
         let codex_home = std::env::var_os("CODEX_HOME").map(PathBuf::from);
         let desktop_config = claude_desktop_config(Path::new(&home));
         let opencode_config = std::env::var_os("OPENCODE_CONFIG").map(PathBuf::from);
-        Ok(discover(
+        let claude = match account {
+            Some(account) => config_file(account)?,
+            None => Path::new(&home).join(".claude.json"),
+        };
+        Ok(discover_in(
             Path::new(&home),
             &project,
             codex_home.as_deref(),
             &desktop_config,
             opencode_config.as_deref(),
+            &claude,
         ))
     }
 }
 
+#[cfg(test)]
 fn discover(
     home: &Path,
     project: &Path,
@@ -453,21 +542,38 @@ fn discover(
     desktop_config: &Path,
     opencode_config: Option<&Path>,
 ) -> Vec<McpConnection> {
+    discover_in(
+        home,
+        project,
+        codex_home_override,
+        desktop_config,
+        opencode_config,
+        &home.join(".claude.json"),
+    )
+}
+
+fn discover_in(
+    home: &Path,
+    project: &Path,
+    codex_home_override: Option<&Path>,
+    desktop_config: &Path,
+    opencode_config: Option<&Path>,
+    claude: &Path,
+) -> Vec<McpConnection> {
     let mut connections = Vec::new();
-    let claude = home.join(".claude.json");
-    if let Some(config) = read_json(&claude) {
+    if let Some(config) = read_json(claude) {
         add_json_servers(
             &mut connections,
             "claude",
             "user",
-            &claude,
+            claude,
             config.get("mcpServers"),
         );
         add_json_servers(
             &mut connections,
             "claude",
             "local",
-            &claude,
+            claude,
             config
                 .get("projects")
                 .and_then(|projects| projects.get(project.to_string_lossy().as_ref()))
@@ -611,6 +717,7 @@ fn add_json_servers(
             transport: transport(config).into(),
             enabled: config.get("enabled").and_then(Value::as_bool) != Some(false)
                 && config.get("disabled").and_then(Value::as_bool) != Some(true),
+            auth: auth_kind(config),
         });
     }
 }
@@ -638,6 +745,7 @@ fn add_toml_file(connections: &mut Vec<McpConnection>, provider: &str, scope: &s
             }
             .into(),
             enabled: entry.get("enabled").and_then(toml::Value::as_bool) != Some(false),
+            auth: account::toml_auth_kind(entry),
         });
     }
 }
@@ -738,8 +846,13 @@ fn mcp_command(
     args: Vec<String>,
     cwd: String,
     timeout: Duration,
+    account: Option<&crate::accounts::Profile>,
 ) -> Result<String, String> {
-    crate::cli::output(&binary, &args, &expand_home(&cwd), timeout)
+    let env = match account {
+        Some(account) => account_env(account)?,
+        None => crate::cli::Env::default(),
+    };
+    crate::cli::output_with(&binary, &args, &expand_home(&cwd), timeout, &env, None)
 }
 pub(crate) fn add_mcp_via_cli(
     provider: &str,
@@ -748,9 +861,16 @@ pub(crate) fn add_mcp_via_cli(
     name: &str,
     config: &serde_json::Value,
     binary_path: Option<&str>,
+    account: Option<&crate::accounts::Profile>,
 ) -> Result<(), String> {
     let (binary, args) = mcp_add_args(provider, scope, name, config, binary_path)?;
-    mcp_command(binary, args, cwd.to_owned(), Duration::from_secs(30))?;
+    mcp_command(
+        binary,
+        args,
+        cwd.to_owned(),
+        Duration::from_secs(30),
+        account,
+    )?;
     Ok(())
 }
 
@@ -761,6 +881,7 @@ pub(crate) fn opencode_major_version(cwd: &str, binary_path: Option<&str>) -> Re
         vec!["--version".into()],
         cwd.to_owned(),
         Duration::from_secs(10),
+        None,
     )?;
     version
         .split_whitespace()
@@ -887,14 +1008,15 @@ fn mcp_key_values(
     Ok(args)
 }
 
-/// The command that signs in to an MCP server: binary, arguments and the (home-expanded) working
-/// directory. The caller runs it on a pseudo-terminal, because the provider CLIs refuse to sign in
-/// without one.
+/// The command that signs in to an MCP server. For Claude it carries the environment of `account`
+/// (the account the sessions use), so the sign-in lands in that account's secure storage. The caller
+/// runs it on a pseudo-terminal, because the provider CLIs refuse to sign in without one.
 pub fn login_command(
     cwd: &str,
     provider: &str,
     name: &str,
-) -> Result<(PathBuf, Vec<String>, PathBuf), String> {
+    account: Option<&crate::accounts::Profile>,
+) -> Result<LoginCommand, String> {
     if name.trim().is_empty() || name.chars().any(char::is_control) {
         return Err("Invalid MCP server name".into());
     }
@@ -903,13 +1025,23 @@ pub fn login_command(
         "opencode" => "auth",
         _ => return Err("Unsupported MCP provider".into()),
     };
-    Ok((
-        resolve_mcp_binary(provider, None)?,
-        vec!["mcp".into(), action.into(), name.into()],
-        expand_home(cwd),
-    ))
+    let env = match account.filter(|_| provider == "claude") {
+        Some(account) => account_env(account)?,
+        None => crate::cli::Env::default(),
+    };
+    Ok(LoginCommand {
+        binary: resolve_mcp_binary(provider, None)?,
+        args: vec!["mcp".into(), action.into(), name.into()],
+        cwd: expand_home(cwd),
+        env,
+    })
 }
-pub fn remove(cwd: &str, name: &str, scope: &str) -> Result<(), String> {
+pub fn remove(
+    cwd: &str,
+    name: &str,
+    scope: &str,
+    account: Option<&crate::accounts::Profile>,
+) -> Result<(), String> {
     if name.is_empty()
         || !name
             .bytes()
@@ -931,6 +1063,7 @@ pub fn remove(cwd: &str, name: &str, scope: &str) -> Result<(), String> {
         ],
         cwd.into(),
         Duration::from_secs(30),
+        account,
     )
     .map(|_| ())
 }
@@ -945,6 +1078,7 @@ pub fn claude_health_within(cwd: &str, timeout: Duration) -> Result<String, Stri
         vec!["mcp".into(), "list".into()],
         cwd.into(),
         timeout,
+        None,
     )
 }
 
@@ -966,11 +1100,13 @@ pub fn claude_health_until(
         vec!["mcp".into(), "list".into()],
         cwd.into(),
         timeout,
+        None,
     )
 }
 
 /// Reads `claude mcp list` output into (server name, status) pairs. The status is one of
-/// "Connected", "Needs authentication", "Failed", "Disabled" or "Configured". Lines that do not
+/// "Connected", "Needs authentication", "Needs approval" (a `.mcp.json` server waiting for the
+/// user's approval), "Rejected", "Failed", "Disabled" or "Configured". Lines that do not
 /// start with a plain server name are skipped.
 pub fn parse_claude_health(text: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -986,8 +1122,16 @@ pub fn parse_claude_health(text: &str) -> Vec<(String, String)> {
         {
             continue;
         }
-        let lower = detail.to_lowercase();
-        let status = if lower.contains("connected") {
+        // Only the text after the last " - " is the status; before it are the command, arguments
+        // or URL, which can hold any word.
+        let lower = detail
+            .rsplit_once(" - ")
+            .map_or(String::new(), |(_, status)| status.to_lowercase());
+        let status = if lower.contains("pending approval") {
+            "Needs approval"
+        } else if lower.contains("rejected") {
+            "Rejected"
+        } else if lower.contains("connected") {
             "Connected"
         } else if lower.contains("authentication") || lower.contains("needs auth") {
             "Needs authentication"
@@ -1010,15 +1154,15 @@ mod tests {
     #[test]
     fn login_command_rejects_bad_input_before_resolving_a_binary() {
         assert_eq!(
-            login_command("/p", "claude", "bad\nname").unwrap_err(),
+            login_command("/p", "claude", "bad\nname", None).unwrap_err(),
             "Invalid MCP server name"
         );
         assert_eq!(
-            login_command("/p", "claude", " ").unwrap_err(),
+            login_command("/p", "claude", " ", None).unwrap_err(),
             "Invalid MCP server name"
         );
         assert_eq!(
-            login_command("/p", "nope", "x").unwrap_err(),
+            login_command("/p", "nope", "x", None).unwrap_err(),
             "Unsupported MCP provider"
         );
     }
@@ -1040,6 +1184,71 @@ mod tests {
         assert_eq!(status("off"), Some("Disabled"));
         assert_eq!(status("plain"), Some("Configured"));
         assert_eq!(got.len(), 5);
+    }
+
+    #[test]
+    fn the_status_is_read_only_after_the_last_separator() {
+        let text = "a: npx srv --rejected --failed disabled - \u{2714} Connected\n\
+            b: https://x.example/connected - ! Needs authentication\n\
+            c: npx connected failed\n";
+        let got = parse_claude_health(text);
+        let status = |n: &str| got.iter().find(|(k, _)| k == n).map(|(_, v)| v.as_str());
+        assert_eq!(status("a"), Some("Connected"));
+        assert_eq!(status("b"), Some("Needs authentication"));
+        assert_eq!(status("c"), Some("Configured"));
+    }
+
+    #[test]
+    fn parses_pending_approval_and_rejected_project_servers() {
+        let text = "supabase: https://x.example/mcp (HTTP) - \u{23f8} Pending approval (run `claude` to approve)\n\
+            nope: npx nope - Rejected (see disabledMcpjsonServers in settings)\n\
+            off: npx off - \u{2298} Disabled for this project\n\
+            linear: https://y.example (HTTP) - ! Needs authentication\n\
+            ok: https://z.example (HTTP) - \u{2714} Connected\n\
+            plugin:context7:context7: https://c.example - ! Needs authentication\n";
+        let got = parse_claude_health(text);
+        let status = |n: &str| got.iter().find(|(k, _)| k == n).map(|(_, v)| v.as_str());
+        assert_eq!(status("supabase"), Some("Needs approval"));
+        assert_eq!(status("nope"), Some("Rejected"));
+        assert_eq!(status("off"), Some("Disabled"));
+        assert_eq!(status("linear"), Some("Needs authentication"));
+        assert_eq!(status("ok"), Some("Connected"));
+        assert_eq!(got.len(), 5);
+    }
+
+    #[test]
+    fn discovers_claude_servers_from_the_chosen_account_config() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let project = root.path().join("project");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        std::fs::write(
+            home.join(".claude.json"),
+            r#"{"mcpServers":{"cli-only":{"type":"http","url":"https://a"}}}"#,
+        )
+        .unwrap();
+        let account = root.path().join("acct.json");
+        std::fs::write(
+            &account,
+            r#"{"mcpServers":{"mine":{"type":"http","url":"https://b","headers":{"Authorization":"secret"}},"local":{"command":"npx"}}}"#,
+        )
+        .unwrap();
+        let found = discover_in(
+            &home,
+            &project,
+            None,
+            &root.path().join("desktop.json"),
+            None,
+            &account,
+        );
+        let summary: Vec<_> = found.iter().map(|c| (c.name.as_str(), c.auth)).collect();
+        assert_eq!(
+            summary,
+            [("local", AuthKind::None), ("mine", AuthKind::Header)]
+        );
+        assert!(!serde_json::to_string(&found).unwrap().contains("secret"));
     }
 
     #[test]

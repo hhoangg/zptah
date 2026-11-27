@@ -1,6 +1,7 @@
 //! Native app updates. Uses the same Minisign keys and package signatures as
 //! Tauri. The native feed is additionally signed, binding version, channel and
 //! platform to the package; it cannot dispatch a production Tauri update.
+pub mod confirm;
 mod install;
 pub mod remote;
 #[cfg(test)]

@@ -1,7 +1,7 @@
 //! For profiling scrolling without a trackpad: with
 //! `MONOCODE_PERF_SCROLL=<pixels per second>`, the first transcript to finish
-//! streaming scrolls itself up and down between its ends on every display
-//! frame, the way wheel scrolling moves its list and notifies it.
+//! streaming scrolls itself between its ends on every display frame. Set
+//! `MONOCODE_PERF_SCROLL_LIVE=1` to scroll during streaming instead.
 //! scripts/perf/frame-run.sh sets it for `MODE=scroll`.
 use super::*;
 use std::cell::Cell;
@@ -29,20 +29,31 @@ fn speed() -> Option<f32> {
     })
 }
 
+fn scroll_while_streaming() -> bool {
+    static LIVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *LIVE.get_or_init(|| std::env::var_os("MONOCODE_PERF_SCROLL_LIVE").is_some())
+}
+
 impl TranscriptView {
     /// Called while rendering; schedules the next scroll step.
     pub(super) fn perf_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(speed) = speed() else {
             return;
         };
-        if self.streaming || self.rows.is_empty() || self.perf_scroll.scheduled {
+        if self.streaming != scroll_while_streaming()
+            || self.rows.is_empty()
+            || self.perf_scroll.scheduled
+        {
             return;
         }
         let id = cx.entity_id();
         if OWNER.get().is_some_and(|owner| owner != id) {
             return;
         }
-        OWNER.set(Some(id));
+        if OWNER.get().is_none() {
+            self.perf_scroll.up = self.streaming;
+            OWNER.set(Some(id));
+        }
         self.perf_scroll.scheduled = true;
         let view = cx.entity().downgrade();
         window.on_next_frame(move |_, cx| {

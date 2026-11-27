@@ -34,6 +34,11 @@ pub struct Spec {
     pub provider: String,
     pub timeout: Duration,
     pub fallback_delay: Duration,
+    /// Variables the child gets on top of the app's environment (an account's config dir).
+    pub env: Vec<(String, String)>,
+    /// Variables the child must not inherit. Honored on Unix only (the program runs under
+    /// `env -u`); Windows can only set.
+    pub remove: Vec<String>,
 }
 
 /// Progress reported while the command runs.
@@ -243,8 +248,8 @@ pub fn failure_message(name: &str, provider: &str, outcome: &Outcome) -> String 
         Outcome::Failed { code, output } => {
             if output.to_lowercase().contains("awaiting approval") {
                 format!(
-                    "\"{name}\" from .mcp.json is awaiting approval. Start Claude Code in this \
-                     project to approve it, then sign in again."
+                    "\"{name}\" from .mcp.json is awaiting approval. Use the Approve button on \
+                     its row in this page, then sign in again."
                 )
             } else {
                 match code {
@@ -576,15 +581,37 @@ fn child_env(shims: Option<&Shims>) -> Vec<(String, String)> {
     env
 }
 
+/// alacritty cannot remove a variable, so the program runs under `env -u KEY -- program`, which
+/// then execs it (the pid is kept). Windows only sets: alacritty's `Options` has only an `env` map
+/// (no removal), and an empty value is not the same as an unset variable for every CLI.
+fn with_removals(program: String, args: Vec<String>, remove: &[String]) -> (String, Vec<String>) {
+    if !cfg!(unix) || remove.is_empty() {
+        return (program, args);
+    }
+    let mut wrapped = Vec::with_capacity(remove.len() * 2 + args.len() + 2);
+    for key in remove {
+        wrapped.push("-u".to_owned());
+        wrapped.push(key.clone());
+    }
+    wrapped.push("--".into());
+    wrapped.push(program);
+    wrapped.extend(args);
+    ("/usr/bin/env".into(), wrapped)
+}
+
 fn pty_options(spec: &Spec, shims: Option<&Shims>) -> alacritty_terminal::tty::Options {
+    let (program, args) = with_removals(
+        crate::terminal::shell::pty_program(&spec.binary.to_string_lossy()),
+        spec.args.clone(),
+        &spec.remove,
+    );
+    let mut env: std::collections::HashMap<String, String> = child_env(shims).into_iter().collect();
+    env.extend(spec.env.iter().cloned());
     alacritty_terminal::tty::Options {
-        shell: Some(alacritty_terminal::tty::Shell::new(
-            crate::terminal::shell::pty_program(&spec.binary.to_string_lossy()),
-            spec.args.clone(),
-        )),
+        shell: Some(alacritty_terminal::tty::Shell::new(program, args)),
         working_directory: Some(spec.cwd.clone()),
         drain_on_exit: false,
-        env: child_env(shims).into_iter().collect(),
+        env,
         #[cfg(target_os = "windows")]
         escape_args: true,
     }
@@ -1000,7 +1027,7 @@ https://linear.example.test/oauth/authorize?client_id=c&state=q\n\n\
             &failed("\"supabase\" is from .mcp.json and awaiting approval. Run `claude`"),
         );
         assert!(approval.contains("awaiting approval"));
-        assert!(approval.contains("Start Claude Code"));
+        assert!(approval.contains("Approve button"));
         assert_eq!(
             failure_message("x", "claude", &failed("boom")),
             "Sign-in for \"x\" failed (exit 1)."
@@ -1091,6 +1118,8 @@ https://linear.example.test/oauth/authorize?client_id=c&state=q\n\n\
                     provider: "claude".into(),
                     timeout,
                     fallback_delay: Duration::from_millis(300),
+                    env: vec![],
+                    remove: vec![],
                 }
             }
         }
@@ -1288,9 +1317,44 @@ https://linear.example.test/oauth/authorize?client_id=c&state=q\n\n\
                 provider: "claude".into(),
                 timeout: Duration::from_secs(5),
                 fallback_delay: FALLBACK_DELAY,
+                env: vec![],
+                remove: vec![],
             };
             let outcome = run(&spec, &cancel, |_| {});
             assert!(matches!(outcome, Outcome::Start(_)), "{outcome:?}");
+        }
+
+        #[test]
+        fn the_account_environment_is_set_and_stray_variables_are_removed() {
+            let fake = Fake::new(
+                "printf '%s|%s|%s\\n' \"${CLAUDE_CONFIG_DIR-unset}\" \"${ZPTAH_STRAY-unset}\" \"$1\" > \"$0.env\"\nexit 0",
+            );
+            // Not a variable of this process: the removal list must still win over what the app
+            // process would pass on, which is simulated by a value the spec sets and removes.
+            let mut spec = fake.spec(Duration::from_secs(20));
+            spec.args = vec!["with space".into()];
+            spec.env = vec![
+                ("CLAUDE_CONFIG_DIR".into(), "/accounts/work".into()),
+                ("ZPTAH_STRAY".into(), "set-but-removed".into()),
+            ];
+            spec.remove = vec!["ZPTAH_STRAY".into()];
+            let cancel = AtomicBool::new(false);
+            assert_eq!(run(&spec, &cancel, |_| {}), Outcome::Success);
+            let seen = std::fs::read_to_string(fake.dir.join("fake-cli.env")).unwrap();
+            assert_eq!(seen.trim(), "/accounts/work|unset|with space");
+        }
+
+        #[test]
+        fn removals_wrap_the_program_in_env_on_unix_only() {
+            let (program, args) = with_removals("/bin/x".into(), vec!["a".into()], &[]);
+            assert_eq!((program.as_str(), args.len()), ("/bin/x", 1));
+            let (program, args) = with_removals(
+                "/bin/x".into(),
+                vec!["a".into()],
+                &["K1".into(), "K2".into()],
+            );
+            assert_eq!(program, "/usr/bin/env");
+            assert_eq!(args, ["-u", "K1", "-u", "K2", "--", "/bin/x", "a"]);
         }
 
         #[test]

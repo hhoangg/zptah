@@ -4,7 +4,9 @@ use crate::{
     theme::*,
 };
 use gpui::{App, Context, Entity, EventEmitter, Global, Role, div, prelude::*, px};
-use monocode_core::app_update::{self, Config, Installation, Installed, Update};
+use monocode_core::app_update::{
+    self, Config, Installation, Installed, Update, remote::RunningSession,
+};
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -49,7 +51,13 @@ enum Progress {
     Started,
     Download(u64, Option<u64>),
     Installing,
+    /// The download is done; the UI thread decides whether work that started meanwhile may be
+    /// interrupted. Answer on the channel.
+    Confirm(async_channel::Sender<bool>),
 }
+
+/// The error of an install the user declined at the last moment. Not shown as a failure.
+pub(crate) const DECLINED: &str = "The update was not installed: work is running";
 
 pub(crate) fn version() -> &'static str {
     option_env!("MONOCODE_NATIVE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
@@ -78,6 +86,7 @@ pub(crate) fn install_remote(
     update: Update,
     installation: Installation,
     failed: InstallFailed,
+    acknowledged: Vec<RunningSession>,
     cx: &mut App,
 ) -> Result<(), String> {
     let entity = cx
@@ -85,8 +94,13 @@ pub(crate) fn install_remote(
         .map(|shared| shared.0.clone())
         .ok_or("The updater is not running")?;
     entity.update(cx, |updater, cx| {
-        updater.install_remote(update, installation, failed, cx)
+        updater.install_remote(update, installation, failed, acknowledged, cx)
     })
+}
+/// An update is downloading or installing now.
+pub(crate) fn is_busy(cx: &App) -> bool {
+    cx.try_global::<Shared>()
+        .is_some_and(|shared| shared.0.read(cx).busy())
 }
 pub(crate) fn shared(store: Database, cx: &mut App) -> Entity<Updater> {
     if let Some(shared) = cx.try_global::<Shared>() {
@@ -112,6 +126,11 @@ pub(crate) struct Updater {
     gate: Arc<Mutex<InstallGate>>,
     /// A remote install in progress: told why it failed, once.
     remote_failed: Option<InstallFailed>,
+    /// Work the user already accepted for this install; only newer work asks again.
+    acknowledged: Vec<RunningSession>,
+    /// UI installs that got past the busy check, for tests.
+    #[cfg(test)]
+    installs: usize,
 }
 impl EventEmitter<Event> for Updater {}
 impl Updater {
@@ -136,6 +155,9 @@ impl Updater {
             poll: None,
             gate: Arc::new(Mutex::new(InstallGate::default())),
             remote_failed: None,
+            acknowledged: Vec::new(),
+            #[cfg(test)]
+            installs: 0,
         };
         if this.config.is_some() {
             this.check(false, cx);
@@ -223,6 +245,7 @@ impl Updater {
         update: Update,
         installation: Installation,
         failed: InstallFailed,
+        acknowledged: Vec<RunningSession>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         if self.busy() {
@@ -231,6 +254,7 @@ impl Updater {
         self.pending = Some(update);
         self.installation = Some(installation);
         self.remote_failed = Some(failed);
+        self.acknowledged = acknowledged;
         // Pinned: the requester was told this version and judges the outcome by it.
         self.start_install(false, cx);
         Ok(())
@@ -242,8 +266,57 @@ impl Updater {
         }
     }
     /// The UI install: re-reads the feed first so a release newer than `pending` wins.
-    fn install(&mut self, cx: &mut Context<Self>) {
+    fn install(&mut self, acknowledged: Vec<RunningSession>, cx: &mut Context<Self>) {
+        if self.busy() {
+            return;
+        }
+        self.acknowledged = acknowledged;
+        #[cfg(test)]
+        {
+            self.installs += 1;
+        }
         self.start_install(true, cx);
+    }
+    /// Asked after the download, right before the point of no return: work may have started
+    /// meanwhile. Answers `reply` with whether to go on.
+    fn confirm_install(
+        acknowledged: Vec<RunningSession>,
+        reply: async_channel::Sender<bool>,
+        cx: &mut App,
+    ) {
+        super::update_gate::ask(cx, None, acknowledged, move |accepted, _| {
+            let _ = reply.try_send(accepted.is_some());
+        });
+    }
+    fn apply_progress(&mut self, progress: Progress, cx: &mut Context<Self>) {
+        match progress {
+            Progress::Started => self.rechecking = false,
+            Progress::Download(n, total) => {
+                self.progress = total
+                    .filter(|n| *n > 0)
+                    .map(|total| (n.saturating_mul(100) / total).min(100))
+            }
+            Progress::Installing => self.phase = Phase::Installing,
+            Progress::Confirm(reply) => {
+                Updater::confirm_install(self.acknowledged.clone(), reply, cx)
+            }
+        }
+        self.changed(cx);
+    }
+    /// The install ended before the restart. A declined one stays available and is no error.
+    fn install_failed(&mut self, error: String, cx: &mut Context<Self>) {
+        self.phase = Phase::Available;
+        if error != DECLINED {
+            self.message = Some(error.clone());
+            cx.emit(Event::Error(format!(
+                "Couldn’t install the update: {error}"
+            )));
+        }
+        self.changed(cx);
+        self.tell_remote_failure(&error, cx);
+        if self.gate.lock().unwrap_or_else(|e| e.into_inner()).quitting {
+            crate::quit(cx);
+        }
     }
     fn start_install(&mut self, recheck: bool, cx: &mut Context<Self>) {
         if self.busy() {
@@ -278,6 +351,7 @@ impl Updater {
                         last_bytes = n;
                     }
                 })?;
+                confirm_before_install(&tx)?;
                 {
                     let mut gate = gate.lock().unwrap_or_else(|e| e.into_inner());
                     if gate.quitting { return Err("The app is closing; the update was not installed".into()); }
@@ -301,18 +375,7 @@ impl Updater {
         cx.spawn(async move |this, cx| {
             while let Ok(progress) = rx.recv().await {
                 if this
-                    .update(cx, |this, cx| {
-                        match progress {
-                            Progress::Started => this.rechecking = false,
-                            Progress::Download(n, total) => {
-                                this.progress = total
-                                    .filter(|n| *n > 0)
-                                    .map(|total| (n.saturating_mul(100) / total).min(100))
-                            }
-                            Progress::Installing => this.phase = Phase::Installing,
-                        }
-                        this.changed(cx);
-                    })
+                    .update(cx, |this, cx| this.apply_progress(progress, cx))
                     .is_err()
                 {
                     return;
@@ -343,22 +406,23 @@ impl Updater {
                         }
                     }
                     Ok(Installed::InstallerStarted) => crate::quit(cx),
-                    Err(error) => {
-                        this.phase = Phase::Available;
-                        this.message = Some(error.clone());
-                        cx.emit(Event::Error(format!(
-                            "Couldn’t install the update: {error}"
-                        )));
-                        this.changed(cx);
-                        this.tell_remote_failure(&error, cx);
-                        if this.gate.lock().unwrap_or_else(|e| e.into_inner()).quitting {
-                            crate::quit(cx);
-                        }
-                    }
+                    Err(error) => this.install_failed(error, cx),
                 }
             });
         })
         .detach();
+    }
+}
+/// Runs on the install thread once the download is done: asks the UI thread whether work that
+/// started meanwhile may be interrupted, and waits for the answer. `Err(DECLINED)` stops the
+/// install before anything is written.
+fn confirm_before_install(tx: &async_channel::Sender<Progress>) -> Result<(), String> {
+    let (reply, answer) = async_channel::bounded(1);
+    let _ = tx.send_blocking(Progress::Confirm(reply));
+    if answer.recv_blocking().unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(DECLINED.into())
     }
 }
 /// The update to install: `pending`, or what `latest` finds when the install re-checks the
@@ -393,8 +457,15 @@ pub(crate) fn status(entity: &Entity<Updater>, cx: &App) -> Option<String> {
         _ => state.message.clone(),
     }
 }
+/// The UI install (sidebar, Settings): asks first when work is running, and does nothing when
+/// the user cancels.
 pub(crate) fn install(entity: &Entity<Updater>, cx: &mut App) {
-    entity.update(cx, |updater, cx| updater.install(cx));
+    let entity = entity.clone();
+    super::update_gate::ask(cx, None, Vec::new(), move |accepted, cx| {
+        if let Some(accepted) = accepted {
+            entity.update(cx, |updater, cx| updater.install(accepted, cx));
+        }
+    });
 }
 impl Updater {
     fn pending_version(&self) -> String {
@@ -495,7 +566,7 @@ pub(crate) fn row(entity: Entity<Updater>, cx: &App) -> gpui::AnyElement {
             .aria_label("Install the available zptah update")
             .cursor_pointer()
             .hover(|s| s.bg(accent_color().opacity(0.2)))
-            .on_click(move |_, _, cx| action.update(cx, |updater, cx| updater.install(cx)));
+            .on_click(move |_, _, cx| install(&action, cx));
     }
     div()
         .id("native-app-update")
@@ -510,7 +581,11 @@ pub(crate) fn row(entity: Entity<Updater>, cx: &App) -> gpui::AnyElement {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
-    use std::sync::{Arc, Mutex};
+    use std::{
+        cell::RefCell,
+        rc::Rc,
+        sync::{Arc, Mutex},
+    };
     #[test]
     fn ui_installs_recheck_the_feed_and_remote_installs_stay_pinned() {
         let mut calls = 0;
@@ -552,7 +627,7 @@ mod tests {
             for phase in [Phase::Downloading, Phase::Installing] {
                 view.phase = phase;
                 view.progress = Some(42);
-                view.install(cx);
+                view.install(Vec::new(), cx);
                 view.check(true, cx);
                 assert_eq!(view.phase, phase);
                 assert_eq!(view.progress, Some(42));
@@ -561,5 +636,175 @@ mod tests {
             view.phase = Phase::Current;
             assert!(!view.actionable());
         });
+    }
+    fn gated(
+        cx: &mut TestAppContext,
+        running: Vec<RunningSession>,
+        builder: bool,
+    ) -> (Entity<Updater>, gpui::VisualTestContext) {
+        // Without the app's builder the dialog is a platform prompt, answered by its button
+        // label; with it, the dialog is the real modal and takes keys.
+        if builder {
+            cx.update(|cx| cx.set_prompt_builder(crate::modal::prompt_builder));
+        }
+        let over = super::super::update_gate::RunningOverride::default();
+        *over.0.borrow_mut() = running;
+        cx.update(|cx| cx.set_global(over));
+        let store = Arc::new(Mutex::new(
+            monocode_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ));
+        let updater = cx.update(|cx| shared(store, cx));
+        let window = cx.add_window(|_, _| gpui::Empty);
+        (
+            updater,
+            gpui::VisualTestContext::from_window(window.into(), cx),
+        )
+    }
+    fn running(id: &str) -> RunningSession {
+        RunningSession {
+            id: id.into(),
+            title: id.into(),
+        }
+    }
+    fn dialog_open(visual: &mut gpui::VisualTestContext) -> bool {
+        visual.update(|window, _| window.has_active_prompt())
+    }
+    fn installs(updater: &Entity<Updater>, visual: &gpui::VisualTestContext) -> usize {
+        updater.read_with(visual, |u, _| u.installs)
+    }
+    #[gpui::test]
+    fn the_ui_install_waits_for_the_user_and_cancel_does_not_start_it(cx: &mut TestAppContext) {
+        let (updater, mut visual) = gated(cx, vec![running("1")], false);
+        visual.update(|_, cx| install(&updater, cx));
+        visual.run_until_parked();
+        assert!(visual.has_pending_prompt(), "the dialog is up");
+        assert_eq!(
+            installs(&updater, &visual),
+            0,
+            "nothing starts before the answer"
+        );
+        visual.simulate_prompt_answer("Cancel");
+        visual.run_until_parked();
+        assert_eq!(installs(&updater, &visual), 0);
+    }
+    #[gpui::test]
+    fn enter_on_the_update_dialog_does_not_install(cx: &mut TestAppContext) {
+        let (updater, mut visual) = gated(cx, vec![running("1")], true);
+        visual.update(|_, cx| install(&updater, cx));
+        visual.run_until_parked();
+        assert!(dialog_open(&mut visual));
+        visual.simulate_keystrokes("enter");
+        visual.run_until_parked();
+        assert!(!dialog_open(&mut visual), "enter answered the dialog");
+        assert_eq!(
+            installs(&updater, &visual),
+            0,
+            "Cancel is the default answer"
+        );
+    }
+    #[gpui::test]
+    fn update_anyway_starts_the_ui_install_and_remembers_what_was_accepted(
+        cx: &mut TestAppContext,
+    ) {
+        let (updater, mut visual) = gated(cx, vec![running("1")], false);
+        visual.update(|_, cx| install(&updater, cx));
+        visual.run_until_parked();
+        assert_eq!(installs(&updater, &visual), 0);
+        visual.simulate_prompt_answer("Update anyway");
+        visual.run_until_parked();
+        assert_eq!(installs(&updater, &visual), 1);
+        assert_eq!(
+            updater.read_with(&visual, |u, _| u.acknowledged.clone()),
+            vec![running("1")]
+        );
+    }
+    #[gpui::test]
+    fn no_running_work_installs_without_a_dialog(cx: &mut TestAppContext) {
+        let (updater, mut visual) = gated(cx, Vec::new(), false);
+        visual.update(|_, cx| install(&updater, cx));
+        visual.run_until_parked();
+        assert!(!visual.has_pending_prompt());
+        assert_eq!(installs(&updater, &visual), 1);
+    }
+    #[gpui::test]
+    fn work_started_during_the_download_asks_again_before_the_install(cx: &mut TestAppContext) {
+        let (updater, mut visual) = gated(cx, vec![running("1"), running("2")], false);
+        updater.update(&mut visual, |u, _| u.acknowledged = vec![running("1")]);
+        let (tx, rx) = async_channel::bounded(8);
+        // The install thread asks through the same function start_install uses.
+        let thread = std::thread::spawn(move || confirm_before_install(&tx));
+        let reply = loop {
+            match rx.try_recv() {
+                Ok(Progress::Confirm(reply)) => break reply,
+                Ok(_) => {}
+                Err(_) => std::thread::yield_now(),
+            }
+        };
+        updater.update(&mut visual, |u, cx| {
+            u.apply_progress(Progress::Confirm(reply), cx)
+        });
+        visual.run_until_parked();
+        assert!(
+            visual.has_pending_prompt(),
+            "work 2 started after the first answer"
+        );
+        visual.simulate_prompt_answer("Cancel");
+        visual.run_until_parked();
+        assert_eq!(thread.join().unwrap(), Err(DECLINED.to_string()));
+    }
+    #[gpui::test]
+    fn nothing_new_installs_without_asking_again(cx: &mut TestAppContext) {
+        let (updater, mut visual) = gated(cx, vec![running("1")], false);
+        updater.update(&mut visual, |u, _| u.acknowledged = vec![running("1")]);
+        let (tx, rx) = async_channel::bounded(8);
+        let thread = std::thread::spawn(move || confirm_before_install(&tx));
+        let reply = loop {
+            match rx.try_recv() {
+                Ok(Progress::Confirm(reply)) => break reply,
+                Ok(_) => {}
+                Err(_) => std::thread::yield_now(),
+            }
+        };
+        updater.update(&mut visual, |u, cx| {
+            u.apply_progress(Progress::Confirm(reply), cx)
+        });
+        visual.run_until_parked();
+        assert!(!visual.has_pending_prompt());
+        assert_eq!(thread.join().unwrap(), Ok(()));
+    }
+    #[gpui::test]
+    fn a_declined_install_stays_available_without_an_error(cx: &mut TestAppContext) {
+        let (updater, mut visual) = gated(cx, Vec::new(), false);
+        let errors = Rc::new(RefCell::new(0));
+        let seen = errors.clone();
+        let _subscription = visual.update(|_, cx| {
+            cx.subscribe(&updater, move |_, event: &Event, _| {
+                if matches!(event, Event::Error(_)) {
+                    *seen.borrow_mut() += 1;
+                }
+            })
+        });
+        let told = Rc::new(RefCell::new(Vec::new()));
+        let sink = told.clone();
+        updater.update(&mut visual, |u, cx| {
+            u.phase = Phase::Downloading;
+            u.message = None;
+            u.remote_failed = Some(Box::new(move |why, _| sink.borrow_mut().push(why)));
+            u.install_failed(DECLINED.into(), cx);
+        });
+        assert_eq!(
+            updater.read_with(&visual, |u, _| (u.phase, u.message.clone())),
+            (Phase::Available, None)
+        );
+        assert_eq!(*errors.borrow(), 0, "a decline is not an error");
+        assert_eq!(
+            *told.borrow(),
+            vec![DECLINED.to_string()],
+            "a remote requester hears it"
+        );
+        updater.update(&mut visual, |u, cx| {
+            u.install_failed("disk full".into(), cx)
+        });
+        assert_eq!(*errors.borrow(), 1);
     }
 }
