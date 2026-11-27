@@ -253,6 +253,22 @@ impl EventEmitter<ShowEmojiLibrary> for Monos {}
 impl EventEmitter<NodePathChanged> for Monos {}
 impl EventEmitter<ChatOpened> for Monos {}
 impl Monos {
+    /// Workflow runs going now, as `(run id, workflow name)`.
+    pub(crate) fn running_workflows(&self) -> Vec<(String, String)> {
+        self.workflows
+            .running()
+            .into_iter()
+            .map(|(workflow, run)| {
+                let name = self
+                    .workflows
+                    .with_run(&workflow, |run| run.definition.name.clone())
+                    .unwrap_or(workflow);
+                (run, name)
+            })
+            .collect()
+    }
+}
+impl Monos {
     #[cfg(test)]
     pub(crate) fn observation_count(&self) -> usize {
         self.observations.len()

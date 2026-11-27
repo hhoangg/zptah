@@ -10,7 +10,7 @@
 use super::*;
 use crate::{
     monos::Monos,
-    notifications::{platform, updater},
+    notifications::{platform, update_gate, updater},
 };
 use gpui::{Global, Task};
 use monocode_core::app_update::{
@@ -32,6 +32,7 @@ pub(crate) trait Backend: Send + Sync {
         &self,
         found: Found,
         failed: updater::InstallFailed,
+        acknowledged: Vec<RunningSession>,
         cx: &mut App,
     ) -> Result<(), String>;
 }
@@ -62,10 +63,11 @@ impl Backend for Feed {
         &self,
         found: Found,
         failed: updater::InstallFailed,
+        acknowledged: Vec<RunningSession>,
         cx: &mut App,
     ) -> Result<(), String> {
         let (update, installation) = found.package.ok_or("No update package was found")?;
-        updater::install_remote(update, installation, failed, cx)
+        updater::install_remote(update, installation, failed, acknowledged, cx)
     }
 }
 
@@ -88,6 +90,8 @@ fn backend(cx: &App) -> Arc<dyn Backend> {
 #[derive(Default)]
 pub(crate) struct State {
     pub(crate) installing: bool,
+    /// The desktop is asking the user whether a remote update may interrupt running work.
+    pub(crate) asking: bool,
     /// Why the last install ended before the restart; shown by the status until the next try.
     last_failure: Option<String>,
     /// The desktop notices raised, for tests (the OS bridge has no observer).
@@ -133,6 +137,9 @@ pub(crate) struct Reply {
 pub(crate) struct Begin {
     found: Found,
     pending: Pending,
+    /// The work the user saw and accepted (or none was running), plus the caller's own chat.
+    /// Only work that starts after this asks again before the restart.
+    acknowledged: Vec<RunningSession>,
 }
 
 impl Begin {
@@ -155,38 +162,68 @@ fn clear_if_same(store: &monocode_core::store::Store, pending: &Pending) -> Resu
 impl Shell {
     /// The chats that are working now: what a restart would interrupt. `except` is the
     /// session of the caller, which is working because it is asking.
-    pub(super) fn remote_update_running(
+    pub(crate) fn remote_update_running(
         &self,
         except: Option<i64>,
         cx: &App,
     ) -> Vec<RunningSession> {
         let terminals = self.tui_sessions.iter().filter_map(|(id, tui)| {
             let summary = self.session_summaries.get(id)?;
-            (tui.read(cx).busy() && Some(*id) != except).then(|| RunningSession {
-                id: id.to_string(),
-                title: monocode_core::session_title::display_title(
-                    &summary.title,
-                    &summary.provider,
-                )
-                .to_owned(),
-            })
-        });
-        let chats = self
-            .notification_chats(cx)
-            .into_iter()
-            .filter_map(|view| {
-                let view = view.read(cx);
-                (view.responding() && Some(view.summary.id) != except).then(|| RunningSession {
-                    id: view.summary.id.to_string(),
+            (tui.read(cx).busy() && Some(*id) != except && !self.is_cloud(*id)).then(|| {
+                RunningSession {
+                    id: id.to_string(),
                     title: monocode_core::session_title::display_title(
-                        &view.summary.title,
-                        &view.summary.provider,
+                        &summary.title,
+                        &summary.provider,
                     )
                     .to_owned(),
-                })
+                }
             })
-            .collect::<Vec<_>>();
-        chats.into_iter().chain(terminals).collect()
+        });
+        let chats =
+            self.notification_chats(cx)
+                .into_iter()
+                .filter_map(|view| {
+                    let view = view.read(cx);
+                    // Cloud sessions and sessions on a remote Host keep running through a restart.
+                    let off_this_computer =
+                        self.is_cloud(view.summary.id) || view.summary.cwd.starts_with("remote://");
+                    (view.responding() && Some(view.summary.id) != except && !off_this_computer)
+                        .then(|| RunningSession {
+                            id: view.summary.id.to_string(),
+                            // A Mono's chat or habit run is named after the Mono.
+                            title: match self.monos.as_ref().and_then(|monos| {
+                                monos
+                                    .read(cx)
+                                    .notification_mono(view.summary.id)
+                                    .map(|m| m.label())
+                            }) {
+                                Some(mono) => mono,
+                                None => monocode_core::session_title::display_title(
+                                    &view.summary.title,
+                                    &view.summary.provider,
+                                )
+                                .to_owned(),
+                            },
+                        })
+                })
+                .collect::<Vec<_>>();
+        // Workflow runs that go on without a chat of their own.
+        let workflows = self.monos.iter().flat_map(|monos| {
+            monos
+                .read(cx)
+                .running_workflows()
+                .into_iter()
+                .map(|(run, name)| RunningSession {
+                    id: format!("workflow:{run}"),
+                    title: name,
+                })
+        });
+        chats
+            .into_iter()
+            .chain(terminals)
+            .chain(workflows)
+            .collect()
     }
 
     /// Answers a `check` or an `install` request. For an install, the returned reply says what
@@ -197,13 +234,29 @@ impl Shell {
         request: Request,
         cx: &mut Context<Self>,
     ) -> Task<Result<Reply, String>> {
+        self.remote_update_with(origin, request, None, cx)
+    }
+
+    /// `accepted`: the work the person at the computer accepted to interrupt in the desktop
+    /// dialog.
+    fn remote_update_with(
+        &mut self,
+        origin: Origin,
+        request: Request,
+        accepted: Option<Vec<RunningSession>>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<Reply, String>> {
+        // A Mono cannot confirm on the user's behalf: only a device (whose own app asked the
+        // user) or the dialog on this computer can accept an interruption.
+        let confirmed = accepted.is_some();
+        let force = confirmed || (request.force && matches!(origin, Origin::Device { .. }));
         let backend = backend(cx);
         let except = match &origin {
             Origin::Mono { session, .. } => Some(*session),
             Origin::Device { .. } => None,
         };
         let running = self.remote_update_running(except, cx);
-        if request.mode == Mode::Install {
+        if request.mode == Mode::Install && !confirmed {
             // A request to install is always told to the person at the computer.
             self.remote_update_notice(
                 &format!("{} asked to update and restart zptah.", origin.name()),
@@ -219,9 +272,9 @@ impl Shell {
             let checked = work.await;
             let current = backend.current();
             let decided = this.update(cx, |_, cx| -> Result<Reply, String> {
-                let state = cx.default_global::<State>();
                 match request.mode {
                     Mode::Check => {
+                        let state = cx.default_global::<State>();
                         let (offer, error) = match &checked {
                             Ok(found) => (found.offer.clone(), None),
                             Err(error) => (None, Some(error.as_str())),
@@ -236,15 +289,32 @@ impl Shell {
                         let found =
                             checked.map_err(|e| format!("Could not read the update feed: {e}"))?;
                         let decision =
-                            remote::decide(&current, found.offer.as_ref(), &running, request.force);
+                            remote::decide(&current, found.offer.as_ref(), &running, force);
+                        if matches!(decision, Decision::Confirm { .. })
+                            && (cx.default_global::<State>().installing || updater::is_busy(cx))
+                        {
+                            // Another update runs: no dialog for one that cannot start.
+                            return Err("An update is already in progress".into());
+                        }
+                        if let Decision::Confirm { sessions } = &decision {
+                            // The caller is told to wait; the person here decides.
+                            Shell::ask_remote_update(&origin, sessions.clone(), cx);
+                        }
+                        let device = matches!(origin, Origin::Device { .. });
                         let Decision::Proceed { from, to } = &decision else {
                             return Ok(Reply {
-                                value: decision.reply(),
+                                value: decision.reply_for(device),
                                 begin: None,
                             });
                         };
+                        // A device's own `confirm` must not race the dialog that is open here:
+                        // the person at the computer answers first.
+                        if !confirmed && cx.default_global::<State>().asking {
+                            return Err("A confirmation dialog is open on the desktop: answer it there first".into());
+                        }
                         // Checked and taken in this one step, after the feed answered: two
                         // requests cannot both pass.
+                        let state = cx.default_global::<State>();
                         if state.installing {
                             return Err("An update is already in progress".into());
                         }
@@ -266,9 +336,20 @@ impl Shell {
                             cx.default_global::<State>().installing = false;
                             return Err(format!("Could not record the update request: {error}"));
                         }
+                        let mut acknowledged = accepted.unwrap_or_else(|| running.clone());
+                        if let Origin::Mono { session, .. } = &origin {
+                            acknowledged.push(RunningSession {
+                                id: session.to_string(),
+                                title: origin.name().to_owned(),
+                            });
+                        }
                         Ok(Reply {
-                            value: decision.reply(),
-                            begin: Some(Begin { found, pending }),
+                            value: decision.reply_for(device),
+                            begin: Some(Begin {
+                                found,
+                                pending,
+                                acknowledged,
+                            }),
                         })
                     }
                 }
@@ -277,18 +358,79 @@ impl Shell {
         })
     }
 
+    /// Opens the desktop dialog for a remote install that running work holds back. "Update
+    /// anyway" runs the request again, confirmed; "Cancel" leaves everything as it is.
+    fn ask_remote_update(origin: &Origin, sessions: Vec<RunningSession>, cx: &mut Context<Self>) {
+        let state = cx.default_global::<State>();
+        if state.asking {
+            return;
+        }
+        state.asking = true;
+        let shell = cx.weak_entity();
+        let origin = origin.clone();
+        let name = origin.name().to_owned();
+        update_gate::ask_about(cx, sessions, Some(name), move |accepted, cx| {
+            cx.default_global::<State>().asking = false;
+            let Some(accepted) = accepted else {
+                return;
+            };
+            let _ = shell.update(cx, |shell, cx| {
+                let task = shell.remote_update_with(
+                    origin,
+                    Request {
+                        mode: Mode::Install,
+                        force: true,
+                    },
+                    Some(accepted),
+                    cx,
+                );
+                cx.spawn(async move |shell, cx| {
+                    let _ = match task.await {
+                        Ok(Reply {
+                            begin: Some(begin), ..
+                        }) => shell.update(cx, |shell, cx| shell.remote_update_begin(begin, cx)),
+                        // Nothing started (feed error, already up to date, another update
+                        // running): the person who clicked must hear why.
+                        Ok(Reply { value, .. }) => shell.update(cx, |shell, cx| {
+                            let text = value["message"]
+                                .as_str()
+                                .unwrap_or("The update did not start.");
+                            shell.remote_update_notice(text, cx)
+                        }),
+                        Err(error) => shell.update(cx, |shell, cx| {
+                            shell.remote_update_notice(
+                                &format!("The update did not start: {error}"),
+                                cx,
+                            )
+                        }),
+                    };
+                })
+                .detach();
+            });
+        });
+    }
+
     /// Starts the install of an accepted request: call it once the reply was sent. The result
     /// is posted when the install fails (here) or after the restart (next launch).
     pub(crate) fn remote_update_begin(&mut self, begin: Begin, cx: &mut Context<Self>) {
-        let Begin { found, pending } = begin;
+        let Begin {
+            found,
+            pending,
+            acknowledged,
+        } = begin;
         let shell = cx.weak_entity();
         let failed_pending = pending.clone();
         let failed: updater::InstallFailed = Box::new(move |error, cx| {
             let _ = shell.update(cx, |shell, cx| {
-                shell.finish_remote_update(&failed_pending, Outcome::Failed(error), cx)
+                let outcome = if error == updater::DECLINED {
+                    Outcome::Cancelled
+                } else {
+                    Outcome::Failed(error)
+                };
+                shell.finish_remote_update(&failed_pending, outcome, cx)
             });
         });
-        if let Err(error) = backend(cx).install(found, failed, cx) {
+        if let Err(error) = backend(cx).install(found, failed, acknowledged, cx) {
             self.finish_remote_update(&pending, Outcome::Failed(error), cx);
         }
     }
@@ -303,7 +445,7 @@ impl Shell {
     ) {
         let state = cx.default_global::<State>();
         state.installing = false;
-        if matches!(outcome, Outcome::Failed(_)) {
+        if !matches!(outcome, Outcome::Updated) {
             state.last_failure = Some(outcome.message(pending));
         }
         let store = self.store.clone();
@@ -425,6 +567,8 @@ pub(crate) mod testing {
         pub install_error: Option<String>,
         /// The version of every install started.
         pub installs: Mutex<Vec<String>>,
+        /// The ids of the work each install was told the user had accepted.
+        pub acknowledged: Mutex<Vec<Vec<String>>>,
     }
     impl Fake {
         pub(crate) fn new(current: &str, latest: Option<&str>) -> Arc<Self> {
@@ -437,6 +581,7 @@ pub(crate) mod testing {
                 feed_error: None,
                 install_error: None,
                 installs: Mutex::new(Vec::new()),
+                acknowledged: Mutex::new(Vec::new()),
             })
         }
     }
@@ -457,6 +602,7 @@ pub(crate) mod testing {
             &self,
             found: Found,
             failed: updater::InstallFailed,
+            acknowledged: Vec<RunningSession>,
             _: &mut App,
         ) -> Result<(), String> {
             if let Some(error) = &self.install_error {
@@ -467,6 +613,10 @@ pub(crate) mod testing {
                 .map(|o| o.version.to_string())
                 .unwrap_or_default();
             self.installs.lock().unwrap().push(version);
+            self.acknowledged
+                .lock()
+                .unwrap()
+                .push(acknowledged.into_iter().map(|work| work.id).collect());
             FAILED.with(|slot| *slot.borrow_mut() = Some(failed));
             Ok(())
         }
