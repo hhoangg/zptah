@@ -966,6 +966,13 @@ fn a_workflow_a_habit_run_starts_reports_to_the_chat_and_outlives_the_run(cx: &m
             m.running.remove(&run);
             assert_eq!(m.active_run, Some(run));
             assert!(m.workflows.is_running(&slow));
+            // An update would interrupt it: it is listed by its workflow name.
+            let names: Vec<_> = m
+                .running_workflows()
+                .into_iter()
+                .map(|(_, name)| name)
+                .collect();
+            assert_eq!(names, ["Slow"]);
         })
     });
     cx.run_until_parked();

@@ -452,3 +452,258 @@ fn an_abandoned_begin_clears_the_record_and_the_lock(cx: &mut TestAppContext) {
     assert!(!cx.update(|cx| cx.default_global::<State>().installing));
     assert!(fake.installs.lock().unwrap().is_empty());
 }
+
+#[gpui::test]
+fn a_held_remote_update_asks_on_the_desktop_and_cancel_installs_nothing(cx: &mut TestAppContext) {
+    let (window, a, _) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    make_busy(&window, cx, a);
+    let held = run(&window, cx, device(), install(false)).unwrap();
+    assert_eq!(held["status"], "confirmation_required");
+    assert!(cx.has_pending_prompt(), "the desktop shows the dialog");
+    cx.simulate_prompt_answer("Cancel");
+    cx.run_until_parked();
+    assert!(fake.installs.lock().unwrap().is_empty());
+    assert!(stored(&window, cx).is_none());
+    assert!(!cx.update(|cx| cx.default_global::<State>().installing));
+}
+
+#[gpui::test]
+fn update_anyway_on_the_desktop_starts_the_held_remote_update(cx: &mut TestAppContext) {
+    let (window, a, _) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    make_busy(&window, cx, a);
+    let held = run(&window, cx, mono("mono-1"), install(false)).unwrap();
+    assert_eq!(held["status"], "confirmation_required");
+    assert!(fake.installs.lock().unwrap().is_empty());
+    cx.simulate_prompt_answer("Update anyway");
+    cx.run_until_parked();
+    assert_eq!(*fake.installs.lock().unwrap(), vec!["0.2.0".to_owned()]);
+    assert_eq!(stored(&window, cx).unwrap().to, "0.2.0");
+}
+
+#[gpui::test]
+fn a_mono_cannot_confirm_an_interruption_by_itself(cx: &mut TestAppContext) {
+    let (window, a, _) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    make_busy(&window, cx, a);
+    let held = run(&window, cx, mono("mono-1"), install(true)).unwrap();
+    assert_eq!(held["status"], "confirmation_required");
+    assert!(fake.installs.lock().unwrap().is_empty());
+    assert!(cx.has_pending_prompt());
+}
+
+#[gpui::test]
+fn cloud_and_remote_host_sessions_do_not_count_as_running(cx: &mut TestAppContext) {
+    let (window, a, b) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    make_busy(&window, cx, a);
+    make_busy(&window, cx, b);
+    window
+        .update(cx, |shell, _, cx| {
+            shell.cloud_marks.insert(
+                a,
+                super::cloud::CloudMark {
+                    local_project: "/work/monocode".into(),
+                    codespace: "cs-1".into(),
+                    kind: monocode_core::cloud_sessions::CloudBackendKind::Codespaces,
+                },
+            );
+            shell.sessions[&b].update(cx, |chat, _| chat.summary.cwd = "remote://host/work".into());
+            assert!(shell.remote_update_running(None, cx).is_empty());
+        })
+        .unwrap();
+    let value = run(&window, cx, device(), install(false)).unwrap();
+    assert_eq!(value["status"], "updating");
+    assert!(
+        !cx.has_pending_prompt(),
+        "no dialog for work that survives a restart"
+    );
+}
+
+#[gpui::test]
+fn work_started_while_the_desktop_dialog_is_open_is_not_treated_as_accepted(
+    cx: &mut TestAppContext,
+) {
+    let (window, a, b) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    make_busy(&window, cx, a);
+    let held = run(&window, cx, device(), install(false)).unwrap();
+    assert_eq!(held["status"], "confirmation_required");
+    // The user is still reading the dialog when another session starts.
+    make_busy(&window, cx, b);
+    cx.simulate_prompt_answer("Update anyway");
+    cx.run_until_parked();
+    assert_eq!(fake.installs.lock().unwrap().len(), 1);
+    let acknowledged = fake.acknowledged.lock().unwrap()[0].clone();
+    assert_eq!(acknowledged, vec![a.to_string()], "only what the user saw");
+}
+
+#[gpui::test]
+fn a_mono_caller_own_chat_is_part_of_what_was_accepted(cx: &mut TestAppContext) {
+    let (window, a, _) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    make_busy(&window, cx, a);
+    let origin = Origin::Mono {
+        id: "m".into(),
+        name: "Ada".into(),
+        session: a,
+    };
+    let value = run(&window, cx, origin, install(false)).unwrap();
+    assert_eq!(value["status"], "updating");
+    assert_eq!(fake.acknowledged.lock().unwrap()[0], vec![a.to_string()]);
+}
+
+#[gpui::test]
+fn a_mono_is_told_it_cannot_confirm_and_a_device_may(cx: &mut TestAppContext) {
+    let (window, a, _) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    make_busy(&window, cx, a);
+    let mono_reply = run(&window, cx, mono("m"), install(false)).unwrap();
+    let message = mono_reply["message"].as_str().unwrap();
+    assert!(message.contains("cannot confirm") && !message.contains("confirm true"));
+    cx.simulate_prompt_answer("Cancel");
+    cx.run_until_parked();
+    let device_reply = run(&window, cx, device(), install(false)).unwrap();
+    assert!(
+        device_reply["message"]
+            .as_str()
+            .unwrap()
+            .contains("confirm true")
+    );
+}
+
+#[gpui::test]
+fn update_anyway_that_cannot_start_tells_the_computer_why(cx: &mut TestAppContext) {
+    let (window, a, _) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    make_busy(&window, cx, a);
+    run(&window, cx, device(), install(false)).unwrap();
+    // Another update starts before the user answers.
+    cx.update(|cx| cx.default_global::<State>().installing = true);
+    let before = notices(cx).len();
+    cx.simulate_prompt_answer("Update anyway");
+    cx.run_until_parked();
+    assert!(fake.installs.lock().unwrap().is_empty());
+    let after = notices(cx);
+    assert_eq!(after.len(), before + 1);
+    assert!(
+        after.last().unwrap().contains("already in progress"),
+        "{after:?}"
+    );
+}
+
+#[gpui::test]
+fn an_install_declined_before_the_restart_reads_as_cancelled_not_failed(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    run(&window, cx, device(), install(false)).unwrap();
+    let failed = FAILED.with(|slot| slot.borrow_mut().take()).unwrap();
+    cx.update(|cx| failed(crate::notifications::updater::DECLINED.into(), cx));
+    cx.run_until_parked();
+    let last = notices(cx).last().cloned().unwrap();
+    assert_eq!(
+        last,
+        "Update to 0.2.0 not installed: cancelled on the desktop"
+    );
+    assert!(stored(&window, cx).is_none());
+}
+
+#[gpui::test]
+fn a_held_request_while_another_update_runs_opens_no_dialog(cx: &mut TestAppContext) {
+    let (window, a, _) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    make_busy(&window, cx, a);
+    cx.update(|cx| cx.default_global::<State>().installing = true);
+    let result = run(&window, cx, device(), install(false));
+    assert!(result.unwrap_err().contains("already in progress"));
+    assert!(!cx.has_pending_prompt());
+}
+
+fn dialog_open(window: &WindowHandle<Shell>, cx: &mut TestAppContext) -> bool {
+    window
+        .update(cx, |_, window, _| window.has_active_prompt())
+        .unwrap()
+}
+
+#[gpui::test]
+fn a_device_confirming_while_the_desktop_dialog_is_open_proceeds_and_closes_it(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| cx.set_prompt_builder(crate::modal::prompt_builder));
+    let (window, a, _) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    make_busy(&window, cx, a);
+    let held = run(&window, cx, device(), install(false)).unwrap();
+    assert_eq!(held["status"], "confirmation_required");
+    assert!(dialog_open(&window, cx));
+    assert!(cx.update(|cx| cx.default_global::<State>().asking));
+    // The web user confirmed on the web and retries with confirm true.
+    let confirmed = run(&window, cx, device(), install(true)).unwrap();
+    assert_eq!(confirmed["status"], "updating");
+    assert_eq!(fake.installs.lock().unwrap().len(), 1);
+    assert!(!dialog_open(&window, cx), "the desktop dialog was closed");
+    assert!(!cx.update(|cx| cx.default_global::<State>().asking));
+    // Closing it did not start a second install nor say anything about one.
+    let notices_before = notices(cx).len();
+    cx.run_until_parked();
+    assert_eq!(fake.installs.lock().unwrap().len(), 1);
+    assert_eq!(notices(cx).len(), notices_before);
+}
+
+#[gpui::test]
+fn a_device_confirm_never_closes_a_dialog_the_user_opened_elsewhere(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_prompt_builder(crate::modal::prompt_builder));
+    let (window, a, _) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    make_busy(&window, cx, a);
+    // The user's own update dialog (sidebar button) is open first.
+    cx.update(|cx| crate::notifications::update_gate::ask(cx, None, Vec::new(), |_, _| {}));
+    cx.run_until_parked();
+    assert!(dialog_open(&window, cx));
+    // A remote request is held; its dialog has to wait behind the user's.
+    let held = run(&window, cx, device(), install(false)).unwrap();
+    assert_eq!(held["status"], "confirmation_required");
+    let confirmed = run(&window, cx, device(), install(true)).unwrap();
+    assert_eq!(confirmed["status"], "updating");
+    assert!(dialog_open(&window, cx), "the user's dialog is still open");
+    // Once the user answers, the dismissed remote dialog never opens.
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    visual
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    visual.run_until_parked();
+    assert!(!dialog_open(&window, visual));
+}
+
+#[gpui::test]
+fn a_mono_confirming_while_the_desktop_dialog_is_open_is_refused_and_the_dialog_stays(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| cx.set_prompt_builder(crate::modal::prompt_builder));
+    let (window, a, _) = window(cx);
+    let fake = Fake::new("0.1.0", Some("0.2.0"));
+    use_backend(cx, &fake);
+    make_busy(&window, cx, a);
+    run(&window, cx, device(), install(false)).unwrap();
+    assert!(dialog_open(&window, cx));
+    let refused = run(&window, cx, mono("m"), install(true)).unwrap();
+    assert_eq!(refused["status"], "confirmation_required");
+    assert!(fake.installs.lock().unwrap().is_empty());
+    assert!(dialog_open(&window, cx), "the dialog stays");
+    assert!(cx.update(|cx| cx.default_global::<State>().asking));
+}

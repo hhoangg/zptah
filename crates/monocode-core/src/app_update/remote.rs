@@ -116,6 +116,12 @@ pub fn decide(
 impl Decision {
     /// The reply to the caller. It is sent before anything is installed.
     pub fn reply(&self) -> Value {
+        self.reply_for(true)
+    }
+
+    /// The reply for a paired device (`device` true, which may repeat with `confirm`) or a Mono
+    /// (which cannot: only the person at the computer accepts an interruption).
+    pub fn reply_for(&self, device: bool) -> Value {
         match self {
             Decision::UpToDate { current } => json!({
                 "status": "up_to_date",
@@ -125,7 +131,11 @@ impl Decision {
             Decision::Confirm { sessions } => json!({
                 "status": "confirmation_required",
                 "runningSessions": sessions,
-                "message": "Sessions are running and a restart interrupts them. Ask the user, then repeat with force true (confirm true for a device).",
+                "message": if device {
+                    "Sessions are running and a restart interrupts them. Nothing was installed. A confirmation dialog was opened on the desktop and the update starts only if the user accepts it there. A device may repeat with confirm true once its user agreed."
+                } else {
+                    "Sessions are running and a restart interrupts them. Nothing was installed. A confirmation dialog was opened on the desktop: the update starts only if the user accepts it there. You cannot confirm it yourself; tell the user."
+                },
             }),
             Decision::Proceed { from, to } => json!({
                 "status": "updating",
@@ -177,6 +187,8 @@ impl Pending {
 pub enum Outcome {
     Updated,
     Failed(String),
+    /// The person at the computer declined at the last moment; nothing was installed.
+    Cancelled,
 }
 
 impl Outcome {
@@ -184,6 +196,10 @@ impl Outcome {
     pub fn message(&self, pending: &Pending) -> String {
         match self {
             Outcome::Updated => format!("Updated to {}", pending.to),
+            Outcome::Cancelled => format!(
+                "Update to {} not installed: cancelled on the desktop",
+                pending.to
+            ),
             Outcome::Failed(reason) => {
                 format!("Update to {} failed: {}", pending.to, capped(reason))
             }
