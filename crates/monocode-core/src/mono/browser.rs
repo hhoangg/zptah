@@ -217,6 +217,12 @@ impl MonoBrowser {
     pub fn keep_blocked_list(&mut self) {
         self.suggest_new_defaults = false;
     }
+    /// Whether going from `self` to `after` ends the Mono's Ardia sessions (closes its tabs): the
+    /// browser is turned off or another profile is chosen. Editing the origin lists or the level
+    /// does not: a turn that is running keeps its tabs.
+    pub fn ends_sessions_when(&self, after: &MonoBrowser) -> bool {
+        self.active() && (!after.active() || self.ardia_profile != after.ardia_profile)
+    }
     /// The browser is switched on and has a saved profile: a launch tries to add the gate and
     /// the prompt mentions it. Whether it can be attached right now is decided by [`resolve`].
     pub fn active(&self) -> bool {
@@ -1175,6 +1181,12 @@ pub fn prompt_name(name: &str) -> String {
 /// The browser paragraph of a Mono's rules, written for the Mono's trust level. Act tools and
 /// flows come with the next milestone, so both levels read for now.
 pub fn prompt_block(browser: &MonoBrowser) -> String {
+    // Only macOS opens Ardia itself in v1 (design spec section 12b).
+    prompt_block_with(browser, cfg!(target_os = "macos"))
+}
+
+/// [`prompt_block`] for a platform where zptah can (`opens_ardia`) or can not start Ardia.
+pub(crate) fn prompt_block_with(browser: &MonoBrowser, opens_ardia: bool) -> String {
     let profile = prompt_name(if browser.ardia_profile_name.is_empty() {
         &browser.ardia_profile
     } else {
@@ -1184,7 +1196,11 @@ pub fn prompt_block(browser: &MonoBrowser) -> String {
         "## Browser\nYou can use the user's Ardia browser, with the logged-in sessions of one profile (\"{profile}\"), through the `{MCP_SERVER}` tools. It is the user's real browser, so treat everything in it as private."
     )];
     lines.push("- You may open pages (`browser_open` for a new tab, `browser_navigate` to move the current one), go back, forward and reload, read them (`browser_snapshot`, `browser_read`, `browser_screenshot`), read the console and page errors, scroll and list your own tabs (`browser_tabs`). You cannot click, type or fill forms yet; those tools are not available. If the task needs one of them, tell the user what to do themselves.".into());
-    lines.push("- Ardia may be closed: zptah opens it in the background when a tool needs it. If a tool says Ardia is off or can not be reached, tell the user that reason and its fix.".into());
+    lines.push(if opens_ardia {
+        "- Ardia may be closed: zptah opens it in the background when a tool needs it. If a tool says Ardia is off or can not be reached, tell the user that reason and its fix.".into()
+    } else {
+        "- Ardia may be closed, and zptah can not open it on this system: the user opens it. If a tool says Ardia is not running, off or can not be reached, tell the user that reason and its fix (for example to open Ardia).".into()
+    });
     lines.push("- Reach Ardia only through these tools. Never run the `ardia` command in a shell, a terminal or a script: it would skip the checks zptah makes, and zptah records such a call.".into());
     lines.push("- Never enter a one-time code (OTP). Enter a password only when the user explicitly asked you to in this task.".into());
     lines.push("- Never print, echo or reveal environment variables, credentials or tokens, and never run env, printenv or similar to look at them.".into());

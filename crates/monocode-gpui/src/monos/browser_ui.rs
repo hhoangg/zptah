@@ -20,9 +20,18 @@ use std::sync::Arc;
 
 /// Drops the Mono's gate (its browser was turned off or changed). It is the app's own state, so
 /// this never touches the user's Chrome.
-fn stop_server(id: &str) {
+///
+/// `end_sessions` also closes the tabs the Mono opened in Ardia: for a browser turned off, a new
+/// profile or a removed Mono, never for an edit of the origin lists.
+fn stop_server(id: &str, end_sessions: bool) {
     let id = id.to_owned();
-    std::thread::spawn(move || browser::server::servers().stop(&id));
+    std::thread::spawn(move || {
+        let servers = browser::server::servers();
+        servers.stop(&id);
+        if end_sessions {
+            servers.end_sessions(&id);
+        }
+    });
 }
 
 /// The selector id of a trust level's row (tests click it).
@@ -294,7 +303,7 @@ impl Monos {
         // The gate starts again with the new setting on the next run. A change that does not
         // shape it (the trust level) keeps it; the running gate takes the new level at once.
         if before.server_key() != setting.server_key() {
-            stop_server(&id);
+            stop_server(&id, before.ends_sessions_when(setting));
         }
         browser::server::servers().update_policy(&id, setting.policy());
         self.save(cx);
@@ -671,7 +680,7 @@ impl Monos {
 
     /// A deleted Mono leaves no token and no audit rows.
     pub(super) fn browser_forget(&mut self, id: &str) {
-        stop_server(id);
+        stop_server(id, true);
         if let Ok(store) = self.browser_store() {
             let _ = store.delete_mono(id);
         }

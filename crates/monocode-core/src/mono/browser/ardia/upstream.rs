@@ -183,14 +183,11 @@ impl ArdiaUpstream {
             changed
         };
         if changed {
-            self.end_all_in_background();
+            // The tabs belong to the old profile: closed by the controller, which keeps the tab
+            // book, and forgotten here.
+            self.convs().clear();
+            self.controller.end_mono_in_background(&self.mono_id);
         }
-    }
-    /// Ends every conversation of this Mono (its browser was turned off or its profile changed),
-    /// on a thread so the caller never waits for `ardia`.
-    pub fn end_all_in_background(self: &Arc<Self>) {
-        let me = self.clone();
-        std::thread::spawn(move || me.end_all());
     }
     /// Closes the tabs and releases the holds of every conversation of this Mono.
     pub fn end_all(&self) {
@@ -198,6 +195,10 @@ impl ArdiaUpstream {
         for id in ids {
             self.end_conversation(id);
         }
+    }
+    /// The controller this upstream runs on.
+    pub fn controller(&self) -> &Arc<Controller> {
+        &self.controller
     }
     fn config(&self) -> Config {
         self.config
@@ -398,19 +399,25 @@ impl ArdiaUpstream {
             return Err(format!("This conversation already has {MAX_TABS} tabs open. Use browser_navigate in one of them, or close one with browser_tabs."));
         }
         let profile = self.config().profile;
-        let before = self.controller.tab_ids();
         let tab = match self.controller.cli().tabs_open(url, &profile) {
             Ok(tab) => tab,
             Err(failure) => {
-                // The open may have gone through before it timed out or failed to read: find
-                // the tab it made (an id that was not there before) and close it.
+                // The open may have made a tab that was never reported back. It is not closed
+                // and not remembered: without its id it could be a tab of the user's. The audit
+                // says so, so the user can close it.
                 if matches!(failure, Failure::TimedOut | Failure::Malformed(_)) {
-                    self.controller.close_new_tabs(&session, &profile, before);
+                    self.audit(
+                        id,
+                        "tab_open_unknown",
+                        url,
+                        "tabs open did not answer: a tab may have been left open in Ardia",
+                    );
                 }
                 return Err(self.fail(id, failure));
             }
         };
-        self.controller.add_tab(&session, &profile, &tab);
+        self.controller
+            .add_tab(&session, &self.mono_id, &profile, &tab);
         match self.bind(id, &tab) {
             Ok(data) => Ok((tab, data)),
             Err(error) => {
@@ -732,7 +739,7 @@ impl ArdiaUpstream {
                             ""
                         },
                         clean(&one_line(entry["title"].as_str().unwrap_or(""))),
-                        one_line(entry["url"].as_str().unwrap_or("")),
+                        defense::redact_url_secrets(&one_line(entry["url"].as_str().unwrap_or(""))),
                     ));
                 }
                 if !any {

@@ -21,6 +21,8 @@ pub const LAUNCH_WAIT: Duration = Duration::from_secs(20);
 pub const HOLD_SECONDS: u64 = 120;
 /// After a launch, `window.opened` events are ignored this long (Ardia restores its windows).
 const RESTORE_GRACE_MS: u64 = 5_000;
+/// How many times the event stream is started before it counts as lost.
+const WATCH_RETRIES: u32 = 3;
 
 // ---- readiness ----
 
@@ -164,12 +166,16 @@ struct Inner {
     /// Own tabs by `ardia browse` session name, each with the profile it was opened in: a tab of
     /// an old profile is never used again after the Mono picks another.
     sessions: HashMap<String, Vec<(String, String)>>,
+    /// The Mono each session belongs to, so a Mono's sessions can all be ended by its id.
+    session_monos: HashMap<String, String>,
     /// Every tab id zptah opened and has not closed, kept in a file.
     persisted: BTreeSet<String>,
     state_file: Option<PathBuf>,
     watch_generation: u64,
     /// Stops the `ardia events` child of the current watcher.
     watcher_stop: Option<Box<dyn Fn() + Send + Sync>>,
+    /// A watcher loop is running for the current generation.
+    watch_running: bool,
     /// The event stream ended while Ardia may still run: nothing says the user is not there, so
     /// there is no idle quit until Ardia is seen closed.
     watch_lost: bool,
@@ -234,10 +240,12 @@ impl Controller {
                 takeover: false,
                 cleanup_due: true,
                 sessions: HashMap::new(),
+                session_monos: HashMap::new(),
                 persisted: BTreeSet::new(),
                 state_file: None,
                 watch_generation: 0,
                 watcher_stop: None,
+                watch_running: false,
                 watch_lost: false,
                 events_from_ms: 0,
                 windows_from_ms: 0,
@@ -363,10 +371,12 @@ impl Controller {
             Err(other) => {
                 // Control off or a refusal: Ardia is up (and stays whoever's it was).
                 self.mark_running();
+                self.watch_if_ours();
                 return Err(Self::readiness_of(other));
             }
         };
         self.mark_running();
+        self.watch_if_ours();
         if info.protocol < MIN_PROTOCOL {
             return Err(Readiness::ProtocolTooOld(info.protocol));
         }
@@ -388,6 +398,7 @@ impl Controller {
             }
             inner.owner = Owner::Nobody;
             inner.watch_lost = false;
+            inner.watch_running = false;
             inner.watch_generation += 1;
             inner.watcher_stop.take()
         };
@@ -424,17 +435,18 @@ impl Controller {
         }
         self.platform.launch().map_err(|_| Readiness::DidntStart)?;
         self.set_launched();
-        self.start_watcher();
         let started = std::time::Instant::now();
         loop {
             match self.hello() {
                 Ok(info) => {
                     self.session_restored();
+                    self.ensure_watcher();
                     return Ok(info);
                 }
                 // Up, but refusing: the caller reports it.
                 Err(Failure::ControlOff) => {
                     self.session_restored();
+                    self.ensure_watcher();
                     return Err(Readiness::ControlOff);
                 }
                 Err(_) => {}
@@ -535,47 +547,109 @@ impl Controller {
 
     // ---- the user takes the browser over ----
 
-    /// Starts reading `ardia events`, after the launch set who owns Ardia. The previous watcher,
-    /// if any, is stopped.
-    fn start_watcher(&self) {
-        let (generation, previous) = {
-            let mut inner = self.lock();
-            inner.watch_generation += 1;
-            (inner.watch_generation, inner.watcher_stop.take())
+    /// Ardia answered and zptah started it: the launch filter opens (after a launch that did not
+    /// answer in time it is still closed) and the event watcher runs.
+    fn watch_if_ours(&self) {
+        let blind = {
+            let inner = self.lock();
+            if inner.owner != Owner::Zptah {
+                return;
+            }
+            inner.events_from_ms == u64::MAX
         };
-        if let Some(stop) = previous {
-            stop();
+        if blind {
+            self.session_restored();
         }
+        self.ensure_watcher();
+    }
+
+    /// Starts reading `ardia events`, only once Ardia has answered (before that the command
+    /// exits at once) and zptah owns it. One watcher per launch; a stream that ends while Ardia
+    /// is still up is started again a few times before the idle quit is given up.
+    fn ensure_watcher(&self) {
+        let generation = {
+            let mut inner = self.lock();
+            if inner.watch_running {
+                return;
+            }
+            inner.watch_running = true;
+            inner.watch_lost = false;
+            inner.watch_generation += 1;
+            inner.watch_generation
+        };
+        let me = self.me.clone();
+        std::thread::spawn(move || Self::watch_loop(me, generation));
+    }
+
+    fn watch_loop(me: Weak<Controller>, generation: u64) {
         let args: Vec<String> = ["events", "app.activated", "window.opened", "--json"]
             .into_iter()
             .map(String::from)
             .collect();
-        let Ok(mut stream) = self.cli.runner().watch(&args) else {
-            // No way to see the user: lean to the user's.
-            self.lock().watch_lost = true;
-            return;
-        };
-        self.lock().watcher_stop = Some(stream.stopper());
-        let me = self.me.clone();
-        std::thread::spawn(move || {
-            while let Some(line) = LineStream::next_line(&mut *stream) {
-                let Some(me) = me.upgrade() else {
-                    return;
-                };
-                if me.lock().watch_generation != generation {
-                    return;
-                }
-                me.note_event(&line);
+        let mut failures = 0u32;
+        loop {
+            let Some(this) = me.upgrade() else {
+                return;
+            };
+            if this.lock().watch_generation != generation {
+                return;
             }
-            // The stream ended. If nothing stopped it on purpose, Ardia may still be running
-            // with nobody watching for the user: no idle quit until it is seen closed.
-            if let Some(me) = me.upgrade() {
-                let mut inner = me.lock();
+            let started = std::time::Instant::now();
+            match this.cli.runner().watch(&args) {
+                Ok(mut stream) => {
+                    {
+                        let mut inner = this.lock();
+                        if inner.watch_generation != generation {
+                            // Stopped while the command started: the stream drops (and ends it).
+                            return;
+                        }
+                        inner.watcher_stop = Some(stream.stopper());
+                    }
+                    // Not held while the read blocks: the app dropping the controller ends it.
+                    drop(this);
+                    while let Some(line) = LineStream::next_line(&mut *stream) {
+                        let Some(this) = me.upgrade() else {
+                            return;
+                        };
+                        if this.lock().watch_generation != generation {
+                            return;
+                        }
+                        this.note_event(&line);
+                    }
+                }
+                Err(_) => drop(this),
+            }
+            let Some(this) = me.upgrade() else {
+                return;
+            };
+            if this.lock().watch_generation != generation {
+                return;
+            }
+            // The stream ended. Ardia gone: ownership resets when the next check sees it closed.
+            if matches!(this.hello(), Err(Failure::Unreachable(_))) {
+                let mut inner = this.lock();
+                if inner.watch_generation == generation {
+                    inner.watch_running = false;
+                }
+                return;
+            }
+            if started.elapsed() > Duration::from_secs(30) {
+                failures = 0;
+            }
+            failures += 1;
+            if failures >= WATCH_RETRIES {
+                // Ardia is up with nobody watching for the user: no idle quit until it is closed.
+                let mut inner = this.lock();
                 if inner.watch_generation == generation {
                     inner.watch_lost = true;
+                    inner.watch_running = false;
                 }
+                return;
             }
-        });
+            let pause = this.poll_every * failures;
+            drop(this);
+            std::thread::sleep(pause);
+        }
     }
 
     /// One line of the event stream.
@@ -608,11 +682,12 @@ impl Controller {
     // ---- activity and idle quit ----
 
     /// A tool call starts: Ardia is in use until the guard drops. Waits while an idle quit or a
-    /// Quit is running (the call then finds Ardia closed and starts it again).
+    /// Quit is running (the call then finds Ardia closed and starts it again). The wait is longer
+    /// than the worst quit (closing tabs takes up to 15 s per command), so no call starts during one.
     pub fn begin_call(self: &Arc<Self>, turn: &str) -> CallGuard {
         let mut inner = self.lock();
         let mut waited = 0;
-        while inner.quitting && waited < 40 {
+        while inner.quitting && waited < 360 {
             inner = self
                 .quit_done
                 .wait_timeout(inner, Duration::from_millis(500))
@@ -630,8 +705,11 @@ impl Controller {
     /// A Mono turn starts or ends: it no longer counts as using the browser.
     pub fn turn_ended(&self, turn: &str) {
         let mut inner = self.lock();
-        inner.busy.remove(turn);
-        inner.last_activity_ms = self.now();
+        // Only a turn that used the browser counts as activity: a habit that never browsed must
+        // not keep Ardia open.
+        if inner.busy.remove(turn) {
+            inner.last_activity_ms = self.now();
+        }
     }
 
     /// One look at the idle rule. Returns what it did.
@@ -740,13 +818,15 @@ impl Controller {
         Ok(())
     }
 
-    /// The app quits: closes every tab zptah opened and, when zptah started Ardia, quits it.
-    /// Bounded by the caller (a hung Ardia must not hold the app).
-    pub fn shutdown(&self) {
-        let _one = self.launch_lock.lock().unwrap_or_else(|e| e.into_inner());
+    /// The app quits. An Ardia zptah started is asked to quit first (instant): its tabs stay in
+    /// the tab file and are closed at the next live check, because Ardia restores them. An Ardia
+    /// that is the user's keeps running, so zptah closes its own tabs there, one by one, until
+    /// `deadline`. The caller bounds the whole call.
+    pub fn shutdown(&self, deadline: std::time::Instant) {
         let (stop, ours) = {
             let mut inner = self.lock();
             inner.watch_generation += 1;
+            inner.watch_running = false;
             (
                 inner.watcher_stop.take(),
                 inner.owner == Owner::Zptah && !inner.takeover,
@@ -755,16 +835,29 @@ impl Controller {
         if let Some(stop) = stop {
             stop();
         }
-        self.close_all_tabs();
         if ours && self.platform.is_hidden() == Some(true) {
             let _ = self.platform.quit();
+            return;
+        }
+        for session in self.sessions() {
+            for id in self.session_tabs(&session) {
+                if std::time::Instant::now() >= deadline {
+                    return;
+                }
+                if self.close_tab(&session, &id).is_err() {
+                    return;
+                }
+            }
         }
     }
 
     // ---- tabs zptah opened ----
 
-    pub fn add_tab(&self, session: &str, profile: &str, id: &str) {
+    pub fn add_tab(&self, session: &str, mono_id: &str, profile: &str, id: &str) {
         let mut inner = self.lock();
+        inner
+            .session_monos
+            .insert(session.to_owned(), mono_id.to_owned());
         let tabs = inner.sessions.entry(session.to_owned()).or_default();
         if !tabs.iter().any(|(t, _)| t == id) {
             tabs.push((id.to_owned(), profile.to_owned()));
@@ -815,44 +908,32 @@ impl Controller {
     pub fn sessions(&self) -> Vec<String> {
         self.lock().sessions.keys().cloned().collect()
     }
-    /// The ids of every tab Ardia has (`tabs.list`), or `None` when that can not be read.
-    pub fn tab_ids(&self) -> Option<HashSet<String>> {
-        let reply = self.cli.call("tabs.list", &json!({})).ok()?;
-        Some(
-            reply
-                .as_array()?
+    /// Ends every session of one Mono (its browser was turned off, its profile changed or it was
+    /// removed): closes the tabs zptah opened and releases the holds. It needs no upstream, so it
+    /// works after the gate and the upstream are gone.
+    pub fn end_mono(&self, mono_id: &str) {
+        let sessions: Vec<String> = {
+            let inner = self.lock();
+            inner
+                .session_monos
                 .iter()
-                .filter_map(|t| t["id"].as_str().map(str::to_owned))
-                .collect(),
-        )
-    }
-    /// A `tabs open` that did not answer may have made a tab: closes any tab of `profile` that was
-    /// not in `before`. Without a list from before there is nothing to compare, so nothing is closed.
-    pub fn close_new_tabs(&self, session: &str, profile: &str, before: Option<HashSet<String>>) {
-        let Some(before) = before else {
-            return;
+                .filter(|(session, mono)| {
+                    mono.as_str() == mono_id && inner.sessions.contains_key(*session)
+                })
+                .map(|(session, _)| session.clone())
+                .collect()
         };
-        let Ok(reply) = self.cli.call("tabs.list", &json!({})) else {
-            return;
-        };
-        for tab in reply.as_array().into_iter().flatten() {
-            let (Some(id), Some(p)) = (tab["id"].as_str(), tab["profile"].as_str()) else {
-                continue;
-            };
-            if p == profile && !before.contains(id) {
-                self.note_possible_tab(id);
-                let _ = self.close_tab(session, id);
-            }
+        for session in sessions {
+            self.end_session(&session);
         }
     }
-    /// Remembers a tab id that may exist (an open that timed out) so the next live check closes it.
-    pub fn note_possible_tab(&self, id: &str) {
-        let mut inner = self.lock();
-        inner.persisted.insert(id.to_owned());
-        inner.cleanup_due = true;
-        save_tabs(&inner);
+    /// [`Controller::end_mono`] on a thread, so a caller on the UI thread never waits for `ardia`.
+    pub fn end_mono_in_background(&self, mono_id: &str) {
+        if let Some(me) = self.me.upgrade() {
+            let mono_id = mono_id.to_owned();
+            std::thread::spawn(move || me.end_mono(&mono_id));
+        }
     }
-
     /// Closes one tab zptah opened. A tab Ardia no longer knows counts as closed.
     pub fn close_tab(&self, session: &str, id: &str) -> Result<(), Failure> {
         match self.cli.tabs_close(id) {
@@ -1036,8 +1117,9 @@ pub fn shutdown(limit: Duration) {
         return;
     };
     let (done, wait) = std::sync::mpsc::channel();
+    let deadline = std::time::Instant::now() + limit;
     std::thread::spawn(move || {
-        controller.shutdown();
+        controller.shutdown(deadline);
         let _ = done.send(());
     });
     let _ = wait.recv_timeout(limit);

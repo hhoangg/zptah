@@ -14,6 +14,9 @@ pub struct BrowserServers {
     /// Why the last launch of a Mono could not attach its browser. The Browser tab shows it; a
     /// launch that attached clears it.
     attach_errors: Mutex<HashMap<String, String>>,
+    /// The Ardia controller of each Mono's gate, kept after the gate is gone so the Mono's tabs
+    /// can still be closed.
+    controllers: Mutex<HashMap<String, Arc<super::ardia::Controller>>>,
 }
 impl BrowserServers {
     pub fn new() -> Self {
@@ -54,6 +57,10 @@ impl BrowserServers {
         policy: gate::Policy,
     ) -> Result<Arc<Gate>, String> {
         let key = format!("ardia-{:p}", Arc::as_ptr(&upstream));
+        self.controllers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(mono_id.to_owned(), upstream.controller().clone());
         self.gate_for(mono_id, &key, upstream, policy)
     }
     /// This Mono's gate in front of `upstream` (named `key`; a new key means a new backend): the
@@ -107,9 +114,20 @@ impl BrowserServers {
         if let Some(gate) = gate {
             gate.clear_output();
         }
-        // Its tabs in Ardia go with it.
-        if let Some(upstream) = super::ardia::upstream::upstream_for(mono_id) {
-            upstream.end_all_in_background();
+    }
+    /// Ends every Ardia session of the Mono: closes the tabs zptah opened for it and releases the
+    /// holds, on a thread. For a browser turned off, a changed profile or a removed Mono; editing
+    /// the origin lists drops the gate ([`BrowserServers::stop`]) but leaves a running turn's
+    /// tabs alone.
+    pub fn end_sessions(&self, mono_id: &str) {
+        let controller = self
+            .controllers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(mono_id)
+            .cloned();
+        if let Some(controller) = controller {
+            controller.end_mono_in_background(mono_id);
         }
     }
     /// Drops every gate (the app quits).
@@ -122,9 +140,7 @@ impl BrowserServers {
             .collect();
         for (mono_id, gate) in gates {
             gate.clear_output();
-            if let Some(upstream) = super::ardia::upstream::upstream_for(&mono_id) {
-                upstream.end_all_in_background();
-            }
+            self.end_sessions(&mono_id);
         }
     }
     pub fn running(&self) -> usize {

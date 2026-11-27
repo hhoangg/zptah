@@ -166,13 +166,16 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
-// The events zptah's idle quit relies on (`app.activated`, `window.opened`): start the stream
-// before anything is opened and report the event names it carried. With `--watch-events N` the
-// script then waits N seconds so you can bring Ardia to the front and open a window by hand,
-// which measures the two names that nothing here triggers.
+// The events zptah relies on: `tab.opened` and `tab.closed` (this script causes them) and
+// `app.activated` and `window.opened` (the idle quit's signals that the user is at Ardia, which
+// nothing here triggers). The stream is read asynchronously for the whole run (the script's own
+// commands are synchronous, so it yields to the event loop at the waits below). With
+// `--watch-events N` the script waits N seconds so you can bring Ardia to the front and open a
+// window by hand.
 const watchSeconds = Number(opt("--watch-events") || 0);
 const seen = new Set();
-const events = spawn(ardia, ["events", "app.activated", "window.opened", "--json"], { stdio: ["ignore", "pipe", "ignore"], env });
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const events = spawn(ardia, ["events", "tab.opened", "tab.closed", "app.activated", "window.opened", "--json"], { stdio: ["ignore", "pipe", "ignore"], env });
 events.stdout.on("data", (chunk) => {
   for (const line of String(chunk).split("\n")) {
     try {
@@ -243,15 +246,10 @@ try {
   for (const [name, cmd, fx] of cmds) step(`browse ${name}`, browse(cmd), fx);
   if (watchSeconds > 0) {
     console.log(`INFO bring Ardia to the front and open a window within ${watchSeconds} s`);
-    spawnSync("sleep", [String(watchSeconds)]);
   }
-  console.log(`INFO events seen: ${[...seen].sort().join(", ") || "none"}`);
-  for (const name of ["tab.opened", "tab.closed"]) {
-    if (!seen.has(name)) report(`event ${name}`, [], "not seen");
-  }
-  if (watchSeconds > 0) {
-    for (const name of ["app.activated", "window.opened"]) if (!seen.has(name)) report(`event ${name}`, [], "not seen");
-  }
+  // Yield so the piped event lines are read (a synchronous wait would not).
+  await sleep(watchSeconds > 0 ? watchSeconds * 1000 : 1000);
+  if (!seen.has("tab.opened")) report("event tab.opened", [], "not seen");
 } catch (e) {
   if (!(e instanceof Stop)) {
     console.log(`FAIL unexpected: ${e.message}`);
@@ -260,4 +258,16 @@ try {
 } finally {
   cleanup();
 }
+// The cleanup closed the tab: that is the `tab.closed` event.
+await sleep(1000);
+console.log(`INFO events seen: ${[...seen].sort().join(", ") || "none"}`);
+try {
+  if (!seen.has("tab.closed")) report("event tab.closed", [], "not seen");
+  if (watchSeconds > 0) {
+    for (const name of ["app.activated", "window.opened"]) if (!seen.has(name)) report(`event ${name}`, [], "not seen");
+  }
+} catch (e) {
+  if (!(e instanceof Stop)) throw e;
+}
+events.kill();
 process.exit(failed ? 1 : 0);

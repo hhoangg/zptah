@@ -51,8 +51,11 @@ mod mac {
 }
 
 impl Platform for RealPlatform {
+    /// Quitting needs AppKit, which the app's platform provides (`set_platform`). This one is
+    /// only the fallback, and a Ardia that can be started but not quit would stay open for ever,
+    /// so it never launches.
     fn can_launch(&self) -> bool {
-        cfg!(target_os = "macos")
+        false
     }
     fn installed(&self) -> bool {
         #[cfg(target_os = "macos")]
@@ -81,5 +84,17 @@ impl Platform for RealPlatform {
     }
     fn is_hidden(&self) -> Option<bool> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_fallback_platform_never_launches_because_it_can_not_quit() {
+        assert!(!RealPlatform.can_launch());
+        assert!(RealPlatform.quit().is_err());
+        assert_eq!(RealPlatform.is_hidden(), None);
     }
 }

@@ -535,16 +535,16 @@ fn main() {
             popover::bind(cx);
             cx.set_prompt_builder(modal::prompt_builder);
             // A quit that macOS starts (Dock, logout) never reaches `quit`.
-            cx.on_app_quit(|cx| {
+            cx.on_app_quit(|_| {
                 monocode_core::process::guard::kill_all();
                 monocode_core::mono::browser::connect::shutdown();
-                // Closes the tabs zptah opened in Ardia and quits an Ardia it started, in at
-                // most a few seconds.
-                cx.background_executor().spawn(async {
-                    monocode_core::mono::browser::ardia::controller::shutdown(
-                        std::time::Duration::from_secs(4),
-                    )
-                })
+                // Asks an Ardia zptah started to quit, or closes the tabs zptah opened in the
+                // user's. Done here, before the future is returned: the app polls these futures
+                // for only 200 ms. Bounded, so a hung Ardia never holds the quit.
+                monocode_core::mono::browser::ardia::controller::shutdown(
+                    std::time::Duration::from_secs(2),
+                );
+                async {}
             })
             .detach();
             explorer::bind(cx);
