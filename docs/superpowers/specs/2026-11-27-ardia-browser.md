@@ -330,8 +330,6 @@ for a flow with `writes: true`. A conversation grant for a flow is stored under 
 and covers that content only; `flow_save` always asks (never granted), and refuses a name that is not
 a flow name.
 
-Open: the format of `flow show` output and whether a flow is tied to a profile. The M0 spike
-records one flow and reads it back.
 
 ## 8. Defense
 
@@ -558,6 +556,16 @@ Flows (section 7):
   range that does not start on an http(s) page (`not_a_web_page`). The gate therefore tells the
   user on the card when a save replaces an existing flow. Not measured: a data flow's run output
   and how an action flow names its params.
+- Measured 2026-11-28 on a local http page: an action flow's `params` are
+  `[{name, example, source}]` with `source` `typed` or `secret` (a password field). Steps name a
+  param as `{{name}}` in `command` and `action.value`; a secret step's command holds `<redacted>`.
+  The gate refuses a flow that has any `secret` param. `flow steps` records `wait` but not the
+  gate's own `snapshot`, `eval`, `get attr` or `get count`; its `--all` form shows the typed
+  values in clear, so the gate masks them. A name saved on two sites makes `flow show` and
+  `flow run` fail (`"<name> is saved for a, b; pick one with --site <site>"`); `--site <site>`
+  (an option, before `--`) picks one, so the gate always passes the site from `flow list`.
+  Killing the `ardia` process during `flow run` stopped the remaining steps (a step after a
+  4 s `wait` never ran).
 - `flow list --json`: `data.flows[] {site, name, description, params, verified, kind, writes}`.
   Typed passwords are kept as params with no value (`<redacted>` in `flow steps`).
 
