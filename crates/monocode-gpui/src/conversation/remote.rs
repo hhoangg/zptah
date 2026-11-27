@@ -620,7 +620,7 @@ impl Conversation {
                     .transpose()?
                     .unwrap_or_default();
                 Some((
-                    crate::transcript::PreparedHistory::new(history.rows, false),
+                    crate::transcript::PreparedHistory::full(history.rows),
                     turns,
                 ))
             } else {

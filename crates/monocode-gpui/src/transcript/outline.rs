@@ -89,7 +89,10 @@ impl TranscriptView {
     }
     /// Read after the list lays out, like the React rail's deferred measure.
     pub(super) fn update_outline(&mut self, cx: &mut Context<Self>) {
-        if self.mono || !self.visible || self.viewport.size.height <= px(0.) {
+        // A rail that is not shown has no use for the active prompt, and
+        // finding it walks every prompt.
+        if !self.outline_visible_at(self.viewport.size.width) || self.viewport.size.height <= px(0.)
+        {
             return;
         }
         let active = self.measure_active();
@@ -106,8 +109,23 @@ impl TranscriptView {
         if self.list.is_following_tail() || max - scrolled <= NEAR_END {
             return Some(last);
         }
-        let mut above = None;
-        for &prompt in prompts {
+        // Locate the last prompt at or before the scroll top. Only that
+        // prompt can be partly visible above the first following prompt.
+        let top = self.list.logical_scroll_top().item_ix;
+        let next = prompts.partition_point(|prompt| {
+            self.messages
+                .binary_search_by_key(prompt, |message| message.start)
+                .is_ok_and(|ix| self.messages[ix].display_start <= top)
+                || *prompt < self.history_start
+        });
+        let first_loaded = prompts.partition_point(|prompt| *prompt < self.history_start);
+        let start = first_loaded.max(next.saturating_sub(1));
+        let mut above = prompts[first_loaded..start]
+            .iter()
+            .rev()
+            .copied()
+            .find(|&prompt| self.prompt_rows(prompt).is_some());
+        for &prompt in &prompts[start..] {
             let Some((first, end)) = self.prompt_rows(prompt) else {
                 continue;
             };
@@ -121,7 +139,12 @@ impl TranscriptView {
             }
             return Some(prompt);
         }
-        above.or(prompts.first().copied())
+        above.or(prompts.get(first_loaded).copied())
+    }
+    /// The source index of the prompt `turns` before the last one.
+    pub(super) fn prompt_from_end(&self, turns: usize) -> Option<usize> {
+        let prompts = &self.outline.prompts;
+        prompts.len().checked_sub(turns + 1).map(|ix| prompts[ix])
     }
     fn hover_prompt(&mut self, prompt: usize, cx: &mut Context<Self>) {
         self.outline.hovered = Some(prompt);
@@ -145,7 +168,16 @@ impl TranscriptView {
         self.outline.open = false;
         cx.notify();
     }
-    fn jump_to_prompt(&mut self, prompt: usize, cx: &mut Context<Self>) {
+    /// Scrolls to a prompt, first paging in the older turns when it lies above
+    /// the loaded window.
+    pub(super) fn jump_to_prompt(&mut self, prompt: usize, cx: &mut Context<Self>) {
+        self.history_search = None;
+        self.history_prompt = None;
+        if prompt < self.history_start {
+            self.history_prompt = Some(prompt);
+            self.load_older_history(cx);
+            return;
+        }
         let Some((first, _)) = self.prompt_rows(prompt) else {
             return;
         };
@@ -177,7 +209,7 @@ impl TranscriptView {
         let active_ix = self
             .outline
             .active
-            .and_then(|active| prompts.iter().position(|&p| p == active));
+            .and_then(|active| prompts.binary_search(&active).ok());
         let (start, end, gap) = bar_stack(prompts.len(), active_ix, budget);
         let bars: Vec<usize> = prompts[start..end].to_vec();
         let hover_ix = self
@@ -508,6 +540,27 @@ mod tests {
         source.push(row("user", "three", true));
         outline.patched(&source, 2);
         assert_eq!(outline.prompts, [0, 3]);
+    }
+
+    #[gpui::test]
+    fn a_hidden_outline_does_not_measure_the_active_prompt(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|_| TranscriptView::new());
+        view.update(cx, |view, cx| {
+            view.visible = true;
+            view.viewport.size = gpui::size(px(MIN_PANE_WIDTH - 1.), px(700.));
+            view.patch(
+                0,
+                vec![
+                    row("user", "one", true),
+                    row("assistant", "first", true),
+                    row("user", "two", true),
+                ],
+                cx,
+            );
+            assert!(view.measure_active().is_some());
+            view.update_outline(cx);
+            assert_eq!(view.outline.active, None);
+        });
     }
 
     #[test]

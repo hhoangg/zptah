@@ -98,6 +98,26 @@ pub struct Session {
     pub surface: crate::surface::Surface,
 }
 
+/// Asks `Store::load_for_open_previewing` for a preview of a long chat.
+pub struct PreviewRequest<'a> {
+    /// Only histories at least this many bytes long are previewed.
+    pub min_bytes: usize,
+    /// The preview covers the turns before the row with this many rows after
+    /// it (a reader's saved position), else the newest turns.
+    pub rows_after: Option<usize>,
+    /// Receives the rows: a suffix of the whole history's rows.
+    pub send: &'a mut dyn FnMut(Vec<Row>),
+}
+
+/// A chat's history, settings and queue as `Store::load_for_open` reads them.
+/// Each part keeps its own error, as it would from its own reader.
+pub struct OpenedHistory {
+    pub transcript: Result<Transcript, String>,
+    pub settings: Result<Option<crate::agent::Settings>, String>,
+    /// Only when the caller asked for the queue.
+    pub follow_ups: Option<Result<crate::follow_up::State, String>>,
+}
+
 /// A session's pending or delivered reminder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reminder {
@@ -964,6 +984,44 @@ impl Store {
             return Ok(HistoryPage::default());
         }
         self.shared_load_before(session, before, all)
+    }
+    /// Everything a chat needs when it opens, in the order the separate
+    /// readers (`agent_settings`, `load`, `follow_ups`) would give it, each
+    /// with its own error. An ordinary local chat is read once instead of
+    /// three times; remote, Mono and prototype histories, and any history that
+    /// cannot be read, use the separate readers. `follow_ups` says whether to
+    /// read the queue too.
+    pub fn load_for_open(&self, session: i64, follow_ups: bool) -> OpenedHistory {
+        self.load_for_open_previewing(session, follow_ups, None)
+    }
+    /// `load_for_open` that also hands the newest turns of a long ordinary
+    /// chat to `preview` as soon as the history is read, before it is parsed
+    /// and projected, so they can be shown meanwhile. The rows are only for
+    /// display: no revision belongs to them. Histories that cannot be
+    /// previewed send nothing.
+    pub fn load_for_open_previewing(
+        &self,
+        session: i64,
+        follow_ups: bool,
+        preview: Option<PreviewRequest<'_>>,
+    ) -> OpenedHistory {
+        if self.shared.is_some()
+            && session >= 0
+            && self
+                .remote_session(session)
+                .is_ok_and(|remote| remote.is_none())
+        {
+            if let Some(opened) = self.shared_load_for_open(session, follow_ups, preview) {
+                return opened;
+            }
+        }
+        let settings = self.agent_settings(session);
+        let transcript = self.load(session);
+        OpenedHistory {
+            transcript,
+            settings,
+            follow_ups: follow_ups.then(|| self.follow_ups(session)),
+        }
     }
     pub fn load(&self, session: i64) -> Result<Transcript, String> {
         if let Some(remote) = self.remote_session(session)? {
