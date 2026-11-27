@@ -232,28 +232,36 @@ fn operator_prompt(block: &Value) -> bool {
                 .is_some()
             }))
 }
-/// The rows of the newest turns of a history that is split but not parsed,
-/// a suffix of what projecting all of it gives. They run back to the block
-/// holding the `PAGE_TURNS`th prompt before the row that has `rows_after`
-/// rows after it (the last row without it). None when that is the first
-/// block or an earlier one cannot be read, so a short history is not
-/// previewed. It is also None once the rows reach `PREVIEW_MAX_PROMPTS`
-/// prompts or `PREVIEW_MAX_BYTES` of text, so a reader who left a chat far
-/// from its end does not get most of it parsed twice: the preview costs
-/// about what the window does (roughly 13 ms per ten turns), and the full
-/// open restores such a position as before.
+/// The newest turns of a history that is split but not parsed: their rows,
+/// a suffix of what projecting all of it gives, and the parsed blocks they
+/// came from (so the full open does not parse them again), starting at block
+/// index `at`. They run back to the block holding the `PAGE_TURNS`th prompt
+/// before the row that has `rows_after` rows after it (the last row without
+/// it). None when that is the first block or a block cannot be read, so a
+/// short history is not previewed.
+///
+/// The newest `PAGE_TURNS` turns are never capped: the full open builds
+/// exactly those rows on the main thread anyway, however heavy their tool
+/// output. A window around a saved reading position is capped at
+/// `PREVIEW_MAX_PROMPTS` prompts instead, so a reader who left a chat far
+/// from its end does not get most of it projected and then built again. No
+/// byte cap: each row's text is bounded, and a tail can still hold several
+/// MiB in total, which is fine because the full open builds the same rows.
+struct Newest {
+    rows: Vec<Row>,
+    at: usize,
+    blocks: Vec<Value>,
+}
 const PREVIEW_MAX_PROMPTS: usize = 4 * super::PAGE_TURNS;
-const PREVIEW_MAX_BYTES: usize = 4 * 1024 * 1024;
 fn newest_rows(
     split: &[&serde_json::value::RawValue],
     rows_after: Option<usize>,
-) -> Option<Vec<Row>> {
+) -> Option<Newest> {
     let threshold = rows_after.unwrap_or(0);
     let mut chunks = Vec::new();
     let mut seen = 0;
     let mut prompts = 0;
     let mut all_prompts = 0;
-    let mut bytes = 0;
     for (at, block) in split.iter().enumerate().rev() {
         let block: Value = serde_json::from_str(block.get()).ok()?;
         let rows = blocks::project(std::slice::from_ref(&block)).ok()?;
@@ -268,14 +276,22 @@ fn newest_rows(
             .iter()
             .filter(|row| row.first && row.is_prompt())
             .count();
-        bytes += rows.iter().map(|row| row.text.len()).sum::<usize>();
-        if all_prompts > PREVIEW_MAX_PROMPTS || bytes > PREVIEW_MAX_BYTES {
+        if rows_after.is_some() && all_prompts > PREVIEW_MAX_PROMPTS {
             return None;
         }
         seen += rows.len();
-        chunks.push(rows);
+        chunks.push((block, rows));
         if prompts >= super::PAGE_TURNS {
-            return (at > 0).then(|| chunks.into_iter().rev().flatten().collect());
+            if at == 0 {
+                return None;
+            }
+            chunks.reverse();
+            let (blocks, rows): (Vec<_>, Vec<_>) = chunks.into_iter().unzip();
+            return Some(Newest {
+                rows: rows.into_iter().flatten().collect(),
+                at,
+                blocks,
+            });
         }
     }
     None
@@ -1294,10 +1310,17 @@ impl Store {
         let Ok(split) = serde_json::from_str::<Vec<&serde_json::value::RawValue>>(&raw) else {
             return parse(&raw);
         };
-        if let Some(rows) = newest_rows(&split, request.rows_after) {
-            (request.send)(rows);
-        }
-        split.iter().map(|block| parse(block.get())).collect()
+        let Some(Newest { rows, at, blocks }) = newest_rows(&split, request.rows_after) else {
+            return split.iter().map(|block| parse(block.get())).collect();
+        };
+        (request.send)(rows);
+        // The blocks behind the preview are already parsed.
+        let mut older = split[..at]
+            .iter()
+            .map(|block| parse(block.get()))
+            .collect::<Result<Vec<Value>, String>>()?;
+        older.extend(blocks);
+        Ok(older)
     }
     pub(super) fn shared_store_blocks(&self, id: i64, blocks: &[Value]) -> Result<(), String> {
         // A terminal session never stores blocks: writing them would clear

@@ -2445,12 +2445,52 @@ fn a_preview_around_a_saved_position_counts_rows_from_the_end() {
 }
 
 #[test]
+fn a_tool_heavy_tail_is_previewed_however_many_bytes_it_holds() {
+    use crate::store::PAGE_TURNS;
+    let mut blocks = Vec::new();
+    for turn in 0..PAGE_TURNS + 4 {
+        blocks
+            .push(json!({"id":format!("u{turn}"),"role":"user","text":format!("Question {turn}")}));
+        for tool in 0..8 {
+            blocks.push(json!({"id":format!("t{turn}-{tool}"),"role":"tool","text":"Run","tool":{
+                "callId":format!("c{turn}-{tool}"),"kind":"execute","title":"Run","status":"completed",
+                "detail":format!("line {turn}-{tool}\n").repeat(12_000)}}));
+        }
+        blocks.push(json!({"id":format!("a{turn}"),"role":"assistant","text":"Done"}));
+    }
+    let store = Store::open_monocode(Path::new(":memory:")).unwrap();
+    let (id, _) = saved(&store, json!(blocks));
+    let (sent, at_send, opened) = previewed(&store, id, None);
+    let rows = sent.expect("the newest turns are previewed");
+    let bytes: usize = rows.iter().map(|row| row.text.len()).sum();
+    assert!(
+        bytes > 4 * 1024 * 1024,
+        "the tail holds {bytes} bytes of text"
+    );
+    assert_eq!(at_send, None);
+    assert_eq!(rows, opened.0[opened.0.len() - rows.len()..]);
+    // The same open without a preview gives the same revision and rows.
+    let plain = Store::open_monocode(Path::new(":memory:")).unwrap();
+    let (other, _) = saved(&plain, json!(blocks));
+    let expected = read_for_open(&plain, other);
+    assert_eq!(opened.0, expected.0);
+    assert_eq!(opened.3, expected.3);
+}
+
+#[test]
 fn a_preview_records_no_revision_and_the_full_open_is_unchanged() {
     let store = Store::open_monocode(Path::new(":memory:")).unwrap();
-    let blocks = long_blob(40);
+    let mut blocks = long_blob(40);
+    // The reused tail blocks include an operator prompt and a draft.
+    blocks.push(json!({"id":"operator","role":"user","text":"/mono Run the plan","sentAt":9000,
+        "startedAt":9001,"durationMs":5,"turnModel":{"harness":"codex","id":"codex:model","name":"Model"}}));
+    blocks.push(json!({"id":"draft","role":"user","text":"Unsent draft","draft":true}));
     let (id, _) = saved(&store, json!(blocks));
     let (sent, at_send, opened) = previewed(&store, id, None);
     assert!(sent.is_some());
+    assert!(opened.1["operator_enabled"] == true || opened.1["operatorEnabled"] == true);
+    assert_eq!(opened.2["draft"]["text"], "Unsent draft");
+    assert!(opened.2["draft"]["at"].as_u64().unwrap() > 0);
     assert_eq!(
         at_send, None,
         "nothing is recorded when the preview is sent"
