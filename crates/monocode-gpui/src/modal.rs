@@ -427,6 +427,15 @@ pub(crate) fn overlay(
 thread_local! {
     /// Set around one `window.prompt` call by [`cancel_default`], read by the builder it calls.
     static CANCEL_DEFAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The dialog the builder made for the last [`cancel_default`] prompt.
+    static LAST_CANCEL_DEFAULT: std::cell::RefCell<Option<gpui::WeakEntity<Prompt>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The dialog made by the last [`cancel_default`] call, if the app's builder drew it. Take it
+/// right after the call, to close the dialog later with [`Prompt::dismiss`].
+pub(crate) fn take_cancel_default_prompt() -> Option<gpui::WeakEntity<Prompt>> {
+    LAST_CANCEL_DEFAULT.with(|slot| slot.borrow_mut().take())
 }
 
 /// Runs `prompt` (a `window.prompt` call) so that its dialog makes Cancel the default answer:
@@ -456,14 +465,18 @@ pub(crate) fn prompt_builder(
     window: &mut Window,
     cx: &mut App,
 ) -> RenderablePromptHandle {
+    let cancel_default = CANCEL_DEFAULT.with(|flag| flag.replace(false));
     let view = cx.new(|cx| Prompt {
         level,
         message: message.to_owned().into(),
         detail: detail.map(|d| d.to_owned().into()),
         actions: actions.to_vec(),
-        cancel_default: CANCEL_DEFAULT.with(|flag| flag.replace(false)),
+        cancel_default,
         focus: cx.focus_handle(),
     });
+    if cancel_default {
+        LAST_CANCEL_DEFAULT.with(|slot| *slot.borrow_mut() = Some(view.downgrade()));
+    }
     handle.with_view(view, window, cx)
 }
 
@@ -483,6 +496,11 @@ impl Focusable for Prompt {
     }
 }
 impl Prompt {
+    /// Closes the dialog as if the user chose Cancel (the answer a caller cannot tell apart,
+    /// so a caller that dismisses it must know it did).
+    pub(crate) fn dismiss(&mut self, cx: &mut Context<Self>) {
+        cx.emit(PromptResponse(self.cancel()));
+    }
     /// Escape and the scrim choose Cancel, or the last answer like a sheet.
     fn cancel(&self) -> usize {
         self.actions

@@ -44,6 +44,26 @@ pub(crate) fn running(cx: &App) -> Vec<RunningSession> {
     all
 }
 
+/// A dialog a caller may close from outside, because its question was answered elsewhere. The
+/// callback then gets `None`, as for Cancel.
+#[derive(Clone, Default)]
+pub(crate) struct Dialog(std::rc::Rc<DialogState>);
+#[derive(Default)]
+struct DialogState {
+    prompt: std::cell::RefCell<Option<gpui::WeakEntity<crate::modal::Prompt>>>,
+    dismissed: std::cell::Cell<bool>,
+}
+impl Dialog {
+    /// Closes the dialog if it is open, or keeps it from opening if it is still waiting.
+    pub(crate) fn dismiss(&self, cx: &mut App) {
+        self.0.dismissed.set(true);
+        let prompt = self.0.prompt.borrow_mut().take();
+        if let Some(prompt) = prompt {
+            let _ = prompt.update(cx, |prompt, cx| prompt.dismiss(cx));
+        }
+    }
+}
+
 /// `done(Some(running))` when the update may go on: nothing new is running, or the user chose
 /// "Update anyway" (the list is what they accepted). `done(None)` when they cancelled, or when
 /// there is no window to ask in. `acknowledged` is work the user already accepted for this
@@ -58,7 +78,7 @@ pub(crate) fn ask(
     // that window's `Shell` and opening a dialog in it.
     cx.defer(move |cx| {
         let found = running(cx);
-        decide(cx, found, true, requester, acknowledged, done);
+        decide(cx, found, true, requester, acknowledged, None, done);
     });
 }
 
@@ -67,9 +87,10 @@ pub(crate) fn ask_about(
     cx: &mut App,
     found: Vec<RunningSession>,
     requester: Option<String>,
+    dialog: Dialog,
     done: impl FnOnce(Option<Vec<RunningSession>>, &mut App) + 'static,
 ) {
-    cx.defer(move |cx| decide(cx, found, false, requester, Vec::new(), done));
+    cx.defer(move |cx| decide(cx, found, false, requester, Vec::new(), Some(dialog), done));
 }
 
 /// `regather`: look at the running work again on each retry (the caller did not fix a list).
@@ -79,8 +100,13 @@ fn decide(
     regather: bool,
     requester: Option<String>,
     acknowledged: Vec<RunningSession>,
+    dialog: Option<Dialog>,
     done: impl FnOnce(Option<Vec<RunningSession>>, &mut App) + 'static,
 ) {
+    if dialog.as_ref().is_some_and(|d| d.0.dismissed.get()) {
+        done(None, cx);
+        return;
+    }
     let Some(prompt) = confirm::prompt(&found, &acknowledged, requester.as_deref()) else {
         done(Some(found), cx);
         return;
@@ -107,6 +133,12 @@ fn decide(
             )
         }))
     });
+    // Always taken, so a dialog made for another caller never lingers in the slot; only a
+    // dialog this call really showed is handed to `dialog`.
+    let made = crate::modal::take_cancel_default_prompt();
+    if let (Some(dialog), Ok(Some(_))) = (&dialog, &shown) {
+        *dialog.0.prompt.borrow_mut() = made;
+    }
     let answer = match shown {
         Err(_) => {
             done(None, cx);
@@ -118,7 +150,7 @@ fn decide(
                 cx.update(|cx| {
                     // Work may have started or ended while another dialog was open.
                     let found = if regather { running(cx) } else { found };
-                    decide(cx, found, regather, requester, acknowledged, done)
+                    decide(cx, found, regather, requester, acknowledged, dialog, done)
                 });
             })
             .detach();

@@ -92,6 +92,8 @@ pub(crate) struct State {
     pub(crate) installing: bool,
     /// The desktop is asking the user whether a remote update may interrupt running work.
     pub(crate) asking: bool,
+    /// That dialog, to close it when a device confirms first.
+    dialog: Option<update_gate::Dialog>,
     /// Why the last install ended before the restart; shown by the status until the next try.
     last_failure: Option<String>,
     /// The desktop notices raised, for tests (the OS bridge has no observer).
@@ -307,11 +309,6 @@ impl Shell {
                                 begin: None,
                             });
                         };
-                        // A device's own `confirm` must not race the dialog that is open here:
-                        // the person at the computer answers first.
-                        if !confirmed && cx.default_global::<State>().asking {
-                            return Err("A confirmation dialog is open on the desktop: answer it there first".into());
-                        }
                         // Checked and taken in this one step, after the feed answered: two
                         // requests cannot both pass.
                         let state = cx.default_global::<State>();
@@ -343,6 +340,12 @@ impl Shell {
                                 title: origin.name().to_owned(),
                             });
                         }
+                        // A device that confirmed itself answers the question the desktop dialog
+                        // still asks: close it, so it cannot start a second install. Only now
+                        // that the request is recorded; a store error leaves the dialog open.
+                        if let Some(dialog) = cx.default_global::<State>().dialog.take() {
+                            cx.defer(move |cx| dialog.dismiss(cx));
+                        }
                         Ok(Reply {
                             value: decision.reply_for(device),
                             begin: Some(Begin {
@@ -366,11 +369,15 @@ impl Shell {
             return;
         }
         state.asking = true;
+        let dialog = update_gate::Dialog::default();
+        state.dialog = Some(dialog.clone());
         let shell = cx.weak_entity();
         let origin = origin.clone();
         let name = origin.name().to_owned();
-        update_gate::ask_about(cx, sessions, Some(name), move |accepted, cx| {
-            cx.default_global::<State>().asking = false;
+        update_gate::ask_about(cx, sessions, Some(name), dialog, move |accepted, cx| {
+            let state = cx.default_global::<State>();
+            state.asking = false;
+            state.dialog = None;
             let Some(accepted) = accepted else {
                 return;
             };
