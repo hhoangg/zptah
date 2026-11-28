@@ -829,7 +829,7 @@ fn an_ai_decision_uses_the_decision_model_when_the_workflow_sets_one() {
     let mut w = ai_gate(r#","model":"claude:sonnet-5""#);
     w.decision_model = Some(DecisionModel {
         harness: "codex".into(),
-        model: "codex:gpt-5".into(),
+        model: Some("codex:gpt-5".into()),
         effort: Some("low".into()),
     });
     let got = decision_model_for(&w, "gate").unwrap();
@@ -843,6 +843,36 @@ fn an_ai_decision_uses_the_decision_model_when_the_workflow_sets_one() {
         (Some("codex"), Some("codex:gpt-5"), Some("low"))
     );
     assert_eq!(validate_workflow(&w), []);
+}
+
+#[test]
+fn a_harness_only_decision_model_leaves_the_model_to_that_harness_default() {
+    let mut w = ai_gate(r#","model":"claude:sonnet-5""#);
+    w.decision_model = Some(DecisionModel {
+        harness: "codex".into(),
+        model: None,
+        effort: None,
+    });
+    let got = decision_model_for(&w, "gate").unwrap();
+    // The workflow's choice wins over the session upstream, and the model stays unset: the
+    // runner resolves it to the harness's default when the run starts.
+    assert_eq!(got.source, DecisionModelSource::Workflow);
+    assert_eq!(
+        (got.harness.as_deref(), got.model, got.effort),
+        (Some("codex"), None, None)
+    );
+    assert_eq!(validate_workflow(&w), []);
+    // The file keeps just the harness, and reads back the same.
+    let written = serde_json::to_value(w.decision_model.as_ref().unwrap()).unwrap();
+    assert_eq!(written, serde_json::json!({"harness": "codex"}));
+    let raw = Json::parse(r#"{"harness":"codex"}"#).unwrap();
+    assert_eq!(
+        super::parse::parse_decision_model(Some(&raw)),
+        Some(w.decision_model.clone())
+    );
+    // A model that is not text is unreadable, not "no model".
+    let bad = Json::parse(r#"{"harness":"codex","model":3}"#).unwrap();
+    assert_eq!(super::parse::parse_decision_model(Some(&bad)), None);
 }
 
 #[test]
@@ -888,7 +918,7 @@ fn an_ai_decision_with_neither_a_decision_model_nor_an_upstream_session_fails_va
     // Setting the decision model fixes it.
     w.decision_model = Some(DecisionModel {
         harness: "claude".into(),
-        model: "claude:sonnet-5".into(),
+        model: Some("claude:sonnet-5".into()),
         effort: None,
     });
     assert_eq!(validate_workflow(&w), []);

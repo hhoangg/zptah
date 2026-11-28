@@ -542,7 +542,7 @@ pub fn workflow_guide() -> String {
             format!(r##"- `name` (required, at most {WORKFLOW_NAME_MAX} characters) and `description` (optional, at most {WORKFLOW_DESCRIPTION_MAX} characters)."##).as_str(),
             r##"- `inputs`: an object of named inputs, each `{"type": "project" | "string" | "number" | "boolean", "description"?}`. Names use letters, digits and underscores."##,
             r##"- `inputValues`: the value of each declared input. A `project` input takes the path or name of one of the Mono's projects. A missing or mistyped value is reported as an issue. Change values later with `workflows.setInputs`."##,
-            r##"- `decisionModel` (optional): `{"harness", "model", "effort"?}`, the model that answers `decide: "ai"` questions (see Models and If). Without it the harness and model of the nearest session step upstream of the question are used.
+            r##"- `decisionModel` (optional): `{"harness", "model"?, "effort"?}`, the model that answers `decide: "ai"` questions (see Models and If). Leave `model` out to use that harness's default model, chosen when the run starts. Without it the harness and model of the nearest session step upstream of the question are used.
 - `summaryTemplate` (optional): the text of the run summary (see Templates). Without it the app writes the summary.
 - `nodes`: a list of nodes (below). `edges`: a list of `{"from", "to", "handle"?, "loop"?}`."##,
             "",

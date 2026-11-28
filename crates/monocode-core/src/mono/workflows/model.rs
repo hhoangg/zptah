@@ -314,12 +314,15 @@ pub enum Decide {
 /// The `decide` value of a loop edge that asks the AI (the same word as `Decide::Ai`).
 pub const DECIDE_AI: &str = "ai";
 
-/// A model to run a one-shot call with: the harness, its model id and an optional effort.
+/// A model to run a one-shot call with: the harness, its model id and an optional effort. A
+/// missing `model` means that harness's default model, resolved when the run starts (like a
+/// session step that names only a harness).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DecisionModel {
     pub harness: String,
-    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
 }

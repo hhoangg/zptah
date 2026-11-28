@@ -7,6 +7,7 @@ use monocode_core::mono::workflows::{
     board_model::{
         EdgeKind, FlowEdge, FlowKind, FlowNode, Point, absolute, out_handles, trigger_frame,
     },
+    board_edit::{shared_by_all_triggers, trigger_ids},
     model::{LoopSpec, Node},
     ordered::js_number_text,
     run_graph_model::{RunEdgeState, RunNodeStatus},
@@ -250,22 +251,12 @@ fn progress(state: Option<RunEdgeState>) -> u8 {
 /// the triggers lead to, which leave their own trigger. A merged edge keeps the id of the first
 /// edge it stands for.
 fn from_frame(edges: &[FlowEdge], nodes: &[FlowNode]) -> (Vec<FlowEdge>, Vec<FlowEdge>) {
-    let triggers: Vec<&str> = nodes
-        .iter()
-        .filter(|n| n.parent_id.is_none() && n.data.node.is_trigger())
-        .map(|n| n.id.as_str())
-        .collect();
+    let triggers = trigger_ids(nodes);
     let from_trigger: Vec<&FlowEdge> = edges
         .iter()
         .filter(|e| triggers.contains(&e.source.as_str()))
         .collect();
-    let shared = |target: &str| {
-        triggers.iter().all(|t| {
-            from_trigger
-                .iter()
-                .any(|e| e.source == *t && e.target == target)
-        })
-    };
+    let shared = |target: &str| shared_by_all_triggers(nodes, edges, target);
     let mut merged: Vec<FlowEdge> = Vec::new();
     let mut own: Vec<FlowEdge> = Vec::new();
     for &e in &from_trigger {

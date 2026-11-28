@@ -667,20 +667,28 @@ fn a_default_decision_model_pick_never_stores_an_invalid_model(cx: &mut TestAppC
     });
     let model = on_board(&s, visual, |b| b.meta.decision_model.clone()).unwrap();
     assert_eq!(
-        (model.harness.as_str(), model.model.as_str()),
-        ("claude", "claude:sonnet-5")
+        (model.harness.as_str(), model.model.as_deref()),
+        ("claude", Some("claude:sonnet-5"))
     );
-    // A harness with no bundled default has nothing to store: the step before it decides.
+    // A harness with no bundled default has no id to store: only the harness is kept, and the
+    // run asks that harness's default model (D44).
     do_with(&s, visual, |m, cx| {
         m.board_decision_picked(Kind::Claude, None, cx)
     });
-    assert!(on_board(&s, visual, |b| b.meta.decision_model.is_none()));
+    let model = on_board(&s, visual, |b| b.meta.decision_model.clone()).unwrap();
+    assert_eq!(
+        (model.harness.as_str(), model.model.clone(), model.effort.clone()),
+        ("claude", None, None)
+    );
+    // And the saved file keeps it as `{harness}` with no model key.
+    let saved = serde_json::to_value(&model).unwrap();
+    assert_eq!(saved, json!({"harness": "claude"}));
     // Pi has one, and the file stores it.
     do_with(&s, visual, |m, cx| {
         m.board_decision_picked(Kind::Pi, None, cx)
     });
     let model = on_board(&s, visual, |b| b.meta.decision_model.clone()).unwrap();
-    assert_eq!(model.model, "pi:default");
+    assert_eq!(model.model.as_deref(), Some("pi:default"));
 }
 
 #[gpui::test]

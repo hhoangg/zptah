@@ -529,7 +529,10 @@ impl Monos {
             WfMode::Runs => self.runs_mode(scope, cx),
             WfMode::Settings => self.wf_settings_body(scope, window, cx),
         };
-        let problems = (mode != WfMode::Runs)
+        // Runs mode shows the run, not the draft: its problems bar appears only once the draft has
+        // changed, so a flagged edit is not hidden by switching to a run.
+        let draft_changed = self.wf.board.as_ref().is_some_and(|b| b.changed());
+        let problems = (mode != WfMode::Runs || draft_changed)
             .then(|| self.wf_problems_bar(cx))
             .flatten();
         let leaving = self.board_leave_dialog(window, cx);

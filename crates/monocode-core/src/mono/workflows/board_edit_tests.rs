@@ -65,6 +65,34 @@ mod trigger_edges {
     }
 
     #[test]
+    fn an_edge_only_some_triggers_share_is_selected_alone_and_the_helper_agrees() {
+        let (flow, current) = board(&workflow());
+        let (flow, id) = add_node(&flow, &current, NodeType::Schedule);
+        // Only the new trigger leads to "extra"; "start" does not.
+        let mut flow = flow;
+        let source_edge = flow
+            .edges
+            .iter()
+            .find(|e| e.source == id && e.target == "report")
+            .unwrap()
+            .clone();
+        let mut own = source_edge.clone();
+        own.id = "own-edge".into();
+        own.target = "start".into();
+        flow.edges.push(own);
+        assert!(shared_by_all_triggers(&flow.nodes, &flow.edges, "report"));
+        assert!(!shared_by_all_triggers(&flow.nodes, &flow.edges, "start"));
+        let picked = select(&flow, None, Some("own-edge"));
+        let chosen: Vec<&str> = picked
+            .edges
+            .iter()
+            .filter(|e| e.selected)
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(chosen, ["own-edge"]);
+    }
+
+    #[test]
     fn an_edge_that_does_not_leave_a_trigger_is_selected_alone() {
         let (flow, _) = board(&ticket_workflow());
         let inner = flow

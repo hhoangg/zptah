@@ -174,7 +174,10 @@ pub(super) fn summary_and_decisions_text(
 ) -> (Option<String>, String) {
     let decisions = has_ai_decision(w).then(|| match &w.decision_model {
         Some(model) => {
-            let mut text = format!("{} {}", visible(&model.harness), visible(&model.model));
+            let mut text = match model.model.as_deref() {
+                Some(id) => format!("{} {}", visible(&model.harness), visible(id)),
+                None => format!("{} (its default model)", visible(&model.harness)),
+            };
             if let Some(effort) = model.effort.as_deref().filter(|e| !e.is_empty()) {
                 text.push_str(&format!(" ({})", visible(effort)));
             }

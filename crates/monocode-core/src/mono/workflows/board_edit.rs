@@ -305,34 +305,56 @@ pub fn loop_allowed(w: &Workflow, from: &str, to: &str) -> bool {
     connection_kind(w, from, to, None) == ConnectionKind::Loop
 }
 
+/// The ids of the top-level trigger nodes of a flow.
+pub fn trigger_ids(nodes: &[FlowNode]) -> Vec<&str> {
+    nodes
+        .iter()
+        .filter(|n| n.parent_id.is_none() && n.data.node.is_trigger())
+        .map(|n| n.id.as_str())
+        .collect()
+}
+
+/// Whether every trigger has an edge to `target`. The canvas draws one edge from the trigger
+/// frame for such a target; an edge to a target only some triggers lead to leaves its own trigger.
+pub fn shared_by_all_triggers(nodes: &[FlowNode], edges: &[FlowEdge], target: &str) -> bool {
+    trigger_ids(nodes)
+        .iter()
+        .all(|t| edges.iter().any(|e| e.source == *t && e.target == target))
+}
+
 /// The flow with the node (and edge) given selected and nothing else. The canvas draws one edge
-/// from the trigger frame for all the edges the triggers have to the same step, so selecting a
-/// trigger's edge selects every trigger edge to that step: deleting it removes them all.
+/// from the trigger frame for all the edges every trigger has to the same step, so selecting such
+/// an edge selects every trigger edge to that step: deleting it removes them all. An edge to a
+/// step only some triggers lead to is its own edge and is selected alone.
 pub fn select(flow: &Flow, node: Option<&str>, edge: Option<&str>) -> Flow {
     let mut out = flow.clone();
     for n in &mut out.nodes {
         n.selected = node == Some(n.id.as_str());
     }
-    let is_trigger = |id: &str| {
-        flow.nodes
-            .iter()
-            .any(|n| n.id == id && n.parent_id.is_none() && n.data.node.is_trigger())
-    };
+    let triggers = trigger_ids(&flow.nodes);
     let framed_target = edge
         .and_then(|id| flow.edges.iter().find(|e| e.id == id))
-        .filter(|e| is_trigger(&e.source))
+        .filter(|e| triggers.contains(&e.source.as_str()))
+        .filter(|e| shared_by_all_triggers(&flow.nodes, &flow.edges, &e.target))
         .map(|e| e.target.clone());
     for e in &mut out.edges {
         e.selected = edge == Some(e.id.as_str())
             || framed_target
                 .as_deref()
-                .is_some_and(|target| e.target == target && is_trigger(&e.source));
+                .is_some_and(|target| e.target == target && triggers.contains(&e.source.as_str()));
     }
     out
 }
 
 fn is_trigger_type(ty: NodeType) -> bool {
-    matches!(ty, NodeType::Schedule | NodeType::Manual)
+    match ty {
+        NodeType::Schedule | NodeType::Manual => true,
+        NodeType::Session
+        | NodeType::Command
+        | NodeType::If
+        | NodeType::Switch
+        | NodeType::ForEach => false,
+    }
 }
 
 fn sort_parents_first(nodes: Vec<FlowNode>) -> Vec<FlowNode> {

@@ -405,9 +405,16 @@ pub(crate) fn parse_decision_model(raw: Option<&Json>) -> Option<Option<Decision
         Some(Json::String(effort)) => Some(effort.clone()),
         Some(_) => return None,
     };
+    // Absent, null or empty: the harness's default model, resolved when the run starts. A value
+    // that is not text is unreadable, not "no model".
+    let model = match raw.get("model") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(model)) => Some(model.clone()).filter(|m| !m.is_empty()),
+        Some(_) => return None,
+    };
     Some(Some(DecisionModel {
         harness: str_of(raw, "harness").filter(|h| !h.is_empty())?,
-        model: str_of(raw, "model").filter(|m| !m.is_empty())?,
+        model,
         effort,
     }))
 }

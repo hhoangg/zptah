@@ -1687,7 +1687,7 @@ pub fn decision_model_for(w: &Workflow, node_id: &str) -> Option<ResolvedDecisio
         return Some(ResolvedDecisionModel {
             source: DecisionModelSource::Workflow,
             harness: Some(model.harness.clone()),
-            model: Some(model.model.clone()),
+            model: model.model.clone(),
             effort: model.effort.clone(),
         });
     }

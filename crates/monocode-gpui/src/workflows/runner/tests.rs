@@ -725,7 +725,7 @@ fn the_workflows_decision_model_answers_even_when_a_session_names_another(cx: &m
     );
     def.decision_model = Some(DecisionModel {
         harness: "claude".into(),
-        model: "claude:opus-5".into(),
+        model: Some("claude:opus-5".into()),
         effort: Some("high".into()),
     });
     let request = decided_with(cx, &def, &["ok"]);
@@ -734,6 +734,30 @@ fn the_workflows_decision_model_answers_even_when_a_session_names_another(cx: &m
         (Some("claude"), Some("claude:opus-5"), Some("high"))
     );
     assert_eq!(request.project.as_deref(), Some("/code/app"));
+}
+
+#[gpui::test]
+fn a_harness_only_decision_model_asks_that_harness_with_no_model_set(cx: &mut TestAppContext) {
+    let mut def = workflow(
+        vec![
+            trigger(),
+            session(
+                "dev",
+                json!({}),
+                json!({"harness": "codex", "model": "codex:test"}),
+            ),
+            json!({"id": "ask", "type": "switch", "decide": "ai", "question": "Ship it?", "cases": ["yes", "no"]}),
+        ],
+        vec![edge("start", "dev"), edge("dev", "ask")],
+    );
+    def.decision_model = Some(DecisionModel {
+        harness: "claude".into(),
+        model: None,
+        effort: None,
+    });
+    // The host fills in that harness's default model when it sets the call up.
+    let request = decided_with(cx, &def, &["ok"]);
+    assert_eq!(model_triple(&request), (Some("claude"), None, None));
 }
 
 #[gpui::test]

@@ -693,10 +693,10 @@ impl Monos {
             .unwrap_or(Kind::Claude);
         let native = model
             .as_ref()
-            .and_then(|m| native_model(&m.model, kind.id()));
+            .and_then(|m| native_model(m.model.as_deref()?, kind.id()));
         let efforts = model
             .as_ref()
-            .and_then(|m| model_efforts(&b.catalog, kind.id(), &m.model))
+            .and_then(|m| model_efforts(&b.catalog, kind.id(), m.model.as_deref()?))
             .unwrap_or_default();
         let label = match &model {
             Some(_) => cached_model_name(kind, native.as_deref()),
@@ -798,12 +798,9 @@ impl Monos {
         native: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        // A harness's own default has no id to store (the file needs a model), so it means the
-        // model of the step before it.
-        let Some(model) = stored_model_id(kind, native.as_deref()) else {
-            self.board_meta_edit(|m| m.decision_model = None, cx);
-            return;
-        };
+        // A harness's own default has no id to store: the file keeps only the harness, and the
+        // run asks that harness's default model.
+        let model = stored_model_id(kind, native.as_deref());
         self.board_meta_edit(
             |m| {
                 m.decision_model = Some(DecisionModel {
@@ -829,7 +826,7 @@ impl Monos {
             .unwrap_or(Kind::Claude);
         let native = model
             .as_ref()
-            .and_then(|m| native_model(&m.model, kind.id()));
+            .and_then(|m| native_model(m.model.as_deref()?, kind.id()));
         self.open_model_list(
             kind,
             native,

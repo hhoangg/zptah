@@ -416,6 +416,27 @@ fn the_problems_bar_lists_the_issues_and_a_click_selects_the_node(cx: &mut TestA
 }
 
 #[gpui::test]
+fn the_problems_bar_shows_in_runs_mode_only_while_the_draft_has_changed(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut w = ticket(json!({}));
+    if let NodeKind::Session { prompt, .. } = &mut w.nodes[1].kind {
+        *prompt = "List {{inputs.nope}}".into();
+    }
+    put_run(&s, &done_run(&w));
+    let mut visual = open_board(&s, &w, cx);
+    let visual = &mut visual;
+    set_mode(&s, visual, WfMode::Runs);
+    // The stored workflow has a problem, but nothing was edited: the run is the subject.
+    assert!(!on_board(&s, visual, |b| b.changed()));
+    assert!(!shown(visual, "wf-board-issues"));
+    // An edit keeps the flagged draft in view while the runs are looked at.
+    rename(&s, visual, "In progress");
+    assert_eq!(mode(&s, visual), WfMode::Runs);
+    assert!(on_board(&s, visual, |b| b.changed()));
+    assert!(shown(visual, "wf-board-issues"));
+}
+
+#[gpui::test]
 fn a_problem_of_the_workflow_itself_opens_its_settings(cx: &mut TestAppContext) {
     let s = setup(cx);
     crate::monos::tests::set_probes(&s, cx, |p| {
@@ -468,7 +489,7 @@ fn settings_edits_the_decision_model_the_report_mono_and_the_summary_template_an
     pick(&s, visual, BoardPick::DecisionEffort, "high");
     let model = on_board(&s, visual, |b| b.meta.decision_model.clone()).unwrap();
     assert_eq!(model.harness, "claude");
-    assert_eq!(model.model, "claude:opus-5");
+    assert_eq!(model.model, Some("claude:opus-5".to_string()));
     assert_eq!(model.effort.as_deref(), Some("high"));
     settle(&s, visual);
     assert!(shown(visual, "wf-decision-default"));
@@ -491,7 +512,7 @@ fn settings_edits_the_decision_model_the_report_mono_and_the_summary_template_an
     assert_eq!(
         (
             model.harness.as_str(),
-            model.model.as_str(),
+            model.model.as_deref().unwrap_or(""),
             model.effort.as_deref()
         ),
         ("claude", "claude:opus-5", Some("high"))
