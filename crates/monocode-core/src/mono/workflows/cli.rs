@@ -15,10 +15,10 @@
 use super::global::WorkflowsDir;
 use super::guide::workflow_guide;
 use super::model::{
-    interrupted_instances, left_instances_text, new_workflow_id, with_run_values, Edge, InputValue,
-    Node, NodeKind, ReportTo, RequirementKind, RunCaller, RunInstance, RunStatus, Workflow,
-    WorkflowRun, WORKFLOWS_MAX, WORKFLOW_DEFINITION_MAX_BYTES, WORKFLOW_DESCRIPTION_MAX,
-    WORKFLOW_NAME_MAX,
+    definition_fingerprint, interrupted_instances, left_instances_text, new_workflow_id,
+    with_run_values, Edge, InputValue, Node, NodeKind, ReportTo, RequirementKind, RunCaller,
+    RunInstance, RunStatus, Workflow, WorkflowRun, WORKFLOWS_MAX, WORKFLOW_DEFINITION_MAX_BYTES,
+    WORKFLOW_DESCRIPTION_MAX, WORKFLOW_NAME_MAX,
 };
 use super::models::{harnesses_used, native_probe, workflow_issues, ModelCatalog, Probe};
 use super::ordered::{js_number_text, Json, OrderedMap};
@@ -1258,6 +1258,13 @@ fn update<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
         };
         draft.enabled = wanted.unwrap_or(current.enabled);
         check_scope(host.caller(), &draft)?;
+        // A Mono that changes what the workflow does hands it back to the user to approve.
+        let redefined = host.caller().is_some()
+            && definition_fingerprint(&draft) != definition_fingerprint(&current);
+        if redefined {
+            draft.needs_review = true;
+            draft.enabled = false;
+        }
         let issues = problems(host, &draft);
         // A workflow that cannot run is paused rather than left to fail on its schedule.
         let enabled = draft.enabled && issues.is_empty();
@@ -1276,11 +1283,14 @@ fn update<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
             } else {
                 draft
             };
-        let result = obj([
+        let mut result = obj([
             ("id", st(&next.id)),
             ("enabled", Json::Bool(enabled)),
             ("issues", issues_json(&issues)),
         ]);
+        if let (true, Json::Object(map)) = (redefined, &mut result) {
+            map.insert("needsReview", Json::Bool(true));
+        }
         Ok((replace(list, next), result))
     })
 }

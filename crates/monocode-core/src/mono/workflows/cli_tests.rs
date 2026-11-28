@@ -2947,12 +2947,12 @@ fn a_mono_only_updates_and_runs_workflows_whose_projects_are_its_own() {
         w["name"] = json!(name);
         w
     };
+    f.ok("workflows.run", json!({"id": mine}));
+    assert!(f.stored().iter().any(|w| w.id == mine && w.run_requested));
     f.ok(
         "workflows.update",
         json!({"id": mine, "workflow": change("Renamed", "/code/app")}),
     );
-    f.ok("workflows.run", json!({"id": mine}));
-    assert!(f.stored().iter().any(|w| w.id == mine && w.run_requested));
     for e in [
         f.err(
             "workflows.update",
@@ -2977,6 +2977,43 @@ fn a_mono_only_updates_and_runs_workflows_whose_projects_are_its_own() {
         f.stored().iter().find(|w| w.id == mine).unwrap().name,
         "Renamed"
     );
+}
+
+#[test]
+fn a_mono_changing_the_definition_of_an_approved_workflow_sends_it_back_for_review() {
+    let (mut f, mine, _) = mono_fx();
+    let mut edited = in_project("/code/app");
+    edited["nodes"][1]["prompt"] = json!("Go, but differently");
+    let result = f.ok("workflows.update", json!({"id": mine, "workflow": edited}));
+    assert!(flag(&result, "needsReview"));
+    let w = f.stored().iter().find(|w| w.id == mine).unwrap();
+    assert!(w.needs_review && !w.enabled);
+    assert_review(&f.err("workflows.resume", json!({"id": mine})));
+}
+
+#[test]
+fn a_mono_changing_only_input_values_leaves_an_approved_workflow_alone() {
+    let (mut f, mine, _) = mono_fx();
+    f.ok(
+        "workflows.setInputs",
+        json!({"id": mine, "values": {"project": "/code/app"}}),
+    );
+    let mut same = in_project("/code/app");
+    same["inputValues"] = json!({"project": "/code/app"});
+    f.ok("workflows.update", json!({"id": mine, "workflow": same}));
+    let w = f.stored().iter().find(|w| w.id == mine).unwrap();
+    assert!(!w.needs_review && w.enabled);
+}
+
+#[test]
+fn a_users_own_edit_of_an_approved_workflow_does_not_need_review() {
+    let (mut f, mine, _) = mono_fx();
+    f.host.caller = None;
+    let mut edited = in_project("/code/app");
+    edited["nodes"][1]["prompt"] = json!("Go, but differently");
+    f.ok("workflows.update", json!({"id": mine, "workflow": edited}));
+    let w = f.stored().iter().find(|w| w.id == mine).unwrap();
+    assert!(!w.needs_review && w.enabled);
 }
 
 #[test]
