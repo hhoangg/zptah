@@ -13,10 +13,12 @@ use monocode_core::mono::workflows::{
     board_edit::*,
     model::{
         DecisionModel, InputType, InputValue, Node, NodeKind, OutputField, OutputFieldType,
-        Workflow, WorkflowInput,
+        SessionMode, Workflow, WorkflowInput,
     },
     models::{model_efforts, session_node_problem, stored_model_id},
+    output::session_builtins,
     report::field_in_report,
+    validate::terminal_problems,
 };
 use monocode_core::provider::Kind;
 use monocode_core::store::native_model;
@@ -24,6 +26,149 @@ use monocode_core::store::native_model;
 use super::inspector::*;
 
 impl Monos {
+    // ---- how a session step runs ------------------------------------------------------------------
+
+    /// The `surface` (chat or terminal) and `mode` (auto or wait for me) of a session step, and
+    /// the built-in outputs it gets. Terminal is dimmed, with the reason under the control, when
+    /// the step cannot run in the provider's own CLI.
+    pub(super) fn board_session_how(
+        &mut self,
+        w: &Workflow,
+        node: &Node,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let id = node.id.clone();
+        let NodeKind::Session {
+            harness,
+            model,
+            target,
+            ..
+        } = &node.kind
+        else {
+            return div();
+        };
+        let surface = node.kind.session_surface();
+        let mode = node.kind.session_mode();
+        let cloud = target.is_some();
+        let project = project_path(w, node);
+        let mut problems = terminal_problems(
+            project.as_deref(),
+            harness.as_deref(),
+            model.as_deref(),
+            cloud,
+            cfg!(windows),
+        );
+        // The harness the model rows show counts too: a step that names none runs on it.
+        let shown = self.board_model_state(node, cx).kind;
+        if harness.as_deref().is_none_or(str::is_empty)
+            && model.as_deref().is_none_or(str::is_empty)
+            && shown != Kind::Claude
+        {
+            problems.push(format!(
+                "A terminal step runs Claude only, but this step uses {}",
+                shown.label()
+            ));
+        }
+        let reason = problems.into_iter().next();
+        let blocked: &[&str] = if reason.is_some() { &["terminal"] } else { &[] };
+        let surface_id = id.clone();
+        let surface_control = crate::segmented::segmented_with(
+            "segmented",
+            "wf-surface",
+            "How the step runs",
+            if surface.is_terminal() {
+                "terminal"
+            } else {
+                "chat"
+            },
+            &[("chat", "Chat"), ("terminal", "Terminal")],
+            blocked,
+            cx,
+            move |this: &mut Self, picked, cx| {
+                this.board_node_edit(
+                    &surface_id,
+                    |n| {
+                        if let NodeKind::Session { surface, .. } = &mut n.kind {
+                            *surface = (picked == "terminal").then(|| "terminal".to_string());
+                        }
+                    },
+                    cx,
+                )
+            },
+        );
+        let mode_id = id.clone();
+        let mode_control = crate::segmented::segmented(
+            "segmented",
+            "wf-mode-of-step",
+            "When the step ends",
+            if mode == SessionMode::WaitForMe {
+                "waitForMe"
+            } else {
+                "auto"
+            },
+            &[("auto", "Auto"), ("waitForMe", "Wait for me")],
+            cx,
+            move |this: &mut Self, picked, cx| {
+                this.board_node_edit(
+                    &mode_id,
+                    |n| {
+                        if let NodeKind::Session { mode, .. } = &mut n.kind {
+                            *mode = (picked == "waitForMe").then(|| "waitForMe".to_string());
+                        }
+                    },
+                    cx,
+                )
+            },
+        );
+        let builtins = session_builtins(surface, cloud).join(", ");
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .px_4()
+                    .pt_3()
+                    .flex()
+                    .flex_col()
+                    .gap_1p5()
+                    .child(property("Opens as", surface_control))
+                    .when_some(reason, |d, reason| {
+                        d.child(
+                            div()
+                                .id("wf-surface-reason")
+                                .debug_selector(|| "wf-surface-reason".into())
+                                .text_size(px(11.))
+                                .line_height(px(16.))
+                                .text_color(content(0.45))
+                                .child(format!("Terminal is not available: {reason}")),
+                        )
+                    })
+                    .child(property("Ends", mode_control))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .text_color(content(0.35))
+                            .child(if mode == SessionMode::WaitForMe {
+                                "After the first turn you chat on in the session, then press Continue or Fail step."
+                            } else {
+                                "The step ends when the first turn ends."
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .id("wf-builtin-outputs")
+                    .debug_selector(|| "wf-builtin-outputs".into())
+                    .px_4()
+                    .pt_2()
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(content(0.35))
+                    .child(format!("Built-in outputs: {builtins}")),
+            )
+    }
+
     // ---- the model ------------------------------------------------------------------------------
 
     pub(super) fn board_model_rows(

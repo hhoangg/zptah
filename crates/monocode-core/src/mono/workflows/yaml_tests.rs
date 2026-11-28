@@ -1492,8 +1492,10 @@ fn a_harness_only_decision_model_round_trips_without_a_model_line() {
         effort: None,
     });
     let yaml = export_workflow(&w);
-    assert!(yaml.contains("decisionModel:\n  harness: claude\n"), "{yaml}");
-    assert!(!yaml.contains("model:"), "{yaml}");
+    assert!(
+        yaml.contains("decisionModel:\n  harness: claude\nnodes:"),
+        "{yaml}"
+    );
     assert_eq!(ok(&yaml).workflow.decision_model, w.decision_model);
 }
 

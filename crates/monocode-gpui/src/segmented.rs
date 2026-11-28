@@ -15,6 +15,21 @@ pub(crate) fn segmented<T: 'static>(
     cx: &mut Context<T>,
     change: impl Fn(&mut T, &'static str, &mut Context<T>) + Clone + 'static,
 ) -> Stateful<Div> {
+    segmented_with(selector, id, label, value, options, &[], cx, change)
+}
+
+/// `segmented` where the options named in `disabled` are drawn dimmed and cannot be pressed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn segmented_with<T: 'static>(
+    selector: &'static str,
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    value: &str,
+    options: &[(&'static str, &str)],
+    disabled: &[&str],
+    cx: &mut Context<T>,
+    change: impl Fn(&mut T, &'static str, &mut Context<T>) + Clone + 'static,
+) -> Stateful<Div> {
     let id: SharedString = id.into();
     div()
         .id(SharedString::from(format!("segmented-{id}")))
@@ -32,6 +47,7 @@ pub(crate) fn segmented<T: 'static>(
         .line_height(px(16.))
         .children(options.iter().map(|&(option, text)| {
             let selected = value == option;
+            let off = disabled.contains(&option);
             let change = change.clone();
             let id = id.clone();
             div()
@@ -50,9 +66,17 @@ pub(crate) fn segmented<T: 'static>(
                 .rounded(px(5.))
                 .px(px(10.))
                 .py_1()
-                .cursor_pointer()
                 .map(|d| {
-                    if selected {
+                    if off {
+                        d.cursor_default().text_color(content(0.25))
+                    } else {
+                        d.cursor_pointer()
+                    }
+                })
+                .map(|d| {
+                    if off {
+                        d
+                    } else if selected {
                         d.bg(content(0.1)).text_color(content(1.))
                     } else {
                         d.text_color(content(0.5))
@@ -60,6 +84,8 @@ pub(crate) fn segmented<T: 'static>(
                     }
                 })
                 .child(text.to_owned())
-                .on_click(cx.listener(move |this, _, _, cx| change(this, option, cx)))
+                .when(!off, |d| {
+                    d.on_click(cx.listener(move |this, _, _, cx| change(this, option, cx)))
+                })
         }))
 }

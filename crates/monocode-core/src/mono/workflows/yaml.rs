@@ -284,9 +284,7 @@ fn export_requirement(r: &Requirement) -> Doc {
 }
 
 fn export_decision_model(model: &DecisionModel) -> Doc {
-    let mut out = vec![
-        ("harness".to_string(), text(&model.harness)),
-    ];
+    let mut out = vec![("harness".to_string(), text(&model.harness))];
     put(&mut out, "model", model.model.as_deref().map(text));
     put(&mut out, "effort", model.effort.as_deref().map(text));
     Doc::Map(out)

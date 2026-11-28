@@ -669,6 +669,7 @@ impl Monos {
                     cx,
                 );
                 let outputs = self.board_outputs(&id, output, window, cx);
+                let how = self.board_session_how(w, node, cx);
                 div()
                     .flex()
                     .flex_col()
@@ -682,6 +683,7 @@ impl Monos {
                             .child(nest_row)
                             .child(limit),
                     )
+                    .child(how)
                     .children(reuse.map(|r| div().px_2().child(r)))
                     .child(prompt_section)
                     .child(outputs)

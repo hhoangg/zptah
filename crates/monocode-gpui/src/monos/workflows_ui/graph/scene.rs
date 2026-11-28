@@ -4,10 +4,10 @@
 //! so the board editor draws from the same thing.
 use super::geometry::{Rect, Seg, Side, arrow_head, bounds_of, rounded, step_points};
 use monocode_core::mono::workflows::{
+    board_edit::{shared_by_all_triggers, trigger_ids},
     board_model::{
         EdgeKind, FlowEdge, FlowKind, FlowNode, Point, absolute, out_handles, trigger_frame,
     },
-    board_edit::{shared_by_all_triggers, trigger_ids},
     model::{LoopSpec, Node},
     ordered::js_number_text,
     run_graph_model::{RunEdgeState, RunNodeStatus},

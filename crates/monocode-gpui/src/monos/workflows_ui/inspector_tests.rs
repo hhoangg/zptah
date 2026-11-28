@@ -537,6 +537,121 @@ fn a_new_output_field_can_be_renamed_and_removed(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_session_step_edits_its_surface_and_mode_and_lists_its_built_in_outputs(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    event(&s, visual, GraphEvent::Click("fetch".into()));
+    let shown =
+        |visual: &mut VisualTestContext, id: &'static str| visual.debug_bounds(id).is_some();
+    assert!(shown(visual, "segmented-wf-surface-chat"));
+    assert!(shown(visual, "segmented-wf-mode-of-step-waitForMe"));
+    assert!(!shown(visual, "wf-surface-reason"));
+    let NodeKind::Session { surface, mode, .. } = node_of(&s, visual, "fetch").kind else {
+        panic!()
+    };
+    assert_eq!((surface, mode), (None, None));
+    // Chat steps list the reply and the git facts as built-ins.
+    assert!(shown(visual, "wf-builtin-outputs"));
+    click(visual, "segmented-wf-mode-of-step-waitForMe");
+    click(visual, "segmented-wf-surface-terminal");
+    let NodeKind::Session { surface, mode, .. } = node_of(&s, visual, "fetch").kind else {
+        panic!()
+    };
+    assert_eq!(surface.as_deref(), Some("terminal"));
+    assert_eq!(mode.as_deref(), Some("waitForMe"));
+    // The built-ins of a terminal step have no reply.
+    use monocode_core::mono::workflows::{model::SessionSurface, output::session_builtins};
+    assert!(!session_builtins(SessionSurface::Terminal, false).contains(&"reply"));
+    assert_eq!(
+        session_builtins(SessionSurface::Chat, true),
+        ["reply", "sessionId"]
+    );
+    // Back to the defaults: nothing is written for them.
+    click(visual, "segmented-wf-mode-of-step-auto");
+    click(visual, "segmented-wf-surface-chat");
+    let NodeKind::Session { surface, mode, .. } = node_of(&s, visual, "fetch").kind else {
+        panic!()
+    };
+    assert_eq!((surface, mode), (None, None));
+}
+
+#[gpui::test]
+fn terminal_is_disabled_with_the_reason_when_the_step_cannot_run_in_a_terminal(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    do_with(&s, visual, |m, cx| {
+        m.board_node_edit(
+            "fetch",
+            |n| {
+                if let NodeKind::Session { harness, model, .. } = &mut n.kind {
+                    *harness = Some("codex".into());
+                    *model = None;
+                }
+            },
+            cx,
+        )
+    });
+    event(&s, visual, GraphEvent::Click("fetch".into()));
+    assert!(visual.debug_bounds("wf-surface-reason").is_some());
+    // Pressing it changes nothing.
+    click(visual, "segmented-wf-surface-terminal");
+    let NodeKind::Session { surface, .. } = node_of(&s, visual, "fetch").kind else {
+        panic!()
+    };
+    assert_eq!(surface, None);
+    // A step that already is a terminal one can still be put back to chat.
+    do_with(&s, visual, |m, cx| {
+        m.board_node_edit(
+            "fetch",
+            |n| {
+                if let NodeKind::Session { surface, .. } = &mut n.kind {
+                    *surface = Some("terminal".into());
+                }
+            },
+            cx,
+        )
+    });
+    click(visual, "segmented-wf-surface-chat");
+    let NodeKind::Session { surface, .. } = node_of(&s, visual, "fetch").kind else {
+        panic!()
+    };
+    assert_eq!(surface, None);
+}
+
+#[gpui::test]
+fn an_output_field_named_like_a_built_in_is_flagged_on_the_step(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    event(&s, visual, GraphEvent::Click("fetch".into()));
+    click(visual, "wf-output-add");
+    type_in(
+        &s,
+        visual,
+        BoardField::OutputName("fetch".into(), "field".into()),
+        "reply",
+    );
+    commit(
+        &s,
+        visual,
+        BoardField::OutputName("fetch".into(), "field".into()),
+    );
+    let issues = on_board(&s, visual, |b| b.issues.clone());
+    assert!(
+        issues.iter().any(|i| i.node_id.as_deref() == Some("fetch")
+            && i.message.contains("\"reply\" is a built-in output")),
+        "{issues:?}"
+    );
+    assert!(visual.debug_bounds("wf-inspector-issues").is_some());
+}
+
+#[gpui::test]
 fn a_project_chosen_for_a_step_is_held_by_an_input(cx: &mut TestAppContext) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
@@ -677,7 +792,11 @@ fn a_default_decision_model_pick_never_stores_an_invalid_model(cx: &mut TestAppC
     });
     let model = on_board(&s, visual, |b| b.meta.decision_model.clone()).unwrap();
     assert_eq!(
-        (model.harness.as_str(), model.model.clone(), model.effort.clone()),
+        (
+            model.harness.as_str(),
+            model.model.clone(),
+            model.effort.clone()
+        ),
         ("claude", None, None)
     );
     // And the saved file keeps it as `{harness}` with no model key.
