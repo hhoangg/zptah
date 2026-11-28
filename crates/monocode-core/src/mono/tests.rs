@@ -275,6 +275,12 @@ fn the_prompt_and_help_describe_workflows() {
     ] {
         assert!(context.contains(needle), "context lacks {needle}");
     }
+    // The help of monos.send says the switch is on by default, as `Mono::default()` has it.
+    assert!(bridge::HELP.contains("turned on in its settings (on by default)"));
+    assert!(!bridge::HELP.contains("(off by default)"));
+    // Habit runs, heartbeats and workflow questions are refused for monos.send, and the help says so.
+    assert!(bridge::HELP.contains("can call monos.list but not monos.send"));
+    assert!(!bridge::HELP.contains("workflow questions follow the sessions.* rules"));
     // The paragraph follows the habits and keeps the native CLI's words (no React `app ` prefix).
     assert!(
         context.find("Habits are scheduled work").unwrap()
@@ -310,6 +316,23 @@ fn the_prompt_and_help_describe_workflows() {
             "{name} is not an app action"
         );
     }
+    for name in ["monos.list", "monos.send"] {
+        assert!(
+            bridge::HELP.contains(&format!("{name} {{")),
+            "help lacks {name}"
+        );
+    }
+    assert!(api::validate("monos.list", &serde_json::json!({})).is_ok());
+    assert!(api::validate(
+        "monos.send",
+        &serde_json::json!({"mono":"b","message":"m","notifyOnReply":false})
+    )
+    .is_ok());
+    assert!(api::validate("monos.send", &serde_json::json!({"notifyOnReply":"yes"})).is_err());
+    assert!(
+        crate::mono::instructions(&crate::mono::Mono::default(), std::path::Path::new("/x"))
+            .contains("## Other Monos")
+    );
     for needle in [
         "always saved paused, however clean it is",
         "needing review",

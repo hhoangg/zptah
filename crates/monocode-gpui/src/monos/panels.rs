@@ -2022,6 +2022,10 @@ impl Monos {
                     .child(self.projects_anchor.probe())
                     .child(div().size(px(32.)).rounded_lg().border_1().border_color(content(0.15)).flex().items_center().justify_center().child(icon("plus",14.)))
                     .child("Add project").on_click(cx.listener(move |this,_,w,cx|this.pick_project(&add,w,cx)))))
+            .child(heading("Other Monos",None))
+            .child(card()
+                .child(switch_setting("Messages from other Monos","Other Monos can hand it a task with monos.send. It works on them only in its own projects, ranks them below your instructions, and they show in its chat.",false,
+                    self.switch("mono-accept-peer-messages",mono.accept_peer_messages,false,|m,on|m.accept_peer_messages=on,cx))))
             .child(heading("Sessions it starts",None))
             .child(card()
                 .child(switch_setting("Show sessions in sidebar","Sessions it starts appear in your project sidebar. Hidden ones stay saved and open from its overview.",false,

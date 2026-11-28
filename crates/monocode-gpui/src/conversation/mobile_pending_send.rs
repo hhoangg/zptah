@@ -147,6 +147,12 @@ impl Conversation {
         self.busy = busy;
     }
 
+    /// Test support: the status line a finished turn leaves behind.
+    #[cfg(test)]
+    pub(crate) fn set_status_for_test(&mut self, status: &str) {
+        self.status = status.into();
+    }
+
     /// Test support: the queue is pumped as a finished turn would.
     #[cfg(test)]
     pub(crate) fn pump_for_test(&mut self, cx: &mut Context<Self>) {

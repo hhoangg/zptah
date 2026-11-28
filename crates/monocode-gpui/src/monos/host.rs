@@ -479,6 +479,14 @@ impl Monos {
         if call.action == "projects.add" && (habit_run || question || heartbeat) {
             return Err("A habit run, heartbeat or workflow question cannot add projects".into());
         }
+        // Another Mono's chat starts a turn there, in projects this Mono was never given. Habit
+        // runs read untrusted source text, and a heartbeat or a question starts again at depth 0:
+        // only the Mono's own chat sends. Listing the other Monos stays allowed.
+        if call.action == "monos.send" && (habit_run || question || heartbeat) {
+            return Err(
+                "A habit run, heartbeat or workflow question cannot message other Monos".into(),
+            );
+        }
         // A workflow must not start workflows through its own question to the Mono.
         if call.action.starts_with("workflows.") && question {
             return Err("A workflow's question to its Mono cannot use workflows".into());
@@ -1587,6 +1595,12 @@ impl Monos {
                 .and_then(|id| mono.documents.iter().find(|d| d.id == id))
                 .map(|d| json!(d))
                 .ok_or("Document not found".into()),
+            "monos.list" => Ok(mono::peers::list(&self.roster, &mono.id)),
+            "monos.send" => {
+                let result = self.peer_send(&mono, call.session, &input, cx);
+                self.finish_call(call, result, cx);
+                return;
+            }
             "chat.card" => {
                 let mut card = match mono::cards::parse(&input) {
                     Ok(c) => c,
@@ -1885,6 +1899,39 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.set_enabled
             _ => Err("Unknown action. Run app help to see supported actions".into()),
         };
         self.finish_call(call, result, cx);
+    }
+    /// `monos.send`: queues `message` in another Mono's chat as a peer's request. The target
+    /// keeps its own projects; the hop and rate limits stop runaway exchanges.
+    fn peer_send(
+        &mut self,
+        sender: &mono::Mono,
+        session: i64,
+        input: &Value,
+        cx: &mut Context<Self>,
+    ) -> Result<Value, String> {
+        let message = app::text(input, "message", mono::peers::MESSAGE_MAX)?;
+        let wanted = app::text(input, "mono", 200)?;
+        let notify = flag(input, "notifyOnReply", true);
+        let target = mono::peers::resolve(&self.roster, &sender.id, &wanted)?.clone();
+        // Only the Mono's own chat turn can be one that a peer message started; a habit run,
+        // heartbeat or workflow question starts a fresh exchange.
+        let inflight = (sender.session_id == Some(session))
+            .then(|| self.inflight.get(&sender.id).map(|m| m.id.as_str()))
+            .flatten();
+        let depth = mono::peers::current_depth(sender, inflight);
+        let recent = self.peer_sends.entry(sender.id.clone()).or_default();
+        let depth = mono::peers::admit(depth, recent, now_ms())?;
+        let text = mono::peers::request_text(sender, &message, notify);
+        let message_id = self
+            .enqueue_peer(&sender.id, &target.id, text, depth, notify, cx)
+            .ok_or("That Mono is gone")?;
+        Ok(json!({
+            "sent": true,
+            "to": {"id": target.id, "name": target.label()},
+            "messageId": message_id,
+            "notifyOnReply": notify,
+            "depth": depth,
+        }))
     }
     /// sessions.start. Every check runs before the session row exists. `input` is the call's
     /// input with the Mono's subsession defaults filled in; the receipt keys on `call.input`.
