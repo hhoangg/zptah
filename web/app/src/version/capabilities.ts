@@ -20,6 +20,7 @@ export const FEATURES: Readonly<Record<KnownCapability, string>> = {
   terminal: "The terminal",
   slashCommands: "The / menu",
   visualControls: "Controls in visuals",
+  workflows: "Workflows",
 };
 
 export type { KnownCapability };

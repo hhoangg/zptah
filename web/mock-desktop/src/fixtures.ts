@@ -27,6 +27,7 @@ import { MockTerminals } from "./terminal.ts";
 import { MENTION_MESSAGE, MentionError, mentionedFile } from "./mentioned.ts";
 import { MockTransfers } from "./transfer.ts";
 import { MockVisual } from "./visual.ts";
+import { workflowRuns, workflowsList } from "./workflows.ts";
 import type { z } from "zod";
 
 /** Time used by default so fixtures are deterministic. */
@@ -1255,4 +1256,6 @@ export const FIXTURE_HANDLERS: { [M in MethodName]: HandlerOf<M> } = {
   "terminal.close": (p, ctx) => terminalsOf(ctx).close(ctx.device.fingerprint, p),
   "desktop.updateStatus": (_p, { world }) => world.updateStatus(),
   "desktop.update": (p, { world }) => world.update(p.confirm === true),
+  "workflows.list": (_p, { world }) => workflowsList(world.now()),
+  "workflows.runs": (p, { world }) => workflowRuns(p.workflowId, world.now(), [...world.sessions.keys()].filter((id) => !id.startsWith("mono:")).slice(0, 2)),
 };

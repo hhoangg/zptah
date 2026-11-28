@@ -45,6 +45,8 @@ import { Route as DDesktopIdSSessionIdRouteImport } from './routes/d/$desktopId/
 import { Route as DDesktopIdSettingsIndexRouteImport } from './routes/d/$desktopId/settings/index'
 import { Route as DDesktopIdTTerminalIdRouteImport } from './routes/d/$desktopId/t/$terminalId'
 import { Route as DDesktopIdTerminalIndexRouteImport } from './routes/d/$desktopId/terminal/index'
+import { Route as DDesktopIdWorkflowsIndexRouteImport } from './routes/d/$desktopId/workflows/index'
+import { Route as DDesktopIdWorkflowsWorkflowIdRouteImport } from './routes/d/$desktopId/workflows/$workflowId'
 import { Route as DDesktopIdMonosMonoIdIndexRouteImport } from './routes/d/$desktopId/monos/$monoId/index'
 import { Route as DDesktopIdPProjectIdIndexRouteImport } from './routes/d/$desktopId/p/$projectId/index'
 import { Route as DDesktopIdPProjectIdGitRouteImport } from './routes/d/$desktopId/p/$projectId/git'
@@ -237,6 +239,18 @@ const DDesktopIdTerminalIndexRoute = DDesktopIdTerminalIndexRouteImport.update({
   path: '/terminal/',
   getParentRoute: () => DDesktopIdRouteRoute,
 } as any)
+const DDesktopIdWorkflowsIndexRoute =
+  DDesktopIdWorkflowsIndexRouteImport.update({
+    id: '/workflows/',
+    path: '/workflows/',
+    getParentRoute: () => DDesktopIdRouteRoute,
+  } as any)
+const DDesktopIdWorkflowsWorkflowIdRoute =
+  DDesktopIdWorkflowsWorkflowIdRouteImport.update({
+    id: '/workflows/$workflowId',
+    path: '/workflows/$workflowId',
+    getParentRoute: () => DDesktopIdRouteRoute,
+  } as any)
 const DDesktopIdMonosMonoIdIndexRoute =
   DDesktopIdMonosMonoIdIndexRouteImport.update({
     id: '/monos/$monoId/',
@@ -335,10 +349,12 @@ export interface FileRoutesByFullPath {
   '/settings/desktops/': typeof SettingsDesktopsIndexRoute
   '/d/$desktopId/s/$sessionId': typeof DDesktopIdSSessionIdRoute
   '/d/$desktopId/t/$terminalId': typeof DDesktopIdTTerminalIdRoute
+  '/d/$desktopId/workflows/$workflowId': typeof DDesktopIdWorkflowsWorkflowIdRoute
   '/d/$desktopId/cloud/': typeof DDesktopIdCloudIndexRoute
   '/d/$desktopId/monos/': typeof DDesktopIdMonosIndexRoute
   '/d/$desktopId/settings/': typeof DDesktopIdSettingsIndexRoute
   '/d/$desktopId/terminal/': typeof DDesktopIdTerminalIndexRoute
+  '/d/$desktopId/workflows/': typeof DDesktopIdWorkflowsIndexRoute
   '/d/$desktopId/p/$projectId/git': typeof DDesktopIdPProjectIdGitRoute
   '/d/$desktopId/p/$projectId/new': typeof DDesktopIdPProjectIdNewRoute
   '/d/$desktopId/monos/$monoId/': typeof DDesktopIdMonosMonoIdIndexRoute
@@ -382,10 +398,12 @@ export interface FileRoutesByTo {
   '/settings/desktops': typeof SettingsDesktopsIndexRoute
   '/d/$desktopId/s/$sessionId': typeof DDesktopIdSSessionIdRoute
   '/d/$desktopId/t/$terminalId': typeof DDesktopIdTTerminalIdRoute
+  '/d/$desktopId/workflows/$workflowId': typeof DDesktopIdWorkflowsWorkflowIdRoute
   '/d/$desktopId/cloud': typeof DDesktopIdCloudIndexRoute
   '/d/$desktopId/monos': typeof DDesktopIdMonosIndexRoute
   '/d/$desktopId/settings': typeof DDesktopIdSettingsIndexRoute
   '/d/$desktopId/terminal': typeof DDesktopIdTerminalIndexRoute
+  '/d/$desktopId/workflows': typeof DDesktopIdWorkflowsIndexRoute
   '/d/$desktopId/p/$projectId/git': typeof DDesktopIdPProjectIdGitRoute
   '/d/$desktopId/p/$projectId/new': typeof DDesktopIdPProjectIdNewRoute
   '/d/$desktopId/monos/$monoId': typeof DDesktopIdMonosMonoIdIndexRoute
@@ -432,10 +450,12 @@ export interface FileRoutesById {
   '/settings/desktops/': typeof SettingsDesktopsIndexRoute
   '/d/$desktopId/s/$sessionId': typeof DDesktopIdSSessionIdRoute
   '/d/$desktopId/t/$terminalId': typeof DDesktopIdTTerminalIdRoute
+  '/d/$desktopId/workflows/$workflowId': typeof DDesktopIdWorkflowsWorkflowIdRoute
   '/d/$desktopId/cloud/': typeof DDesktopIdCloudIndexRoute
   '/d/$desktopId/monos/': typeof DDesktopIdMonosIndexRoute
   '/d/$desktopId/settings/': typeof DDesktopIdSettingsIndexRoute
   '/d/$desktopId/terminal/': typeof DDesktopIdTerminalIndexRoute
+  '/d/$desktopId/workflows/': typeof DDesktopIdWorkflowsIndexRoute
   '/d/$desktopId/p/$projectId/git': typeof DDesktopIdPProjectIdGitRoute
   '/d/$desktopId/p/$projectId/new': typeof DDesktopIdPProjectIdNewRoute
   '/d/$desktopId/monos/$monoId/': typeof DDesktopIdMonosMonoIdIndexRoute
@@ -483,10 +503,12 @@ export interface FileRouteTypes {
     | '/settings/desktops/'
     | '/d/$desktopId/s/$sessionId'
     | '/d/$desktopId/t/$terminalId'
+    | '/d/$desktopId/workflows/$workflowId'
     | '/d/$desktopId/cloud/'
     | '/d/$desktopId/monos/'
     | '/d/$desktopId/settings/'
     | '/d/$desktopId/terminal/'
+    | '/d/$desktopId/workflows/'
     | '/d/$desktopId/p/$projectId/git'
     | '/d/$desktopId/p/$projectId/new'
     | '/d/$desktopId/monos/$monoId/'
@@ -530,10 +552,12 @@ export interface FileRouteTypes {
     | '/settings/desktops'
     | '/d/$desktopId/s/$sessionId'
     | '/d/$desktopId/t/$terminalId'
+    | '/d/$desktopId/workflows/$workflowId'
     | '/d/$desktopId/cloud'
     | '/d/$desktopId/monos'
     | '/d/$desktopId/settings'
     | '/d/$desktopId/terminal'
+    | '/d/$desktopId/workflows'
     | '/d/$desktopId/p/$projectId/git'
     | '/d/$desktopId/p/$projectId/new'
     | '/d/$desktopId/monos/$monoId'
@@ -579,10 +603,12 @@ export interface FileRouteTypes {
     | '/settings/desktops/'
     | '/d/$desktopId/s/$sessionId'
     | '/d/$desktopId/t/$terminalId'
+    | '/d/$desktopId/workflows/$workflowId'
     | '/d/$desktopId/cloud/'
     | '/d/$desktopId/monos/'
     | '/d/$desktopId/settings/'
     | '/d/$desktopId/terminal/'
+    | '/d/$desktopId/workflows/'
     | '/d/$desktopId/p/$projectId/git'
     | '/d/$desktopId/p/$projectId/new'
     | '/d/$desktopId/monos/$monoId/'
@@ -870,6 +896,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DDesktopIdTerminalIndexRouteImport
       parentRoute: typeof DDesktopIdRouteRoute
     }
+    '/d/$desktopId/workflows/': {
+      id: '/d/$desktopId/workflows/'
+      path: '/workflows'
+      fullPath: '/d/$desktopId/workflows/'
+      preLoaderRoute: typeof DDesktopIdWorkflowsIndexRouteImport
+      parentRoute: typeof DDesktopIdRouteRoute
+    }
+    '/d/$desktopId/workflows/$workflowId': {
+      id: '/d/$desktopId/workflows/$workflowId'
+      path: '/workflows/$workflowId'
+      fullPath: '/d/$desktopId/workflows/$workflowId'
+      preLoaderRoute: typeof DDesktopIdWorkflowsWorkflowIdRouteImport
+      parentRoute: typeof DDesktopIdRouteRoute
+    }
     '/d/$desktopId/monos/$monoId/': {
       id: '/d/$desktopId/monos/$monoId/'
       path: '/monos/$monoId'
@@ -988,10 +1028,12 @@ interface DDesktopIdRouteRouteChildren {
   DDesktopIdIndexRoute: typeof DDesktopIdIndexRoute
   DDesktopIdSSessionIdRoute: typeof DDesktopIdSSessionIdRoute
   DDesktopIdTTerminalIdRoute: typeof DDesktopIdTTerminalIdRoute
+  DDesktopIdWorkflowsWorkflowIdRoute: typeof DDesktopIdWorkflowsWorkflowIdRoute
   DDesktopIdCloudIndexRoute: typeof DDesktopIdCloudIndexRoute
   DDesktopIdMonosIndexRoute: typeof DDesktopIdMonosIndexRoute
   DDesktopIdSettingsIndexRoute: typeof DDesktopIdSettingsIndexRoute
   DDesktopIdTerminalIndexRoute: typeof DDesktopIdTerminalIndexRoute
+  DDesktopIdWorkflowsIndexRoute: typeof DDesktopIdWorkflowsIndexRoute
   DDesktopIdPProjectIdGitRoute: typeof DDesktopIdPProjectIdGitRoute
   DDesktopIdPProjectIdNewRoute: typeof DDesktopIdPProjectIdNewRoute
   DDesktopIdMonosMonoIdIndexRoute: typeof DDesktopIdMonosMonoIdIndexRoute
@@ -1009,10 +1051,12 @@ const DDesktopIdRouteRouteChildren: DDesktopIdRouteRouteChildren = {
   DDesktopIdIndexRoute: DDesktopIdIndexRoute,
   DDesktopIdSSessionIdRoute: DDesktopIdSSessionIdRoute,
   DDesktopIdTTerminalIdRoute: DDesktopIdTTerminalIdRoute,
+  DDesktopIdWorkflowsWorkflowIdRoute: DDesktopIdWorkflowsWorkflowIdRoute,
   DDesktopIdCloudIndexRoute: DDesktopIdCloudIndexRoute,
   DDesktopIdMonosIndexRoute: DDesktopIdMonosIndexRoute,
   DDesktopIdSettingsIndexRoute: DDesktopIdSettingsIndexRoute,
   DDesktopIdTerminalIndexRoute: DDesktopIdTerminalIndexRoute,
+  DDesktopIdWorkflowsIndexRoute: DDesktopIdWorkflowsIndexRoute,
   DDesktopIdPProjectIdGitRoute: DDesktopIdPProjectIdGitRoute,
   DDesktopIdPProjectIdNewRoute: DDesktopIdPProjectIdNewRoute,
   DDesktopIdMonosMonoIdIndexRoute: DDesktopIdMonosMonoIdIndexRoute,

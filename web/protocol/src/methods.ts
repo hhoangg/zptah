@@ -324,6 +324,60 @@ export const CloudStartOptionsResultSchema = z.looseObject({
   sizes: z.array(z.looseObject({ id: z.string().optional(), name: z.string().optional() })).optional(),
 });
 
+// --- Workflows (read-only) ---
+
+/**
+ * Loose on purpose: the desktop passes run and node records through as they are stored, so a status or a
+ * field a later desktop adds (a node waiting for the user, a queued run, a skipped node) needs no protocol
+ * change. The screen shows what it knows and tolerates the rest.
+ */
+export const WorkflowSummarySchema = z.looseObject({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullish(),
+  enabled: z.boolean(),
+  needsReview: z.boolean().optional(),
+  triggers: z.array(z.looseObject({ id: z.string(), type: z.string(), label: z.string() })),
+  /** Milliseconds since the epoch; null when nothing is scheduled. */
+  nextRunAt: z.number().nullish(),
+  lastRun: z.looseObject({ status: z.string(), startedAt: z.number() }).nullish(),
+});
+
+export const WorkflowsListResultSchema = z.looseObject({ workflows: z.array(WorkflowSummarySchema) });
+
+export const WorkflowNodeRunSchema = z.looseObject({
+  nodeId: z.string(),
+  branch: z.string().optional(),
+  status: z.string(),
+  title: z.string().nullish(),
+  type: z.string().nullish(),
+  output: z.unknown().optional(),
+  error: z.string().nullish(),
+  startedAt: z.number().nullish(),
+  endedAt: z.number().nullish(),
+  /** Session ids (as `sessions.list` shows them) of the sessions this device may open. */
+  sessions: z.array(z.string()).optional(),
+});
+
+export const WorkflowRunSchema = z.looseObject({
+  id: z.string(),
+  status: z.string(),
+  caller: z.looseObject({ kind: z.string(), monoId: z.string().optional() }),
+  startedAt: z.number(),
+  endedAt: z.number().nullish(),
+  durationMs: z.number().nullish(),
+  summary: z.looseObject({ title: z.string(), text: z.string() }).nullish(),
+  error: z.string().nullish(),
+  nodes: z.array(WorkflowNodeRunSchema),
+  sessions: z.array(z.string()).optional(),
+});
+
+export const WorkflowsRunsResultSchema = z.looseObject({
+  /** Null when the workflow does not exist or this device may not see it. */
+  workflow: z.looseObject({ id: z.string(), name: z.string() }).nullable(),
+  runs: z.array(WorkflowRunSchema),
+});
+
 // --- Mono ---
 
 const MonoFile = z.enum(["soul", "memory"]);
@@ -872,6 +926,16 @@ export const METHODS = {
   }),
   "cloud.moveToLocal": method({ class: "control", transport: "app", params: SessionIdParams, result: Json }),
   "cloud.cancelMove": method({ class: "control", transport: "app", params: SessionIdParams, result: Json }),
+
+  // Workflows (capability `workflows`): read-only list and runs. A device sees a workflow only when it sees
+  // every project the workflow uses; a run's sessions are listed only where the session rules allow them.
+  "workflows.list": method({ class: "read", transport: "app", params: Empty, result: WorkflowsListResultSchema }),
+  "workflows.runs": method({
+    class: "read",
+    transport: "app",
+    params: z.object({ workflowId: z.string().min(1) }),
+    result: WorkflowsRunsResultSchema,
+  }),
 
   // Desktop app update (remote update and restart)
   "desktop.updateStatus": method({

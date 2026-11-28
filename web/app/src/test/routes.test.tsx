@@ -105,6 +105,13 @@ const CASES: ReadonlyArray<{ url: string; route: string; params: Record<string, 
     fullPath: "/d/$desktopId/monos/$monoId/profile/file/$name",
   },
   { url: "/d/dk1/cloud", route: "/d/:desktopId/cloud", params: { desktopId: "dk1" }, fullPath: "/d/$desktopId/cloud/" },
+  { url: "/d/dk1/workflows", route: "/d/:desktopId/workflows", params: { desktopId: "dk1" }, fullPath: "/d/$desktopId/workflows/" },
+  {
+    url: "/d/dk1/workflows/w1",
+    route: "/d/:desktopId/workflows/:workflowId",
+    params: { desktopId: "dk1", workflowId: "w1" },
+    fullPath: "/d/$desktopId/workflows/$workflowId",
+  },
   // The old per-desktop settings URL redirects to the desktop's page in the settings shell.
   { url: "/d/dk1/settings", route: "/settings/desktops/:id", params: { id: "dk1" }, fullPath: "/settings/desktops/$id" },
   // `/settings` redirects to the first page (no matchMedia here, which counts as a wide window).
@@ -178,6 +185,11 @@ const SCREENS: Record<string, string> = {
   // U-17 (WS-C): the cloud instance list, framed by the workspace with its "Cloud" h1.
   "/d/dk1/cloud": "Cloud",
   "/d/:desktopId/cloud": "Cloud",
+  // The read-only Workflows screens, each with its own h1.
+  "/d/dk1/workflows": "Workflows",
+  "/d/:desktopId/workflows": "Workflows",
+  "/d/dk1/workflows/w1": "Workflow runs",
+  "/d/:desktopId/workflows/:workflowId": "Workflow runs",
   // U-05 (WS-P): the file browser, with its "Files" h1 (the splat stays in the route params).
   "/d/dk1/p/p1/files/src/main.rs": "Files",
   "/d/:desktopId/p/:projectId/files/*": "Files",

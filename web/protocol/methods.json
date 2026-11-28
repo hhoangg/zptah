@@ -322,6 +322,16 @@
       "transport": "app"
     },
     {
+      "name": "workflows.list",
+      "class": "read",
+      "transport": "app"
+    },
+    {
+      "name": "workflows.runs",
+      "class": "read",
+      "transport": "app"
+    },
+    {
       "name": "workspace.list",
       "class": "read",
       "transport": "host"

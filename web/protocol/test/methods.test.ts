@@ -189,6 +189,20 @@ const fixtures: Record<MethodName, { params: unknown; result: unknown }> = {
     params: { confirm: true },
     result: { status: "confirmation_required", runningSessions: [{ id: "s1", title: "Fix bug" }] },
   },
+  "workflows.list": {
+    params: {},
+    result: {
+      workflows: [{ id: "w1", name: "Nightly", enabled: true, triggers: [{ id: "t", type: "schedule", label: "Daily at 02:00" }], nextRunAt: 1_700_000_000_000, lastRun: { status: "done", startedAt: 1_700_000_000_000 } }],
+    },
+  },
+  "workflows.runs": {
+    params: { workflowId: "w1" },
+    result: {
+      workflow: { id: "w1", name: "Nightly" },
+      // A status and a field a later desktop may send are accepted as they are.
+      runs: [{ id: "r1", status: "waitingForUser", caller: { kind: "manual" }, startedAt: 1, future: true, nodes: [{ nodeId: "n", status: "someNewState", sessions: ["s1"] }] }],
+    },
+  },
 };
 
 describe("every method has a typed entry", () => {
