@@ -179,8 +179,7 @@ fn validation_issues_are_shown_without_blocking_the_import(cx: &mut TestAppConte
         json!({"id": "wf-sourceaaa", "name": "Odd", "inputs": {"project": {"type": "project"}}}),
         json!([
             {"id": "start", "type": "manual"},
-            {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": "make"},
-            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
+            {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": "make", "timeoutMinutes": 0},
         ]),
         json!([{"from": "start", "to": "build"}]),
     );
@@ -398,7 +397,7 @@ fn the_real_reason_an_import_could_not_be_saved_is_shown(cx: &mut TestAppContext
     visual.run_until_parked();
     paste(&s, &export_workflow(&plain_source()), visual);
     // The workflows file cannot be read as a file any more.
-    let file = s.root.join(&s.id).join("workflows.json");
+    let file = s.workflows_dir().root().join("workflows.json");
     let _ = std::fs::remove_file(&file);
     std::fs::create_dir_all(&file).unwrap();
     click(visual, "mono-import-paused");

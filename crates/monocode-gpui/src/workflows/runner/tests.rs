@@ -583,7 +583,8 @@ fn the_node_fails_when_the_ais_answer_cannot_be_read(cx: &mut TestAppContext) {
     rig.start(cx, &ask_workflow());
     cx.run_until_parked();
     let run = rig.last_run();
-    assert_eq!(run.status, RunStatus::Failed);
+    // The step before it succeeded, so the run ends with failures rather than failed.
+    assert_eq!(run.status, RunStatus::DoneWithFailures);
     let ask = node(&run, "ask");
     assert_eq!(ask.status, NodeStatus::Failed);
     assert!(ask.error.as_deref().unwrap().contains("workflow-output"));
@@ -603,11 +604,9 @@ fn the_ais_answer_is_a_decision_and_its_reason_is_capped(cx: &mut TestAppContext
     cx.run_until_parked();
     let run = rig.last_run();
     assert_eq!(run.status, RunStatus::Done);
-    let output = node(&run, "ask").output.clone().unwrap();
-    assert_eq!(output.get("answer"), Some(&Json::String("yes".into())));
-    let Some(Json::String(reason)) = output.get("reason") else {
-        panic!("a reason")
-    };
+    let decision = node(&run, "ask").decision.clone().expect("a decision");
+    assert_eq!(decision.value, "yes");
+    let reason = decision.reason.expect("a reason");
     assert!(reason.len() < 16_200 && reason.contains("truncated"));
 }
 
@@ -733,18 +732,23 @@ fn a_loop_edge_decides_on_the_model_of_the_session_it_leaves(cx: &mut TestAppCon
     let def = workflow(
         vec![
             trigger(),
+            session("dev", json!({"summary": {"type": "string"}}), json!({})),
             session(
-                "dev",
+                "review",
                 json!({"summary": {"type": "string"}}),
                 json!({"harness": "codex", "model": "codex:test"}),
             ),
         ],
         vec![
             edge("start", "dev"),
-            json!({"from": "dev", "to": "dev", "loop": {"maxRounds": 2, "decide": "ai"}}),
+            edge("dev", "review"),
+            json!({"from": "review", "to": "dev", "loop": {"maxRounds": 2, "decide": "ai"}}),
         ],
     );
-    let rig = Rig::new(&[&fenced(json!({"summary": "a"}))]);
+    let rig = Rig::new(&[
+        &fenced(json!({"summary": "a"})),
+        &fenced(json!({"summary": "b"})),
+    ]);
     rig.fake
         .answer(Ok(fenced(json!({"answer": "exit", "reason": "done"}))));
     rig.start(cx, &def);
@@ -1483,6 +1487,8 @@ fn a_run_that_is_already_over_is_only_written(cx: &mut TestAppContext) {
     run.status = RunStatus::Failed;
     run.ended_at = Some(2_000);
     run.error = Some("The workflow is not valid: nope".into());
+    // Its summary went out when it was made, so nothing is delivered again.
+    run.report_posted_at = Some(2_000);
     let rig = Rig::new(&[]);
     rig.start_run(cx, run);
     cx.run_until_parked();

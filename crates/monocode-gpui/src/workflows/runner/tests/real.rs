@@ -511,7 +511,8 @@ fn a_command_nobody_started_cannot_be_cancelled(cx: &mut TestAppContext) {
 
 // --- the app side of start/resume/stop --------------------------------------------------------
 
-/// trigger -> dev: a session step that never gets a turn in a test, so the run stays going.
+/// trigger -> dev: a session step that never gets a turn in a test (the prompt is only left in
+/// the composer), so the run stays going.
 fn waiting_workflow(s: &Setup) -> Workflow {
     workflow_with(
         vec![trigger(), session("dev", json!({}), json!({}))],

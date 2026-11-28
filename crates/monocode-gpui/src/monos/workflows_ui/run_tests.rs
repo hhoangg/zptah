@@ -103,7 +103,7 @@ fn run_page_draws_one_card_per_run_node(cx: &mut TestAppContext) {
             ("start".into(), "done")
         ]
     );
-    for selector in ["wf-node-trigger", "wf-node-dev", "wf-node-report"] {
+    for selector in ["wf-node-start", "wf-node-dev", "wf-node-report"] {
         assert!(visual.debug_bounds(selector).is_some(), "{selector}");
     }
     assert!(visual.debug_bounds("wf-graph").is_some());
@@ -122,7 +122,10 @@ fn switch_toggles_lanes_and_single_and_is_remembered(cx: &mut TestAppContext) {
     visual.run_until_parked();
     assert_eq!(view_setting(&s).as_deref(), Some("single"));
     // Leave the page and come back: the choice is remembered.
-    s.manager.update(visual, |m, _| m.wf.route = None);
+    s.manager.update(visual, |m, cx| {
+        m.wf.route = None;
+        cx.notify();
+    });
     visual.run_until_parked();
     open_run(&s, visual);
     assert_eq!(lane_cards(&s, visual).len(), 2);
@@ -496,7 +499,7 @@ fn interrupted(w: &Workflow) -> WorkflowRun {
 #[gpui::test]
 fn an_interrupted_run_shows_resume_and_resume_continues_it(cx: &mut TestAppContext) {
     let s = setup(cx);
-    let w = super::tests::workflow(json!({}));
+    let w = super::tests::workflow_in(&s, json!({}));
     saved_run(&s, &w, &interrupted(&w), cx);
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
@@ -834,7 +837,10 @@ fn opening_a_run_again_starts_with_nothing_picked(cx: &mut TestAppContext) {
         s.manager.read_with(visual, |m, _| m.wf.run.picked.clone())
     };
     assert_eq!(picked(&s, visual).as_deref(), Some("report|"));
-    s.manager.update(visual, |m, _| m.wf.route = None);
+    s.manager.update(visual, |m, cx| {
+        m.wf.route = None;
+        cx.notify();
+    });
     visual.run_until_parked();
     open_run(&s, visual);
     assert_eq!(picked(&s, visual), None);
@@ -905,8 +911,8 @@ fn enter_on_a_focused_card_picks_it(cx: &mut TestAppContext) {
     assert_eq!(picked(&s, visual).as_deref(), Some("dev|"));
     // A click focuses the card; pick another node another way, then Enter on the focused card
     // picks it again.
-    click(visual, "wf-node-trigger");
-    assert_eq!(picked(&s, visual).as_deref(), Some("trigger|"));
+    click(visual, "wf-node-start");
+    assert_eq!(picked(&s, visual).as_deref(), Some("start|"));
     s.manager.update(visual, |m, cx| {
         m.wf.run.picked = Some("report|".into());
         m.run_page_rebuild(cx);
@@ -915,12 +921,12 @@ fn enter_on_a_focused_card_picks_it(cx: &mut TestAppContext) {
     assert_eq!(picked(&s, visual).as_deref(), Some("report|"));
     visual.simulate_keystrokes("enter");
     visual.run_until_parked();
-    assert_eq!(picked(&s, visual).as_deref(), Some("trigger|"));
+    assert_eq!(picked(&s, visual).as_deref(), Some("start|"));
     s.manager.update(visual, |m, cx| {
         m.wf.run.picked = Some("report|".into());
         m.run_page_rebuild(cx);
     });
     visual.simulate_keystrokes("space");
     visual.run_until_parked();
-    assert_eq!(picked(&s, visual).as_deref(), Some("trigger|"));
+    assert_eq!(picked(&s, visual).as_deref(), Some("start|"));
 }

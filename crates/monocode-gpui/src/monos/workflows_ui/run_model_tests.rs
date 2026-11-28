@@ -41,7 +41,8 @@ pub(super) fn run_of(w: &Workflow, status: &str, items: Value, nodes: Value) -> 
     serde_json::from_value(json!({
         "id": "run-1", "workflowId": "wf-aaaaaaaa",
         "definition": serde_json::to_value(w).unwrap(),
-        "status": status, "startedAt": 1_000_000, "start": "manual",
+        "status": status, "startedAt": 1_000_000,
+        "caller": {"kind": "manual", "triggerNode": "start"},
         "items": items, "nodes": nodes,
     }))
     .expect("a run")

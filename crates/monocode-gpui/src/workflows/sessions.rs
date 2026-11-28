@@ -370,7 +370,10 @@ impl Workflows {
         let armed = match &view {
             Some(view) => {
                 self.workflow_watch(local, view, cx);
-                view.read(cx).workflow_working()
+                // A draft only leaves the prompt in the composer: no turn is coming for the run
+                // to wait on, so it is not armed (it gives up after a while, as for any prompt
+                // that is never taken).
+                !draft && view.read(cx).workflow_working()
             }
             None => false,
         };

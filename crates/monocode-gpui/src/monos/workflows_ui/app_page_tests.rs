@@ -56,7 +56,7 @@ fn a_workflow_that_needs_review_is_approved_from_the_global_page(cx: &mut TestAp
     visual.run_until_parked();
     assert!(visual.debug_bounds("mono-workflow-needs-review").is_some());
     s.manager.update(visual, |m, cx| {
-        m.workflow_toggle_clicked(A, true, true, true, cx)
+        m.workflow_toggle_clicked(A, false, true, true, cx)
     });
     visual.run_until_parked();
     assert_eq!(

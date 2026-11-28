@@ -801,6 +801,11 @@ impl Monos {
                         this.reload_today_habits(cx);
                     }
                     this.reload_files(&mono_id, cx);
+                    // Workflows are global: the open page shows what a Mono saved, whichever Mono
+                    // is open.
+                    if call.action.starts_with("workflows.") && this.workflows_requested() {
+                        this.refresh_workflows(cx);
+                    }
                     this.refresh_cards(cx);
                     this.changed(cx);
                     value

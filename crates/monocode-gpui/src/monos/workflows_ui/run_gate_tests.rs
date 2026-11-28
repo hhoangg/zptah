@@ -722,7 +722,7 @@ fn a_hidden_dialog_is_not_shown_for_escape(cx: &mut TestAppContext) {
     let visual = &mut opened(&s, cx, vec![needing(json!({}))], all_found);
     click(visual, "mono-workflow-run-wf-aaaaaaaa");
     assert!(s.manager.read_with(visual, |m, _| m.wf_gate_shown()));
-    // No Mono in view (a session is): the dialog is kept but must not take Escape.
-    s.manager.update(visual, |m, _| m.active = None);
+    // The page is not in view (a session is): the dialog is kept but must not take Escape.
+    s.manager.update(visual, |m, _| m.wf.open = false);
     assert!(!s.manager.read_with(visual, |m, _| m.wf_gate_shown()));
 }

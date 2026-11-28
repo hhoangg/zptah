@@ -44,9 +44,34 @@ pub(super) fn build(extra: Value, nodes: Value, edges: Value) -> Workflow {
 }
 
 /// manual trigger -> report.
-pub(super) fn workflow(extra: Value) -> Workflow {
+/// The project input the command steps below name, unless the test declares its own inputs.
+fn with_project_input(mut extra: Value) -> Value {
+    if extra.get("inputs").is_none() {
+        extra["inputs"] = json!({"project": {"type": "project"}});
+        extra["inputValues"] = json!({"project": "/work/api"});
+    }
+    extra
+}
+
+/// manual trigger -> report, where the report is a condition, so a run of it ends by itself with
+/// no process or provider (a command would finish on its own thread). Its project input points
+/// at the test's own project.
+pub(super) fn workflow_in(s: &Setup, mut extra: Value) -> Workflow {
+    extra["inputs"] = json!({"project": {"type": "project"}});
+    extra["inputValues"] = json!({"project": s.project});
     build(
         extra,
+        json!([
+            {"id": "start", "type": "manual"},
+            {"id": "report", "type": "if", "condition": "{{inputs.project}} == \"nothing\""},
+        ]),
+        json!([{"from": "start", "to": "report"}]),
+    )
+}
+
+pub(super) fn workflow(extra: Value) -> Workflow {
+    build(
+        with_project_input(extra),
         json!([{"id": "start", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
         json!([{"from": "start", "to": "report"}]),
     )
@@ -55,7 +80,7 @@ pub(super) fn workflow(extra: Value) -> Workflow {
 /// weekdays trigger -> report, next run in an hour.
 fn scheduled(extra: Value) -> Workflow {
     let mut all = json!({"nextRunAt": monocode_core::time::now_ms() + 3_600_000});
-    for (key, value) in extra.as_object().unwrap() {
+    for (key, value) in with_project_input(extra).as_object().unwrap() {
         all[key] = value.clone();
     }
     build(
@@ -486,7 +511,7 @@ fn a_saved_input_value_lands_in_the_file_and_the_real_reason_comes_back_on_failu
         d.first().input_values.get("limit"),
         Some(&InputValue::Number(7.))
     );
-    let huge = InputValue::String("x".repeat(3 * 1024 * 1024));
+    let huge = InputValue::String("x".repeat(9 * 1024 * 1024));
     let error = actions::save_input(&mut d.host, A, "repo", &huge).unwrap_err();
     assert!(error.contains("too large to save"), "{error}");
     assert_eq!(
@@ -773,7 +798,15 @@ fn an_empty_tab_says_how_to_fill_it(cx: &mut TestAppContext) {
 #[gpui::test]
 fn run_now_on_a_row_starts_a_manual_run(cx: &mut TestAppContext) {
     let s = setup(cx);
-    put(&s, vec![workflow(json!({}))]);
+    // No inputs, so the click starts the run without a dialog; the trigger alone ends it.
+    put(
+        &s,
+        vec![build(
+            json!({}),
+            json!([{"id": "start", "type": "manual"}]),
+            json!([]),
+        )],
+    );
     open_tab(&s, cx);
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
@@ -824,7 +857,10 @@ fn resume_and_run_now_on_a_flagged_workflow_open_the_review_instead(cx: &mut Tes
     );
     let w = &saved(&s)[0];
     assert!(!w.enabled && w.needs_review && w.next_run_at.is_none());
-    s.manager.update(visual, |m, _| m.wf.route = None);
+    s.manager.update(visual, |m, cx| {
+        m.wf.route = None;
+        cx.notify();
+    });
     visual.run_until_parked();
     settle(&s, visual);
     click(visual, "mono-workflow-run-wf-aaaaaaaa");
@@ -1004,7 +1040,10 @@ fn import_and_new_open_their_pages_below_the_limit(cx: &mut TestAppContext) {
     click(visual, "mono-workflow-new");
     assert_eq!(route(&s, visual), Some(WfRoute::New));
     assert!(visual.debug_bounds("wf-board").is_some());
-    s.manager.update(visual, |m, _| m.wf.route = None);
+    s.manager.update(visual, |m, cx| {
+        m.wf.route = None;
+        cx.notify();
+    });
     visual.run_until_parked();
     click(visual, "mono-workflow-import");
     assert_eq!(route(&s, visual), Some(WfRoute::Import));
@@ -1157,7 +1196,7 @@ fn the_real_reason_an_input_could_not_be_saved_is_shown(cx: &mut TestAppContext)
     open_page(&s, visual);
     let key = format!("wf-input:{A}:note");
     s.manager.update(visual, |m, cx| {
-        m.fields[&key].update(cx, |f, cx| f.set_text("x".repeat(3 * 1024 * 1024), cx));
+        m.fields[&key].update(cx, |f, cx| f.set_text("x".repeat(9 * 1024 * 1024), cx));
         m.workflow_commit_input(A, "note", cx);
     });
     visual.run_until_parked();
@@ -1261,25 +1300,6 @@ fn a_step_named_by_its_id_reads_it_as_words() {
     let mut titled = node("x");
     titled.title = Some("  ".into());
     assert_eq!(super::review::node_title(&titled), "X");
-}
-
-#[gpui::test]
-fn ask_mono_focuses_the_composer(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    put(&s, vec![workflow(json!({}))]);
-    open_tab(&s, cx);
-    let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
-    visual.run_until_parked();
-    click(visual, "mono-workflow-ask");
-    let focused = s
-        .window
-        .update(visual, |_, window, cx| {
-            let chat = s.manager.read(cx).chat().unwrap();
-            let handle = chat.read(cx).input.focus_handle(cx);
-            handle.is_focused(window)
-        })
-        .unwrap();
-    assert!(focused);
 }
 
 #[gpui::test]

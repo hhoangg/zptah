@@ -385,7 +385,7 @@ fn dragging_from_a_handle_draws_a_connection_and_letting_go_on_a_card_connects(
     let visual = &mut visual;
     visual.refresh().unwrap();
     let handle = visual
-        .debug_bounds("wf-handle-trigger-out")
+        .debug_bounds("wf-handle-start-out")
         .expect("a handle");
     let target = visual.debug_bounds("wf-node-fetch").unwrap().center();
     visual.simulate_mouse_down(

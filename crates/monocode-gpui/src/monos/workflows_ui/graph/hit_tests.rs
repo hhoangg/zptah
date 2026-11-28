@@ -121,8 +121,16 @@ fn the_line_of_a_case_leaves_from_the_handle_of_that_case() {
 }
 
 #[test]
-fn a_report_only_takes_lines_in() {
-    assert_eq!(kinds(&scene(), "report"), vec![HandleKind::In]);
+fn a_command_takes_and_gives_lines_and_loops_like_a_session() {
+    assert_eq!(
+        kinds(&scene(), "report"),
+        vec![
+            HandleKind::In,
+            HandleKind::LoopIn,
+            HandleKind::Out(None),
+            HandleKind::LoopOut
+        ]
+    );
 }
 
 #[test]

@@ -5081,6 +5081,10 @@ fn workflow_actions_work_from_the_mono_chat_and_signal_the_runner(cx: &mut TestA
     assert_eq!(refused, "workflows.add does not take bogus");
     let refused = ask("shape-1", "workflows.add", json!({"workflow": "x"}), cx).unwrap_err();
     assert_eq!(refused, "workflow must be an object");
+    // What a Mono adds waits for the user, who reviews it in Workflows.
+    let waiting = ask("run-0", "workflows.run", json!({"id": id}), cx).unwrap_err();
+    assert!(waiting.contains("has not reviewed it yet"), "{waiting}");
+    approve_workflow(&s, &id);
     // run needs a resumed workflow, then only writes its request and wakes the runner.
     let refused = ask("run-1", "workflows.run", json!({"id": id}), cx).unwrap_err();
     assert_eq!(refused, "Resume the workflow before running it.");
@@ -5094,10 +5098,7 @@ fn workflow_actions_work_from_the_mono_chat_and_signal_the_runner(cx: &mut TestA
     assert_eq!(runs.len(), 1);
     assert_eq!(
         runs[0].caller,
-        monocode_core::mono::workflows::model::RunCaller::new(
-            monocode_core::mono::workflows::model::CallerKind::Manual,
-            "start"
-        )
+        monocode_core::mono::workflows::model::RunCaller::mono(s.id.clone(), "start")
     );
     assert!(!signals.take_check_now(), "the look answered the request");
     // stop and the running flag come from what the runner reports.
@@ -5157,7 +5158,18 @@ fn nothing_found(
     }
 }
 
-/// Adds a workflow from the Mono's chat and returns its id.
+/// The user reviewing a workflow a Mono added: only the app clears the mark, never the Mono.
+fn approve_workflow(s: &Setup, id: &str) {
+    monocode_core::mono::workflows::store::update_workflows(&s.workflows_dir(), |mut list| {
+        list.iter_mut()
+            .filter(|w| w.id == id)
+            .for_each(|w| w.needs_review = false);
+        Ok((list, ()))
+    })
+    .unwrap();
+}
+
+/// Adds a workflow from the Mono's chat, has the user review it, and returns its id.
 fn add_workflow(s: &Setup, request: &str, definition: Value, cx: &mut TestAppContext) -> String {
     let added = call(
         s,
@@ -5169,7 +5181,9 @@ fn add_workflow(s: &Setup, request: &str, definition: Value, cx: &mut TestAppCon
     .try_recv()
     .unwrap()
     .unwrap();
-    added["id"].as_str().unwrap().to_string()
+    let id = added["id"].as_str().unwrap().to_string();
+    approve_workflow(s, &id);
+    id
 }
 
 fn from_chat(s: &Setup, request: &str, action: &str, input: Value, cx: &mut TestAppContext) {
@@ -6142,7 +6156,7 @@ fn a_habit_run_can_export_but_not_import(cx: &mut TestAppContext) {
     }
 }
 
-const TERMINALS_REFUSED: &str = "A habit run, heartbeat or workflow question cannot use terminals";
+const TERMINALS_REFUSED: &str = "A habit run or heartbeat cannot use terminals";
 
 #[gpui::test]
 fn terminals_belong_to_the_monos_own_chat_and_not_to_habit_runs_or_heartbeats(
@@ -6227,7 +6241,7 @@ fn terminals_belong_to_the_monos_own_chat_and_not_to_habit_runs_or_heartbeats(
     assert_eq!(after.as_array().unwrap().len(), 1);
 }
 
-const UPDATE_REFUSED: &str = "A habit run, heartbeat or workflow question cannot update the app";
+const UPDATE_REFUSED: &str = "A habit run or heartbeat cannot update the app";
 
 #[gpui::test]
 fn a_habit_run_and_a_heartbeat_cannot_update_the_app(cx: &mut TestAppContext) {
@@ -6256,7 +6270,7 @@ fn a_habit_run_and_a_heartbeat_cannot_update_the_app(cx: &mut TestAppContext) {
     }
 }
 
-const PROJECTS_REFUSED: &str = "A habit run, heartbeat or workflow question cannot add projects";
+const PROJECTS_REFUSED: &str = "A habit run or heartbeat cannot add projects";
 
 #[gpui::test]
 fn a_habit_run_and_a_heartbeat_cannot_add_projects(cx: &mut TestAppContext) {

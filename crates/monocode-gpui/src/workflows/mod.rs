@@ -56,6 +56,9 @@ pub(crate) struct Probes {
     pub(crate) models: fn(Kind) -> Probe,
     /// How a workflow's `requires` are checked.
     pub(crate) requirements: fn(&Workflow) -> Preflight,
+    /// Whether a step's session only gets its prompt in the composer and no turn runs. Tests set
+    /// it so no step ever reaches a real CLI; the run then waits for a turn that never comes.
+    pub(crate) draft_sessions: bool,
 }
 
 impl Probes {
@@ -64,11 +67,13 @@ impl Probes {
         return Self {
             models: runner::trusting_probe,
             requirements: runner::trusting_preflight,
+            draft_sessions: true,
         };
         #[cfg(not(test))]
         Self {
             models: monocode_core::mono::workflows::models::native_probe,
             requirements: monocode_core::mono::workflows::preflight::native_preflight,
+            draft_sessions: false,
         }
     }
 

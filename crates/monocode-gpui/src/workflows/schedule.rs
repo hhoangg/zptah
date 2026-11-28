@@ -208,6 +208,9 @@ impl Workflows {
                 Start::Run { mut run, failure } => {
                     // A run that never starts would otherwise only show in the run history.
                     if let Some(failure) = failure {
+                        // Delivered here, so the runner must not deliver a second summary for the
+                        // run it only writes.
+                        run.report_posted_at = Some(run.ended_at.unwrap_or(run.started_at));
                         run.summary = Some(RunSummary {
                             title: failure.title.clone(),
                             text: failure.text.clone(),

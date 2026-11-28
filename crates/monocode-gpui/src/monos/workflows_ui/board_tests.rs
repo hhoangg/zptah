@@ -149,7 +149,7 @@ fn renders_one_card_per_workflow_node(cx: &mut TestAppContext) {
         vec!["dev", "each", "fetch", "report", "review", "start"]
     );
     for selector in [
-        "wf-node-trigger",
+        "wf-node-start",
         "wf-node-fetch",
         "wf-node-each",
         "wf-node-dev",
@@ -276,8 +276,10 @@ fn a_flagged_workflow_is_not_saved_enabled_points_to_the_review_and_keeps_its_ma
     ));
     assert!(stored_first(&s).enabled);
     // Back on the board: Save paused keeps the mark.
-    s.manager
-        .update(visual, |m, _| m.wf.route = Some(WfRoute::Board(A.into())));
+    s.manager.update(visual, |m, cx| {
+        m.wf.route = Some(WfRoute::Board(A.into()));
+        cx.notify();
+    });
     visual.run_until_parked();
     settle(&s, visual);
     click(visual, "wf-board-save-paused");
@@ -338,8 +340,10 @@ fn run_now_and_resume_in_the_menu_open_the_review_of_a_flagged_workflow(cx: &mut
         route(&s, visual),
         Some(WfRoute::Review(_, super::ReviewIntent::Run))
     ));
-    s.manager
-        .update(visual, |m, _| m.wf.route = Some(WfRoute::Board(A.into())));
+    s.manager.update(visual, |m, cx| {
+        m.wf.route = Some(WfRoute::Board(A.into()));
+        cx.notify();
+    });
     visual.run_until_parked();
     do_with(&s, visual, |m, cx| m.board_toggle_enabled(cx));
     assert!(matches!(
@@ -429,9 +433,7 @@ fn a_blocked_workflow_is_saved_paused_from_the_leave_dialog(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-fn a_new_workflow_starts_with_a_manual_trigger_and_a_report_and_is_saved_paused(
-    cx: &mut TestAppContext,
-) {
+fn a_new_workflow_starts_with_a_manual_trigger_and_is_saved_paused(cx: &mut TestAppContext) {
     let s = setup(cx);
     put(&s, vec![]);
     open_tab(&s, cx);
@@ -440,7 +442,7 @@ fn a_new_workflow_starts_with_a_manual_trigger_and_a_report_and_is_saved_paused(
     click(visual, "mono-workflow-new");
     settle(&s, visual);
     assert_eq!(route(&s, visual), Some(WfRoute::New));
-    assert_eq!(node_ids(&s, visual), vec!["report", "start"]);
+    assert_eq!(node_ids(&s, visual), vec!["start"]);
     assert_eq!(
         on_board(&s, visual, |b| b.meta.name.clone()),
         "New workflow"
@@ -453,7 +455,7 @@ fn a_new_workflow_starts_with_a_manual_trigger_and_a_report_and_is_saved_paused(
     assert!(w.inputs.is_empty() && w.input_values.is_empty());
     assert!(w.id.starts_with("wf-") && w.id.len() == 11);
     let types: Vec<&str> = w.nodes.iter().map(|n| n.kind.type_name()).collect();
-    assert_eq!(types, vec!["manual", "report"]);
+    assert_eq!(types, vec!["manual"]);
 }
 
 #[gpui::test]
@@ -690,7 +692,7 @@ fn shows_the_real_reason_a_save_failed(cx: &mut TestAppContext) {
     let visual = &mut visual;
     // A step too large for the file: the store says so.
     do_with(&s, visual, |m, cx| {
-        let huge = "x".repeat(2 * 1024 * 1024 + 10);
+        let huge = "x".repeat(8 * 1024 * 1024 + 10);
         m.board_node_edit(
             "fetch",
             |n| {
@@ -706,7 +708,7 @@ fn shows_the_real_reason_a_save_failed(cx: &mut TestAppContext) {
     assert_eq!(
         page_notice(&s, visual).as_deref(),
         Some(
-            "The workflows are too large to save (over 2 MiB in total). Remove a workflow or shorten its steps."
+            "The workflows are too large to save (over 8 MiB in total). Remove a workflow or shorten its steps."
         )
     );
     assert_eq!(stored_first(&s).name, "ClickUp -> Dev -> Review");

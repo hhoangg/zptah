@@ -56,17 +56,16 @@ fn session_steps() -> (Vec<Value>, Vec<Value>) {
     )
 }
 
-/// A manual trigger and a session step that never gets a turn in a test: the run stays going
-/// until it is stopped.
+/// A manual trigger and a session step that never gets a turn in a test (its prompt is only
+/// left in the composer): the run stays going until it is stopped.
 fn waiting(s: &Setup, id: &str, extra: Value) -> Workflow {
     let (nodes, edges) = session_steps();
     definition(id, nodes, edges, with_project(extra, Some(&s.project)))
 }
 
-/// A workflow that cannot start: its project input has no value.
+/// A workflow that cannot start: it has no steps at all.
 fn broken(id: &str, extra: Value) -> Workflow {
-    let (nodes, edges) = session_steps();
-    definition(id, nodes, edges, with_project(extra, None))
+    definition(id, vec![], vec![], extra)
 }
 
 fn workflows_of(s: &Setup, cx: &mut TestAppContext) -> Entity<Workflows> {
@@ -286,7 +285,7 @@ fn a_stop_written_in_the_file_stops_the_run_that_is_going(cx: &mut TestAppContex
 #[gpui::test]
 fn a_resume_written_in_the_file_continues_an_interrupted_run(cx: &mut TestAppContext) {
     let s = setup(cx);
-    let def = quick(A, json!({}));
+    let def = waiting(&s, A, json!({}));
     let interrupted = mark_interrupted(&start_run(
         &def,
         RunCaller::new(CallerKind::Manual, "start"),
@@ -294,13 +293,14 @@ fn a_resume_written_in_the_file_continues_an_interrupted_run(cx: &mut TestAppCon
         "run-old",
     ));
     assert_eq!(interrupted.status, RunStatus::Interrupted);
-    put(&s, vec![quick(A, json!({"resumeRunId": "run-old"}))]);
+    put(&s, vec![waiting(&s, A, json!({"resumeRunId": "run-old"}))]);
     put_runs(&s, A, vec![interrupted]);
     look(&s, cx);
     let history = runs(&s, A);
     assert_eq!(history.len(), 1, "the same run continues");
     assert_eq!(history[0].id, "run-old");
-    assert_eq!(history[0].status, RunStatus::Done);
+    assert_eq!(history[0].status, RunStatus::Running);
+    assert!(running(&s, A, cx));
     assert_eq!(saved(&s)[0].resume_run_id, None);
 }
 
@@ -531,6 +531,7 @@ fn probes(models: fn(Kind) -> Probe) -> Probes {
     Probes {
         models,
         requirements: preflight_met,
+        draft_sessions: true,
     }
 }
 

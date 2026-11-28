@@ -388,14 +388,24 @@ fn switch_cases_can_be_added_renamed_and_removed(cx: &mut TestAppContext) {
         cases[cases.len() - 1].clone(),
     );
     assert_ne!(first, second);
-    // A line leaving by the first new case follows it when it is renamed.
+    // A line leaving by the first new case follows it when it is renamed. The step it goes to is
+    // a new one: the existing ones lead into the switch, and a line back would be a loop.
+    do_with(&s, visual, |m, cx| m.board_add(NodeType::Command, cx));
+    let target = on_board(&s, visual, |b| {
+        b.flow
+            .nodes
+            .iter()
+            .find(|n| matches!(n.data.node.kind, NodeKind::Command { .. }) && n.id != "report")
+            .map(|n| n.id.clone())
+            .expect("a command")
+    });
     event(
         &s,
         visual,
         GraphEvent::Connect {
             source: route.clone(),
             handle: Some(first.clone()),
-            target: "report".into(),
+            target,
             at: at(),
         },
     );
@@ -409,6 +419,11 @@ fn switch_cases_can_be_added_renamed_and_removed(cx: &mut TestAppContext) {
         })
     };
     assert!(leaves_by(&s, visual, &first));
+    // The new step took the inspector; back to the switch.
+    let again = route.clone();
+    do_with(&s, visual, move |m, cx| {
+        m.board_view(Some(super::board::InspectorView::Node(again)), cx)
+    });
     type_in(
         &s,
         visual,
