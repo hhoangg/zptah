@@ -15,7 +15,9 @@ use super::run_model::*;
 use super::view::alert;
 use gpui::Div;
 use monocode_core::mono::workflows::{
+    cli::WorkflowHost,
     model::{CallerKind, RunStatus, WorkflowRun},
+    queue::{queue_position, queued_count},
     run_graph_model::{
         Pick, Picks, RunView, VIEW_KEY, chosen_view, default_run_view, definition_changed,
         has_for_each,
@@ -513,7 +515,9 @@ impl Monos {
                 .into_any_element();
         };
         let lanes = has_for_each(&run).then(|| self.wf.run.view() == Some(RunView::Lanes));
-        let stopping = workflow.to_string();
+        let (stopping, which, queued_workflow) =
+            (workflow.to_string(), run.id.clone(), workflow.to_string());
+        let queued_run = run.id.clone();
         let top = div()
             .id("wf-run-top")
             .debug_selector(|| "wf-run-top".into())
@@ -530,7 +534,7 @@ impl Monos {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(self.run_meta(&run, scope.color)),
+                            .child(self.run_meta(&run, scope.color, cx)),
                     )
                     .child(
                         div()
@@ -556,8 +560,15 @@ impl Monos {
                                 icon_button("wf-run-stop", "Stop run", "square")
                                     .debug_selector(|| "wf-run-stop".into())
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.stop_workflow_run(&stopping);
+                                        this.stop_workflow_run(&stopping, Some(&which));
                                         cx.notify();
+                                    }))
+                            }))
+                            .children((run.status == RunStatus::Queued).then(|| {
+                                icon_button("wf-run-cancel", "Cancel queued run", "x")
+                                    .debug_selector(|| "wf-run-cancel".into())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.run_cancel_queued(&queued_workflow, &queued_run, cx);
                                     }))
                             }))
                             .children((run.status == RunStatus::Interrupted).then(|| {
@@ -613,8 +624,21 @@ impl Monos {
             .into_any_element()
     }
 
+    /// Cancels a run that waits in the queue: it never starts.
+    pub(super) fn run_cancel_queued(&mut self, workflow: &str, run: &str, cx: &mut Context<Self>) {
+        let (workflow, run) = (workflow.to_string(), run.to_string());
+        self.workflow_said(None, true, cx);
+        self.workflow_task(
+            move |host| host.cancel_queued(&workflow, &run),
+            |this, result, cx| {
+                this.workflow_said(result.err(), true, cx);
+            },
+            cx,
+        );
+    }
+
     /// Status, when it started and how long it took.
-    fn run_meta(&self, run: &WorkflowRun, color: u32) -> Div {
+    fn run_meta(&self, run: &WorkflowRun, color: u32, cx: &mut Context<Self>) -> Div {
         let (label, dot) = run_status(run.status, color);
         let now = now_ms();
         let took = match run.ended_at {
@@ -670,6 +694,55 @@ impl Monos {
                     .debug_selector(|| "wf-run-caller".into())
                     .child(self.caller_label(run)),
             ))
+            .children(self.queue_meta(run))
+            .children(self.worktree_meta(run, cx))
+    }
+
+    /// Where a queued run stands: its place among the runs that wait.
+    fn queue_meta(&self, run: &WorkflowRun) -> Option<Div> {
+        if run.status != RunStatus::Queued {
+            return None;
+        }
+        let waiting = self.workflow_runs_of(&run.workflow_id);
+        let place = waiting.and_then(|runs| queue_position(runs, &run.id));
+        let of = waiting.map_or(0, |runs| queued_count(runs));
+        Some(meta(
+            "Queue",
+            div()
+                .debug_selector(|| "wf-run-queue".into())
+                .child(match place {
+                    Some(place) => format!("Place {place} of {of}"),
+                    None => "Waiting".to_string(),
+                }),
+        ))
+    }
+
+    /// The run's worktree: its branch, and a button to remove it when nothing uses it.
+    fn worktree_meta(&self, run: &WorkflowRun, cx: &mut Context<Self>) -> Option<Div> {
+        let tree = run.worktree.as_ref()?;
+        let remove = super::run_tree_dialog::can_remove(run);
+        Some(meta(
+            "Worktree",
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .id("wf-run-worktree")
+                        .debug_selector(|| "wf-run-worktree".into())
+                        .max_w(px(420.))
+                        .truncate()
+                        .child(format!("{} ({})", tree.branch, tree.path)),
+                )
+                .when(remove, |d| {
+                    d.child(
+                        crate::modal::ghost_button("wf-run-remove-tree", "Remove worktree")
+                            .debug_selector(|| "wf-run-remove-tree".into())
+                            .on_click(cx.listener(|this, _, _, cx| this.run_tree_open(cx))),
+                    )
+                }),
+        ))
     }
 
     /// Who started the run: Manual, Schedule (trigger node), Event or Mono <name>.

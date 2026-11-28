@@ -24,6 +24,7 @@ mod sessions;
 mod summary;
 mod terminal;
 mod waits;
+mod worktrees;
 
 pub(crate) use runner::{Live, WaitChoice, WorkflowRunner};
 #[cfg(test)]
@@ -220,15 +221,14 @@ impl Workflows {
             .map(|(workflow, run)| {
                 let name = self
                     .runner
-                    .with_run(&workflow, |run| run.definition.name.clone())
+                    .with_run_id(&run, |run| run.definition.name.clone())
                     .unwrap_or(workflow);
                 (run, name)
             })
             .collect()
     }
 
-    /// Runs `run` (made by the engine's `start_run`). False when the workflow already has a run
-    /// going.
+    /// Runs `run` (made by the engine's `start_run`). False when the workflow has no free slot.
     pub(crate) fn start_run(&mut self, run: WorkflowRun, cx: &mut Context<Self>) -> bool {
         let host = self.workflow_host(cx);
         self.runner.start(host, &cx.to_async(), run)
@@ -259,8 +259,9 @@ impl Workflows {
         }))
     }
 
-    /// Stops the workflow's run. False when none is going.
-    pub(crate) fn stop_run(&mut self, workflow_id: &str) -> bool {
-        self.runner.stop(workflow_id)
+    /// Stops the run `run_id` of the workflow, or every run it has going when none is named.
+    /// False when none was going.
+    pub(crate) fn stop_run(&mut self, workflow_id: &str, run_id: Option<&str>) -> bool {
+        self.runner.stop(workflow_id, run_id)
     }
 }

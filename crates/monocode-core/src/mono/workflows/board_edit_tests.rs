@@ -1096,12 +1096,14 @@ mod fields {
             parse_checkout("worktree:dev"),
             Checkout::WorktreeOf("dev".into())
         );
-        assert_eq!(cwd_value(None), "root");
+        assert_eq!(cwd_value(None), "run");
+        assert_eq!(cwd_value(Some(&Cwd::Root)), "root");
         assert_eq!(
             cwd_value(Some(&Cwd::WorktreeOf("dev".into()))),
             "worktree:dev"
         );
-        assert_eq!(parse_cwd("root"), None);
+        assert_eq!(parse_cwd("run"), None);
+        assert_eq!(parse_cwd("root"), Some(Cwd::Root));
         assert_eq!(
             parse_cwd("worktree:dev"),
             Some(Cwd::WorktreeOf("dev".into()))

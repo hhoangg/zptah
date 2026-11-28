@@ -141,9 +141,9 @@ fn look_with(
         files,
         &Tick {
             now: now(),
-            is_running: running,
+            live_runs: &|id| usize::from(running(id)),
             probe,
-            on_claim: &|_| {},
+            on_claim: &|_, _| {},
             preflight: &|_| Preflight::default(),
         },
     )
@@ -159,9 +159,9 @@ fn look_pf(
         files,
         &Tick {
             now: now(),
-            is_running: running,
+            live_runs: &|id| usize::from(running(id)),
             probe: probe_nothing,
-            on_claim: &|_| {},
+            on_claim: &|_, _| {},
             preflight,
         },
     )
@@ -512,7 +512,7 @@ fn a_workflow_is_reported_claimed_before_its_models_are_probed() {
         ],
     );
     let claimed = RefCell::new(Vec::new());
-    let on_claim = |id: &str| {
+    let on_claim = |id: &str, _run: &str| {
         CLAIMS.fetch_add(1, Ordering::SeqCst);
         claimed.borrow_mut().push(id.to_string());
     };
@@ -520,7 +520,7 @@ fn a_workflow_is_reported_claimed_before_its_models_are_probed() {
         &disk,
         &Tick {
             now: now(),
-            is_running: &idle,
+            live_runs: &|_| 0,
             probe: probing,
             on_claim: &on_claim,
             preflight: &|_| Preflight::default(),
@@ -1109,12 +1109,12 @@ fn a_resume_is_refused_while_a_requirement_is_missing_and_the_run_stays_interrup
         all_missing(w)
     };
     let claimed = RefCell::new(Vec::new());
-    let on_claim = |id: &str| claimed.borrow_mut().push(id.to_string());
+    let on_claim = |id: &str, _run: &str| claimed.borrow_mut().push(id.to_string());
     let found = check(
         &disk,
         &Tick {
             now: now(),
-            is_running: &idle,
+            live_runs: &|_| 0,
             probe: probe_nothing,
             on_claim: &on_claim,
             preflight: &refusing,

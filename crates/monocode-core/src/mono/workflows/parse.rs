@@ -1,10 +1,10 @@
 //! Lenient reading of workflow files. A node or edge that cannot be read could not run, and
 //! dropping it quietly would change what the workflow does, so the whole entry is left out.
 use super::model::{
-    CallerKind, Checkout, Cwd, Decide, DecisionModel, Edge, Handle, InputType, InputValue,
-    LoopSpec, Node, NodeKind, OutputField, OutputFieldType, ReportTo, Requirement, RequirementKind,
-    RunCaller, SessionTarget, TargetInstance, Ui, Workflow, WorkflowInput, WorkflowUi, DECIDE_AI,
-    DIRECTION_LR, NODE_TYPES,
+    CallerKind, Checkout, Concurrency, Cwd, Decide, DecisionModel, Edge, Handle, InputType,
+    InputValue, LoopSpec, Node, NodeKind, OutputField, OutputFieldType, ReportTo, Requirement,
+    RequirementKind, RunCaller, SessionTarget, TargetInstance, Ui, Workflow, WorkflowInput,
+    WorkflowUi, Workspace, WorkspaceMode, DECIDE_AI, DIRECTION_LR, NODE_TYPES,
 };
 use super::ordered::{Json, OrderedMap};
 use crate::mono::habits::Schedule;
@@ -68,12 +68,76 @@ fn worktree_of(raw: &Json) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Absent means `run`, the run's own worktree. None for a value that is not a checkout.
 fn parse_checkout(raw: Option<&Json>) -> Option<Checkout> {
-    match raw? {
-        Json::String(s) if s == "root" => Some(Checkout::Root),
-        Json::String(s) if s == "newWorktree" => Some(Checkout::NewWorktree),
-        other @ Json::Object(_) => worktree_of(other).map(Checkout::WorktreeOf),
+    match raw {
+        None | Some(Json::Null) => Some(Checkout::Run),
+        Some(Json::String(s)) if s == "run" => Some(Checkout::Run),
+        Some(Json::String(s)) if s == "root" => Some(Checkout::Root),
+        Some(Json::String(s)) if s == "newWorktree" => Some(Checkout::NewWorktree),
+        Some(other @ Json::Object(_)) => match other.get("existing") {
+            Some(Json::String(path)) if !path.is_empty() => Some(Checkout::Existing(path.clone())),
+            Some(_) => None,
+            None => worktree_of(other).map(Checkout::WorktreeOf),
+        },
         _ => None,
+    }
+}
+
+/// A step's `project`: absent is empty (the workflow's `workspace.project`), a value that is
+/// not text is unreadable.
+fn parse_project(raw: &Json) -> Option<String> {
+    match raw.get("project") {
+        None | Some(Json::Null) => Some(String::new()),
+        Some(Json::String(project)) => Some(project.clone()),
+        Some(_) => None,
+    }
+}
+
+/// `Some(None)` when there is no `workspace`, `None` when it is there but unreadable (it decides
+/// where a run works, so it is never dropped quietly).
+pub(crate) fn parse_workspace(raw: Option<&Json>) -> Option<Workspace> {
+    let raw = match raw {
+        None | Some(Json::Null) => return Some(Workspace::default()),
+        Some(raw) if is_rec(raw) => raw,
+        Some(_) => return None,
+    };
+    let mode = match raw.get("mode") {
+        None | Some(Json::Null) => WorkspaceMode::PerRun,
+        Some(Json::String(name)) => WorkspaceMode::ALL
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, mode)| *mode)?,
+        Some(_) => return None,
+    };
+    let project = match raw.get("project") {
+        None | Some(Json::Null) => String::new(),
+        Some(Json::String(project)) => project.clone(),
+        Some(_) => return None,
+    };
+    let base_branch = match raw.get("baseBranch") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(branch)) => Some(branch.clone()),
+        Some(_) => return None,
+    };
+    Some(Workspace {
+        mode,
+        project,
+        base_branch,
+    })
+}
+
+/// The workflow's `concurrency`; None when it is there but unreadable.
+pub(crate) fn parse_concurrency(raw: Option<&Json>) -> Option<Concurrency> {
+    let raw = match raw {
+        None | Some(Json::Null) => return Some(Concurrency::default()),
+        Some(raw) if is_rec(raw) => raw,
+        Some(_) => return None,
+    };
+    match raw.get("max") {
+        None | Some(Json::Null) => Some(Concurrency::default()),
+        Some(Json::Number(max)) => Some(Concurrency { max: *max }),
+        Some(_) => None,
     }
 }
 
@@ -179,7 +243,7 @@ pub fn parse_node(raw: &Json) -> Option<Node> {
         },
         "manual" => NodeKind::Manual,
         "session" => NodeKind::Session {
-            project: str_of(raw, "project")?,
+            project: parse_project(raw)?,
             prompt: str_of(raw, "prompt")?,
             checkout: parse_checkout(raw.get("checkout"))?,
             // `outputs` is what is written; `output` is what older files and the first design say.
@@ -196,13 +260,14 @@ pub fn parse_node(raw: &Json) -> Option<Node> {
             account: parse_account(raw.get("account"))?,
         },
         "command" => NodeKind::Command {
-            project: str_of(raw, "project")?,
+            project: parse_project(raw)?,
             command: str_of(raw, "command")?,
             cwd: match raw.get("cwd") {
                 Some(Json::String(s)) if s == "root" => Some(Cwd::Root),
                 Some(o @ Json::Object(_)) => worktree_of(o).map(Cwd::WorktreeOf),
                 _ => None,
             },
+            on_failure: str_of(raw, "onFailure"),
             timeout_minutes: num_of(raw, "timeoutMinutes"),
         },
         "if" => NodeKind::If {
@@ -481,6 +546,8 @@ pub fn parse_workflow(raw: &Json) -> Option<Workflow> {
     drop_stray_handles(&nodes, &mut edges);
     let decision_model = parse_decision_model(raw.get("decisionModel"))?;
     let report_to = parse_report_to(raw.get("reportTo"))?;
+    let workspace = parse_workspace(raw.get("workspace"))?;
+    let concurrency = parse_concurrency(raw.get("concurrency"))?;
     let flag = |key: &str| raw.get(key) == Some(&Json::Bool(true));
     Some(Workflow {
         id,
@@ -520,6 +587,18 @@ pub fn parse_workflow(raw: &Json) -> Option<Workflow> {
         report_to,
         summary_template: str_of(raw, "summaryTemplate"),
         run_caller: raw.get("runCaller").and_then(parse_caller),
+        workspace,
+        concurrency,
+        stop_run_ids: raw
+            .get("stopRunIds")
+            .and_then(Json::as_array)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| id.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        run_counter: num_of(raw, "runCounter").map_or(0, |n| n as u64),
     })
 }
 

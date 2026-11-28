@@ -108,7 +108,7 @@ fn running(s: &Setup, workflow: &str, cx: &mut TestAppContext) -> bool {
 
 fn stop(s: &Setup, workflow: &str, cx: &mut TestAppContext) -> bool {
     let workflows = workflows_of(s, cx);
-    cx.update(|cx| workflows.update(cx, |w, _| w.stop_run(workflow)))
+    cx.update(|cx| workflows.update(cx, |w, _| w.stop_run(workflow, None)))
 }
 
 fn forget_startup(s: &Setup, cx: &mut TestAppContext) {

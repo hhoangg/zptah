@@ -357,7 +357,7 @@ impl Monos {
                     icon_button("mono-workflow-stop", "Stop", "square")
                         .debug_selector(|| "mono-workflow-stop".into())
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.stop_workflow_run(&stop_id);
+                            this.stop_workflow_run(&stop_id, None);
                             cx.notify();
                         })),
                 )
@@ -537,6 +537,7 @@ impl Monos {
             .flatten();
         let leaving = self.board_leave_dialog(window, cx);
         let gate = self.run_gate_dialog(scope, window, cx);
+        let tree = self.run_tree_dialog(window, cx);
         div()
             .id("wf-board")
             .debug_selector(|| "wf-board".into())
@@ -572,6 +573,7 @@ impl Monos {
             .children(problems)
             .children(leaving)
             .children(gate)
+            .children(tree)
             .into_any_element()
     }
 

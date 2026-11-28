@@ -55,12 +55,13 @@ pub struct Due<'a> {
 
 /// Workflows to run now, and ones whose schedule only has to move on.
 /// Like habits, one that came due long ago (the app was closed) is not run, and one that
-/// comes due while its previous run is going is skipped: it runs again at its next time.
-/// A requested run waits for the current one to end instead of being dropped.
+/// comes due while a run of it already waits in the queue is skipped: it runs again at its next
+/// time. A requested run is never dropped: when no slot is free the claim queues it.
+/// `queued(id)` says whether a run of the workflow waits in the queue.
 pub fn due_workflows<'a>(
     workflows: &'a [Workflow],
     now: u64,
-    is_running: impl Fn(&str) -> bool,
+    queued: impl Fn(&str) -> bool,
 ) -> Due<'a> {
     let mut due = Due {
         run: Vec::new(),
@@ -72,13 +73,11 @@ pub fn due_workflows<'a>(
         if workflow.needs_review {
             continue;
         }
-        let busy = is_running(&workflow.id);
         if workflow.run_requested {
-            if !busy {
-                due.run.push(workflow);
-            }
+            due.run.push(workflow);
             continue;
         }
+        let busy = queued(&workflow.id);
         let times = next_times(workflow);
         if !workflow.enabled || times.is_empty() {
             continue;
@@ -161,6 +160,8 @@ pub fn after_claim(workflow: &Workflow, now: u64, run_id: Option<&str>) -> Workf
     }
     if let Some(id) = run_id {
         next.last_run_id = Some(id.to_string());
+        // The claimed run takes the next number of the workflow.
+        next.run_counter = workflow.run_counter + 1;
     }
     next
 }

@@ -431,6 +431,19 @@ fn build_scope<'n>(
     info.insert("id", Json::String(run.id.clone()));
     info.insert("startedAt", Json::Number(run.started_at as f64));
     info.insert("round", Json::Number(f64::from(round)));
+    // The folder and branch the run works in (empty when the workspace makes no worktree). Inside
+    // a For each branch they are the branch's own.
+    let tree = parse_branch(branch)
+        .and_then(|b| run.branch_worktrees.get(&format!("{}#{}", b.group_id, b.index)))
+        .or(run.worktree.as_ref());
+    info.insert(
+        "worktree",
+        Json::String(tree.map(|t| t.path.clone()).unwrap_or_default()),
+    );
+    info.insert(
+        "branch",
+        Json::String(tree.map(|t| t.branch.clone()).unwrap_or_default()),
+    );
     scope.insert("run", Json::Object(info));
     // `trigger` is what fired the run ("trigger" is a reserved node id, so nothing else uses it).
     let mut trigger = OrderedMap::new();
@@ -1130,6 +1143,10 @@ pub fn start_run(def: &Workflow, caller: RunCaller, now: u64, id: &str) -> Workf
         error: None,
         cloud_instances: Vec::new(),
         summary: None,
+        number: None,
+        queued_at: None,
+        worktree: None,
+        branch_worktrees: Default::default(),
     };
     let mut d = draft_of(run, &definition, now);
     // A schedule trigger exposes when it fired; a manual one has nothing to expose.

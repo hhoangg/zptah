@@ -46,6 +46,10 @@ pub fn run() -> WorkflowRun {
         report_posted_at: None,
         error: None,
         cloud_instances: Vec::new(),
+        number: None,
+        queued_at: None,
+        worktree: None,
+        branch_worktrees: Default::default(),
         summary: None,
     }
 }

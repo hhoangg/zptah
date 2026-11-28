@@ -18,6 +18,37 @@ use std::path::{Path, PathBuf};
 /// ever deleted with it: any other branch was chosen by the user.
 const SESSION_BRANCH: &str = "mc/native-";
 
+/// The setting prefix that marks a worktree as owned by a workflow run. The key holds the
+/// worktree's path key and the value the run's id.
+const WORKFLOW_WORKTREE: &str = "workflow-worktree:";
+
+fn workflow_worktree_key(path: &str) -> String {
+    format!("{WORKFLOW_WORKTREE}{}", path_key(path))
+}
+
+/// Records that `path` belongs to a workflow run, so no session removal ever takes it. Only the
+/// run's page removes it.
+pub fn mark_workflow_worktree(store: &Store, path: &str, run_id: &str) -> Result<(), String> {
+    store.save_setting(&workflow_worktree_key(path), run_id)
+}
+
+/// Forgets the mark of a worktree the user removed.
+pub fn unmark_workflow_worktree(store: &Store, path: &str) -> Result<(), String> {
+    store.delete_setting(&workflow_worktree_key(path))
+}
+
+/// Whether `path` belongs to a workflow run (as recorded, or as its real path). A lookup that
+/// fails counts as owned: nothing is removed on a guess.
+pub fn is_workflow_worktree(store: &Store, path: &str) -> bool {
+    let owned = |key: String| !matches!(store.setting(&key), Ok(None));
+    if owned(workflow_worktree_key(path)) {
+        return true;
+    }
+    Path::new(path)
+        .canonicalize()
+        .is_ok_and(|real| owned(workflow_worktree_key(&real.to_string_lossy())))
+}
+
 /// The worktree path to report for a session, or `None` when it works in the
 /// main checkout. `dir` is where the session works (its recorded worktree, else
 /// its folder). Cheap on purpose, no Git is run: a linked worktree has a `.git`
@@ -73,6 +104,12 @@ pub fn plan(store: &Store, id: i64) -> Result<Plan, String> {
         .as_deref()
         .filter(|path| !path.is_empty() && !settings.worktree_removed)
         .ok_or("This session has no worktree made by the app")?;
+    if is_workflow_worktree(store, recorded) {
+        return Err(
+            "This worktree belongs to a workflow run. Remove it from the run's page in Workflows"
+                .into(),
+        );
+    }
     let path = Path::new(recorded);
     if crate::files::remote::is_remote(path) {
         return Err("A worktree on another machine is never removed from here".into());

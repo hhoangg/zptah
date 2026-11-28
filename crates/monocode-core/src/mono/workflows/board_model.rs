@@ -894,6 +894,7 @@ pub fn new_node(ty: NodeType, w: &Workflow) -> Node {
             command: String::new(),
             cwd: None,
             timeout_minutes: None,
+            on_failure: None,
         },
         NodeType::If => NodeKind::If {
             condition: None,
@@ -1334,6 +1335,12 @@ pub fn definition_key(w: &Workflow) -> String {
             .filter(|t| !js_trim(t).is_empty())
         {
             map.insert("summaryTemplate".into(), json!(template));
+        }
+        if !w.workspace.is_default() {
+            map.insert("workspace".into(), to_value(&w.workspace));
+        }
+        if !w.concurrency.is_default() {
+            map.insert("concurrency".into(), to_value(&w.concurrency));
         }
     }
     stable_json(&value)

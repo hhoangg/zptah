@@ -195,6 +195,10 @@ fn run(id: &str, status: RunStatus, workflow: &str) -> WorkflowRun {
         report_posted_at: None,
         error: None,
         cloud_instances: Vec::new(),
+        number: None,
+        queued_at: None,
+        worktree: None,
+        branch_worktrees: Default::default(),
         summary: None,
     }
 }
@@ -2629,9 +2633,9 @@ fn a_secret_in_the_environment_never_reaches_a_result_a_run_file_or_a_failure_te
         &disk,
         &super::tick::Tick {
             now: now(),
-            is_running: &|_| false,
+            live_runs: &|_| 0,
             probe: no_probe,
-            on_claim: &|_| {},
+            on_claim: &|_, _| {},
             preflight: &judge,
         },
     )

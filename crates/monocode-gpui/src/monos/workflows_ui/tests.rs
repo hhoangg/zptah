@@ -1009,7 +1009,7 @@ fn the_list_follows_a_run_that_starts_and_ends_in_the_runner(cx: &mut TestAppCon
             .is_some()
     );
     s.manager.update(visual, |m, _| {
-        m.stop_workflow_run(A);
+        m.stop_workflow_run(A, None);
     });
     visual.run_until_parked();
     s.manager.update(visual, |m, cx| {

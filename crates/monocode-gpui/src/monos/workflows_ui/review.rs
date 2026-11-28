@@ -94,6 +94,8 @@ pub(in crate::monos) fn session_detail(preview: &ImportPreview, node: &Node) -> 
         return None;
     };
     let where_ = match checkout {
+        Checkout::Run => "Run worktree".to_string(),
+        Checkout::Existing(path) => format!("Folder {}", visible(path)),
         Checkout::Root => "Project folder".to_string(),
         Checkout::NewWorktree => "New worktree".to_string(),
         Checkout::WorktreeOf(of) => {

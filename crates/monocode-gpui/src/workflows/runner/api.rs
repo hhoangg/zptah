@@ -4,7 +4,7 @@ use monocode_core::mono::{
     habits,
     workflows::{
         command::CommandResult,
-        model::{OutputField, WorkflowRun},
+        model::{OutputField, RunWorktree, WorkflowRun},
         ordered::OrderedMap,
     },
 };
@@ -271,6 +271,31 @@ pub(crate) trait WorkflowHost {
     fn worktree_of(&self, session_id: &str) -> Option<String>;
     /// Writes the run into the workflow's run history.
     fn save_run(&self, run: WorkflowRun) -> Fut<Result<(), String>>;
+    /// Makes the run's worktree and marks it as the run's own, so no session removal takes it.
+    /// Git runs off the UI thread.
+    fn create_run_worktree(&self, request: RunWorktreeRequest) -> Fut<Result<RunWorktree, String>>;
+    /// Makes the worktree of one For each branch, forked from the run worktree's current HEAD,
+    /// and marks it as the run's own. Git runs off the UI thread.
+    fn fork_branch_worktree(
+        &self,
+        run_id: &str,
+        run: RunWorktree,
+        group: String,
+        index: usize,
+    ) -> Fut<Result<RunWorktree, String>>;
+}
+
+/// The worktree a run asks for before its first step (`workspace.mode = perRun`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RunWorktreeRequest {
+    /// One of the app's project paths.
+    pub project: String,
+    pub base_branch: String,
+    /// The workflow's name as a branch slug, and the run's number: `wf/<slug>-<number>`.
+    pub slug: String,
+    pub number: u64,
+    /// The run that will own the worktree.
+    pub run_id: String,
 }
 
 /// What a `workflow.output` call changed, for its reply.

@@ -158,6 +158,10 @@ pub(super) fn remove_unused_worktree(store: &Database, path: &str) -> Result<(),
     if worktree_in_use(store, path, &[])? {
         return Err("Another session still uses it.".into());
     }
+    // A workflow run owns its worktree: only the run's page removes it.
+    if monocode_core::session_worktree::is_workflow_worktree(&*locked(store)?, path) {
+        return Err("It belongs to a workflow run. Remove it from the run's page.".into());
+    }
     monocode_core::worktree_management::remove_clean(Path::new(path))
 }
 
@@ -427,8 +431,13 @@ impl Shell {
             candidates
                 .into_iter()
                 .filter(|(_, path)| {
-                    // A failed lookup must never offer filesystem cleanup.
-                    worktree_in_use(&store, path, &selected) == Ok(false) && {
+                    // A failed lookup must never offer filesystem cleanup, and a worktree a workflow
+                    // run owns is never offered: only the run's page removes it.
+                    worktree_in_use(&store, path, &selected) == Ok(false)
+                        && locked(&store).is_ok_and(|db| {
+                            !monocode_core::session_worktree::is_workflow_worktree(&db, path)
+                        })
+                        && {
                         let path = Path::new(path);
                         monocode_core::worktree_management::check(path, path).is_ok()
                     }

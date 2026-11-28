@@ -1300,8 +1300,8 @@ fn stop_stops_running_sessions_ends_stopped_and_reports_once(cx: &mut TestAppCon
         Some("s1")
     );
 
-    assert!(rig.runner.stop(WF));
-    assert!(!rig.runner.stop(WF), "a second stop changes nothing");
+    assert!(rig.runner.stop(WF, None));
+    assert!(!rig.runner.stop(WF, None), "a second stop changes nothing");
     cx.run_until_parked();
     let run = rig.last_run();
     assert_eq!(run.status, RunStatus::Stopped);
@@ -1329,7 +1329,7 @@ fn stop_cancels_a_running_command_and_the_run_is_released_after_it_settles(
     cx.run_until_parked();
     let id = rig.fake.world().commands[0].3.clone();
 
-    rig.runner.stop(WF);
+    rig.runner.stop(WF, None);
     cx.run_until_parked();
     assert!(rig.fake.world().cancelled.contains(&id));
     let run = rig.last_run();
@@ -1355,7 +1355,7 @@ fn stop_retries_a_cancel_that_beat_the_command_starting(cx: &mut TestAppContext)
     rig.fake.cancel_refuses(3);
     rig.start(cx, &command_workflow(json!({})));
     cx.run_until_parked();
-    rig.runner.stop(WF);
+    rig.runner.stop(WF, None);
     cx.run_until_parked();
     minutes(cx, 1);
     // Three misses, then it took (the run asks once more when it is over).
@@ -1371,7 +1371,7 @@ fn stop_does_not_wait_for_a_pending_decision(cx: &mut TestAppContext) {
     rig.start(cx, &ask_workflow());
     cx.run_until_parked();
     assert_eq!(rig.fake.world().decisions.len(), 1);
-    rig.runner.stop(WF);
+    rig.runner.stop(WF, None);
     cx.run_until_parked();
     assert_eq!(rig.last_run().status, RunStatus::Stopped);
     assert!(!rig.runner.is_running(WF));
@@ -1384,7 +1384,7 @@ fn stop_does_not_wait_for_a_session_that_never_finishes_starting(cx: &mut TestAp
     rig.start(cx, &simple(json!({})));
     cx.run_until_parked();
     assert_eq!(rig.fake.world().starts.len(), 1);
-    rig.runner.stop(WF);
+    rig.runner.stop(WF, None);
     cx.run_until_parked();
     assert_eq!(rig.last_run().status, RunStatus::Stopped);
     assert!(!rig.runner.is_running(WF));
@@ -1415,7 +1415,7 @@ fn starts_queued_behind_another_are_not_launched_once_the_run_is_stopped(cx: &mu
     cx.run_until_parked();
     assert_eq!(rig.fake.world().starts.len(), 2);
 
-    rig.runner.stop(WF);
+    rig.runner.stop(WF, None);
     cx.run_until_parked();
     assert_eq!(rig.last_run().status, RunStatus::Stopped);
     gate.close();
@@ -1436,7 +1436,7 @@ fn stop_goes_on_when_a_session_cannot_be_stopped(cx: &mut TestAppContext) {
     rig.fake.stop_fails();
     rig.start(cx, &simple(json!({})));
     cx.run_until_parked();
-    rig.runner.stop(WF);
+    rig.runner.stop(WF, None);
     cx.run_until_parked();
     assert_eq!(rig.last_run().status, RunStatus::Stopped);
     let w = rig.fake.world();
@@ -1448,8 +1448,8 @@ fn stopping_a_run_that_is_over_does_nothing(cx: &mut TestAppContext) {
     let rig = Rig::new(&["ok"]);
     rig.start(cx, &simple(json!({})));
     cx.run_until_parked();
-    assert!(!rig.runner.stop(WF));
-    assert!(!rig.runner.stop("wf-unknown1"));
+    assert!(!rig.runner.stop(WF, None));
+    assert!(!rig.runner.stop("wf-unknown1", None));
     assert_eq!(rig.last_run().status, RunStatus::Done);
 }
 
@@ -1467,7 +1467,7 @@ fn stopping_a_run_that_is_already_over_does_not_hold_it_open(cx: &mut TestAppCon
     let rig = Rig::new(&[]);
     rig.start_run(cx, run);
     // Before the first save has even run.
-    assert!(!rig.runner.stop(WF));
+    assert!(!rig.runner.stop(WF, None));
     cx.run_until_parked();
     assert!(!rig.runner.is_running(WF));
     assert!(!rig.signals.is_running(WF));
@@ -1753,7 +1753,7 @@ fn quitting_leaves_a_run_running_in_the_file_for_the_next_start_to_interrupt(
     assert!(!rig.signals.is_running(WF));
     // A second quit, and a stop after it, do nothing.
     rig.runner.quit();
-    assert!(!rig.runner.stop(WF));
+    assert!(!rig.runner.stop(WF, None));
 }
 
 #[gpui::test]

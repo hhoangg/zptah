@@ -63,16 +63,17 @@ pub(super) fn look_at(
             "Could not check for interrupted workflow runs: {error}"
         ));
     }
-    let running = |workflow: &str| signals.is_running(workflow);
+    let live = |workflow: &str| signals.live_runs(workflow);
     let tick = Tick {
         now,
-        is_running: &running,
+        live_runs: &live,
         probe: probes.models,
         preflight: &probes.requirements,
-        on_claim: &|workflow: &str| signals.set_running(workflow, true),
+        on_claim: &|workflow: &str, run: &str| signals.claim_run(workflow, run),
     };
     match tick::check(dir, &tick) {
-        Ok(found) if found.starts.is_empty() && found.stops.is_empty() => {}
+        Ok(found)
+            if found.starts.is_empty() && found.stops.is_empty() && found.stop_runs.is_empty() => {}
         Ok(found) => looked.found = Some(found),
         Err(error) => looked
             .errors
@@ -156,15 +157,22 @@ impl Workflows {
         for error in &looked.errors {
             eprintln!("{error}");
         }
-        // The look marked what it claimed as running (so nothing could remove or double-run it
-        // while its models were probed); the runs started here keep that mark, the others lose it.
-        let claimed: Vec<String> = looked
+        // The look marked what it claimed as running (so nothing could remove or over-fill the
+        // workflow while its models were probed); the runs started here keep that mark, the
+        // others lose it.
+        let claimed: Vec<(String, String)> = looked
             .found
             .iter()
             .flat_map(|found| &found.starts)
             .map(|start| match start {
-                Start::Run { run, .. } | Start::Resume { run } => run.workflow_id.clone(),
-                Start::Refused { workflow_id, .. } => workflow_id.clone(),
+                Start::Run { run, .. } | Start::Resume { run } => {
+                    (run.workflow_id.clone(), run.id.clone())
+                }
+                Start::Refused {
+                    workflow_id,
+                    run_id,
+                    ..
+                } => (workflow_id.clone(), run_id.clone()),
             })
             .collect();
         // A look that was going when the app began to quit finds nothing to start.
@@ -173,9 +181,9 @@ impl Workflows {
         {
             self.apply_found(found, cx);
         }
-        for workflow_id in claimed {
-            if !self.runner.is_running(&workflow_id) {
-                self.signals.set_running(&workflow_id, false);
+        for (workflow_id, run_id) in claimed {
+            if !self.runner.is_run_live(&run_id) {
+                self.signals.release_run(&workflow_id, &run_id);
             }
         }
         if !self.runner.is_quitting() && std::mem::take(&mut self.checks.again) {
@@ -185,7 +193,10 @@ impl Workflows {
 
     fn apply_found(&mut self, found: Found, cx: &mut Context<Self>) {
         for workflow_id in &found.stops {
-            self.stop_run(workflow_id);
+            self.stop_run(workflow_id, None);
+        }
+        for (workflow_id, run_id) in &found.stop_runs {
+            self.stop_run(workflow_id, Some(run_id));
         }
         for start in found.starts {
             match start {

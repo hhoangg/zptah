@@ -292,7 +292,7 @@ fn a_stop_does_not_wait_for_an_extraction_that_hangs(cx: &mut TestAppContext) {
     rig.start(cx, &simple(json!({"summary": {"type": "string"}})));
     cx.run_until_parked();
     assert!(rig.runner.is_running(WF), "the run waits for the answer");
-    assert!(rig.runner.stop(WF));
+    assert!(rig.runner.stop(WF, None));
     cx.run_until_parked();
     assert!(!rig.runner.is_running(WF));
     assert_eq!(rig.last_run().status, RunStatus::Stopped);
@@ -475,7 +475,7 @@ fn stop_withdraws_the_banner_and_a_later_continue_is_refused(cx: &mut TestAppCon
     let rig = Rig::new(&["First answer."]);
     rig.start(cx, &waiting(json!({})));
     cx.run_until_parked();
-    assert!(rig.runner.stop(WF));
+    assert!(rig.runner.stop(WF, None));
     // Stop and Continue race: whichever the run hears second changes nothing, so the run is
     // stopped and the step never finishes, whether or not this answer got in.
     let _ = answer(&rig, "s1", WaitChoice::Continue);

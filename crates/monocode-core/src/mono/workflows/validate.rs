@@ -3,9 +3,9 @@
 use super::condition::condition_syntax_problem;
 use super::model::{
     is_node_id, Checkout, Cwd, Handle, Node, NodeId, NodeKind, Requirement, RequirementKind,
-    SessionMode, SessionSurface, SessionTarget, TargetInstance, Workflow, MAX_PARALLEL_LIMIT,
-    MAX_ROUNDS_LIMIT, MAX_TIMEOUT_MINUTES, SWITCH_DEFAULT, TEMPLATABLE_TARGET_OPTIONS,
-    TRIGGERS_MAX,
+    SessionMode, SessionSurface, SessionTarget, TargetInstance, Workflow, WorkspaceMode,
+    CONCURRENCY_LIMIT, MAX_PARALLEL_LIMIT, MAX_ROUNDS_LIMIT, MAX_TIMEOUT_MINUTES, SWITCH_DEFAULT,
+    TEMPLATABLE_TARGET_OPTIONS, TRIGGERS_MAX,
 };
 use super::output::{is_builtin_name, session_builtins, COMMAND_BUILTINS};
 use super::parse::{is_ai_decide, is_map_key, is_name};
@@ -21,7 +21,8 @@ pub struct WorkflowIssue {
     pub message: String,
 }
 
-pub(super) const RUN_VARS: [&str; 3] = ["round", "id", "startedAt"];
+/// `worktree` and `branch` are the run worktree's path and branch (empty without one).
+pub(super) const RUN_VARS: [&str; 5] = ["round", "id", "startedAt", "worktree", "branch"];
 /// Template variables a node output must not shadow.
 const RESERVED_NODE_IDS: [&str; 4] = ["run", "inputs", "results", "trigger"];
 /// Extra `run` fields only the summary template gets (see `compose_report`).
@@ -663,29 +664,104 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// A step's `project`: empty (the workflow's `workspace.project`), a project path, or exactly
+    /// `{{inputs.<name>}}` naming a project input.
     fn check_project(&mut self, node: &Node, project: &str) {
-        match project_ref(project) {
-            None => {
-                let message = if find_absolute_path(project).is_some() || project.starts_with('/') {
-                    "project is an absolute path; it must be {{inputs.<name>}} naming a project input"
-                } else {
-                    "project must be exactly {{inputs.<name>}} naming a project input"
-                };
-                self.add(message, Some(&node.id));
+        let at = Some(node.id.as_str());
+        if js_trim(project).is_empty() {
+            if js_trim(&self.w.workspace.project).is_empty() {
+                self.add(
+                    "project is not set: give the step a project or the workflow a workspace.project",
+                    at,
+                );
             }
+            return;
+        }
+        if let Some(problem) = self.project_text_problem("project", project) {
+            self.add(problem, at);
+        }
+    }
+
+    /// Why `project` is not a project path or `{{inputs.<name>}}`, if it is not.
+    fn project_text_problem(&self, label: &str, project: &str) -> Option<String> {
+        if !project.contains("{{") && !project.contains("}}") {
+            return None;
+        }
+        match project_ref(project) {
+            None => Some(format!(
+                "{label} must be a project path or exactly {{{{inputs.<name>}}}} naming a project input"
+            )),
             Some(name) => {
                 let declared = self
                     .w
                     .inputs
                     .get(name)
                     .is_some_and(|i| i.ty == super::model::InputType::Project);
-                if !declared {
+                (!declared).then(|| format!("{project} is not a declared project input"))
+            }
+        }
+    }
+
+    /// `workspace` and `concurrency`.
+    fn check_workspace(&mut self) {
+        let workspace = &self.w.workspace;
+        if !js_trim(&workspace.project).is_empty() {
+            if let Some(problem) = self.project_text_problem("workspace.project", &workspace.project)
+            {
+                self.add(problem, None);
+            }
+        }
+        if let Some(branch) = &workspace.base_branch {
+            let bad = js_trim(branch).is_empty()
+                || branch.starts_with(['-', '/', '@'])
+                || branch.ends_with(['/', '.'])
+                || branch.contains("..")
+                || branch.contains("{{")
+                || branch
+                    .chars()
+                    .any(|c| js_space(c) || c.is_control() || "~^:?*[\\".contains(c));
+            if bad {
+                self.add(
+                    format!("workspace.baseBranch \"{branch}\" is not a valid branch name"),
+                    None,
+                );
+            }
+        }
+        let max = self.w.concurrency.max;
+        if !(is_whole(max) && max >= 1.0 && max <= f64::from(CONCURRENCY_LIMIT)) {
+            self.add(
+                format!("concurrency.max must be a whole number from 1 to {CONCURRENCY_LIMIT}"),
+                None,
+            );
+        }
+    }
+
+    /// `checkout` of a local session step: what the step needs from the workflow's workspace.
+    fn check_checkout(&mut self, node: &Node, project: &str, checkout: &Checkout) {
+        let at = Some(node.id.as_str());
+        match checkout {
+            Checkout::Run => {
+                let workspace = &self.w.workspace;
+                let another = workspace.per_run()
+                    && !js_trim(project).is_empty()
+                    && js_trim(project) != js_trim(&workspace.project);
+                if another {
                     self.add(
-                        format!("{project} is not a declared project input"),
-                        Some(&node.id),
+                        format!(
+                            "checkout run works in the run worktree of the workspace project ({}), but this step's project is {}: use checkout root, newWorktree or existing, or the workspace project",
+                            js_trim(&workspace.project),
+                            js_trim(project)
+                        ),
+                        at,
                     );
                 }
             }
+            Checkout::Existing(path) => {
+                if js_trim(path).is_empty() {
+                    self.add("checkout existing needs a folder", at);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -744,6 +820,14 @@ impl<'a> Checker<'a> {
         }
         match checkout {
             Checkout::Root => {}
+            Checkout::Run => self.add(
+                "A cloud session works in its instance's own checkout: use checkout \"root\" (checkout \"run\" is the run worktree on this computer)",
+                at,
+            ),
+            Checkout::Existing(_) => self.add(
+                "A cloud session cannot use checkout existing: it works in its instance's own checkout, so use checkout \"root\"",
+                at,
+            ),
             Checkout::NewWorktree => self.add(
                 "A cloud session works in its instance's own checkout: use checkout \"root\" and target.branch instead of newWorktree",
                 at,
@@ -1013,6 +1097,9 @@ impl<'a> Checker<'a> {
                 ..
             } => {
                 self.check_project(node, project);
+                if target.is_none() {
+                    self.check_checkout(node, project, checkout);
+                }
                 self.check_text(prompt, node);
                 for name in output.keys() {
                     if !is_map_key(name) {
@@ -1070,8 +1157,15 @@ impl<'a> Checker<'a> {
                 command,
                 cwd,
                 timeout_minutes,
+                on_failure,
             } => {
                 self.check_project(node, project);
+                if let Some(value) = on_failure.as_deref().filter(|v| !matches!(*v, "fail" | "continue")) {
+                    self.add(
+                        format!("onFailure \"{value}\" is not valid: use fail or continue"),
+                        Some(&node.id),
+                    );
+                }
                 self.check_text(command, node);
                 // Commands are shell text, so quoting problems are security problems.
                 for problem in shell_template_problems(command) {
@@ -1516,6 +1610,8 @@ pub fn validate_workflow_on(w: &Workflow, windows: bool) -> Vec<WorkflowIssue> {
         );
     }
 
+    c.check_workspace();
+
     // --- per node, in the order the user reads them ------------------------------------------
     for node in &w.nodes {
         c.check_node(node);
@@ -1691,6 +1787,156 @@ pub fn validate_workflow_on(w: &Workflow, windows: bool) -> Vec<WorkflowIssue> {
     }
 
     c.issues
+}
+
+// --- warnings ------------------------------------------------------------------------------
+
+/// What a step with a checkout of its own shares with other steps: steps with the same key write
+/// into the same folder. `None` for a step that is not on this computer or writes nowhere shared.
+fn worktree_key(w: &Workflow, g: &Graph, node: &Node, depth: usize) -> Option<String> {
+    let project = |own: &str| {
+        let own = js_trim(own);
+        if own.is_empty() {
+            js_trim(&w.workspace.project).to_string()
+        } else {
+            own.to_string()
+        }
+    };
+    let run_key = |own: &str| {
+        if w.workspace.per_run() {
+            // One worktree per run, and one per branch of a For each.
+            format!("run:{}", node.parent.as_deref().unwrap_or(""))
+        } else {
+            format!("root:{}", project(own))
+        }
+    };
+    match &node.kind {
+        NodeKind::Session {
+            project: own,
+            checkout,
+            target: None,
+            ..
+        } => match checkout {
+            Checkout::Run => Some(run_key(own)),
+            Checkout::Root => Some(format!("root:{}", project(own))),
+            Checkout::Existing(path) => Some(format!("path:{path}")),
+            Checkout::NewWorktree => Some(format!("own:{}", node.id)),
+            Checkout::WorktreeOf(other) if depth < 8 => g
+                .by_id
+                .get(other.as_str())
+                .and_then(|n| worktree_key(w, g, n, depth + 1)),
+            Checkout::WorktreeOf(_) => None,
+        },
+        NodeKind::Command {
+            project: own, cwd, ..
+        } => match cwd {
+            None => Some(run_key(own)),
+            Some(Cwd::Root) => Some(format!("root:{}", project(own))),
+            Some(Cwd::WorktreeOf(other)) if depth < 8 => g
+                .by_id
+                .get(other.as_str())
+                .and_then(|n| worktree_key(w, g, n, depth + 1)),
+            Some(Cwd::WorktreeOf(_)) => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether `a` and `b` sit on different sides of one If or Switch, so only one of them runs.
+fn exclusive(g: &Graph, w: &Workflow, a: &str, b: &str) -> bool {
+    let side = |to: &str| -> HashSet<String> {
+        let mut set: HashSet<String> = reach(to, &g.next).into_iter().map(str::to_string).collect();
+        set.insert(to.to_string());
+        set
+    };
+    for node in &w.nodes {
+        if !matches!(node.kind, NodeKind::If { .. } | NodeKind::Switch { .. }) {
+            continue;
+        }
+        let outs: Vec<(&str, &str)> = w
+            .edges
+            .iter()
+            .filter(|e| e.loop_spec.is_none() && e.from == node.id)
+            .filter_map(|e| e.handle.as_ref().map(|h| (h.as_str(), e.to.as_str())))
+            .collect();
+        for (h1, t1) in &outs {
+            for (h2, t2) in &outs {
+                if h1 == h2 {
+                    continue;
+                }
+                let (s1, s2) = (side(t1), side(t2));
+                if s1.contains(a) && s2.contains(b) && !s2.contains(a) && !s1.contains(b) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Advice about a definition that never blocks a save or a run: a risk the user may accept.
+/// Today it covers steps that can run at the same time in one worktree (D25 included).
+pub fn workflow_warnings(w: &Workflow) -> Vec<WorkflowIssue> {
+    let g = Graph::new(w);
+    let mut out = Vec::new();
+    let writers: Vec<(&Node, String)> = w
+        .nodes
+        .iter()
+        .filter_map(|n| worktree_key(w, &g, n, 0).map(|key| (n, key)))
+        .collect();
+    let mut ancestors: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for (n, _) in &writers {
+        ancestors.insert(n.id.as_str(), reach(n.id.as_str(), &g.prev));
+    }
+    for (i, (a, key_a)) in writers.iter().enumerate() {
+        for (b, key_b) in &writers[i + 1..] {
+            if key_a != key_b || a.id == b.id {
+                continue;
+            }
+            let ordered = ancestors[a.id.as_str()].contains(b.id.as_str())
+                || ancestors[b.id.as_str()].contains(a.id.as_str());
+            if ordered || exclusive(&g, w, &a.id, &b.id) {
+                continue;
+            }
+            let place = if key_a.starts_with("run:") {
+                "the run worktree".to_string()
+            } else if let Some(project) = key_a.strip_prefix("root:") {
+                format!("the project folder {project}")
+            } else if let Some(path) = key_a.strip_prefix("path:") {
+                format!("the folder {path}")
+            } else {
+                "the same worktree".to_string()
+            };
+            out.push(WorkflowIssue {
+                node_id: Some(b.id.clone()),
+                message: format!(
+                    "Steps \"{}\" and \"{}\" can run at the same time and both write into {place}: connect one after the other, or give one a checkout of its own (newWorktree)",
+                    a.id, b.id
+                ),
+            });
+        }
+    }
+    // Without a worktree per run, runs that go at once write into the same project folder.
+    let shared_root = |key: &str| key.starts_with("root:") || (key.starts_with("run:") && !w.workspace.per_run());
+    let concurrent = w.concurrency.limit() > 1;
+    if concurrent
+        && (w.workspace.mode == WorkspaceMode::None || !w.workspace.per_run())
+        && writers.iter().any(|(_, key)| shared_root(key))
+    {
+        out.push(WorkflowIssue {
+            node_id: None,
+            message: format!(
+                "Up to {} runs of this workflow can go at the same time and its steps write into the project folder itself{}: set concurrency.max to 1, or let each run work in its own worktree (workspace mode perRun with a project)",
+                w.concurrency.limit(),
+                if w.workspace.mode == WorkspaceMode::None {
+                    " (workspace mode is none)"
+                } else {
+                    ""
+                }
+            ),
+        });
+    }
+    out
 }
 
 /// Where the model an AI decision runs on came from.

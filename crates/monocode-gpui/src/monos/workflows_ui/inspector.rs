@@ -611,7 +611,14 @@ impl Monos {
                         .debug_selector(|| "wf-account".to_string())
                 });
                 let others = sessions_except(w, &id);
-                let mut worktrees = choices(&[("root", "Project folder"), ("newWorktree", "New worktree")]);
+                let mut worktrees = choices(&[
+                    ("run", "Run worktree"),
+                    ("root", "Project folder"),
+                    ("newWorktree", "New worktree"),
+                ]);
+                if let Checkout::Existing(path) = checkout {
+                    worktrees.push((format!("existing:{path}"), format!("Folder {path}")));
+                }
                 worktrees.extend(others.iter().map(|s| {
                     (format!("worktree:{}", s.id), format!("Worktree of {}", node_title(s)))
                 }));
@@ -698,7 +705,7 @@ impl Monos {
                 ..
             } => {
                 let project_row = self.board_project_row(scope, w, &id, cx);
-                let mut runs = choices(&[("root", "Project folder")]);
+                let mut runs = choices(&[("run", "Run worktree"), ("root", "Project folder")]);
                 runs.extend(sessions_except(w, &id).iter().map(|s| {
                     (format!("worktree:{}", s.id), format!("Worktree of {}", node_title(s)))
                 }));

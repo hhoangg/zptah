@@ -24,6 +24,14 @@ pub const WORKFLOW_RUNS_KEPT: usize = 20;
 pub const MAX_PARALLEL_LIMIT: u32 = 10;
 /// How many run at once when `maxParallel` is unset.
 pub const DEFAULT_MAX_PARALLEL: u32 = 3;
+/// The most runs of one workflow that go at the same time (`concurrency.max`).
+pub const CONCURRENCY_LIMIT: u32 = 10;
+/// How many runs of one workflow go at once when `concurrency` is unset.
+pub const DEFAULT_CONCURRENCY: u32 = 3;
+/// The most runs of one workflow that may wait in the queue.
+pub const QUEUED_RUNS_MAX: usize = 50;
+/// The branch a run worktree starts from when `workspace.baseBranch` is unset.
+pub const DEFAULT_BASE_BRANCH: &str = "main";
 /// The most passes a loop edge may allow (`maxRounds`).
 pub const MAX_ROUNDS_LIMIT: u32 = 10;
 pub const DEFAULT_SESSION_TIMEOUT_MINUTES: u32 = 120;
@@ -167,9 +175,13 @@ impl SessionSurface {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Checkout {
+    /// The run's own worktree (the project folder when the workspace makes none). The default.
+    Run,
     Root,
     NewWorktree,
     WorktreeOf(NodeId),
+    /// A folder the user names, which must be a worktree of the step's project.
+    Existing(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -271,6 +283,113 @@ impl Serialize for Requirement {
             map.serialize_entry("hint", hint)?;
         }
         map.end()
+    }
+}
+
+/// Where a run works.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WorkspaceMode {
+    /// The run makes one worktree of `workspace.project` and its steps work in it.
+    #[default]
+    PerRun,
+    /// The run makes no worktree: steps work where their own checkout says.
+    None,
+}
+
+impl WorkspaceMode {
+    pub const ALL: [(&str, Self); 2] = [("perRun", Self::PerRun), ("none", Self::None)];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::PerRun => "perRun",
+            Self::None => "none",
+        }
+    }
+}
+
+/// `workspace` of a workflow: whether a run gets a worktree, and from which project and branch.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Workspace {
+    pub mode: WorkspaceMode,
+    /// A project path or `{{inputs.<name>}}`. Empty when the workflow names none.
+    pub project: String,
+    /// The branch the run worktree starts from; `main` when unset.
+    pub base_branch: Option<String>,
+}
+
+impl Workspace {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    /// The branch a run worktree starts from.
+    pub fn base(&self) -> &str {
+        self.base_branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|b| !b.is_empty())
+            .unwrap_or(DEFAULT_BASE_BRANCH)
+    }
+    /// Whether a run makes a worktree of its own.
+    pub fn per_run(&self) -> bool {
+        self.mode == WorkspaceMode::PerRun && !self.project.trim().is_empty()
+    }
+}
+
+impl Serialize for Workspace {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = s.serialize_map(None)?;
+        map.serialize_entry("mode", self.mode.name())?;
+        if !self.project.is_empty() {
+            map.serialize_entry("project", &self.project)?;
+        }
+        if let Some(base) = &self.base_branch {
+            map.serialize_entry("baseBranch", base)?;
+        }
+        map.end()
+    }
+}
+
+/// `concurrency` of a workflow: how many of its runs go at the same time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Concurrency {
+    /// 1 to 10 (as written, so validation can name a bad value).
+    pub max: f64,
+}
+
+impl Default for Concurrency {
+    fn default() -> Self {
+        Self {
+            max: f64::from(DEFAULT_CONCURRENCY),
+        }
+    }
+}
+
+impl Concurrency {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    /// The number of live runs allowed, whatever was written.
+    pub fn limit(&self) -> usize {
+        if !self.max.is_finite() {
+            return DEFAULT_CONCURRENCY as usize;
+        }
+        (self.max.round() as i64).clamp(1, i64::from(CONCURRENCY_LIMIT)) as usize
+    }
+}
+
+impl Serialize for Concurrency {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = s.serialize_map(Some(1))?;
+        map.serialize_entry("max", &SerNumber(self.max))?;
+        map.end()
+    }
+}
+
+struct SerNumber(f64);
+impl Serialize for SerNumber {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        serialize_number(&self.0, s)
     }
 }
 
@@ -466,7 +585,8 @@ pub enum NodeKind {
     Manual,
     #[serde(rename_all = "camelCase")]
     Session {
-        /// Always `{{inputs.<name>}}` naming a `project` input.
+        /// A project path or `{{inputs.<name>}}`. Empty means `workspace.project`.
+        #[serde(skip_serializing_if = "String::is_empty")]
         project: String,
         prompt: String,
         checkout: Checkout,
@@ -509,10 +629,16 @@ pub enum NodeKind {
     },
     #[serde(rename_all = "camelCase")]
     Command {
+        /// A project path or `{{inputs.<name>}}`. Empty means `workspace.project`.
+        #[serde(skip_serializing_if = "String::is_empty")]
         project: String,
         command: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         cwd: Option<Cwd>,
+        /// `fail` (default) or `continue`: with `continue` a non-zero exit finishes the node with
+        /// `exitCode`, `stdout` and `stderr`. Kept as written so validation can name a bad value.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        on_failure: Option<String>,
         /// Default 10.
         #[serde(
             skip_serializing_if = "Option::is_none",
@@ -749,6 +875,22 @@ pub struct Workflow {
     /// Who asked for the pending `run_requested` run. App-managed, never exported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_caller: Option<RunCaller>,
+    /// Whether a run gets a worktree, and from which project and branch.
+    #[serde(skip_serializing_if = "Workspace::is_default")]
+    pub workspace: Workspace,
+    /// How many runs go at the same time.
+    #[serde(skip_serializing_if = "Concurrency::is_default")]
+    pub concurrency: Concurrency,
+    /// Runs asked to stop by id (`workflows.stop` with `runId`). App-managed, never exported.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stop_run_ids: Vec<String>,
+    /// How many runs were numbered so far; the next run is this plus one. App-managed.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub run_counter: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl Workflow {
@@ -779,6 +921,10 @@ impl Workflow {
             report_to: None,
             summary_template: None,
             run_caller: None,
+            workspace: Workspace::default(),
+            concurrency: Concurrency::default(),
+            stop_run_ids: Vec::new(),
+            run_counter: 0,
         }
     }
     pub fn node(&self, id: &str) -> Option<&Node> {
@@ -911,6 +1057,19 @@ pub fn definition_fingerprint(w: &Workflow) -> String {
         root.insert(
             "summaryTemplate".into(),
             Value::String(template.to_string()),
+        );
+    }
+    // Where runs work and how many go at once decide what a run can touch.
+    if !w.workspace.is_default() {
+        root.insert(
+            "workspace".into(),
+            serde_json::to_value(&w.workspace).unwrap_or(Value::Null),
+        );
+    }
+    if !w.concurrency.is_default() {
+        root.insert(
+            "concurrency".into(),
+            serde_json::to_value(w.concurrency).unwrap_or(Value::Null),
         );
     }
     stable_json(&Value::Object(root))
@@ -1069,12 +1228,27 @@ impl NodeRun {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RunStatus {
+    /// Waiting for a free slot (`concurrency.max` runs are going). Starts on its own, first in,
+    /// first out.
+    Queued,
     Running,
     Done,
     DoneWithFailures,
     Failed,
     Stopped,
     Interrupted,
+    /// Never started: the queue was full (an event over the cap). `error` says why.
+    Skipped,
+}
+
+/// The worktree a run (or one For each branch of it) works in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunWorktree {
+    pub path: String,
+    pub branch: String,
+    /// The commit the worktree started from, to tell what the run changed.
+    pub base: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1107,6 +1281,19 @@ pub struct WorkflowRun {
     /// The summary the run ended with (what `compose_report` made of it), kept for the run page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<RunSummary>,
+    /// The run's number in its workflow (the `<n>` of `wf/<slug>-<n>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<u64>,
+    /// When the run was queued; set while it waits and kept after it starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_at: Option<u64>,
+    /// The run's own worktree (`workspace.mode = perRun`). The run owns it: it is kept after the
+    /// run and removed only by the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<RunWorktree>,
+    /// The worktree of each For each branch (`<forEach>#<index>`), forked from the run's.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub branch_worktrees: BTreeMap<BranchKey, RunWorktree>,
 }
 
 /// The summary of a finished run: a title line and Markdown text.
