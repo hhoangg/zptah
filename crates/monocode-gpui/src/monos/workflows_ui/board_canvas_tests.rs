@@ -139,7 +139,7 @@ fn the_inspector_edits_and_removes_a_loop(cx: &mut TestAppContext) {
             .map(|l| l.max_rounds)
     });
     assert_eq!(rounds, Some(7.0));
-    click(visual, "wf-loop-remove");
+    click_in_inspector(visual, "wf-loop-remove");
     assert!(!edges_of(&s, visual).iter().any(|e| e.2));
 }
 

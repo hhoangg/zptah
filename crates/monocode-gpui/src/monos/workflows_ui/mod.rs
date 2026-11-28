@@ -28,6 +28,9 @@ mod inspector;
 mod inspector_parts;
 #[cfg(test)]
 mod inspector_tests;
+mod inspector_variables;
+#[cfg(test)]
+mod inspector_variables_tests;
 mod layout;
 #[cfg(test)]
 mod layout_tests;

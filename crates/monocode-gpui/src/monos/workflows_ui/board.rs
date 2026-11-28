@@ -178,6 +178,12 @@ pub(super) struct BoardState {
     catalog_kinds: Vec<monocode_core::provider::Kind>,
     catalog_rev: u64,
     pub issues: Vec<WorkflowIssue>,
+    /// The variables each node may use, computed when first shown and dropped whenever the issues
+    /// are recomputed (they depend on the same draft).
+    pub variables:
+        std::collections::HashMap<String, Vec<monocode_core::mono::workflows::variables::Variable>>,
+    /// Whether the "Available variables" list is folded away; kept while the board is open.
+    pub variables_folded: bool,
     pub canvas: Entity<GraphCanvas>,
     /// A new key makes the canvas fit its view again.
     pub fit_gen: u64,
@@ -297,6 +303,8 @@ impl Monos {
             catalog_kinds: Vec::new(),
             catalog_rev: 0,
             issues: Vec::new(),
+            variables: Default::default(),
+            variables_folded: false,
             canvas,
             fit_gen: 0,
             more_anchor: AnchorSlot::default(),
@@ -332,6 +340,7 @@ impl Monos {
         };
         let w = b.current();
         b.issues = problems_of(&w, &b.catalog);
+        b.variables.clear();
         let by_node = issues_by_node(&b.issues);
         let loops: Vec<(&str, &str)> = w
             .edges
@@ -739,7 +748,10 @@ impl Monos {
         self.wf.seeds.insert(key.clone(), value.to_string());
         let field = cx.new(|cx| {
             let mut f = if multi {
-                Input::markdown_editor(label, cx)
+                let mut f = Input::markdown_editor(label, cx);
+                // A long form scrolls: keep the caret in view after a variable is inserted.
+                f.set_reveal_in_parent(true);
+                f
             } else {
                 Input::field(label.to_string(), label.to_string(), content(0.35), cx)
             };

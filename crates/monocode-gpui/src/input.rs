@@ -780,6 +780,31 @@ impl Input {
         self.replace_text_in_range(None, text, window, cx);
         self.edit_step = false;
     }
+    /// Types `text` at the caret (over the selection, if any) as one undo step, as if the user
+    /// had pasted it, and puts the caret `caret_back` bytes before the end of what was typed.
+    /// Text still being composed (IME) is committed first, so it is kept.
+    pub(crate) fn insert_at_cursor(
+        &mut self,
+        text: &str,
+        caret_back: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.marked.take().is_some() {
+            self.composition_ended(true);
+        }
+        self.edit_step = true;
+        self.replace_text_in_range(None, text, window, cx);
+        self.edit_step = false;
+        if caret_back > 0 && !self.read_only {
+            let at = self.clip_offset(self.cursor().saturating_sub(caret_back));
+            self.select_range(at..at, cx);
+        }
+    }
+    /// Scroll the surrounding page to the caret when it moves, as the automation instructions do.
+    pub(crate) fn set_reveal_in_parent(&mut self, value: bool) {
+        self.reveal_in_parent = value;
+    }
     /// Layouts and native text callbacks can still refer to the previous value.
     /// Every cursor and edit range must index the current UTF-8 buffer.
     fn clip_offset(&self, offset: usize) -> usize {
@@ -2562,6 +2587,23 @@ mod native_input_tests {
                 assert_eq!(i.take(cx).as_deref(), Some("日本語"));
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn inserting_at_the_caret_keeps_composing_text_and_places_the_caret(cx: &mut TestAppContext) {
+        let window = field(cx, false);
+        let input = window.root(cx).unwrap();
+        window
+            .update(cx, |i, w, cx| {
+                i.replace_and_mark_text_in_range(None, "日本", Some(2..2), w, cx);
+                i.insert_at_cursor("{{item.}}", 2, w, cx);
+            })
+            .unwrap();
+        input.read_with(cx, |i, _| {
+            assert!(!i.is_composing());
+            assert_eq!(i.content.as_ref(), "日本{{item.}}");
+            assert_eq!(i.selection, i.content.len() - 2..i.content.len() - 2);
+        });
     }
 
     #[gpui::test]
