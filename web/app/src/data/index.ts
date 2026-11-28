@@ -9,6 +9,7 @@ export {
   openConversation,
   useApprovals,
   useApprovalsSeq,
+  useChiefExtra,
   useCloud,
   useConversation,
   type ConversationHandle,

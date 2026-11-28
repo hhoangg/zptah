@@ -60,6 +60,9 @@ pub fn validate_operator(action: &str, input: &Value) -> Result<(), String> {
     if input.get("account").is_some() {
         return Err("account is available to Monos only".into());
     }
+    if input.get("proposalId").is_some() {
+        return Err("proposalId is only available to a Mono relaying an owner command".into());
+    }
     Ok(())
 }
 

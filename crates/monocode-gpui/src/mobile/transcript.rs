@@ -47,6 +47,11 @@ pub(crate) struct Source<'a> {
     /// for a web device. `None` when the Mono's emoji switch is off or the library is not
     /// loaded.
     pub emoji: Option<&'a MonoEmoji>,
+    /// The commands the Chief relayed to this Mono, by stored proposal id: `{proposalId,
+    /// instruction, chiefName}`. A relay prompt of the chat is shown only when its id is here.
+    pub chief_relays: &'a HashMap<String, Value>,
+    /// The Chief's own chat: only its turns hold `chief.propose` calls to draw cards for.
+    pub chief: bool,
 }
 
 /// An approval or question waiting on the desktop.
@@ -174,6 +179,25 @@ pub(crate) fn build(source: &Source, range: std::ops::Range<usize>) -> Vec<Value
             } else {
                 agent_turn(source, &turns[index], live)
             };
+            // The proposals this turn's `chief.propose` calls returned: the web draws their cards
+            // right after the turn.
+            let (first, last) = (
+                turns[index].runs[0].prompt,
+                turns[index].runs.last().map_or(0, |run| run.end),
+            );
+            let proposals = if source.chief {
+                crate::transcript::chief_card::run_proposals(
+                    source.rows,
+                    first,
+                    last.min(source.rows.len()),
+                    |_| true,
+                )
+            } else {
+                Vec::new()
+            };
+            if !proposals.is_empty() {
+                turn["chiefProposals"] = json!(proposals);
+            }
             if index + 1 == turns.len()
                 && let Some(items) = turn["items"].as_array_mut()
             {
@@ -238,6 +262,34 @@ fn user_items(rows: &[Row], run: Run, out: &mut Vec<Value>, by_row: &mut HashMap
             item.insert("attachments".into(), files.len().into());
         }
         by_row.insert(at, out.len());
+        out.push(Value::Object(item));
+    }
+}
+
+/// The commands the Chief relayed in a prompt block, as the owner's own words: a user item whose
+/// text is the stored instruction and that carries `chiefRelay`, so the web draws "From you, via
+/// <name>". Keyed on a stored proposal id, never on the message text alone.
+fn chief_relay_items(source: &Source, run: Run, out: &mut Vec<Value>) {
+    if source.chief_relays.is_empty() {
+        return;
+    }
+    for (at, end) in messages_in(source.rows, run.prompt, run.key) {
+        if source.rows[at].role != "mono-system" {
+            continue;
+        }
+        let text = joined(&source.rows[at..end]);
+        let Some(relay) = monocode_core::mono::chief::relay_proposal_id(&text)
+            .and_then(|id| source.chief_relays.get(id))
+        else {
+            continue;
+        };
+        let mut item = object(json!({
+            "type": "user",
+            "id": format!("r{at}"),
+            "text": relay["instruction"],
+            "chiefRelay": relay,
+        }));
+        put(&mut item, "at", source.rows[at].sent_at);
         out.push(Value::Object(item));
     }
 }
@@ -790,6 +842,7 @@ fn mono_turn(source: &Source, turn: &Turn, live: bool, name: &str) -> Value {
     for &run in &turn.runs {
         let before = items.len();
         user_items(rows, run, &mut items, &mut by_row);
+        chief_relay_items(source, run, &mut items);
         standalone &= items.len() == before;
         let run_live = live && run.end == rows.len();
         let internal = run.key > run.prompt && rows[run.key - 1].role == "mono-system";
@@ -1037,6 +1090,8 @@ mod tests {
             pending: &[],
             launches: Box::leak(Box::default()),
             emoji: None,
+            chief_relays: Box::leak(Box::default()),
+            chief: false,
         }
     }
     fn all(source: &Source) -> Vec<Value> {
@@ -1592,6 +1647,77 @@ mod tests {
         assert!(!types(&all(&live)[0]).contains(&"sessions"));
         mono.launches = Box::leak(Box::default());
         assert!(!types(&all(&mono)[0]).contains(&"sessions"));
+    }
+
+    #[test]
+    fn a_turn_lists_the_proposals_its_chief_propose_calls_returned() {
+        let mut call = ToolCall::new("call", "mcp__monocode_app__app");
+        call.input = json!({"action": "chief.propose", "input": {}}).to_string();
+        call.state = ToolState::Completed;
+        call.output = json!({"ok": true, "result": {"proposalId": "p_0000000a"}}).to_string();
+        let rows = [
+            row("user", "what is waiting?"),
+            row("tool", &serde_json::to_string(&call).unwrap()),
+            row("assistant", "Here is a command."),
+            row("user", "thanks"),
+            row("assistant", "Welcome."),
+        ];
+        let infos = HashMap::new();
+        let mut chief = source(&rows, &infos, false);
+        chief.mono = Some("Chief");
+        chief.chief = true;
+        let turns = all(&chief);
+        assert_eq!(turns[0]["chiefProposals"], json!(["p_0000000a"]));
+        assert!(turns[1].get("chiefProposals").is_none());
+        // Another conversation never draws a card, whatever its tool calls say.
+        let turns = all(&source(&rows, &infos, false));
+        assert!(turns[0].get("chiefProposals").is_none());
+    }
+
+    #[test]
+    fn a_relayed_chief_command_is_the_owners_user_item_with_the_stored_instruction() {
+        use monocode_core::mono::chief::{HEADER, command_text};
+        let mut proposal = monocode_core::mono::chief::Proposal::new(
+            1,
+            7,
+            "Fix it",
+            "repo",
+            None,
+            monocode_core::mono::chief::Route::Direct,
+            "edited by the owner",
+            monocode_core::mono::chief::Surface::Web,
+        )
+        .unwrap();
+        proposal.id = "p_00000001".into();
+        let relay = command_text(&proposal);
+        assert!(relay.starts_with(HEADER));
+        let rows = [
+            sent("mono-system", &relay, 1_000),
+            row("assistant", "On it."),
+        ];
+        let infos = HashMap::new();
+        let known = HashMap::from([(
+            "p_00000001".to_owned(),
+            json!({"proposalId": "p_00000001", "instruction": "edited by the owner", "chiefName": "Chief"}),
+        )]);
+        let mut mono = source(&rows, &infos, false);
+        mono.mono = Some("Ada");
+        mono.chief_relays = &known;
+        let turn = &all(&mono)[0];
+        let first = &turn["items"][0];
+        assert_eq!(first["type"], "user");
+        assert_eq!(first["text"], "edited by the owner");
+        assert_eq!(first["chiefRelay"]["chiefName"], "Chief");
+        assert_eq!(first["chiefRelay"]["proposalId"], "p_00000001");
+        // An id that is not a stored proposal shows nothing, whatever the text says.
+        mono.chief_relays = Box::leak(Box::default());
+        assert!(
+            all(&mono)[0]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item.get("chiefRelay").is_none())
+        );
     }
 
     #[test]

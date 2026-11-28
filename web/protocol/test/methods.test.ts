@@ -18,6 +18,20 @@ import {
 import { readText } from "./helpers.ts";
 
 const turn = { id: "t1", items: [{ type: "text", id: "a", text: "Hello" }], completedAt: 1 };
+const chiefProposal = {
+  id: "p_0000abcd",
+  createdAt: 1,
+  route: { type: "viaMono", monoId: "m1", monoName: "Ada" },
+  sessionNumber: 3,
+  sessionTitle: "Fix login",
+  project: "app",
+  branch: "main",
+  instruction: "Run the tests",
+  notes: ["sessionBusy"],
+  state: "awaitingOwner",
+  open: true,
+  kind: "command",
+};
 const session = {
   id: "s1",
   projectId: "p1",
@@ -143,6 +157,18 @@ const fixtures: Record<MethodName, { params: unknown; result: unknown }> = {
   "mono.emoji": { params: { monoId: "m1", hash: "a".repeat(64) }, result: { hash: "a".repeat(64), mime: "image/png", encoding: "base64", data: "AAAA" } },
   "mono.reset": { params: { monoId: "m1", ticket: "t1", deleteFiles: false }, result: null },
   "mono.delete": { params: { monoId: "m1" }, result: null },
+  "chief.profile": {
+    params: {},
+    result: { enabled: true, name: "Chief", mascot: "owl", color: "#aabbcc", status: "idle", openCount: 1, allowWebSend: false, notifyOnDelivery: true, harness: { id: "claude", ok: true, line: "Claude Code" } },
+  },
+  "chief.update": {
+    params: { name: "Boss", emoji: null, color: "aabbcc", model: null, notifyOnDelivery: false },
+    result: { enabled: true, name: "Boss", mascot: "owl", color: "#aabbcc", status: "idle", openCount: 1, allowWebSend: false, notifyOnDelivery: false, harness: { id: "claude", ok: true, line: "Claude Code" } },
+  },
+  "chief.proposals": { params: {}, result: { enabled: true, proposals: [chiefProposal], openCount: 1, allowWebSend: false } },
+  "chief.proposal.send": { params: { proposalId: "p_0000abcd", expectedInstruction: "Run the tests", instruction: "Run the tests" }, result: { proposal: chiefProposal } },
+  "chief.proposal.edit": { params: { proposalId: "p_0000abcd", instruction: "Run the tests" }, result: { proposal: chiefProposal } },
+  "chief.proposal.cancel": { params: { proposalId: "p_0000abcd" }, result: { proposal: chiefProposal } },
   "workspace.list": {
     params: {},
     result: {
@@ -153,6 +179,7 @@ const fixtures: Record<MethodName, { params: unknown; result: unknown }> = {
       monoTools: true,
       monoFiles: true,
       push: true,
+      chief: { enabled: true, name: "Chief", mascot: "owl", color: "#aabbcc", status: "needs-you", openCount: 1 },
     },
   },
   "sessions.list": { params: { projectId: "p1", offset: 0, limit: 30, query: "fix" }, result: { sessions: [session], hasMore: false } },
@@ -554,5 +581,29 @@ describe("mono.profile resetFiles", () => {
     expect(bad.success).toBe(true);
     expect(bad.success && bad.data.resetFiles).toBeUndefined();
     expect(bad.success && bad.data.id).toBe("m1");
+  });
+});
+
+describe("chief.update", () => {
+  const params = METHODS["chief.update"].params;
+  it("is a control method answered by the app", () => {
+    expect(METHODS["chief.update"]).toMatchObject({ class: "control", transport: "app" });
+    expect(METHOD_LIST.some((entry) => entry.name === "chief.update")).toBe(true);
+  });
+  it("accepts each allowed field, with null resetting emoji, model and effort", () => {
+    for (const ok of [{ name: " Boss " }, { mascot: "owl" }, { emoji: "x" }, { emoji: null }, { color: "#aabbcc" }, { color: "AABBCC" }, { model: null }, { effort: null }, { notifyOnDelivery: true }]) {
+      expect(params.safeParse(ok).success, JSON.stringify(ok)).toBe(true);
+    }
+  });
+  it("refuses every field that would widen the device's power, and any unknown key", () => {
+    for (const key of ["enabled", "harness", "account", "allowWebSend", "soul", "memory", "anything"]) {
+      expect(params.safeParse({ name: "Boss", [key]: key === "enabled" || key === "allowWebSend" ? true : "x" }).success, key).toBe(false);
+      expect(params.safeParse({ [key]: true }).success, `${key} alone`).toBe(false);
+    }
+  });
+  it("refuses an empty object, a blank or long name and a bad color", () => {
+    for (const bad of [{}, { name: "   " }, { name: "x".repeat(41) }, { color: "#abc" }, { color: "#gggggg" }, { notifyOnDelivery: "yes" }]) {
+      expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
   });
 });

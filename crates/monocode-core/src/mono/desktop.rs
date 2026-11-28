@@ -295,6 +295,30 @@ mod tests {
     }
 
     #[test]
+    fn the_desktop_merge_keeps_the_chief_and_its_proposals() {
+        let mut roster = Roster {
+            chief: Some(chief::Chief {
+                session_id: Some(4),
+                name: "Boss".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mono = Mono {
+            id: "m".into(),
+            ..Default::default()
+        };
+        roster.merge_desktop(vec![mono.clone()]).unwrap();
+        roster.merge_desktop(Vec::new()).unwrap();
+        let raw = serde_json::to_string(&roster).unwrap();
+        let mut roster: Roster = serde_json::from_str(&raw).unwrap();
+        roster.merge_desktop(vec![mono]).unwrap();
+        let chief = roster.chief.as_ref().unwrap();
+        assert_eq!(chief.session_id, Some(4));
+        assert_eq!(chief.name, "Boss");
+    }
+
+    #[test]
     fn source_updates_merge_with_native_edits_runtime_and_deletions_across_restarts() {
         let mut roster = Roster::default();
         let mut first = Mono {

@@ -104,7 +104,22 @@ impl Render for Overview {
             .flatten();
         let mut layers = Vec::new();
         self.native_content = false;
-        if let Some((mono, route)) = state {
+        let chief_open = self
+            .manager
+            .read_with(cx, |m, _| m.chief_active())
+            .unwrap_or(false);
+        if chief_open {
+            // The Chief has no Mono panels: its own details, with the link to its settings.
+            let _ = self.manager.update(cx, |m, cx| {
+                let body = m.chief_details(cx);
+                layers.push(layer(
+                    "chief-detail-base".into(),
+                    Pose { x: 0., opacity: 1. },
+                    true,
+                    body,
+                ));
+            });
+        } else if let Some((mono, route)) = state {
             let changed = self.stack.sync(&mono.id, route, now, cx.reduce_motion());
             if changed && self.focus.contains_focused(window, cx) {
                 window.focus(&self.focus, cx);

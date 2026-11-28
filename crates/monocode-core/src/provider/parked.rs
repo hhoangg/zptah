@@ -647,6 +647,7 @@ mod tests {
             root: PathBuf::from("/desktop/monos"),
             executable: PathBuf::from("monocode"),
             browser_database: None,
+            role: Default::default(),
         });
         let first = key(&request);
         assert_ne!(regular, first);

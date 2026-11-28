@@ -328,7 +328,13 @@ describe("workspace drawer (F-12)", () => {
 
   it("still offers New Mono in the Monos heading when there are no Monos yet", async () => {
     const user = userEvent.setup();
-    mount("", { seed: (desktop) => void ((desktop.world.monos() as unknown as unknown[]).length = 0) });
+    mount("", {
+      seed: (desktop) => {
+        (desktop.world.monos() as unknown as unknown[]).length = 0;
+        // The pinned Chief row is a link of its own; this test is about the Monos.
+        desktop.world.chief.enabled = false;
+      },
+    });
     const nav = await openDrawer(user);
     await within(nav).findByText("Example Alpha");
     const monos = await within(nav).findByRole("region", { name: "Monos" });

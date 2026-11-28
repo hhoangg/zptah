@@ -188,6 +188,7 @@ impl Shell {
             for change in widened {
                 let tag: String = change.device_id.chars().take(16).collect();
                 let _ = platform::show(platform::Notification {
+                    title: None,
                     tag: format!("web-access-{tag}-{}", change.at),
                     subtitle: "Web app".into(),
                     body: access_change_body(&change),
@@ -202,6 +203,7 @@ impl Shell {
             let tag: String = fingerprint.chars().take(16).collect();
             // The receiver is dropped: delivery is best effort.
             let _ = platform::show(platform::Notification {
+                title: None,
                 tag: format!("web-pending-{tag}"),
                 subtitle: "Web app".into(),
                 body: format!("Web app: {name} asks for access"),

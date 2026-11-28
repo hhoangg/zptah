@@ -72,6 +72,10 @@ pub struct State {
     pub messages: Vec<Message>,
     pub paused: bool,
     pub draft: Option<Message>,
+    /// The ids of recent queued messages the provider accepted, newest last. The Chief reads
+    /// it to tell a delivered command from one the owner removed from the queue, also after a
+    /// restart.
+    pub delivered: Vec<String>,
 }
 
 impl State {
@@ -247,6 +251,25 @@ mod tests {
             .unwrap();
         assert!(store.follow_ups(session.id).unwrap().messages.is_empty());
         assert!(store.follow_ups(session.id).unwrap().draft.is_some());
+    }
+
+    #[test]
+    fn the_ids_of_delivered_messages_are_saved_with_the_queue() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let session = store.create("codex", "/tmp").unwrap();
+        let state = State {
+            revision: 1,
+            delivered: vec!["a".into(), "b".into()],
+            ..Default::default()
+        };
+        store.save_follow_ups(session.id, &state).unwrap();
+        assert_eq!(
+            store.follow_ups(session.id).unwrap().delivered,
+            vec!["a".to_owned(), "b".to_owned()]
+        );
+        // A queue saved before the field existed still loads.
+        let old: State = serde_json::from_str(r#"{"revision":3,"messages":[]}"#).unwrap();
+        assert!(old.delivered.is_empty());
     }
 
     #[test]

@@ -394,6 +394,7 @@ export function Transcript({
                   >
                     <div className="pb-1">
                       <TranscriptTurn turn={row.turn} {...(agent ? { agent } : {})} />
+                      {hostActions.renderTurnExtra?.(row.turn)}
                       {row.optimistic ? <SendStatus turn={row.optimistic} onRetry={onRetry} /> : null}
                     </div>
                   </div>

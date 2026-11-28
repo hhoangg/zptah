@@ -9,6 +9,8 @@ use super::delivery::{Permission, Target};
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub struct Notification {
     pub tag: String,
+    /// Replaces the app name as the title.
+    pub title: Option<String>,
     pub subtitle: String,
     pub body: String,
     pub sound: bool,

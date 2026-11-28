@@ -1,5 +1,6 @@
 pub(crate) mod attachments;
 pub(crate) mod burst;
+pub(crate) mod chief_card;
 pub(crate) mod cloud_moved;
 pub(crate) mod cloud_start;
 pub(crate) mod dates;
@@ -32,6 +33,9 @@ pub(crate) mod tasks;
 mod tools;
 mod user_links;
 mod visuals;
+pub(crate) use chief_card::{
+    ChiefCard, ChiefCardAction, ChiefCards, ChiefClick, Tone as ChiefTone,
+};
 #[cfg(test)]
 pub(crate) use visuals::placements;
 
@@ -179,6 +183,10 @@ enum Body {
     Pending(usize),
     /// LaunchedSessionCard for a session the run started.
     Launch(i64),
+    /// The card of a proposal the Chief made in this turn, by proposal id.
+    ChiefProposal(String),
+    /// A command the Chief relayed to this Mono, by proposal id.
+    ChiefRelay(String),
     /// A commit pill turn's status line, then its card.
     GitAction(Arc<git_turns::GitCard>),
     Tool {
@@ -780,6 +788,10 @@ pub(crate) struct TranscriptView {
     taken: Vec<TakenMessage>,
     pending_entrances: HashMap<String, Instant>,
     launches: HashMap<i64, LaunchView>,
+    /// The Chief's proposals, for its cards and for the relay label in a Mono's chat.
+    chief: ChiefCards,
+    /// The cards whose "Sent text" the owner opened.
+    chief_sent_open: HashSet<String>,
     /// A clock for the tool and task shimmers.
     started_at: Instant,
     /// One clock per frame for row motion. The list measures rows and the
@@ -2152,7 +2164,12 @@ impl TranscriptView {
             .into_any_element()
     }
     fn mono_card_spacing(&self, ix: usize) -> (f32, f32) {
-        let is_card = |row: &UiRow| matches!(row.body, Body::Launch(_) | Body::MonoCard(_));
+        let is_card = |row: &UiRow| {
+            matches!(
+                row.body,
+                Body::Launch(_) | Body::MonoCard(_) | Body::ChiefProposal(_)
+            )
+        };
         let top = if ix > 0 && is_card(&self.rows[ix - 1]) {
             0.
         } else {
@@ -2752,6 +2769,8 @@ impl TranscriptView {
             taken: Vec::new(),
             pending_entrances: HashMap::new(),
             launches: HashMap::new(),
+            chief: ChiefCards::default(),
+            chief_sent_open: HashSet::new(),
             started_at: Instant::now(),
             frame_now: Instant::now(),
             measurements: Default::default(),
@@ -4102,6 +4121,24 @@ impl TranscriptView {
                         parse_user_message_link(text).map(|link| (chunk, Arc::new(link)))
                     });
                 }
+                // A command the Chief relayed: shown as the owner's words, keyed on a stored
+                // proposal id, never on the text alone.
+                if role == "mono-system"
+                    && self.mono
+                    && let Some(id) = monocode_core::mono::chief::relay_proposal_id(&text)
+                    && self.chief.cards.contains_key(id)
+                {
+                    self.rows.push(UiRow {
+                        key: (0, 0),
+                        body: Body::ChiefRelay(id.to_owned()),
+                        message,
+                        first: false,
+                        last: false,
+                        work: false,
+                        work_tail: false,
+                        thought_phase: None,
+                    });
+                }
                 // `line-clamp-4`: a collapsed message shows its first lines only.
                 // A message with a link preview is never clamped, as in React.
                 let clamped = role == "user"
@@ -4246,6 +4283,21 @@ impl TranscriptView {
                             thought_phase: None,
                         });
                     }
+                    let known = chief_card::run_proposals(&self.source, turn, turn_end, |id| {
+                        self.chief.cards.contains_key(id)
+                    });
+                    for (k, id) in known.into_iter().enumerate() {
+                        self.rows.push(UiRow {
+                            key: (at, usize::MAX - 32 + k.min(30)),
+                            body: Body::ChiefProposal(id),
+                            message,
+                            first: false,
+                            last: false,
+                            work: false,
+                            work_tail: false,
+                            thought_phase: None,
+                        });
+                    }
                 }
             }
             if !self.document
@@ -4276,6 +4328,7 @@ impl TranscriptView {
             }
             at = end;
         }
+        self.push_unplaced_chief_cards();
         self.prepared_parsers.clear();
         if self.mono && !self.rows.iter().any(|r| matches!(r.body, Body::Pending(_))) {
             self.push_pending(self.source.len());
@@ -4609,6 +4662,8 @@ impl TranscriptView {
                     | Body::MonoDivider
                     | Body::Pending(_)
                     | Body::Launch(_)
+                    | Body::ChiefProposal(_)
+                    | Body::ChiefRelay(_)
                     | Body::SavedDraft
                     | Body::CloudStart
                     | Body::CloudQueued
@@ -5077,6 +5132,14 @@ impl TranscriptView {
             Body::CloudMoved => return self.cloud_moved_row(),
             Body::Pending(i) => return self.pending_row(i, cx),
             Body::Launch(id) => return self.launch_row(ix, id, cx),
+            Body::ChiefProposal(ref id) => {
+                let id = id.clone();
+                return self.chief_card_row(ix, &id, cx);
+            }
+            Body::ChiefRelay(ref id) => {
+                let id = id.clone();
+                return self.chief_relay_row(ix, &id);
+            }
             _ => {}
         }
         let group = self.motions.get(&self.rows[ix].key).and_then(|m| m.group);
@@ -5320,6 +5383,8 @@ impl TranscriptView {
             Body::MonoDivider => mono_divider::render(),
             Body::Pending(_)
             | Body::Launch(_)
+            | Body::ChiefProposal(_)
+            | Body::ChiefRelay(_)
             | Body::SavedDraft
             | Body::CloudStart
             | Body::CloudQueued

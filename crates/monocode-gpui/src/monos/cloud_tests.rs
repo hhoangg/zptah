@@ -1317,6 +1317,7 @@ fn a_cloud_sub_agent_row_shows_the_cloud_badge_and_a_local_one_does_not(cx: &mut
                 dismissed: false,
                 each: false,
                 visible: false,
+                origin: None,
             });
         }
     });

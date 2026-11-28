@@ -274,6 +274,7 @@ impl Monos {
         if self.reset.as_ref().is_some_and(|d| d.mono == id && !d.busy) {
             self.reset = None;
         }
+        self.chief_mono_lost(id, false, "The Mono was deleted", cx);
         self.roster.monos.retain(|m| m.id != id);
         self.browser_forget(id);
         if self.active.as_deref() == Some(id) {

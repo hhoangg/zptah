@@ -90,6 +90,13 @@ impl State {
     }
 }
 
+/// The Chief notices posted in a test (name, body); the platform banner cannot be observed.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct ChiefNotices(pub Vec<(String, String)>);
+#[cfg(test)]
+impl gpui::Global for ChiefNotices {}
+
 impl Shell {
     pub(super) fn app_update_footer(&self, cx: &App) -> AnyElement {
         let state = &self.notification_state;
@@ -619,8 +626,49 @@ impl Shell {
             summary,
             category,
             Target::Session(summary.id),
+            None,
             body,
             cue,
+            cx,
+        );
+    }
+
+    /// The notice for a command the Chief proposed that reached its session: the Chief's name as
+    /// the title, `body` as the text. It follows the project's mute rules like a Mono's message
+    /// and reaches the web devices that see the whole workspace (never a narrowed one, which
+    /// never sees the Chief). Phones are not told: the phone app has no Chief.
+    pub(crate) fn deliver_chief_notice(
+        &mut self,
+        session: i64,
+        chief_name: &str,
+        body: &str,
+        cx: &mut Context<Self>,
+    ) {
+        const CATEGORY: &str = "monoMessages";
+        let Some(summary) = self.session_summaries.get(&session).cloned() else {
+            return;
+        };
+        let now = monocode_core::time::now_ms();
+        if !self.workspace.preferences.allows_project_notification(
+            &summary.cwd,
+            CATEGORY,
+            Some(now),
+            now,
+        ) {
+            return;
+        }
+        #[cfg(test)]
+        cx.default_global::<ChiefNotices>()
+            .0
+            .push((chief_name.to_owned(), body.to_owned()));
+        self.notify_chief_web(&summary, chief_name, body, CATEGORY, cx);
+        self.dispatch_notice(
+            &summary,
+            CATEGORY,
+            Target::Session(session),
+            Some(chief_name),
+            body,
+            None,
             cx,
         );
     }
@@ -634,6 +682,7 @@ impl Shell {
                     session_id: id,
                     due_at,
                 },
+                None,
                 &summary.title,
                 None,
                 cx,
@@ -641,11 +690,13 @@ impl Shell {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn dispatch_notice(
         &mut self,
         summary: &Session,
         category: &str,
         target: Target,
+        heading: Option<&str>,
         body: &str,
         cue: Option<crate::sound::Cue>,
         cx: &mut Context<Self>,
@@ -682,7 +733,10 @@ impl Shell {
         };
         let receiver = platform::show(platform::Notification {
             tag: target.tag(self.notification_state.sequence),
-            subtitle: if category == "reminders" {
+            title: heading.map(str::to_owned),
+            subtitle: if heading.is_some() {
+                String::new()
+            } else if category == "reminders" {
                 "Session reminder".into()
             } else {
                 summary.title.clone()
