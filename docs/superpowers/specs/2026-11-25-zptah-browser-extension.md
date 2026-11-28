@@ -1017,7 +1017,7 @@ How signals become categories:
   that task does not ask again. In `browser_tabs list all:true`, tabs on sensitive sites show only
   the domain, not the title, until such an approval (titles like "Balance: 52,000,000 ₫" are
   content).
-- **Task domains**: registrable domains the user named in the task messages, domains of tabs the
+- **Task domains**: registrable domains the user named in the task messages (a typed `name.tld`, or the bare name of a site: at least 3 characters, under a common or country TLD, not shared hosting, and bound to the first such site opened, so `vnexpress` names `vnexpress.net` and then not `vnexpress.ru`), domains of tabs the
   user referenced or dragged into the Mono's group, the Mono's `allowed_origins`, and domains the
   user approved in this task.
 - **Unrelated-domain rule**:

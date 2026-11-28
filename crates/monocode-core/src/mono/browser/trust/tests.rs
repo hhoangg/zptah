@@ -179,6 +179,238 @@ fn decision_table() {
     ));
 }
 
+fn navigation_decision(s: &mut TrustState, url: &str) -> Decision {
+    let args = json!({});
+    let mut nav = Action::new("browser_navigate", &args, "about:blank");
+    nav.target_url = Some(url);
+    s.evaluate(&act(), &nav).decision
+}
+
+fn asks_unrelated(d: &Decision) -> bool {
+    matches!(d, Decision::Ask(c) if c.contains(&Category::UnrelatedDomain))
+}
+
+#[test]
+fn a_site_the_user_named_by_its_bare_name_is_a_task_domain() {
+    let mut s = state();
+    s.begin_run("dùng ardia mở vnexpress check thông tin mới");
+    assert_eq!(
+        navigation_decision(&mut s, "https://vnexpress.net/tin-moi-nhat"),
+        Decision::Allow
+    );
+    assert_eq!(
+        navigation_decision(&mut s, "https://www.vnexpress.net/"),
+        Decision::Allow
+    );
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://evil-example.net/"
+    )));
+    // A longer host that merely contains the word is another site.
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://vnexpress-news.net/"
+    )));
+}
+
+#[test]
+fn a_bare_name_matches_a_registrable_domain_with_a_two_label_suffix() {
+    let mut s = state();
+    s.begin_run("Read the BBC news");
+    assert_eq!(
+        navigation_decision(&mut s, "https://www.bbc.co.uk/news"),
+        Decision::Allow
+    );
+}
+
+#[test]
+fn a_word_shorter_than_three_characters_does_not_name_a_site() {
+    let mut s = state();
+    s.begin_run("mở x");
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://x.com/"
+    )));
+    s.note_user_message("mở x.com");
+    assert_eq!(
+        navigation_decision(&mut s, "https://x.com/"),
+        Decision::Allow
+    );
+}
+
+#[test]
+fn a_word_read_from_a_page_does_not_name_a_site() {
+    let mut s = state();
+    s.begin_run("look around");
+    s.note_read("https://blog.example/", "visit vnexpress today");
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://vnexpress.net/"
+    )));
+}
+
+#[test]
+fn ending_the_conversation_forgets_the_bare_names() {
+    let mut s = state();
+    s.begin_run("mở vnexpress");
+    assert_eq!(
+        navigation_decision(&mut s, "https://vnexpress.net/"),
+        Decision::Allow
+    );
+    s.end_conversation();
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://vnexpress.net/"
+    )));
+}
+
+#[test]
+fn a_bare_name_does_not_hide_data_read_in_the_url() {
+    let mut s = state();
+    s.begin_run("mở vnexpress");
+    s.note_read("https://blog.example/", "secret-token-9f8e7d6c5b");
+    let d = navigation_decision(&mut s, "https://vnexpress.net/?q=secret-token-9f8e7d6c5b");
+    assert!(
+        matches!(&d, Decision::Ask(c) if c.contains(&Category::Tainted)),
+        "{d:?}"
+    );
+}
+
+#[test]
+fn a_typed_domain_does_not_make_its_tld_a_site_name() {
+    let mut s = state();
+    s.begin_run("open github.com");
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://evil.com.mx/"
+    )));
+}
+
+#[test]
+fn shared_hosting_and_uncommon_suffixes_are_not_named_by_a_bare_word() {
+    let mut s = state();
+    s.begin_run("search the web for x, and blogspot too");
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://x.web.app/"
+    )));
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://foo.blogspot.com/"
+    )));
+}
+
+#[test]
+fn a_non_ascii_word_does_not_leave_an_ascii_piece_that_names_a_site() {
+    let mut s = state();
+    s.begin_run("chuyển khoản cho tôi");
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://kho.vn/"
+    )));
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://chuy.vn/"
+    )));
+}
+
+#[test]
+fn a_two_character_word_does_not_name_a_site() {
+    let mut s = state();
+    s.begin_run("mở vn");
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://vn.com/"
+    )));
+}
+
+#[test]
+fn a_bare_name_binds_to_the_first_site_followed() {
+    let mut s = state();
+    s.begin_run("mở vnexpress");
+    assert_eq!(
+        navigation_decision(&mut s, "https://vnexpress.net/a"),
+        Decision::Allow
+    );
+    s.note_navigated("https://vnexpress.net/a", "https://vnexpress.net/a");
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://vnexpress.ru/"
+    )));
+    // A write on the bound site does not ask as an unrelated domain.
+    let args = json!({});
+    let write = click(&args, "https://vnexpress.net/a", "Subscribe to newsletter");
+    assert!(!s
+        .evaluate(&act(), &write)
+        .categories
+        .contains(&Category::UnrelatedDomain));
+}
+
+#[test]
+fn a_followed_link_never_binds_a_bare_name() {
+    let mut s = state();
+    s.begin_run("mở vnexpress");
+    s.note_link_followed("https://vnexpress.co/x");
+    let args = json!({});
+    let write = click(&args, "https://vnexpress.co/x", "Subscribe to newsletter");
+    assert!(s
+        .evaluate(&act(), &write)
+        .categories
+        .contains(&Category::UnrelatedDomain));
+    assert_eq!(
+        navigation_decision(&mut s, "https://vnexpress.net/"),
+        Decision::Allow
+    );
+}
+
+#[test]
+fn a_redirect_to_a_lookalike_does_not_bind_a_bare_name() {
+    let mut s = state();
+    s.begin_run("mở vnexpress");
+    s.note_navigated(
+        "https://www.google.com/url?q=https://vnexpress.co/",
+        "https://vnexpress.co/",
+    );
+    let args = json!({});
+    let write = click(&args, "https://vnexpress.co/", "Subscribe to newsletter");
+    assert!(s
+        .evaluate(&act(), &write)
+        .categories
+        .contains(&Category::UnrelatedDomain));
+    assert_eq!(
+        navigation_decision(&mut s, "https://vnexpress.net/"),
+        Decision::Allow
+    );
+}
+
+#[test]
+fn under_a_country_code_only_the_bare_domain_and_www_count() {
+    let mut s = state();
+    s.begin_run("đọc blog này, và vnexpress");
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://evil.blog.br/"
+    )));
+    assert_eq!(
+        navigation_decision(&mut s, "https://www.vnexpress.vn/"),
+        Decision::Allow
+    );
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://x.vnexpress.vn/"
+    )));
+}
+
+#[test]
+fn a_listed_shared_hosting_domain_is_not_named_by_a_bare_word() {
+    let mut s = state();
+    s.begin_run("start ngrok");
+    assert!(asks_unrelated(&navigation_decision(
+        &mut s,
+        "https://abc.ngrok.io/"
+    )));
+}
+
 #[test]
 fn purpose_and_declared_risk_cannot_downgrade() {
     let s = state();
