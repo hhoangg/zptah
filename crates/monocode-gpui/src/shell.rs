@@ -3,7 +3,6 @@ mod actions;
 mod app_commands;
 mod app_views;
 mod archive_family;
-mod automation_runs;
 mod classic_sidebar;
 #[cfg(test)]
 mod classic_surface_tests;
@@ -900,7 +899,6 @@ pub(crate) struct Shell {
     note_count: Option<usize>,
     inbox: Option<Entity<crate::inbox::Inbox>>,
     today: Option<Entity<crate::today::Today>>,
-    automations: Option<Entity<crate::automations::Automations>>,
     workflows_page: Option<Entity<crate::monos::WorkflowsPage>>,
     /// The sessions a workflow started (the zap badge); see `session_zap`.
     workflow_sessions: HashSet<i64>,
@@ -915,7 +913,6 @@ pub(crate) struct Shell {
     /// The app data folder, `None` for an in-memory store.
     data_dir: Option<std::path::PathBuf>,
     app_view_events: Vec<Subscription>,
-    automation_state: automation_runs::State,
     workflow_events: workflow_events::State,
     settings: Option<Entity<crate::settings::SettingsView>>,
     settings_events: Option<Subscription>,
@@ -1191,7 +1188,6 @@ impl Shell {
                 if this
                     .update(cx, |this, cx| {
                         this.poll_reminders(cx);
-                        this.poll_automations(cx);
                         this.update_chat_visibility(cx);
                         if this.workspace.sidebar_visible {
                             this.notify_sidebar(cx);
@@ -1411,7 +1407,6 @@ impl Shell {
             note_count: None,
             inbox: None,
             today: None,
-            automations: None,
             workflows_page: None,
             workflow_sessions: HashSet::new(),
             contributors: None,
@@ -1422,7 +1417,6 @@ impl Shell {
             active_app_view: None,
             data_dir,
             app_view_events: Vec::new(),
-            automation_state: Default::default(),
             workflow_events: Default::default(),
             settings: None,
             settings_events: None,
@@ -1726,7 +1720,7 @@ impl Shell {
         this.update_usage_provider(cx);
         this.apply_preferences(cx);
         this.poll_reminders(cx);
-        this.initialize_automations(cx);
+        this.start_background_apps(cx);
         this.watch_workflow_event_inbox(cx);
         this.init_contributors(cx);
         if this.workspace.active.is_none() {
@@ -1986,7 +1980,6 @@ impl Shell {
                 }
                 this.sync_search_session(id, cx);
                 this.orchestration_session_changed(id, cx);
-                this.automation_session_changed(id, cx);
                 this.sync_review_locks(cx);
                 this.refresh_session_mark(id, cx);
                 this.notification_session_changed(id, cx);

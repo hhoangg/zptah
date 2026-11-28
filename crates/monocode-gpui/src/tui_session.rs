@@ -80,7 +80,7 @@ pub(crate) enum TuiEvent {
     /// The session's saved conversation id changed.
     Conversation(Option<String>),
     /// The CLI ran for a while and exited cleanly: the pane has nothing left to
-    /// show. Always follows `Exited`, so an automation run settles first.
+    /// show. Always follows `Exited`, so a workflow run settles first.
     Close,
 }
 

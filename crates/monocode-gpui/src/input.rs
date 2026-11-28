@@ -456,28 +456,6 @@ impl Input {
         input.max_height = 160.;
         input
     }
-    /// AutomationEditor uses a proportional, naturally growing prompt field.
-    pub(crate) fn automation_instructions(cx: &mut Context<Self>) -> Self {
-        let mut input = Self::commit_message(cx);
-        input.label = "Instructions".into();
-        input.placeholder = "Tell the agent what to do when this automation runs…".into();
-        input.font_size = 14.;
-        input.line_height = 22.;
-        input.height = 88.;
-        input.min_height = 88.;
-        input.max_height = f32::MAX;
-        input.reveal_in_parent = true;
-        input
-    }
-    pub(crate) fn automation_name(cx: &mut Context<Self>) -> Self {
-        let mut input = Self::search(cx);
-        input.label = "Automation name".into();
-        input.placeholder = "Untitled".into();
-        input.font_size = 20.;
-        input.line_height = 25.;
-        input.height = 25.;
-        input
-    }
     /// The session composer: one line tall until the text grows.
     pub fn session_composer(cx: &mut Context<Self>) -> Self {
         let mut input = Self::new(cx);
@@ -801,7 +779,7 @@ impl Input {
             self.select_range(at..at, cx);
         }
     }
-    /// Scroll the surrounding page to the caret when it moves, as the automation instructions do.
+    /// Scroll the surrounding page to the caret when it moves, as a long prompt field does.
     pub(crate) fn set_reveal_in_parent(&mut self, value: bool) {
         self.reveal_in_parent = value;
     }

@@ -2846,7 +2846,7 @@ impl Shell {
             }
             settings.model_settings.extend(chosen_settings);
             settings.worktree_cwd = worktree;
-            // A new worktree off HEAD is made on the first send, as automations do.
+            // A new worktree off HEAD is made on the first send, as workflows do.
             settings.new_worktree = params["workspaceMode"] == "worktree";
             store.save_agent_settings(summary.id, &settings)?;
             Ok::<_, Failure>((summary, settings, attachments))

@@ -1,5 +1,5 @@
-//! ClickUp spaces for a trigger filter: the picker rows and the lookup. Shared by the
-//! Workflows event inspector and the Automations editor.
+//! ClickUp spaces for a trigger filter: the picker rows and the lookup. Used by the
+//! Workflows event inspector.
 use crate::runtime::{Database, locked};
 
 /// Picker rows for a ClickUp trigger. The trigger stores the space id so a

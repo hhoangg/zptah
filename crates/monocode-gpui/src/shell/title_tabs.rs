@@ -192,7 +192,6 @@ impl Shell {
                 app_views::AppView::Today => self.open_today(window, cx),
                 app_views::AppView::Inbox => self.open_inbox(window, cx),
                 app_views::AppView::Notes => self.open_notes(window, cx),
-                app_views::AppView::Automations => self.open_automations(window, cx),
                 app_views::AppView::Workflows => self.open_workflows(window, cx),
                 app_views::AppView::Contributors => self.open_contributors(None, None, window, cx),
             },

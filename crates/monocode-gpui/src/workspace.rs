@@ -11,7 +11,9 @@ pub(crate) enum AppView {
     Today,
     Inbox,
     Notes,
-    Automations,
+    /// `Automations` is the name this view had before Workflows replaced it; saved workspaces
+    /// that still hold it open Workflows.
+    #[serde(alias = "Automations")]
     Workflows,
     Contributors,
 }
@@ -21,7 +23,6 @@ impl AppView {
             Self::Today => "Today",
             Self::Inbox => "Inbox",
             Self::Notes => "Notes",
-            Self::Automations => "Automations",
             Self::Workflows => "Workflows",
             Self::Contributors => "Contributors",
         }
@@ -31,7 +32,6 @@ impl AppView {
             Self::Today => "clock",
             Self::Inbox => "inbox",
             Self::Notes => "note",
-            Self::Automations => "refresh-cw",
             Self::Workflows => "zap",
             Self::Contributors => "chart-square",
         }
@@ -107,7 +107,9 @@ pub(crate) struct Workspace {
     /// The Search field heading the sidebar; ⌘K opens search either way.
     pub sidebar_search_visible: bool,
     pub sidebar_notes_visible: bool,
-    pub sidebar_automations_visible: bool,
+    /// Saved as `sidebar_automations_visible` before Workflows replaced Automations.
+    #[serde(alias = "sidebar_automations_visible")]
+    pub sidebar_workflows_visible: bool,
     pub sidebar_contributors_visible: bool,
     pub sidebar_today_visible: bool,
     pub sidebar_inbox_visible: bool,
@@ -467,7 +469,7 @@ impl Default for Workspace {
             compact_session_cards: true,
             sidebar_search_visible: true,
             sidebar_notes_visible: true,
-            sidebar_automations_visible: true,
+            sidebar_workflows_visible: true,
             sidebar_contributors_visible: true,
             sidebar_today_visible: true,
             sidebar_inbox_visible: true,
@@ -1818,6 +1820,48 @@ mod tests {
         assert!(fresh.new_layout_boxy);
         let rounded = Workspace::restore(Some(r#"{"new_layout_boxy":false}"#), &sessions, "/a");
         assert!(!rounded.new_layout_boxy);
+    }
+    #[test]
+    fn a_workspace_saved_with_automations_restores_with_workflows_and_keeps_everything_else() {
+        let saved = json!({
+            "project": "/a",
+            "projects": ["/a", "/b"],
+            "tabs": [1],
+            "active": 1,
+            "title_order": [
+                {"Session": 1},
+                {"App": "Automations"},
+                {"App": "Workflows"},
+            ],
+            "pinned_tabs": [{"App": "Automations"}, {"App": "Workflows"}],
+            "scope_focus": {"/a": {"App": "Automations"}, "/b": {"App": "Workflows"}},
+            "sidebar_automations_visible": false,
+            "sidebar_today_visible": false,
+        })
+        .to_string();
+        let sessions = vec![(1, "/a".to_string())];
+        let restored = Workspace::restore(Some(&saved), &sessions, "/a");
+        // Nothing fell back to the defaults.
+        assert_eq!(restored.projects, ["/a", "/b"]);
+        assert_eq!(restored.project, "/a");
+        assert_eq!(restored.tabs, [1]);
+        assert_eq!(restored.active, Some(1));
+        assert!(!restored.sidebar_today_visible);
+        // The old flag survives under the new name.
+        assert!(!restored.sidebar_workflows_visible);
+        // Both entries became one tab, pinned once.
+        let workflows = TitleTab::App(AppView::Workflows);
+        assert_eq!(
+            restored.title_order,
+            vec![TitleTab::Session(1), workflows.clone()]
+        );
+        assert_eq!(restored.pinned_tabs, vec![workflows.clone()]);
+        assert_eq!(restored.scope_focus["/a"], workflows);
+        assert_eq!(restored.scope_focus["/b"], workflows);
+        // Saving writes only the new key.
+        let written = serde_json::to_value(&restored).unwrap();
+        assert_eq!(written["sidebar_workflows_visible"], json!(false));
+        assert!(written.get("sidebar_automations_visible").is_none());
     }
     #[test]
     fn restoring_history_keeps_only_remembered_or_selected_projects() {

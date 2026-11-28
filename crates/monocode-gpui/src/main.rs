@@ -11,7 +11,6 @@ mod app_menu;
 mod arcade;
 mod assets;
 mod attachment_tray;
-mod automations;
 mod changes;
 mod cli_auth;
 mod cloud_actions;

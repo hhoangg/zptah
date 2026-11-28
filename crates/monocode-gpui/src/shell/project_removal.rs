@@ -1795,44 +1795,6 @@ mod tests {
     }
 
     #[gpui::test]
-    fn an_automation_run_refiles_into_a_folder_removed_since_it_started(cx: &mut TestAppContext) {
-        let (window, _, _, _) = setup(cx);
-        window
-            .update(cx, |shell, _, cx| {
-                let (one, run) = (history_row(shell), history_row(shell));
-                put_folders(shell, &[("f", &[one])]);
-                let automation: monocode_core::automations::Automation =
-                    serde_json::from_value(serde_json::json!({
-                        "id": "a", "name": "n", "prompt": "p", "harness": "codex",
-                        "model": "", "cwd": PROJECT, "workspaceMode": "current",
-                        "sessionFolderId": "f", "reuseSession": false,
-                        "runtimeMode": "auto", "scheduleKind": "daily", "minute": 0,
-                        "time": "09:00", "dayOfWeek": 0, "missedRunGraceMinutes": 0,
-                        "enabled": true, "nextRunAt": 0, "createdAt": 0, "updatedAt": 0,
-                    }))
-                    .unwrap();
-                let snapshot = shell.groups[PROJECT].folder("f").cloned();
-                shell
-                    .groups
-                    .get_mut(PROJECT)
-                    .unwrap()
-                    .remove_deleted_session(one);
-                assert!(shell.groups[PROJECT].folder("f").is_none());
-                shell.place_automation_session(run, &automation, snapshot.as_ref(), cx);
-                assert_eq!(members(shell, "f"), [run]);
-                // A folder already gone when the run started stays gone.
-                shell
-                    .groups
-                    .get_mut(PROJECT)
-                    .unwrap()
-                    .remove_deleted_session(run);
-                shell.place_automation_session(run, &automation, None, cx);
-                assert!(shell.groups[PROJECT].folder("f").is_none());
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
     fn a_delete_reports_removed_nothing_or_failed_on_its_channel(cx: &mut TestAppContext) {
         let (window, a, _, _) = setup(cx);
         let (tx, rx) = async_channel::bounded(1);

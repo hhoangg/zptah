@@ -54,13 +54,13 @@ fn the_sidebar_entry_opens_the_workflows_page_in_every_layout(cx: &mut TestAppCo
         assert!(visual.debug_bounds("workflows-view").is_some(), "{name}");
         assert_eq!(app_views::AppView::Workflows.label(), "Workflows");
         assert_eq!(app_views::AppView::Workflows.icon(), "zap");
-        // Automations stays where it was, with its own icon.
-        assert_eq!(app_views::AppView::Automations.icon(), "refresh-cw");
     }
 }
 
 #[gpui::test]
-fn the_workflows_entry_has_no_visibility_toggle_of_its_own(cx: &mut TestAppContext) {
+fn the_workflows_entry_has_a_visibility_toggle_and_no_automations_entry_remains(
+    cx: &mut TestAppContext,
+) {
     let (window, _) = setup(cx, false, true);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     window
@@ -74,11 +74,11 @@ fn the_workflows_entry_has_no_visibility_toggle_of_its_own(cx: &mut TestAppConte
                 })
                 .collect();
             assert!(
-                !labels.iter().any(|label| label == "Workflows"),
+                labels.iter().any(|label| label == "Workflows"),
                 "{labels:?}"
             );
             assert!(
-                labels.iter().any(|label| label == "Automations"),
+                !labels.iter().any(|label| label == "Automations"),
                 "{labels:?}"
             );
         })
@@ -111,20 +111,6 @@ fn a_session_a_workflow_started_gets_the_zap_badge(cx: &mut TestAppContext) {
     assert!(
         window
             .read_with(visual, |s, _| s.session_zap(session))
-            .unwrap()
-    );
-    // An automation's session still counts.
-    window
-        .update(visual, |shell, _, _| {
-            shell
-                .automation_state
-                .session_automations
-                .insert(session + 1000, "automation".into());
-        })
-        .unwrap();
-    assert!(
-        window
-            .read_with(visual, |s, _| s.session_zap(session + 1000))
             .unwrap()
     );
 }

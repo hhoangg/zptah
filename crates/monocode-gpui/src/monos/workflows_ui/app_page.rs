@@ -1,4 +1,4 @@
-//! The global Workflows page: a view of the app (like Today or Automations) that hosts the
+//! The global Workflows page: a view of the app (like Today or Inbox) that hosts the
 //! workflow pages of `Monos`. It owns nothing but its focus and what the shell tells it about the
 //! app; the state and the pages are in `WorkflowsUi` and the sibling files, so no Mono is needed
 //! to show them.
