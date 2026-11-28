@@ -82,13 +82,24 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 impl Store {
-    /// Exports and drops the retired automation tables of the brand database. Never fails the
+    /// Exports and drops the retired automation tables of the brand database, and clears their
+    /// settings on every writable open. Never fails the
     /// open: a problem is logged and leaves every table in place for the next open.
     pub(super) fn drop_automation_data(&self, shared: bool) {
         let path = self.database_path();
         let is_brand_db =
             path.file_name().and_then(|name| name.to_str()) == Some(crate::brand::DATABASE_FILE);
-        if !is_brand_db || !TABLES.iter().any(|table| table_exists(&self.conn, table)) {
+        if !is_brand_db {
+            return;
+        }
+        if !TABLES.iter().any(|table| table_exists(&self.conn, table)) {
+            // The tables are gone and their rows are in the backup. Settings a failed delete
+            // left behind are removed now, without a new backup.
+            for (key, _) in self.settings_to_clear(shared) {
+                if let Err(error) = self.delete_setting(&key) {
+                    eprintln!("Could not remove the setting {key}: {error}");
+                }
+            }
             return;
         }
         match self.export_and_drop(shared, path) {

@@ -160,3 +160,25 @@ fn the_prototype_store_drops_the_tables_and_the_automation_settings() {
     assert!(!has_table(&Connection::open(&path).unwrap(), "automations"));
     assert!(store.sessions().unwrap().iter().any(|s| s.id == session.id));
 }
+
+#[test]
+fn settings_left_behind_after_the_tables_are_gone_are_removed_on_the_next_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = legacy_database(dir.path());
+    drop(Store::open_monocode(&path).unwrap());
+    let backups_before = backups(dir.path());
+    // A failed settings delete would leave this behind.
+    let store = Store::open_monocode(&path).unwrap();
+    store.save_setting(RETRY_SETTING, "{}").unwrap();
+    store.save_setting("keep-me", "yes").unwrap();
+    drop(store);
+    let store = Store::open_monocode(&path).unwrap();
+    assert_eq!(store.setting(RETRY_SETTING).unwrap(), None);
+    assert_eq!(store.setting("keep-me").unwrap().as_deref(), Some("yes"));
+    assert_eq!(backups(dir.path()), backups_before);
+    // A read-only open leaves such a setting alone.
+    store.save_setting(RETRY_SETTING, "{}").unwrap();
+    drop(store);
+    let store = Store::read_monocode(&path).unwrap();
+    assert!(store.setting(RETRY_SETTING).unwrap().is_some());
+}

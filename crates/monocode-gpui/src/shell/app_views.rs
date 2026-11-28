@@ -452,10 +452,6 @@ impl Shell {
     /// reopens the saved app tab when nothing else has been opened meanwhile.
     pub(super) fn start_background_apps(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            // Two turns of the background executor first, as the former startup spent opening
-            // its service there. Some Workflows tests depend on this order of startup tasks.
-            cx.background_executor().spawn(async {}).await;
-            cx.background_executor().spawn(async {}).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if !cfg!(test) {
                     this.ensure_background_inbox(window, cx);
