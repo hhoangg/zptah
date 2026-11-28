@@ -565,7 +565,12 @@ impl Monos {
         let signals = std::sync::Arc::<mono::workflows::cli::Signals>::default();
         let workflow_dir = match locked(&store) {
             Ok(db) => mono::workflows::global::WorkflowsDir::for_store(&db),
-            Err(_) => mono::workflows::global::WorkflowsDir::new(root.join("workflows")),
+            // `root` is `<app data>/monos`; the global workflows sit next to it, as `workflows_root` has them.
+            Err(_) => mono::workflows::global::WorkflowsDir::new(
+                root.parent()
+                    .unwrap_or(&root)
+                    .join(mono::workflows::global::WORKFLOWS_DIR),
+            ),
         };
         let mut this = Self {
             #[cfg(all(target_os = "macos", not(test)))]

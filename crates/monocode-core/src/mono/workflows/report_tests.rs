@@ -98,7 +98,6 @@ fn run_of(definition: Workflow, nodes: Vec<NodeRun>) -> WorkflowRun {
         started_at: 1_000,
         ended_at: Some(2_000),
         caller: RunCaller::new(CallerKind::Manual, "start"),
-        folder_id: None,
         items: BTreeMap::new(),
         nodes,
         report_posted_at: None,

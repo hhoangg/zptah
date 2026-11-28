@@ -203,6 +203,43 @@ fn a_workflow_that_cannot_start_gets_a_failed_run_with_its_message_on_the_run_pa
     assert!(!running(&s, A, cx));
 }
 
+/// A real (non-draft) session start, with every CLI pointed at a file that is not there: the
+/// first prompt reaches the session launch (the store row the app prepared for it), and the run
+/// ends with the start error instead of waiting for a turn.
+#[gpui::test]
+fn a_step_that_is_not_a_draft_hands_its_prompt_to_the_session_launch_and_fails_when_the_cli_is_missing(
+    cx: &mut TestAppContext,
+) {
+    let _clis = crate::shell::surface_tests::NoClis::new();
+    let s = setup(cx);
+    crate::monos::tests::set_probes(&s, cx, |p| p.draft_sessions = false);
+    put(&s, vec![waiting(&s, A, json!({"runRequested": true}))]);
+    look(&s, cx);
+    let history = runs(&s, A);
+    assert_eq!(history.len(), 1);
+    let run = &history[0];
+    assert_eq!(run.status, RunStatus::Failed, "{:?}", run.error);
+    let dev = run
+        .nodes
+        .iter()
+        .find(|n| n.node_id == "dev")
+        .expect("dev ran");
+    let session = dev.session_id.clone().expect("a session was launched");
+    // The prompt was handed to the launch: the app prepared it on the session's row.
+    let titled = s
+        .store
+        .lock()
+        .unwrap()
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .any(|row| row.title == "go");
+    assert!(titled, "no session was made for the prompt {session}");
+    let error = dev.error.as_deref().unwrap_or_default();
+    assert!(!error.is_empty(), "the step names why it failed");
+    assert!(!running(&s, A, cx));
+}
+
 #[gpui::test]
 fn the_waker_makes_a_request_act_at_once(cx: &mut TestAppContext) {
     let s = setup(cx);

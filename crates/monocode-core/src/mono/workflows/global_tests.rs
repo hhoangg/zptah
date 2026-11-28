@@ -400,3 +400,49 @@ fn slugs_are_unique_over_the_whole_global_list_whatever_the_names() {
         assert_eq!(first.slug, slug.slug);
     }
 }
+
+#[test]
+fn recognising_an_old_per_mono_id_only_reads_and_creates_nothing() {
+    use super::cli::{MonoCaller, Signals, StoreHost, WorkflowHost};
+    use std::sync::Arc;
+    let root = temp_root();
+    let monos = root.join("monos");
+    let old = monos.join("mono-1");
+    std::fs::create_dir_all(&old).unwrap();
+    let file = old.join("workflows.json");
+    std::fs::write(&file, serde_json::to_string(&[workflow()]).unwrap()).unwrap();
+    let mut host = StoreHost::new(
+        WorkflowsDir::new(root.join(WORKFLOWS_DIR)),
+        Arc::new(Signals::default()),
+    )
+    .with_legacy_root(&monos)
+    .with_caller(MonoCaller {
+        id: "mono-1".into(),
+        projects: Vec::new(),
+    });
+    assert!(host.is_legacy_id(ID));
+    assert!(!host.is_legacy_id("wf-other999"));
+    let mut names: Vec<String> = std::fs::read_dir(&old)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        ["workflows.json"],
+        "no memory folder or file appears"
+    );
+    // A Mono whose folder does not exist stays absent.
+    let mut other = StoreHost::new(
+        WorkflowsDir::new(root.join(WORKFLOWS_DIR)),
+        Arc::new(Signals::default()),
+    )
+    .with_legacy_root(&monos)
+    .with_caller(MonoCaller {
+        id: "mono-2".into(),
+        projects: Vec::new(),
+    });
+    assert!(!other.is_legacy_id(ID));
+    assert!(!monos.join("mono-2").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}

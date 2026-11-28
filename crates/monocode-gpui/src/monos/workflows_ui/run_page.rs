@@ -14,7 +14,7 @@ use super::run_model::*;
 use super::view::{alert, notice_line};
 use gpui::Div;
 use monocode_core::mono::workflows::{
-    model::{RunStatus, WorkflowRun},
+    model::{CallerKind, RunStatus, WorkflowRun},
     run_graph_model::{
         Pick, Picks, RunView, VIEW_KEY, chosen_view, default_run_view, definition_changed,
         has_for_each,
@@ -68,6 +68,31 @@ impl RunPage {
     pub(super) fn view(&self) -> Option<RunView> {
         let run = self.run.as_ref()?;
         Some(self.chosen.unwrap_or_else(|| default_run_view(run)))
+    }
+}
+
+/// `mono` is the name of the Mono that started the run, when it is known.
+pub(super) fn caller_text(run: &WorkflowRun, mono: Option<&str>) -> String {
+    let caller = &run.caller;
+    let node = run
+        .definition
+        .nodes
+        .iter()
+        .find(|n| n.id == caller.trigger_node)
+        .map(|n| n.title.clone().unwrap_or_else(|| n.id.clone()))
+        .filter(|title| !title.is_empty());
+    let with_node = |kind: &str| match &node {
+        Some(node) => format!("{kind} ({node})"),
+        None => kind.to_string(),
+    };
+    match caller.kind {
+        CallerKind::Manual => "Manual".into(),
+        CallerKind::Schedule => with_node("Schedule"),
+        CallerKind::Event => with_node("Event"),
+        CallerKind::Mono => match mono.filter(|name| !name.is_empty()) {
+            Some(name) => format!("Mono {name}"),
+            None => "Mono".into(),
+        },
     }
 }
 
@@ -357,6 +382,7 @@ impl Monos {
         let body = match &run {
             Some(run) => body
                 .child(self.run_meta(run, scope.color))
+                .children(self.run_summary(run))
                 .when(self.wf.run.changed, |d| {
                     d.child(
                         div()
@@ -475,5 +501,71 @@ impl Monos {
                 "Took",
                 div().debug_selector(|| "wf-run-took".into()).child(took),
             ))
+            .child(meta(
+                "Started by",
+                div()
+                    .debug_selector(|| "wf-run-caller".into())
+                    .child(self.caller_label(run)),
+            ))
+    }
+
+    /// Who started the run: Manual, Schedule (trigger node), Event or Mono <name>.
+    fn caller_label(&self, run: &WorkflowRun) -> String {
+        let mono = run
+            .caller
+            .mono_id
+            .as_deref()
+            .map(|id| self.roster.get(id).map_or(id, |mono| mono.name.as_str()));
+        caller_text(run, mono)
+    }
+
+    /// The summary the run ended with: its title and its Markdown text.
+    fn run_summary(&self, run: &WorkflowRun) -> Option<AnyElement> {
+        let summary = run.summary.as_ref()?;
+        let mut body = div()
+            .debug_selector(|| "wf-run-summary-text".into())
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .text_size(px(12.))
+            .line_height(px(20.));
+        for (ix, mut row) in crate::markdown_model::parse_full(&summary.text)
+            .blocks
+            .iter()
+            .flat_map(|b| crate::markdown::rows(&b.block))
+            .enumerate()
+        {
+            crate::markdown::resolve_file_links(&mut row, "");
+            body = body.child(div().w_full().min_w_0().flex_shrink_0().child(
+                crate::markdown::body(
+                    &row,
+                    format!("wf-run-summary-{}-{ix}", run.id).into(),
+                    crate::markdown::Tone::Normal,
+                    None,
+                    std::time::Instant::now(),
+                ),
+            ));
+        }
+        Some(
+            div()
+                .id("wf-run-summary")
+                .debug_selector(|| "wf-run-summary".into())
+                .flex_shrink_0()
+                .px_4()
+                .pb_3()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .debug_selector(|| "wf-run-summary-title".into())
+                        .text_size(px(12.))
+                        .text_color(content(0.85))
+                        .child(summary.title.clone()),
+                )
+                .child(body)
+                .into_any_element(),
+        )
     }
 }

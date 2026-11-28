@@ -388,7 +388,10 @@ impl WorkflowHost for AppHost {
         Box::pin(async move {
             let (tx, rx) = bounded(1);
             let started = workflows.update(&mut cx, |w, cx| {
+                #[cfg(test)]
                 let draft = w.probes().draft_sessions && req.target.is_none();
+                #[cfg(not(test))]
+                let draft = false;
                 w.workflow_session(req, draft, tx, cx)
             });
             match started {

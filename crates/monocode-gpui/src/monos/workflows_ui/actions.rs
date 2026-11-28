@@ -166,6 +166,8 @@ pub(super) fn run_now(
         }
         let mut next = w;
         next.run_requested = true;
+        // The user asks for this run, whatever a Mono left in the request before.
+        next.run_caller = None;
         // Only for the run that starts now; a value left by an earlier request must not leak in.
         next.run_values = values.clone();
         Ok((Some(next), None))
@@ -294,6 +296,7 @@ pub(super) fn approve(
             let approved = match intent {
                 ReviewIntent::Run => {
                     approved.run_requested = true;
+                    approved.run_caller = None;
                     approved.run_values = None;
                     Ok(approved)
                 }

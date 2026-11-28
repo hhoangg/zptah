@@ -41,7 +41,6 @@
       "kind": "manual",
       "triggerNode": "start"
     },
-    "folderId": "f1",
     "items": {
       "each": [
         "a",

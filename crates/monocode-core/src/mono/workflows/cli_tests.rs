@@ -6,7 +6,7 @@ use super::global::WorkflowsDir;
 use super::guide::{guide_examples, workflow_guide};
 use super::model::*;
 use super::models::{CatalogHarness, CatalogModel, ModelCatalog, Probe};
-use super::ordered::Json;
+use super::ordered::{Json, OrderedMap};
 use super::preflight::{Preflight, RequirementStatus};
 use super::store::{load_runs, load_workflows, update_workflows};
 use super::validate::validate_workflow;
@@ -190,7 +190,6 @@ fn run(id: &str, status: RunStatus, workflow: &str) -> WorkflowRun {
         started_at: now() - 60_000,
         ended_at: None,
         caller: RunCaller::new(CallerKind::Manual, "start"),
-        folder_id: None,
         items: BTreeMap::new(),
         nodes: vec![fetch, dev],
         report_posted_at: None,
@@ -2976,6 +2975,68 @@ fn a_mono_only_updates_and_runs_workflows_whose_projects_are_its_own() {
     assert_eq!(
         f.stored().iter().find(|w| w.id == mine).unwrap().name,
         "Renamed"
+    );
+}
+
+#[test]
+fn a_mono_only_pauses_resumes_stops_and_removes_workflows_on_its_own_projects() {
+    let (mut f, mine, theirs) = mono_fx();
+    f.host.live.insert(mine.clone());
+    f.host.live.insert(theirs.clone());
+    for action in ["pause", "resume", "stop", "remove"] {
+        let e = f.err(&format!("workflows.{action}"), json!({"id": theirs}));
+        assert!(
+            e.contains("not this Mono's") && e.contains("/code/other"),
+            "{action}: {e}"
+        );
+    }
+    let other = f.stored().iter().find(|w| w.id == theirs).unwrap().clone();
+    assert!(other.enabled && !other.stop_requested);
+    f.ok("workflows.stop", json!({"id": mine}));
+    f.host.live.remove(&mine);
+    f.ok("workflows.pause", json!({"id": mine}));
+    assert!(!f.stored().iter().find(|w| w.id == mine).unwrap().enabled);
+    f.ok("workflows.resume", json!({"id": mine}));
+    assert!(f.stored().iter().find(|w| w.id == mine).unwrap().enabled);
+    f.ok("workflows.remove", json!({"id": mine}));
+    assert!(f.stored().iter().all(|w| w.id != mine));
+    f.host.live.remove(&theirs);
+    f.err("workflows.remove", json!({"id": theirs}));
+    assert!(f.stored().iter().any(|w| w.id == theirs));
+}
+
+#[test]
+fn a_mono_resumes_a_run_only_when_the_runs_own_snapshot_is_in_scope() {
+    let (mut f, mine, _) = mono_fx();
+    // The workflow now points at the Mono's project, but the run was made on another one.
+    let mut stored_run = run("run-1", RunStatus::Interrupted, &mine);
+    let mut snapshot = f.stored().iter().find(|w| w.id == mine).unwrap().clone();
+    let mut run_values = OrderedMap::new();
+    run_values.insert("project", InputValue::String("/code/other".into()));
+    snapshot.run_values = Some(run_values);
+    stored_run.definition = snapshot.clone();
+    f.host.runs.insert(mine.clone(), vec![stored_run.clone()]);
+    let e = f.err("workflows.resumeRun", json!({"id": mine, "runId": "run-1"}));
+    assert!(
+        e.contains("not this Mono's") && e.contains("/code/other"),
+        "{e}"
+    );
+    assert_eq!(f.stored()[0].resume_run_id, None);
+    snapshot.run_values = None;
+    stored_run.definition = snapshot;
+    f.host.runs.insert(mine.clone(), vec![stored_run]);
+    f.ok("workflows.resumeRun", json!({"id": mine, "runId": "run-1"}));
+}
+
+#[test]
+fn a_string_input_used_as_a_step_project_counts_as_a_project() {
+    let (mut f, _, _) = mono_fx();
+    let mut w = in_project("/code/other");
+    w["inputs"] = json!({"project": {"type": "string"}});
+    let e = f.err("workflows.add", json!({"workflow": w}));
+    assert!(
+        e.contains("not this Mono's") && e.contains("/code/other"),
+        "{e}"
     );
 }
 

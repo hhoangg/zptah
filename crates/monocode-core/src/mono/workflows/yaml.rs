@@ -584,11 +584,136 @@ fn fail<T>(message: impl Into<String>) -> Result<T, String> {
     Err(message.into())
 }
 
+/// `trigger` is reserved for the event item (`{{trigger.item}}`), but a file written before that
+/// used it as the id of its trigger node. Such a node gets a free id, and the edges, the `parent`
+/// fields and the `{{trigger.*}}` references that meant its outputs follow it.
+fn rename_trigger_node(file: &mut OrderedMap<Json>, warnings: &mut Vec<String>) {
+    const OLD: &str = "trigger";
+    let ids: Vec<String> = match file.get("nodes") {
+        Some(Json::Array(nodes)) => nodes
+            .iter()
+            .filter_map(|n| n.get("id").and_then(Json::as_str).map(str::to_string))
+            .collect(),
+        _ => return,
+    };
+    if !ids.iter().any(|id| id == OLD) {
+        return;
+    }
+    let new_id = std::iter::once("start".to_string())
+        .chain((2..).map(|n| format!("start{n}")))
+        .find(|candidate| !ids.contains(candidate))
+        .unwrap_or_default();
+    if let Some(Json::Array(nodes)) = file.get_mut("nodes") {
+        for node in nodes.iter_mut() {
+            rename_in_node(node, OLD, &new_id);
+        }
+    }
+    if let Some(Json::Array(edges)) = file.get_mut("edges") {
+        for edge in edges.iter_mut() {
+            if let Json::Object(fields) = edge {
+                for key in ["from", "to"] {
+                    if fields.get(key).and_then(Json::as_str) == Some(OLD) {
+                        fields.insert(key, Json::String(new_id.clone()));
+                    }
+                }
+            }
+        }
+    }
+    if let Some(Json::String(template)) = file.get_mut("summaryTemplate") {
+        *template = rename_template_head(template, OLD, &new_id);
+    }
+    warnings.push(format!(
+        "The node \"{OLD}\" was renamed \"{new_id}\": \"{OLD}\" now names the event item, and its references were updated"
+    ));
+}
+
+fn rename_in_node(node: &mut Json, old: &str, new: &str) {
+    let Json::Object(fields) = node else {
+        return;
+    };
+    let keys: Vec<String> = fields.keys().cloned().collect();
+    for key in keys {
+        let Some(value) = fields.get_mut(&key) else {
+            continue;
+        };
+        if key == "id" || key == "parent" {
+            if value.as_str() == Some(old) {
+                *value = Json::String(new.to_string());
+            }
+        } else {
+            rename_in_templates(value, old, new);
+        }
+    }
+}
+
+fn rename_in_templates(value: &mut Json, old: &str, new: &str) {
+    match value {
+        Json::String(text) => *text = rename_template_head(text, old, new),
+        Json::Array(items) => items
+            .iter_mut()
+            .for_each(|item| rename_in_templates(item, old, new)),
+        Json::Object(fields) => {
+            let keys: Vec<String> = fields.keys().cloned().collect();
+            for key in keys {
+                if let Some(item) = fields.get_mut(&key) {
+                    rename_in_templates(item, old, new);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `{{old.x}}` and `{{#if old.x}}` become `{{new.x}}` and `{{#if new.x}}`.
+pub(super) fn rename_template_head(text: &str, old: &str, new: &str) -> String {
+    if !text.contains("{{") {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let old_chars: Vec<char> = old.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '{' && chars.get(i + 1) == Some(&'{') {
+            let mut j = i + 2;
+            while j < chars.len() && js_space(chars[j]) {
+                j += 1;
+            }
+            let if_end = j + 3;
+            if chars.get(j..if_end).is_some_and(|c| c == ['#', 'i', 'f'])
+                && chars.get(if_end).is_some_and(|c| js_space(*c))
+            {
+                j = if_end;
+                while j < chars.len() && js_space(chars[j]) {
+                    j += 1;
+                }
+            }
+            let end = j + old_chars.len();
+            if chars.get(j..end) == Some(old_chars.as_slice())
+                && chars
+                    .get(end)
+                    .is_none_or(|c| *c == '.' || *c == '}' || js_space(*c))
+            {
+                out.extend(&chars[i..j]);
+                out.push_str(new);
+                i = end;
+                continue;
+            }
+            out.extend(&chars[i..j]);
+            i = j;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
 /// Reads YAML or JSON. Validation problems are reported in `issues`, not as a rejection.
 /// `catalog` is what the session nodes' models are judged against.
 pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPreview, String> {
     let file = parse_file(text)?;
-    let Json::Object(file) = file else {
+    let Json::Object(mut file) = file else {
         return fail("Not a zptah workflow file");
     };
     let file_json = Json::Object(file.clone());
@@ -615,12 +740,16 @@ pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPrevie
         Some(Json::String(d)) => Some(d.clone()),
         Some(_) => return fail("description must be text"),
     };
+    if !matches!(file.get("nodes"), Some(Json::Array(_))) {
+        return fail("The workflow file needs a list of nodes");
+    }
+    let mut warnings = Vec::new();
+    rename_trigger_node(&mut file, &mut warnings);
     let Some(Json::Array(raw_nodes)) = file.get("nodes") else {
         return fail("The workflow file needs a list of nodes");
     };
 
     let mut nodes = Vec::new();
-    let mut warnings = Vec::new();
     // A Report node of an older file is folded into `summaryTemplate`, and its edges go with it.
     let mut folded_ids: Vec<String> = Vec::new();
     let mut folded_template: Option<String> = None;

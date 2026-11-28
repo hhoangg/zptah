@@ -419,6 +419,34 @@ fn approve_clears_the_mark_and_asks_for_a_run() {
 }
 
 #[test]
+fn a_run_the_user_asks_for_does_not_keep_the_caller_a_mono_left() {
+    let mono = || {
+        Some(monocode_core::mono::workflows::model::RunCaller::mono(
+            "mono-1", "start",
+        ))
+    };
+    let mut left = workflow(json!({}));
+    left.run_caller = mono();
+    let mut d = disk(vec![left]);
+    assert_eq!(actions::run_now(&mut d.host, A, None), None);
+    let now = d.first();
+    assert!(now.run_requested && now.run_caller.is_none());
+
+    let mut flagged = workflow(json!({"enabled": false, "needsReview": true}));
+    flagged.run_caller = mono();
+    let mut d = disk(vec![flagged.clone()]);
+    let result = actions::approve(
+        &mut d.host,
+        A,
+        ReviewIntent::Run,
+        &definition_fingerprint(&flagged),
+    );
+    assert_eq!(result, Approval::Done);
+    let now = d.first();
+    assert!(now.run_requested && now.run_caller.is_none());
+}
+
+#[test]
 fn approve_changes_nothing_when_the_stored_definition_is_not_the_one_reviewed() {
     let command = |text: &str| {
         build(

@@ -143,6 +143,26 @@ fn trigger_label(preview: &ImportPreview) -> String {
     }
 }
 
+/// The two lines of the review that the fingerprint covers beyond the steps: the model for AI
+/// decisions and where the run summary goes. `mono` is the name of the Mono in `reportTo`.
+pub(super) fn summary_and_decisions_text(w: &Workflow, mono: Option<&str>) -> (String, String) {
+    let decisions = match &w.decision_model {
+        Some(model) => {
+            let mut text = format!("{} {}", visible(&model.harness), visible(&model.model));
+            if let Some(effort) = model.effort.as_deref().filter(|e| !e.is_empty()) {
+                text.push_str(&format!(" ({})", visible(effort)));
+            }
+            text
+        }
+        None => "The model of the step before it".to_string(),
+    };
+    let summary_to = match mono {
+        Some(name) => format!("The run page and Mono {}", visible(name)),
+        None => "The run page".to_string(),
+    };
+    (decisions, summary_to)
+}
+
 /// Text exactly as the file has it, in the monospace the app uses for code.
 pub(in crate::monos) fn verbatim(text: &str) -> Div {
     div()
@@ -418,6 +438,31 @@ impl Monos {
         out
     }
 
+    /// What the fingerprint covers besides the steps: the model that makes the AI decisions and
+    /// who gets the run summary. The summary template itself is listed with the prompts.
+    fn summary_and_decisions(&self, w: &Workflow) -> AnyElement {
+        let mono = w
+            .report_to
+            .as_ref()
+            .and_then(|r| r.mono.as_deref())
+            .filter(|m| !m.is_empty())
+            .map(|id| self.roster.get(id).map_or(id, |m| m.name.as_str()));
+        let (decisions, summary_to) = summary_and_decisions_text(w, mono);
+        section("Summary and decisions", None)
+            .id("mono-workflow-summary-decisions")
+            .debug_selector(|| "mono-workflow-summary-decisions".into())
+            .child(
+                div()
+                    .px_2()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(property("AI decisions use", decisions))
+                    .child(property("Run summary goes to", summary_to)),
+            )
+            .into_any_element()
+    }
+
     /// Opens the review a flagged workflow needs before it can run or be enabled.
     pub(in crate::monos) fn open_workflow_review(
         &mut self,
@@ -570,12 +615,17 @@ impl Monos {
         let back = review.back.clone();
         let can_approve = !review.busy && review.ready_preview().is_some();
         let notice = review.notice.clone();
+        let shown = review.shown.clone();
         let sections = match review.ready_preview().cloned() {
-            Some(preview) => self.review_sections(
-                &preview,
-                "It cannot be enabled or run until these are fixed.",
-                cx,
-            ),
+            Some(preview) => {
+                let mut sections = self.review_sections(
+                    &preview,
+                    "It cannot be enabled or run until these are fixed.",
+                    cx,
+                );
+                sections.push(self.summary_and_decisions(&shown));
+                sections
+            }
             None => Vec::new(),
         };
         let go_back = back.clone();

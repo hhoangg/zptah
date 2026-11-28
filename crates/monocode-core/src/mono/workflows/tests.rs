@@ -261,7 +261,6 @@ fn a_run_round_trips_with_string_session_ids() {
         "definition": serde_json::from_str::<Value>(EXAMPLE_JSON).unwrap(),
         "status": "doneWithFailures", "startedAt": 5, "endedAt": 9,
         "caller": {"kind": "mono", "monoId": "m-1", "triggerNode": "start", "item": {"ref": "CU-1"}},
-        "folderId": "f1",
         "items": { "each": [{"title": "a"}], "each@r1": [] },
         "nodes": [{
             "nodeId": "dev", "branch": "each#0", "status": "waitingApproval", "round": 2,
@@ -288,6 +287,23 @@ fn a_run_round_trips_with_string_session_ids() {
     assert_eq!(back["definition"], raw["definition"]);
     back["definition"] = raw["definition"].clone();
     assert_eq!(back, raw);
+}
+
+#[test]
+fn a_run_file_written_with_the_old_folder_field_still_parses() {
+    let raw = json!({
+        "id": "run-1", "workflowId": "wf-abcd1234",
+        "definition": serde_json::from_str::<Value>(EXAMPLE_JSON).unwrap(),
+        "status": "done", "startedAt": 5,
+        "caller": {"kind": "manual", "triggerNode": "start"},
+        "folderId": "f1", "items": {}, "nodes": []
+    });
+    let run: WorkflowRun = serde_json::from_value(raw).unwrap();
+    assert_eq!(run.id, "run-1");
+    assert!(serde_json::to_value(&run)
+        .unwrap()
+        .get("folderId")
+        .is_none());
 }
 
 // ---------------------------------------------------------------------------------------------

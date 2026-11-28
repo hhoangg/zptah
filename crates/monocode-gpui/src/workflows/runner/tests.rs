@@ -1711,7 +1711,6 @@ fn a_session_that_finishes_starting_after_the_quit_writes_nothing(cx: &mut TestA
     cx.run_until_parked();
     // The start came through (with its folder) after the app began to go down: not recorded.
     assert_eq!(rig.fake.world().saves.len(), saved);
-    assert_eq!(rig.last_run().folder_id, None);
     assert_eq!(rig.last_run().status, RunStatus::Running);
 }
 

@@ -619,9 +619,10 @@ pub struct Workflow {
     pub last_run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub imported_from: Option<String>,
-    /// Set on a workflow made from a file (by the Mono through the CLI, or imported in the UI).
-    /// Only the user, in the panel, may enable or run it, and only an approval of this exact
-    /// version clears the mark. Never exported.
+    /// Set on a workflow made from a file (by the Mono through the CLI, or imported in the UI),
+    /// on one a Mono adds, and on one a Mono redefines (its steps, prompts, commands, projects,
+    /// models or report settings change). Only the user, in the panel, may enable or run it, and
+    /// only an approval of this exact version clears the mark. Never exported.
     #[serde(skip_serializing_if = "is_false")]
     pub needs_review: bool,
     /// The model an If, Switch or loop edge that decides with AI asks. Without it the harness and
@@ -962,8 +963,6 @@ pub struct WorkflowRun {
     pub ended_at: Option<u64>,
     /// Who started the run and through which trigger node.
     pub caller: RunCaller,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub folder_id: Option<String>,
     /// The lists For each nodes expanded, by node id (`<id>@r<round>` for an archived round).
     #[serde(default)]
     pub items: BTreeMap<NodeId, Vec<Json>>,

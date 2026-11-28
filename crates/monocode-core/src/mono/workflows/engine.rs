@@ -1113,7 +1113,6 @@ pub fn start_run(def: &Workflow, caller: RunCaller, now: u64, id: &str) -> Workf
         started_at: now,
         ended_at: None,
         caller,
-        folder_id: None,
         items: Default::default(),
         nodes,
         report_posted_at: None,

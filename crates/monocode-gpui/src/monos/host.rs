@@ -1724,13 +1724,15 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.set_enabled
                 // thread. run/stop/resumeRun then only write their request into the file.
                 // The files are the global store; the Mono is only the caller, whose projects
                 // bound what it may add, change and run.
-                let mut host = self.workflow_store(cx).with_legacy_root(root);
-                if let Some(m) = self.roster.get(&target) {
-                    host = host.with_caller(MonoCaller {
-                        id: m.id.clone(),
-                        projects: m.projects.clone(),
-                    });
-                }
+                // The caller is the Mono that owns the capability: a roster miss must never fall
+                // back to the user's unscoped host.
+                let mut host =
+                    self.workflow_store(cx)
+                        .with_legacy_root(root)
+                        .with_caller(MonoCaller {
+                            id: mono.id.clone(),
+                            projects: mono.projects.clone(),
+                        });
                 let name = action.clone();
                 self.call_work(
                     call,

@@ -41,7 +41,6 @@ pub fn run() -> WorkflowRun {
         started_at: 1_000_000,
         ended_at: Some(1_060_000),
         caller: RunCaller::new(CallerKind::Manual, "start"),
-        folder_id: None,
         items: BTreeMap::new(),
         nodes: Vec::new(),
         report_posted_at: None,

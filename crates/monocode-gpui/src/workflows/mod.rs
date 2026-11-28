@@ -58,6 +58,8 @@ pub(crate) struct Probes {
     pub(crate) requirements: fn(&Workflow) -> Preflight,
     /// Whether a step's session only gets its prompt in the composer and no turn runs. Tests set
     /// it so no step ever reaches a real CLI; the run then waits for a turn that never comes.
+    /// The field does not exist in a real build, so no setting can put a run's prompt aside.
+    #[cfg(test)]
     pub(crate) draft_sessions: bool,
 }
 
@@ -73,7 +75,6 @@ impl Probes {
         Self {
             models: monocode_core::mono::workflows::models::native_probe,
             requirements: monocode_core::mono::workflows::preflight::native_preflight,
-            draft_sessions: false,
         }
     }
 

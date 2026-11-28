@@ -510,3 +510,32 @@ fn cancel_and_back_drop_the_review_and_read_the_files_again(cx: &mut TestAppCont
         );
     }
 }
+
+#[gpui::test]
+fn the_review_lists_the_decision_model_and_where_the_summary_goes(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let w = flagged(json!({
+        "decisionModel": {"harness": "claude", "model": "claude-opus-5", "effort": "high"},
+        "reportTo": {"mono": "mono-1"},
+        "summaryTemplate": "Done: {{run.id}}",
+    }));
+    put(&s, vec![w.clone()]);
+    open_tab(&s, cx);
+    let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    open_review(&s, ReviewIntent::Enable, visual);
+    assert!(
+        visual
+            .debug_bounds("mono-workflow-summary-decisions")
+            .is_some()
+    );
+    let preview = review_preview(&s, visual).unwrap();
+    assert!(preview.prompts.iter().any(|p| p.text == "Done: {{run.id}}"));
+    let (decisions, to) = super::review::summary_and_decisions_text(&w, Some("Ada"));
+    assert_eq!(decisions, "claude claude-opus-5 (high)");
+    assert_eq!(to, "The run page and Mono Ada");
+    let plain = flagged(json!({}));
+    let (decisions, to) = super::review::summary_and_decisions_text(&plain, None);
+    assert_eq!(decisions, "The model of the step before it");
+    assert_eq!(to, "The run page");
+}

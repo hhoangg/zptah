@@ -930,3 +930,66 @@ fn enter_on_a_focused_card_picks_it(cx: &mut TestAppContext) {
     visual.run_until_parked();
     assert_eq!(picked(&s, visual).as_deref(), Some("start|"));
 }
+
+#[gpui::test]
+fn the_run_page_shows_who_started_the_run_and_its_summary(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut run = run_of(
+        &linear(),
+        "done",
+        json!({}),
+        json!([nr("start", "", "done", json!({}))]),
+    );
+    run.summary = Some(monocode_core::mono::workflows::model::RunSummary {
+        title: "Nightly checks finished".into(),
+        text: "## Result\n\n- **3** tickets done".into(),
+    });
+    saved_run(&s, &linear(), &run, cx);
+    let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    open_run(&s, visual);
+    for selector in [
+        "wf-run-caller",
+        "wf-run-summary",
+        "wf-run-summary-title",
+        "wf-run-summary-text",
+    ] {
+        assert!(visual.debug_bounds(selector).is_some(), "{selector}");
+    }
+}
+
+#[gpui::test]
+fn a_run_without_a_summary_shows_no_summary_block(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let run = run_of(
+        &linear(),
+        "running",
+        json!({}),
+        json!([nr("start", "", "running", json!({}))]),
+    );
+    saved_run(&s, &linear(), &run, cx);
+    let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    open_run(&s, visual);
+    assert!(visual.debug_bounds("wf-run-caller").is_some());
+    assert!(visual.debug_bounds("wf-run-summary").is_none());
+}
+
+#[test]
+fn the_caller_is_named_by_kind_trigger_node_and_mono() {
+    use super::run_page::caller_text;
+    use monocode_core::mono::workflows::model::{CallerKind, RunCaller};
+    let schedule = wf(
+        json!([{"id": "nightly", "type": "schedule", "title": "Every night", "schedule": {"scheduleKind": "weekdays", "time": "09:00", "minute": 0, "dayOfWeek": 1}}]),
+        json!([]),
+    );
+    let mut run = run_of(&schedule, "done", json!({}), json!([]));
+    assert_eq!(caller_text(&run, None), "Manual");
+    run.caller = RunCaller::new(CallerKind::Schedule, "nightly");
+    assert_eq!(caller_text(&run, None), "Schedule (Every night)");
+    run.caller = RunCaller::new(CallerKind::Event, "missing");
+    assert_eq!(caller_text(&run, None), "Event");
+    run.caller = RunCaller::mono("mono-1", "nightly");
+    assert_eq!(caller_text(&run, Some("Ada")), "Mono Ada");
+    assert_eq!(caller_text(&run, None), "Mono");
+}

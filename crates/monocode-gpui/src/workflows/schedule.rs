@@ -207,6 +207,7 @@ impl Workflows {
                 }
                 Start::Run { mut run, failure } => {
                     // A run that never starts would otherwise only show in the run history.
+                    let failed = failure.is_some();
                     if let Some(failure) = failure {
                         // Delivered here, so the runner must not deliver a second summary for the
                         // run it only writes.
@@ -225,7 +226,20 @@ impl Workflows {
                             cx,
                         );
                     }
-                    self.start_run(run, cx);
+                    // The runner writes every run it takes. When it refuses one that already failed
+                    // (and was announced above), the record is written here so it is not lost.
+                    let kept = failed.then(|| run.clone());
+                    if !self.start_run(run, cx)
+                        && let Some(run) = kept
+                    {
+                        let save = self.workflow_host(cx).save_run(run);
+                        cx.spawn(async move |_, _| {
+                            if let Err(error) = save.await {
+                                eprintln!("Could not save a failed workflow run: {error}");
+                            }
+                        })
+                        .detach();
+                    }
                 }
             }
         }

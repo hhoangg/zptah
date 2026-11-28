@@ -28,7 +28,7 @@ use super::parse::{
 };
 use super::preflight::{likely_clis, native_preflight, union_requires, Preflight};
 use super::store::{
-    clear_runs, load_runs, load_workflows, to_json, update_workflows, workflow_json, MonoDir,
+    clear_runs, load_runs, load_workflows, to_json, update_workflows, workflow_json,
 };
 use super::template::js_trim;
 use super::validate::WorkflowIssue;
@@ -287,8 +287,17 @@ impl WorkflowHost for StoreHost {
         let (Some(root), Some(caller)) = (&self.legacy_root, &self.caller) else {
             return false;
         };
-        load_workflows(&MonoDir::new(root, caller.id.clone()))
-            .is_ok_and(|old| old.workflows.iter().any(|w| w.id == id))
+        // A pure read: the Mono's folder is never created or adopted for this.
+        if !crate::mono::files::valid_id(&caller.id) {
+            return false;
+        }
+        let path = root
+            .join(&caller.id)
+            .join(crate::mono::files::WORKFLOWS_FILE);
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| super::parse::read_workflow_file(&text))
+            .is_some_and(|old| old.workflows.iter().any(|w| w.id == id))
     }
 }
 
@@ -589,7 +598,7 @@ pub fn workflow_projects(w: &Workflow) -> (Vec<String>, bool) {
         }
     };
     for (name, input) in w.inputs.iter() {
-        if input.ty != super::model::InputType::Project {
+        if input.ty != super::model::InputType::Project && !used_as_project(w, name) {
             continue;
         }
         if let Some(InputValue::String(value)) = w.input_values.get(name) {
@@ -615,6 +624,22 @@ pub fn workflow_projects(w: &Workflow) -> (Vec<String>, bool) {
         }
     }
     (projects, dynamic)
+}
+
+/// Whether a step names `{{inputs.<name>}}` as its `project`, whatever the input's declared type.
+fn used_as_project(w: &Workflow, name: &str) -> bool {
+    w.nodes.iter().any(|node| match &node.kind {
+        NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => {
+            project
+                .trim()
+                .strip_prefix("{{")
+                .and_then(|rest| rest.strip_suffix("}}"))
+                .map(str::trim)
+                .and_then(|r| r.strip_prefix("inputs."))
+                == Some(name)
+        }
+        _ => false,
+    })
 }
 
 /// Why the calling Mono may not add, change or run `w`, if it may not. The user is never limited.
@@ -1452,6 +1477,7 @@ fn run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
 fn stop<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
     let workflows = host.load()?;
     let current = find(&workflows, input)?.clone();
+    check_scope(host.caller(), &current)?;
     if !host.is_running(&current.id) {
         return Err("That workflow is not running".into());
     }
@@ -1488,8 +1514,9 @@ fn stop<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
 }
 
 fn pause<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
-    host.update(|_, list| {
+    host.update(|host, list| {
         let mut next = find(&list, input)?.clone();
+        check_scope(host.caller(), &next)?;
         next.enabled = false;
         let result = obj([("id", st(&next.id)), ("enabled", Json::Bool(false))]);
         Ok((replace(list, next), result))
@@ -1502,6 +1529,7 @@ fn resume<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
         if current.needs_review {
             return Err(NEEDS_REVIEW.into());
         }
+        check_scope(host.caller(), &current)?;
         let issues = problems(host, &current);
         if !issues.is_empty() {
             return Err(format!(
@@ -1540,6 +1568,8 @@ fn resume_run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, Strin
         ));
     }
     // What the run was made with and what the workflow asks now both have to be there.
+    // The run executes its own snapshot with its effective values, so that is what is checked.
+    check_scope(host.caller(), &with_run_values(&run.definition))?;
     let mut stored = run.definition.clone();
     stored.requires = union_requires(&run.definition.requires, &current.requires);
     if !stored.requires.is_empty() {
@@ -1571,6 +1601,7 @@ fn resume_run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, Strin
 fn remove<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
     let workflows = host.load()?;
     let current = find(&workflows, input)?.clone();
+    check_scope(host.caller(), &current)?;
     if host.is_running(&current.id) {
         return Err("Stop the workflow before removing it".into());
     }

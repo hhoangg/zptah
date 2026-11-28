@@ -1673,3 +1673,87 @@ edges:
     let out = export_workflow(&w);
     assert!(out.contains("decide: ai") && !out.contains("decide: mono"));
 }
+
+// --- files written before "trigger" became reserved ------------------------------------------
+
+const OLD_TRIGGER_FILE: &str = "monoptahWorkflow: 1
+name: Old trigger
+inputs:
+  project:
+    type: project
+nodes:
+  - id: trigger
+    type: manual
+  - id: dev
+    type: session
+    project: \"{{inputs.project}}\"
+    checkout: root
+    prompt: Go
+edges:
+  - from: trigger
+    to: dev
+";
+
+#[test]
+fn a_node_called_trigger_in_an_older_file_gets_a_free_id_and_the_import_is_clean() {
+    let preview = ok(OLD_TRIGGER_FILE);
+    let ids: Vec<&str> = preview
+        .workflow
+        .nodes
+        .iter()
+        .map(|n| n.id.as_str())
+        .collect();
+    assert_eq!(ids, ["start", "dev"]);
+    assert_eq!(preview.workflow.edges.len(), 1);
+    assert_eq!(preview.workflow.edges[0].from, "start");
+    assert_eq!(preview.workflow.edges[0].to, "dev");
+    assert!(
+        preview
+            .warnings
+            .iter()
+            .any(|w| w.contains("\"trigger\"") && w.contains("\"start\"")),
+        "{:?}",
+        preview.warnings
+    );
+    assert!(preview.issues.is_empty(), "{:?}", messages(&preview.issues));
+}
+
+#[test]
+fn references_to_the_renamed_node_follow_it() {
+    assert_eq!(
+        rename_template_head(
+            "a {{trigger.x}} {{ trigger.y }} {{#if trigger.z}}{{trigger.item}}{{/if}} {{triggers.q}} {{inputs.trigger}}",
+            "trigger",
+            "start"
+        ),
+        "a {{start.x}} {{ start.y }} {{#if start.z}}{{start.item}}{{/if}} {{triggers.q}} {{inputs.trigger}}"
+    );
+}
+
+#[test]
+fn the_renamed_trigger_node_avoids_ids_already_in_use() {
+    let text = OLD_TRIGGER_FILE
+        .replace("id: dev", "id: start")
+        .replace("to: dev", "to: start");
+    let preview = ok(&text);
+    let ids: Vec<&str> = preview
+        .workflow
+        .nodes
+        .iter()
+        .map(|n| n.id.as_str())
+        .collect();
+    assert_eq!(ids, ["start2", "start"]);
+    assert_eq!(preview.workflow.edges[0].from, "start2");
+    assert_eq!(preview.workflow.edges[0].to, "start");
+}
+
+#[test]
+fn a_file_without_a_trigger_node_is_not_touched() {
+    let text = OLD_TRIGGER_FILE
+        .replace("id: trigger", "id: begin")
+        .replace("from: trigger", "from: begin")
+        .replace("prompt: Go", "prompt: Go {{trigger.item}}");
+    let preview = ok(&text);
+    assert_eq!(preview.workflow.nodes[0].id, "begin");
+    assert!(preview.warnings.is_empty(), "{:?}", preview.warnings);
+}
