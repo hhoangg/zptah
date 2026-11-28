@@ -105,6 +105,7 @@ export function Transcript({
   const [viewport, setViewport] = useState<number | undefined>(undefined);
   const following = useRef(true);
   const adjustments = useRef<number | undefined>(undefined);
+  const programmaticTop = useRef<number | undefined>(undefined);
   // True from the jump button's press until the scroller rests at the real end or the reader takes over.
   const jumping = useRef(false);
   const jumpTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -175,8 +176,13 @@ export function Transcript({
       if (!scroller) return;
       const target = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
       adjustments.current = target;
-      if (smooth && !prefersReducedMotion() && typeof scroller.scrollTo === "function") scroller.scrollTo({ top: target, behavior: "smooth" });
-      else scroller.scrollTop = target;
+      if (smooth && !prefersReducedMotion() && typeof scroller.scrollTo === "function") {
+        programmaticTop.current = undefined;
+        scroller.scrollTo({ top: target, behavior: "smooth" });
+      } else {
+        programmaticTop.current = target;
+        scroller.scrollTop = target;
+      }
     },
     [scroller],
   );
@@ -329,6 +335,7 @@ export function Transcript({
     );
     if (top === null) return;
     adjustments.current = top;
+    programmaticTop.current = top;
     scroller.scrollTop = top;
   }, [rows, scroller, virtualizer]);
 
@@ -342,7 +349,10 @@ export function Transcript({
       if (Math.abs(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop) < 1) endJump();
       else settleJump();
     }
-    syncScroll();
+    const isProgrammatic =
+      scroller && programmaticTop.current !== undefined && Math.abs(scroller.scrollTop - programmaticTop.current) < 1;
+    programmaticTop.current = undefined;
+    if (!isProgrammatic) syncScroll();
     // A page landing mid-jump would reset the offset the jump is heading to.
     if (scroller && !jumping.current && scroller.scrollTop < OLDER_TRIGGER_PX) requestOlder();
   }, [scroller, endJump, settleJump, syncScroll, requestOlder]);

@@ -41,6 +41,17 @@ describe("windowing and the end (F-32)", () => {
     expect(screen.queryByText("Reply number 0")).toBeNull();
   });
 
+  it("stays at the end when scrollHeight grows before a programmatic scroll event fires", async () => {
+    const { rerender } = render(<Transcript turns={turns(0, 200)} />);
+    await screen.findByText("Reply number 199");
+    await waitFor(() => expect(scroller().scrollTop).toBe(scroller().scrollHeight - VIEW));
+    // Simulate a late scroll event from the initial scrollToEnd after content height has grown.
+    fireEvent.scroll(scroller());
+    rerender(<Transcript turns={turns(0, 201)} />);
+    expect(await screen.findByText("Reply number 200")).toBeInTheDocument();
+    await waitFor(() => expect(scroller().scrollTop).toBe(scroller().scrollHeight - VIEW));
+  });
+
   it("follows a reply that grows while the reader is at the end", async () => {
     const { rerender } = render(<Transcript turns={turns(0, 20)} />);
     await screen.findByText("Reply number 19");
