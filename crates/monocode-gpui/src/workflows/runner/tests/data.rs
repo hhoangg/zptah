@@ -505,3 +505,123 @@ fn a_wait_for_me_step_of_an_auto_node_next_to_it_is_not_held(cx: &mut TestAppCon
     assert_eq!(node(&run, "wait").status, NodeStatus::WaitingForUser);
     assert_eq!(rig.fake.world().waits.len(), 1);
 }
+
+#[gpui::test]
+fn continue_waits_for_a_running_turn_before_taking_outputs(cx: &mut TestAppContext) {
+    let rig = Rig::new(&["First answer."]);
+    rig.fake
+        .extraction(Ok(fenced(json!({"verdict": "from the chat"}))));
+    rig.start(cx, &waiting(json!({"verdict": {"type": "string"}})));
+    cx.run_until_parked();
+    // The user chatted on and the session is still working when they press Continue.
+    let busy = rig.fake.busy();
+    answer(&rig, "s1", WaitChoice::Continue).unwrap();
+    cx.run_until_parked();
+    let run = rig.last_run();
+    assert_eq!(run.status, RunStatus::Running);
+    assert_eq!(node(&run, "dev").status, NodeStatus::WaitingForUser);
+    {
+        let w = rig.fake.world();
+        assert_eq!(w.turn_end_calls, ["s1"]);
+        assert!(w.extract_calls.is_empty(), "nothing is read mid-turn");
+        assert!(w.wait_overs.is_empty(), "the banner stays");
+    }
+    // The turn ends: the outputs are taken now.
+    busy.close();
+    cx.run_until_parked();
+    let run = rig.last_run();
+    assert_eq!(run.status, RunStatus::Done);
+    assert_eq!(output_of(&run, "dev"), "verdict=\"from the chat\"");
+    assert_eq!(rig.fake.world().wait_overs, ["s1"]);
+}
+
+#[gpui::test]
+fn stop_while_continue_waits_for_the_turn_takes_no_outputs(cx: &mut TestAppContext) {
+    let rig = Rig::new(&["First answer."]);
+    rig.start(cx, &waiting(json!({"verdict": {"type": "string"}})));
+    cx.run_until_parked();
+    let _busy = rig.fake.busy();
+    answer(&rig, "s1", WaitChoice::Continue).unwrap();
+    cx.run_until_parked();
+    assert!(rig.runner.stop(WF));
+    cx.run_until_parked();
+    let run = rig.last_run();
+    assert_eq!(run.status, RunStatus::Stopped);
+    assert_eq!(node(&run, "dev").status, NodeStatus::Stopped);
+    let w = rig.fake.world();
+    assert!(w.extract_calls.is_empty());
+    assert_eq!(w.wait_overs, ["s1"]);
+}
+
+// --- a value recorded while the outputs are read ---------------------------------------------
+
+#[gpui::test]
+fn a_value_recorded_while_the_fields_are_read_is_kept_and_wins(cx: &mut TestAppContext) {
+    let rig = Rig::new(&["First answer."]);
+    rig.fake
+        .extraction(Ok(fenced(json!({"verdict": "from the chat"}))));
+    let gate = rig.fake.extraction_gate();
+    rig.start(cx, &waiting(json!({"verdict": {"type": "string"}})));
+    cx.run_until_parked();
+    answer(&rig, "s1", WaitChoice::Continue).unwrap();
+    cx.run_until_parked();
+    // The read is under way: the step works again, not waiting on the user.
+    assert_eq!(rig.fake.world().extract_calls.len(), 1);
+    assert_eq!(node(&rig.last_run(), "dev").status, NodeStatus::Running);
+    // The session records the value now: accepted, so it must not be lost.
+    let recorded = record(&rig, "s1", json!({"verdict": "recorded"})).unwrap();
+    assert_eq!(recorded.recorded, ["verdict"]);
+    gate.close();
+    cx.run_until_parked();
+    let run = rig.last_run();
+    assert_eq!(run.status, RunStatus::Done);
+    assert_eq!(output_of(&run, "dev"), "verdict=\"recorded\"");
+    // Once the step is over, nothing more is accepted.
+    let late = record(&rig, "s1", json!({"verdict": "late"})).unwrap_err();
+    assert!(late.contains("not running a workflow step"), "{late}");
+}
+
+// --- Wait for me after a turn that did not complete -------------------------------------------
+
+#[gpui::test]
+fn a_first_turn_the_user_stopped_still_waits_for_them(cx: &mut TestAppContext) {
+    let rig = Rig::new(&["Half an answer."]);
+    rig.fake.end_turns_with(Outcome::cancelled(STOPPED_BY_USER));
+    rig.start(cx, &waiting(json!({})));
+    cx.run_until_parked();
+    let run = rig.last_run();
+    assert_eq!(run.status, RunStatus::Running);
+    assert_eq!(node(&run, "dev").status, NodeStatus::WaitingForUser);
+    assert_eq!(rig.fake.world().waits.len(), 1);
+    answer(&rig, "s1", WaitChoice::Continue).unwrap();
+    cx.run_until_parked();
+    assert_eq!(rig.last_run().status, RunStatus::Done);
+}
+
+#[gpui::test]
+fn a_failed_first_turn_waits_for_the_user_while_its_session_exists(cx: &mut TestAppContext) {
+    let rig = Rig::new(&["Oops."]);
+    rig.fake
+        .end_turns_with(Outcome::failed("The provider errored"));
+    rig.start(cx, &waiting(json!({})));
+    cx.run_until_parked();
+    assert_eq!(
+        node(&rig.last_run(), "dev").status,
+        NodeStatus::WaitingForUser
+    );
+    answer(&rig, "s1", WaitChoice::Fail).unwrap();
+    cx.run_until_parked();
+    assert_eq!(rig.last_run().status, RunStatus::Failed);
+}
+
+#[gpui::test]
+fn a_failed_turn_of_an_auto_step_still_fails_it(cx: &mut TestAppContext) {
+    let rig = Rig::new(&["Oops."]);
+    rig.fake
+        .end_turns_with(Outcome::failed("The provider errored"));
+    rig.start(cx, &simple(json!({})));
+    cx.run_until_parked();
+    let run = rig.last_run();
+    assert_eq!(run.status, RunStatus::Failed);
+    assert!(rig.fake.world().waits.is_empty());
+}

@@ -186,5 +186,8 @@ fn a_call_after_the_run_stopped_is_refused(cx: &mut TestAppContext) {
     assert!(cx.update(|cx| workflows.update(cx, |w, _| w.stop_run(WF))));
     cx.run_until_parked();
     let error = call(s.window, session, "late", json!({"approved": true}), cx).unwrap_err();
-    assert!(error.contains("workflow step"), "{error}");
+    assert_eq!(
+        error,
+        monocode_core::mono::workflows::active::ActiveError::NotAStep.to_string()
+    );
 }

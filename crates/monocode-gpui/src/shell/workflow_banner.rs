@@ -2,7 +2,7 @@
 //! banner in the waiting session, the "needs you" notice, and the terminal session a step opens
 //! in the background. The state itself lives in `Workflows`; the shell only draws and delivers.
 use super::*;
-use crate::modal::{ghost_button, primary_button};
+use crate::modal::{disabled, ghost_button, primary_button};
 use crate::workflows::WaitBanner;
 use monocode_core::agent::Settings;
 
@@ -18,8 +18,20 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let workflows = self.workflows.clone()?;
-        let WaitBanner { workflow, step, .. } = workflows.read(cx).wait_banner(id)?;
-        let label: SharedString = format!("Workflow {workflow} - step {step}").into();
+        let WaitBanner {
+            workflow,
+            step,
+            turn_running,
+            ..
+        } = workflows.read(cx).wait_banner(id)?;
+        // Continue was pressed while the session's turn still runs: the step takes its outputs
+        // when the turn ends, so neither button does anything until then.
+        let label: SharedString = if turn_running {
+            format!("Workflow {workflow} - step {step} - Waiting for the turn to end")
+        } else {
+            format!("Workflow {workflow} - step {step}")
+        }
+        .into();
         let answer = |choice: crate::workflows::WaitChoice| {
             cx.listener(move |this, _, _, cx| {
                 this.workflow_answer_wait(id, choice, cx);
@@ -51,14 +63,24 @@ impl Shell {
                         .child(label),
                 )
                 .child(
-                    primary_button(("workflow-wait-continue", id as usize), "Continue")
-                        .debug_selector(|| "workflow-wait-continue".into())
-                        .on_click(answer(crate::workflows::WaitChoice::Continue)),
+                    disabled(
+                        primary_button(("workflow-wait-continue", id as usize), "Continue")
+                            .debug_selector(|| "workflow-wait-continue".into()),
+                        turn_running,
+                    )
+                    .when(!turn_running, |b| {
+                        b.on_click(answer(crate::workflows::WaitChoice::Continue))
+                    }),
                 )
                 .child(
-                    ghost_button(("workflow-wait-fail", id as usize), "Fail step")
-                        .debug_selector(|| "workflow-wait-fail".into())
-                        .on_click(answer(crate::workflows::WaitChoice::Fail)),
+                    disabled(
+                        ghost_button(("workflow-wait-fail", id as usize), "Fail step")
+                            .debug_selector(|| "workflow-wait-fail".into()),
+                        turn_running,
+                    )
+                    .when(!turn_running, |b| {
+                        b.on_click(answer(crate::workflows::WaitChoice::Fail))
+                    }),
                 )
                 .into_any_element(),
         )
@@ -74,7 +96,7 @@ impl Shell {
     ) {
         if let Some(workflows) = self.workflows.clone() {
             // The answer does not reach back into the shell, so this is safe from a click.
-            let _ = workflows.update(cx, |w, _| w.answer_wait(id, choice));
+            let _ = workflows.update(cx, |w, cx| w.answer_wait(id, choice, cx));
         }
         cx.notify();
     }

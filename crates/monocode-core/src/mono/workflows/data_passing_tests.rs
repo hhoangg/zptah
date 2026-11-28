@@ -252,6 +252,22 @@ fn a_terminal_step_needs_claude_a_local_project_and_not_windows() {
 }
 
 #[test]
+fn a_terminal_step_on_a_remote_project_is_refused_and_a_chat_step_is_not() {
+    let mut terminal = chain(vec![session("dev", value!({"surface": "terminal"}))]);
+    terminal.input_values.insert(
+        "project",
+        InputValue::String("remote://env/workspaces/app".into()),
+    );
+    assert!(has(&terminal, "its project is on another machine"));
+    let mut chat = chain(vec![session("dev", value!({}))]);
+    chat.input_values.insert(
+        "project",
+        InputValue::String("remote://env/workspaces/app".into()),
+    );
+    assert_eq!(messages(&chat, false), Vec::<String>::new());
+}
+
+#[test]
 fn mode_and_surface_values_are_checked() {
     assert!(has(
         &chain(vec![session("dev", value!({"mode": "later"}))]),
@@ -326,7 +342,8 @@ fn review_texts_show_the_hint_the_agent_will_read_and_no_json_contract() {
     let (_, prompts) = super::yaml::review_texts(&w.nodes);
     let text = &prompts[0].text;
     assert!(text.starts_with("Review it\n\n"));
-    assert!(text.contains("app workflow.output '{\"verdict\": \"...\"}'"));
+    assert!(text.contains("\nRun: zptah app workflow.output '{\"verdict\": \"...\"}'\n"));
+    assert!(!text.contains("app app"), "{text}");
     assert!(!text.contains("fenced"));
 }
 
@@ -415,4 +432,29 @@ fn a_long_extraction_transcript_keeps_its_start_and_its_end() {
     assert!(text.ends_with("END"));
     assert!(text.contains("left out"));
     assert!(text.chars().count() < 1_200);
+}
+
+#[test]
+fn a_workflow_written_with_the_old_output_key_still_parses_and_is_written_as_outputs() {
+    let w = workflow_from(
+        &value!({
+            "id": "wf-abcd1234", "name": "Old", "inputs": {"project": {"type": "project"}},
+            "inputValues": {"project": "/work/api"},
+            "nodes": [
+                {"id": "start", "type": "manual"},
+                {"id": "dev", "type": "session", "project": "{{inputs.project}}", "prompt": "Go",
+                 "checkout": "root", "output": {"verdict": {"type": "string"}}},
+            ],
+            "edges": [{"from": "start", "to": "dev"}],
+            "enabled": false, "createdAt": 0
+        })
+        .to_string(),
+    );
+    let NodeKind::Session { output, .. } = &w.nodes[1].kind else {
+        panic!("not a session")
+    };
+    assert_eq!(output.keys().cloned().collect::<Vec<_>>(), ["verdict"]);
+    let written = serde_json::to_value(&w).unwrap();
+    assert!(written["nodes"][1].get("outputs").is_some(), "{written}");
+    assert!(written["nodes"][1].get("output").is_none(), "{written}");
 }

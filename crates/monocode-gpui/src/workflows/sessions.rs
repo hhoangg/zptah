@@ -27,6 +27,8 @@ use monocode_core::{
 };
 use serde_json::{Value, json};
 
+const REMOTE_TERMINAL: &str = "A terminal step runs on this computer, but this step's project is on another machine. Use a chat step.";
+
 /// A model the caller vouches for, with no settings of its own.
 fn bare_model(id: &str) -> monocode_core::catalog::Model {
     monocode_core::catalog::Model {
@@ -68,6 +70,11 @@ impl Workflows {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let shell = self.shell.upgrade().ok_or("The app is closing")?;
+        // A project on another machine has no local terminal: refused before anything is made,
+        // so no empty chat is left behind.
+        if req.terminal && monocode_core::surface::is_remote(&req.project) {
+            return Err(REMOTE_TERMINAL.into());
+        }
         let project = self
             .app_project(&req.project, cx)
             .ok_or("Not one of the app's projects")?;

@@ -919,6 +919,15 @@ impl<'a> Checker<'a> {
                         at,
                     );
                 }
+                // A project on another machine has no local terminal to run the CLI in.
+                if super::board_edit::project_path(self.w, node)
+                    .is_some_and(|path| crate::surface::is_remote(&path))
+                {
+                    self.add(
+                        "A terminal step runs on this computer: its project is on another machine, so use a chat step",
+                        at,
+                    );
+                }
                 if self.windows {
                     self.add(
                         "A terminal step is not available on Windows: use a chat step",

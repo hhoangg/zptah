@@ -25,9 +25,9 @@ mod summary;
 mod terminal;
 mod waits;
 
-#[cfg(test)]
-pub(crate) use runner::WaitNotice;
 pub(crate) use runner::{Live, WaitChoice, WorkflowRunner};
+#[cfg(test)]
+pub(crate) use runner::{SessionRequest, WaitNotice};
 pub(crate) use schedule::begin_quit;
 pub(crate) use waits::WaitBanner;
 

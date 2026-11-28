@@ -815,7 +815,15 @@ impl Exec {
         if !self.live() {
             return;
         }
-        if outcome.status != Status::Completed {
+        // "Wait for me" hands the session to the user when its first turn ends, however it ended:
+        // a turn they stopped or one that failed leaves a session they can still talk to. Only
+        // a session that is gone fails the step.
+        let user_has_it = mode == SessionMode::WaitForMe
+            && !terminal
+            && target.is_none()
+            && matches!(outcome.status, Status::Cancelled | Status::Failed)
+            && self.host.session_info(&session_id).is_some();
+        if outcome.status != Status::Completed && !user_has_it {
             // A cloud session that did not finish may still hold its first prompt (its start
             // failed): drop it so a later Retry does not run the step outside the run. The
             // instance is left alone.
@@ -929,6 +937,12 @@ impl Exec {
         for (name, value) in self.builtins(session_id, &reply, kind, base).await.iter() {
             output.insert(name.clone(), value.clone());
         }
+        // The session may have recorded more while the fields were read: what it recorded wins
+        // over what was read, and nothing more is taken after this (the node finishes without
+        // waiting, so a later call finds it over).
+        for (name, value) in self.pending_output(node_id, branch).iter() {
+            output.insert(name.clone(), value.clone());
+        }
         Ok(output)
     }
 
@@ -1028,9 +1042,29 @@ impl Exec {
         let timer = self.sleep(self.limits.approval_wait_ms);
         let answer = race(race(answer_rx.recv(), self.stop.wait()), timer).await;
         self.waits.borrow_mut().remove(&key);
+        let answer = match answer {
+            // The user may have chatted on and a turn may still be running: the outputs are
+            // taken once it has ended (or the run is stopped), and the step stays waiting until
+            // then.
+            Either::Left(Either::Left(Ok(WaitChoice::Continue))) => {
+                match race(self.host.turn_ends(session_id), self.stop.wait()).await {
+                    Either::Left(()) => answer,
+                    Either::Right(()) => Either::Left(Either::Right(())),
+                }
+            }
+            other => other,
+        };
         self.host.wait_over(session_id);
         match answer {
-            Either::Left(Either::Left(Ok(WaitChoice::Continue))) => Ok(()),
+            Either::Left(Either::Left(Ok(WaitChoice::Continue))) => {
+                // From here the step works again, reading what it needs.
+                self.apply(EngineEvent::WaitingForUser {
+                    node_id: node_id.into(),
+                    branch: branch.into(),
+                    waiting: false,
+                });
+                Ok(())
+            }
             Either::Left(Either::Left(Ok(WaitChoice::Fail))) => {
                 Err("You ended this step with Fail step.".into())
             }

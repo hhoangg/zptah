@@ -436,8 +436,9 @@ pub fn review_texts(nodes: &[Node]) -> (Vec<ReviewCommand>, Vec<ReviewPrompt>) {
             NodeKind::Session {
                 prompt: p, output, ..
             } => {
-                // The hint the app adds to the first prompt, with the CLI written as `app`.
-                let hint = output_hint(output, "app");
+                // The hint the app adds to the first prompt, with the app's command written by
+                // its name (a session is given the app's own path there).
+                let hint = output_hint(output, crate::brand::NATIVE_PRODUCT);
                 prompt(
                     node,
                     if hint.is_empty() {

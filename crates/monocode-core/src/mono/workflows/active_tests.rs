@@ -383,3 +383,35 @@ fn a_node_that_is_only_being_asked_about_its_loop_is_not_active() {
     run = started(&run, "review", "", "8");
     assert_eq!(find_active(&[&run], &ids(&["8"])), Err(ActiveError::Ended));
 }
+
+#[test]
+fn a_cloud_step_is_never_the_target_of_a_call() {
+    let w = workflow(
+        "wf-1",
+        vec![
+            n(json!({"id": "start", "type": "manual"})),
+            session("dev", json!({"target": {"kind": "codespace"}})),
+        ],
+        vec![e("start", "dev")],
+    );
+    let run = started(
+        &start_run(&w, RunCaller::new(CallerKind::Manual, "start"), AT, "r1"),
+        "dev",
+        "",
+        "remote:abc",
+    );
+    // Not "ended": the session was never a step this app can hear from.
+    assert_eq!(
+        find_active(&[&run], &ids(&["remote:abc"])),
+        Err(ActiveError::NotAStep)
+    );
+    let local = ActiveNode {
+        workflow_id: "wf-1".into(),
+        run_id: "r1".into(),
+        node_id: "dev".into(),
+        branch: String::new(),
+        round: 1,
+    };
+    let err = record_output(&run, &local, &value(json!({"ok": true}))).unwrap_err();
+    assert_eq!(err, ActiveError::NotAStep.to_string());
+}

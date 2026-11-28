@@ -95,9 +95,9 @@ pub enum EngineEvent {
         branch: BranchKey,
         waiting: bool,
     },
-    /// A "Wait for me" session finished its first turn (`waiting`), or the user chatted on and
-    /// the session works again (`!waiting`). Continue and Fail step end the node with
-    /// `NodeFinished` and `NodeFailed`.
+    /// A "Wait for me" session finished its first turn (`waiting`), or the user pressed Continue
+    /// and the step works again, reading its outputs (`!waiting`). Continue and Fail step end the
+    /// node with `NodeFinished` and `NodeFailed`.
     WaitingForUser {
         node_id: NodeId,
         branch: BranchKey,

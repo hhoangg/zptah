@@ -1311,7 +1311,8 @@ fn validate_lists_commands_and_prompts_verbatim() {
     assert_eq!(prompts.len(), 1);
     assert_eq!(text(&prompts[0], "nodeId"), "fetch");
     assert!(text(&prompts[0], "text").starts_with("List my open tickets."));
-    assert!(text(&prompts[0], "text").contains("app workflow.output"));
+    assert!(text(&prompts[0], "text").contains("Run: zptah app workflow.output '"));
+    assert!(!text(&prompts[0], "text").contains("app app"));
 }
 
 #[test]

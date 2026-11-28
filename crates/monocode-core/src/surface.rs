@@ -53,7 +53,7 @@ pub fn tui_caps(kind: Kind) -> TuiCaps {
     }
 }
 
-fn is_remote(cwd: &str) -> bool {
+pub fn is_remote(cwd: &str) -> bool {
     cwd.replace('\\', "/")
         .starts_with(crate::remote::REMOTE_PATH_PREFIX)
 }

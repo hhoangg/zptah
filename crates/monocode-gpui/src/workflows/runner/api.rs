@@ -245,6 +245,9 @@ pub(crate) trait WorkflowHost {
     fn extract(&self, request: ExtractRequest) -> Fut<Result<String, String>>;
     /// The step waits for the user: show the banner in its session and raise the notice.
     fn wait_for_user(&self, notice: WaitNotice);
+    /// Resolves once no turn of the session is running, at once when it is idle. After Continue
+    /// the step waits on this before it takes its outputs; the banner says so while it does.
+    fn turn_ends(&self, session_id: &str) -> Fut<()>;
     /// The wait is over (answered, timed out or stopped): the banner goes.
     fn wait_over(&self, session_id: &str);
     /// Delivers the summary of a run (see `Summary`).

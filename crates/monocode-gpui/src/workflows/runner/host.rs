@@ -177,6 +177,23 @@ async fn settle(
     }
 }
 
+/// Waits until no turn of a session is running. Its conversation wakes this; the poll is a net.
+async fn idle(
+    workflows: WeakEntity<Workflows>,
+    mut cx: AsyncApp,
+    session: i64,
+    wake: Receiver<()>,
+) {
+    loop {
+        match workflows.update(&mut cx, |w, cx| w.workflow_busy(session, cx)) {
+            Ok(Some(true)) => {}
+            // Idle, gone, or the app is closing: nothing is running.
+            _ => return,
+        }
+        let _ = race(wake.recv(), cx.background_executor().timer(WATCH_POLL)).await;
+    }
+}
+
 impl Workflows {
     pub(in crate::workflows) fn workflow_local_id(&mut self, persisted: &str) -> Option<i64> {
         if let Some(id) = self.live.ids.get(persisted) {
@@ -264,6 +281,44 @@ impl Workflows {
             wake,
             armed,
         ))
+    }
+
+    /// Whether the session is working on a turn now; `None` when it is gone.
+    pub(in crate::workflows) fn workflow_busy(
+        &mut self,
+        session: i64,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
+        if let Some(turn) = self.live.tui.get(&session) {
+            return Some(turn.busy());
+        }
+        let view = self
+            .shell
+            .upgrade()?
+            .update(cx, |shell, cx| shell.mono_ensure_session(session, cx))?;
+        Some(view.read(cx).workflow_working())
+    }
+
+    /// Waits for the turn the session may be in to end. The banner of a waiting step says it
+    /// waits for the turn while it does.
+    fn workflow_turn_ends(&mut self, persisted: &str, cx: &mut Context<Self>) -> Fut<()> {
+        let Some(local) = self.workflow_local_id(persisted) else {
+            return Box::pin(async {});
+        };
+        if self.workflow_busy(local, cx) != Some(true) {
+            return Box::pin(async {});
+        }
+        // A terminal session has no conversation to watch: its pane's events wake the wait.
+        if let Some((_, view)) = self.workflow_view(persisted, cx) {
+            self.workflow_watch(local, &view, cx);
+        }
+        if self.wait_for_turn(local)
+            && let Some(shell) = self.shell.upgrade()
+        {
+            shell.update(cx, |_, cx| cx.notify());
+        }
+        let wake = self.live.wake(local).1.clone();
+        Box::pin(idle(cx.weak_entity(), cx.to_async(), local, wake))
     }
 
     fn workflow_turn(&mut self, session: i64, cx: &mut Context<Self>) -> Option<Seen> {
@@ -567,6 +622,11 @@ impl WorkflowHost for AppHost {
 
     fn wait_for_user(&self, notice: WaitNotice) {
         self.with(|w, cx| w.workflow_wait(notice, cx));
+    }
+
+    fn turn_ends(&self, session_id: &str) -> Fut<()> {
+        self.with(|w, cx| w.workflow_turn_ends(session_id, cx))
+            .unwrap_or_else(|| Box::pin(async {}))
     }
 
     fn wait_over(&self, session_id: &str) {

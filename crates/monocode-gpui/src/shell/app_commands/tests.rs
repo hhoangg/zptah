@@ -2362,3 +2362,32 @@ fn a_remote_or_cloud_session_gets_no_terminals(cx: &mut TestAppContext) {
     let error = call(window, 987_654, "rc-u", "terminals.list", json!({}), cx).unwrap_err();
     assert!(error.contains("Unknown session"), "{error}");
 }
+
+#[gpui::test]
+fn a_terminal_session_that_has_the_app_env_is_refused_the_session_actions(cx: &mut TestAppContext) {
+    let (window, _, caller) = setup(cx);
+    // A terminal step's CLI runs with the app session variable, but it has no chat behind it.
+    let tui = window
+        .update(cx, |shell, _, cx| {
+            let cwd = shell.sessions[&caller].read(cx).summary.cwd.clone();
+            let summary = crate::runtime::locked(&shell.store)
+                .unwrap()
+                .create_with_surface("claude", &cwd, monocode_core::surface::Surface::Tui)
+                .unwrap();
+            let id = summary.id;
+            shell.add(summary, cx);
+            id
+        })
+        .unwrap();
+    for (n, (action, expected)) in [
+        ("today.current", "Unknown session"),
+        ("terminals.list", "Unknown session"),
+        ("sessions.list", "Operator is not enabled"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let error = call(window, tui, &format!("tui-{n}"), action, json!({}), cx).unwrap_err();
+        assert!(error.contains(expected), "{action}: {error}");
+    }
+}

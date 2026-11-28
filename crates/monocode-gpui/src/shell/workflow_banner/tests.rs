@@ -366,6 +366,88 @@ fn a_terminal_step_that_would_not_run_claude_is_refused(cx: &mut TestAppContext)
         .unwrap();
 }
 
+#[gpui::test]
+fn a_terminal_step_exiting_with_an_error_mid_turn_fails_instead_of_finishing(
+    cx: &mut TestAppContext,
+) {
+    let s = claude_setup(cx);
+    let workflows = start(&s, cx, &definition(&s, json!({})));
+    let id = ship_session(&workflows, cx);
+    cli_started(&s, cx, id);
+    turn(&s, cx, id, true);
+    // The pane ends the turn as the CLI leaves, then reports the exit.
+    s.window
+        .update(cx, |shell, _, cx| {
+            let terminal = shell.tui_sessions[&id]
+                .read(cx)
+                .terminal()
+                .cloned()
+                .unwrap();
+            terminal.update(cx, |terminal, cx| terminal.fake_exit(Some(1), cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let run = run_of(&workflows, cx);
+    assert_eq!(run.status, RunStatus::Failed);
+    let error = run
+        .nodes
+        .iter()
+        .find(|n| n.node_id == "ship")
+        .unwrap()
+        .error
+        .clone()
+        .unwrap();
+    assert!(error.contains("exited before its turn ended"), "{error}");
+}
+
+#[gpui::test]
+fn a_terminal_step_on_a_remote_project_is_refused_before_a_session_exists(cx: &mut TestAppContext) {
+    let s = claude_setup(cx);
+    let workflows = workflows_of(&s, cx);
+    let host = cx.update(|cx| workflows.update(cx, |w, cx| w.workflow_host(cx)));
+    let before = s
+        .window
+        .update(cx, |shell, _, _| {
+            crate::runtime::locked(&shell.store)
+                .unwrap()
+                .sessions()
+                .unwrap()
+                .len()
+        })
+        .unwrap();
+    let request = crate::workflows::SessionRequest {
+        project: "remote://env/workspaces/app".into(),
+        prompt: "/ship".into(),
+        harness: None,
+        model: None,
+        effort: None,
+        new_worktree: false,
+        worktree_cwd: None,
+        parent_session_id: None,
+        folder_name: None,
+        target: None,
+        terminal: true,
+    };
+    let task = host.start_session(request);
+    let error = cx
+        .foreground_executor()
+        .block_test(task)
+        .err()
+        .expect("refused");
+    assert!(error.contains("another machine"), "{error}");
+    s.window
+        .update(cx, |shell, _, _| {
+            let after = crate::runtime::locked(&shell.store)
+                .unwrap()
+                .sessions()
+                .unwrap()
+                .len();
+            assert_eq!(after, before, "no empty session was left behind");
+            assert!(shell.tui_sessions.is_empty());
+        })
+        .unwrap();
+}
+
 // --- the banner -------------------------------------------------------------------------------
 
 /// A session in the project that no step runs, as a chat or as a terminal.
@@ -452,5 +534,42 @@ fn a_banner_button_for_a_step_that_is_gone_only_removes_the_banner(cx: &mut Test
             })
             .unwrap();
     }
+    assert!(cx.update(|cx| workflows.read(cx).wait_banner(id)).is_none());
+}
+
+#[gpui::test]
+fn continue_during_a_running_turn_keeps_the_banner_until_the_turn_ends(cx: &mut TestAppContext) {
+    let s = claude_setup(cx);
+    let workflows = start(&s, cx, &definition(&s, json!({"mode": "waitForMe"})));
+    let id = ship_session(&workflows, cx);
+    cli_started(&s, cx, id);
+    turn(&s, cx, id, true);
+    turn(&s, cx, id, false);
+    assert_eq!(ship_status(&workflows, cx), NodeStatus::WaitingForUser);
+    let banner = cx.update(|cx| workflows.read(cx).wait_banner(id)).unwrap();
+    assert!(!banner.turn_running);
+    // The user chats on, then presses Continue while the CLI still works.
+    turn(&s, cx, id, true);
+    s.window
+        .update(cx, |shell, _, cx| {
+            shell.workflow_answer_wait(id, WaitChoice::Continue, cx)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let banner = cx.update(|cx| workflows.read(cx).wait_banner(id)).unwrap();
+    assert!(banner.turn_running, "the banner says it waits for the turn");
+    assert_eq!(ship_status(&workflows, cx), NodeStatus::WaitingForUser);
+    // Neither button does anything now: another press finds nothing to answer.
+    s.window
+        .update(cx, |shell, _, cx| {
+            shell.workflow_answer_wait(id, WaitChoice::Fail, cx)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(ship_status(&workflows, cx), NodeStatus::WaitingForUser);
+    assert_eq!(run_of(&workflows, cx).status, RunStatus::Running);
+    // The turn ends: the step takes its outputs and the banner goes.
+    turn(&s, cx, id, false);
+    assert_eq!(run_of(&workflows, cx).status, RunStatus::Done);
     assert!(cx.update(|cx| workflows.read(cx).wait_banner(id)).is_none());
 }

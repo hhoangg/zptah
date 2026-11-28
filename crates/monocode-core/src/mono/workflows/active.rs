@@ -63,6 +63,18 @@ fn is_active(run: &WorkflowRun, r: &NodeRun) -> bool {
             .is_some_and(|n| matches!(n.kind, NodeKind::Session { .. }))
 }
 
+/// Whether `r` runs on a cloud machine. Such a session cannot reach this app, so it never records
+/// anything: a call that names one is not from a step's session.
+fn is_cloud(run: &WorkflowRun, r: &NodeRun) -> bool {
+    matches!(
+        run.definition.node(&r.node_id).map(|n| &n.kind),
+        Some(NodeKind::Session {
+            target: Some(_),
+            ..
+        })
+    )
+}
+
 fn names(r: &NodeRun, ids: &[String]) -> bool {
     r.session_id.as_ref().is_some_and(|id| ids.contains(id))
 }
@@ -90,6 +102,9 @@ pub fn find_active(runs: &[&WorkflowRun], ids: &[String]) -> Result<ActiveNode, 
     for run in runs {
         for r in &run.nodes {
             let current = names(r, ids);
+            if is_cloud(run, r) && (current || named_before(r, ids)) {
+                continue;
+            }
             if current && is_active(run, r) {
                 found.push(ActiveNode {
                     workflow_id: run.workflow_id.clone(),
@@ -127,6 +142,9 @@ pub fn record_output(
         return Err(ActiveError::Ended.to_string());
     };
     let r = &run.nodes[at];
+    if is_cloud(run, r) {
+        return Err(ActiveError::NotAStep.to_string());
+    }
     if run.id != target.run_id || r.round != target.round || !is_active(run, r) {
         return Err(ActiveError::Ended.to_string());
     }

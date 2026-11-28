@@ -48,6 +48,12 @@ pub(super) struct World {
     head: Option<Option<String>>,
     /// Answers of the extraction call, in order.
     extractions: VecDeque<Option<Result<String, String>>>,
+    /// Extraction calls wait for this before they answer.
+    extract_gate: Option<Receiver<()>>,
+    /// While set, a session has a turn running: `turn_ends` waits for it to close.
+    busy_gate: Option<Receiver<()>>,
+    /// The sessions `turn_ends` was asked about.
+    pub(super) turn_end_calls: Vec<String>,
     pub(super) head_calls: Vec<String>,
     pub(super) fact_calls: Vec<(String, Option<String>)>,
     pub(super) extract_calls: Vec<ExtractRequest>,
@@ -121,6 +127,18 @@ impl FakeHost {
     /// The next extraction call answers with this.
     pub(super) fn extraction(&self, answer: Result<String, String>) {
         self.0.borrow_mut().extractions.push_back(Some(answer));
+    }
+    /// Extraction calls wait for this to be closed before they answer.
+    pub(super) fn extraction_gate(&self) -> Hold {
+        let (hold, rx) = self.gate();
+        self.0.borrow_mut().extract_gate = Some(rx);
+        hold
+    }
+    /// Sessions have a turn running until this is closed.
+    pub(super) fn busy(&self) -> Hold {
+        let (hold, rx) = self.gate();
+        self.0.borrow_mut().busy_gate = Some(rx);
+        hold
     }
     /// The next extraction call never answers.
     pub(super) fn hang_next_extraction(&self) {
@@ -390,7 +408,11 @@ impl WorkflowHost for FakeHost {
             .extractions
             .pop_front()
             .unwrap_or_else(|| Some(Err("The fake host has no extraction answer".into())));
+        let gate = w.extract_gate.clone();
         Box::pin(async move {
+            if let Some(gate) = gate {
+                let _ = gate.recv().await;
+            }
             match answer {
                 Some(answer) => answer,
                 None => std::future::pending().await,
@@ -400,6 +422,17 @@ impl WorkflowHost for FakeHost {
 
     fn wait_for_user(&self, notice: WaitNotice) {
         self.0.borrow_mut().waits.push(notice);
+    }
+
+    fn turn_ends(&self, session_id: &str) -> Fut<()> {
+        let mut w = self.0.borrow_mut();
+        w.turn_end_calls.push(session_id.into());
+        let gate = w.busy_gate.clone();
+        Box::pin(async move {
+            if let Some(gate) = gate {
+                let _ = gate.recv().await;
+            }
+        })
     }
 
     fn wait_over(&self, session_id: &str) {
