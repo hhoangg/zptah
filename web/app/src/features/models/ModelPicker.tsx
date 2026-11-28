@@ -153,7 +153,7 @@ function ModelList({
             key={value.harness}
             accounts={accounts}
             value={accountId}
-            existingSession={existingSession}
+            opensNewChat={existingSession && Boolean(onSwitchAccount)}
             onPick={pickAccount}
             usage={usage}
             canRefresh={!disabled}

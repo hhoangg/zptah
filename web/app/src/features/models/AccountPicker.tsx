@@ -15,15 +15,15 @@ type Snapshot = AccountUsageResult["accounts"][string];
 export interface AccountPickerProps {
   accounts: readonly PickerAccount[];
   value: string;
-  /** A running session: switching accounts opens a new chat. */
-  existingSession: boolean;
+  /** Picking another account opens a new chat (a running session); otherwise the account is switched in place. */
+  opensNewChat: boolean;
   onPick: (accountId: string) => void;
   usage: Pick<AccountUsage, "accounts" | "refreshing" | "error" | "refresh">;
   /** Refresh is a control request; a read-only device cannot probe. */
   canRefresh?: boolean;
 }
 
-export function AccountPicker({ accounts, value, existingSession, onPick, usage, canRefresh = true }: AccountPickerProps) {
+export function AccountPicker({ accounts, value, opensNewChat, onPick, usage, canRefresh = true }: AccountPickerProps) {
   const [open, setOpen] = useState(false);
   const selected = accounts.find((account) => account.id === value);
   const failed = usage.error != null;
@@ -82,9 +82,9 @@ export function AccountPicker({ accounts, value, existingSession, onPick, usage,
               </button>
             );
           })}
-          {existingSession || accounts.length < 2 ? (
+          {opensNewChat || accounts.length < 2 ? (
             <p className="border-t border-stroke py-2 text-meta text-muted-text">
-              {existingSession ? "Switching accounts opens a new chat." : "Add accounts in the desktop settings, under Accounts."}
+              {opensNewChat ? "Switching accounts opens a new chat." : "Add accounts in the desktop settings, under Accounts."}
             </p>
           ) : null}
         </div>

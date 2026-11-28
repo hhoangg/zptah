@@ -2588,6 +2588,11 @@ impl Shell {
                     .as_ref()
                     .map(|(kind, _)| *kind)
                     .unwrap_or_else(|| Kind::from_id(&view.read(cx).summary.provider));
+                // A pick that moves the chat to another provider is refused up front while a
+                // handoff or a last-turn edit is running: nothing else in the request applies.
+                if let Some((kind, _)) = &model {
+                    view.read(cx).mobile_model_ready(*kind)?;
+                }
                 let account = mobile_account_pick(kind, params, cx)?;
                 if let Some(profile) = &account {
                     view.read(cx).mobile_account_ready(&profile.id)?;
@@ -5579,9 +5584,16 @@ mod tests {
                     "model": "sonnet",
                     "providerAccountId": work,
                     "switchAccount": true,
+                    "modelSettings": {"thinking": "true"},
+                    "runtimeMode": "auto",
                 });
-                // A handoff in progress refuses the model pick: the chat stays on Codex, so the
-                // Claude account must not land on it.
+                // A handoff in progress refuses the model pick up front: the chat stays on Codex
+                // with its account, settings and access as they were.
+                let (thinking, access) = {
+                    let v = shell.sessions[&codex].read(cx);
+                    (v.settings.thinking, v.settings.access)
+                };
+                assert_ne!(access, AccessMode::Auto);
                 shell.sessions[&codex]
                     .update(cx, |v, _| v.set_status_for_test("Preparing handoff…"));
                 assert!(
@@ -5592,6 +5604,8 @@ mod tests {
                 let v = shell.sessions[&codex].read(cx);
                 assert_eq!(v.summary.provider, Kind::Codex.id());
                 assert_eq!(v.settings.account.id, monocode_core::accounts::DEFAULT);
+                assert_eq!(v.settings.thinking, thinking);
+                assert_eq!(v.settings.access, access);
 
                 shell.sessions[&codex].update(cx, |v, _| v.set_status_for_test(""));
                 assert!(

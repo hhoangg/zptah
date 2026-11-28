@@ -432,8 +432,9 @@ impl Conversation {
         cx.notify();
     }
     /// Whether the phone may move this conversation to account `id` now. Checked
-    /// before any other part of the request is applied, so a refused pick
-    /// leaves the model, settings and access as they were.
+    /// before any other part of the request is applied, so a pick refused here
+    /// leaves the model, settings and access as they were. A model pick that
+    /// `apply_model_pick` would refuse is caught by `mobile_model_ready` first.
     pub(crate) fn mobile_account_ready(&self, id: &str) -> Result<(), String> {
         if self.settings.account.id != id
             && (self.busy
