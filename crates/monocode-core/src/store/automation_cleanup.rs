@@ -67,6 +67,18 @@ fn create_backups_dir(path: &Path) -> std::io::Result<()> {
     builder.create(path)
 }
 
+/// Syncs the folder that holds `path`, so a rename into it survives a power cut. Windows offers no
+/// folder sync through std, so there it does nothing.
+fn sync_folder(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if let Some(folder) = path.parent() {
+        std::fs::File::open(folder)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 /// Writes `bytes` to `path` through a temporary file, so a crash never leaves a half-written
 /// backup under the final name. The folder is synced too, so the rename survives a power cut.
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -86,13 +98,7 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
             file.sync_all()
         })
         .and_then(|_| std::fs::rename(&temporary, path))
-        .and_then(|_| {
-            #[cfg(unix)]
-            if let Some(folder) = path.parent() {
-                std::fs::File::open(folder)?.sync_all()?;
-            }
-            Ok(())
-        });
+        .and_then(|_| sync_folder(path));
     if let Err(error) = result {
         let _ = std::fs::remove_file(&temporary);
         return Err(error.to_string());
