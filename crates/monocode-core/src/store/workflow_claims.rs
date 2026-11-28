@@ -38,6 +38,19 @@ impl Store {
         sql(ensure_workflow_claims_table(&self.conn))
     }
 
+    /// For a test of the app: makes every new claim fail (or work again), as a database that
+    /// cannot be written would.
+    #[cfg(feature = "test-support")]
+    pub fn refuse_workflow_claims(&self, refuse: bool) -> Result<(), String> {
+        self.ensure_claims()?;
+        sql(self.conn.execute_batch(if refuse {
+            "CREATE TRIGGER IF NOT EXISTS refuse_workflow_claims BEFORE INSERT ON workflow_event_claims
+             BEGIN SELECT RAISE(ABORT, 'the claims are unavailable'); END;"
+        } else {
+            "DROP TRIGGER IF EXISTS refuse_workflow_claims;"
+        }))
+    }
+
     fn has_claims_table(&self) -> bool {
         self.conn
             .query_row(

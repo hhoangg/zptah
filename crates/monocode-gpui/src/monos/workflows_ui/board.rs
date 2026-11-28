@@ -98,6 +98,8 @@ pub(super) enum BoardField {
     /// Committed: the name, and the hint, of the requirement at this place.
     RequireName(usize),
     RequireHint(usize),
+    /// Committed as typed: the repositories an event trigger is limited to.
+    EventRepos(String),
 }
 
 impl BoardField {
@@ -149,6 +151,11 @@ pub(in crate::monos) enum BoardPick {
     WorkspaceProject,
     /// How many runs go at the same time (1 to 10).
     Concurrency,
+    /// The source, the event, the project and the ClickUp space of the event trigger.
+    EventSource(String),
+    EventKind(String),
+    EventProject(String),
+    EventSpace(String),
 }
 
 /// The loop being asked for after a connection back up a branch.
@@ -833,6 +840,7 @@ impl Monos {
             BoardField::BaseBranch => {
                 self.board_meta_edit(|m| m.workspace.base_branch = some(text.trim()), cx)
             }
+            BoardField::EventRepos(id) => self.board_event_repos(id, &text, cx),
             BoardField::Title(id) => self.board_node_edit(id, |n| n.title = some(&text), cx),
             BoardField::Time(id) => self.board_node_edit(
                 id,

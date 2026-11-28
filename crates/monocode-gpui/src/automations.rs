@@ -528,19 +528,15 @@ impl Automations {
             return;
         };
         self.clickup_spaces_loading = true;
-        let work = cx.background_executor().spawn(async move {
-            let root = locked(&database)?
-                .data_dir()
-                .map(std::path::Path::to_path_buf)
-                .ok_or("No data directory")?;
-            monocode_core::inbox::clickup::clickup_list_spaces(root)
-        });
+        let work = cx
+            .background_executor()
+            .spawn(async move { crate::inbox::spaces::list_spaces(&database) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.clickup_spaces_loading = false;
                 if let Ok(spaces) = result {
-                    this.clickup_spaces = spaces.into_iter().map(|s| (s.id, s.name)).collect();
+                    this.clickup_spaces = spaces;
                 }
                 cx.notify();
             });

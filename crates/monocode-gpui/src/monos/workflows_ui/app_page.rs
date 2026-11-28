@@ -46,6 +46,18 @@ impl WorkflowsPage {
         });
     }
 
+    /// What the Inbox knows, for the event inspector: which sources are connected, and its items.
+    pub(crate) fn set_event_sources(
+        &mut self,
+        connections: std::collections::HashMap<String, (bool, String)>,
+        items: Vec<monocode_core::inbox::Item>,
+        cx: &mut Context<Self>,
+    ) {
+        self.monos.update(cx, |monos, cx| {
+            monos.set_event_sources(connections, items, cx)
+        });
+    }
+
     /// The page is on screen (or no longer is).
     pub(crate) fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
         self.monos

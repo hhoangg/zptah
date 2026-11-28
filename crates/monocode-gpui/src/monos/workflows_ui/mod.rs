@@ -26,6 +26,9 @@ mod import;
 #[cfg(test)]
 mod import_tests;
 mod inspector;
+mod inspector_event;
+#[cfg(test)]
+mod inspector_event_tests;
 mod inspector_parts;
 #[cfg(test)]
 mod inspector_tests;
@@ -144,6 +147,8 @@ pub(super) struct WorkflowsUi {
     requested: bool,
     /// Where the Ask Mono picker opens from.
     ask_anchor: AnchorSlot,
+    /// What the Inbox tells the event inspector (see `inspector_event`).
+    events: inspector_event::EventSources,
     /// The open page, or the list when `None`.
     route: Option<WfRoute>,
     /// Whether the Workflows view is the one on screen.

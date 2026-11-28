@@ -1,10 +1,7 @@
-//! Runs started by an Inbox item. The Inbox wiring (a later step) matches an item to a workflow
+//! Runs started by an Inbox item. The Inbox wiring (`shell/workflow_events.rs`) matches an item to a workflow
 //! trigger (`event::matching_trigger`) and calls `start_event_run`; the "Test run with this item"
 //! button calls `start_test_run`. Both go through the queue like every other start (see
 //! `monocode_core::mono::workflows::event_run`).
-//!
-//! The seams are called by the Inbox wiring, which is a later step, so they look unused until then.
-#![allow(dead_code)]
 use super::Workflows;
 use crate::runtime::{Database, locked};
 use gpui::{Context, Task};

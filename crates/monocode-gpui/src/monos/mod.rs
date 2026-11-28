@@ -86,6 +86,8 @@ pub(crate) struct ShowDetails(pub String);
 pub(crate) struct OpenWorkflowSession(pub i64);
 /// "Ask Mono to build a workflow" picked a Mono (its id): open it and start the sentence.
 pub(crate) struct AskMonoForWorkflow(pub String);
+/// The event inspector's Connect link: open Settings > Inbox.
+pub(crate) struct OpenInboxSettings;
 /// The Mono's emoji settings asked for the shared library: Settings > Monos > Emoji.
 pub(crate) struct ShowEmojiLibrary;
 /// The Browser tab saved a new path for npx (empty is automatic): the shell keeps it in the
@@ -278,6 +280,7 @@ impl EventEmitter<TabOpened> for Monos {}
 impl EventEmitter<ShowDetails> for Monos {}
 impl EventEmitter<OpenWorkflowSession> for Monos {}
 impl EventEmitter<AskMonoForWorkflow> for Monos {}
+impl EventEmitter<OpenInboxSettings> for Monos {}
 impl EventEmitter<ShowEmojiLibrary> for Monos {}
 impl EventEmitter<NodePathChanged> for Monos {}
 impl EventEmitter<ChatOpened> for Monos {}
