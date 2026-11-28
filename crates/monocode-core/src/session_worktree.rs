@@ -76,6 +76,19 @@ pub fn workflow_worktree_owner(store: &Store, path: &str) -> Option<String> {
     })
 }
 
+/// Like [`workflow_worktree_owner`], but a failed lookup is an error, so a guard can refuse.
+pub fn workflow_worktree_owner_checked(
+    store: &Store,
+    path: &str,
+) -> Result<Option<String>, String> {
+    for key in workflow_worktree_keys(path) {
+        if let Some(id) = store.setting(&key)?.filter(|id| !id.is_empty()) {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
 /// Forgets the mark of a worktree the user removed, under every spelling it may have.
 pub fn unmark_workflow_worktree(store: &Store, path: &str) -> Result<(), String> {
     for key in workflow_worktree_keys(path) {

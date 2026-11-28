@@ -112,6 +112,14 @@ fn name_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '\\')
 }
 
+/// Punctuation after a path, not part of it: after any leading dots (`.`, `...`) the text ends
+/// or goes on with something that cannot be part of a name (`.)`, `."`, `. x`). A dot that
+/// leads into more name (`.txt`, `./x`) stays part of the path. A comma is not a name character.
+fn sentence_end(after: &str) -> bool {
+    let rest = after.trim_start_matches('.');
+    rest.len() < after.len() && rest.chars().next().is_none_or(|c| !name_char(c))
+}
+
 /// Replaces `path` in `text` where it stands as a whole path: not in the middle of a longer one.
 fn replace_path(text: &str, path: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -123,7 +131,8 @@ fn replace_path(text: &str, path: &str) -> String {
         let end_ok = after
             .chars()
             .next()
-            .is_none_or(|c| !(name_char(c) && c != '/' && c != '\\'));
+            .is_none_or(|c| !(name_char(c) && c != '/' && c != '\\'))
+            || sentence_end(after);
         out.push_str(before);
         if start_ok && end_ok {
             out.push_str("(worktree)");
@@ -134,6 +143,11 @@ fn replace_path(text: &str, path: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+#[cfg(test)]
+pub(super) fn replace_path_for_test(text: &str, path: &str) -> String {
+    replace_path(text, path)
 }
 
 /// Replaces the run's worktree paths wherever text carries them (a summary built from

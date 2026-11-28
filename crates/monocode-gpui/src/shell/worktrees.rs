@@ -76,11 +76,24 @@ impl Shell {
     /// Why a worktree a workflow run owns cannot be deleted now: the run is going, stopping, or
     /// about to start or resume. `None` for any other worktree, and for a run that is over.
     pub(crate) fn workflow_run_holds(&self, path: &str, cx: &App) -> Option<String> {
-        let owner = crate::runtime::locked(&self.store)
-            .ok()
-            .and_then(|db| monocode_core::session_worktree::workflow_worktree_owner(&db, path))?;
+        // A failed lookup refuses: nothing is deleted on a guess.
+        let owner = match crate::runtime::locked(&self.store).and_then(|db| {
+            monocode_core::session_worktree::workflow_worktree_owner_checked(&db, path)
+        }) {
+            Ok(Some(owner)) => owner,
+            Ok(None) => return None,
+            Err(_) => {
+                return Some(
+                    "Could not check whether a workflow run owns this worktree. Try again.".into(),
+                );
+            }
+        };
         let workflows = self.workflows()?;
-        workflows.read(cx).run_is_held(&owner).then(|| {
+        let workflows = workflows.read(cx);
+        let held = workflows.run_is_held(&owner);
+        // A resume asked for is waiting to be claimed: it would use the folder.
+        let resume_asked = workflows.resume_asked_for(&owner);
+        (held || resume_asked).then(|| {
             "A workflow run is using this worktree. Stop it, or wait until it ends, first.".into()
         })
     }

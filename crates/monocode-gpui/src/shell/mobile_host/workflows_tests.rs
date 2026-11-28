@@ -892,3 +892,27 @@ fn only_whole_paths_are_hidden_and_the_disk_spelling_counts() {
     assert!(text.contains(&format!("x{}", real.display())), "{text}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_path_ending_a_sentence_is_hidden() {
+    use super::workflows::replace_path_for_test as hide;
+    let path = "/x/app-worktrees/wf-a-1";
+    assert_eq!(hide(&format!("in {path}."), path), "in (worktree).");
+    assert_eq!(
+        hide(&format!("in {path}, then"), path),
+        "in (worktree), then"
+    );
+    assert_eq!(
+        hide(&format!("in {path}. Next"), path),
+        "in (worktree). Next"
+    );
+    assert_eq!(hide(&format!("{path}.txt"), path), format!("{path}.txt"));
+    assert_eq!(hide(&format!("{path}./x"), path), format!("{path}./x"));
+    assert_eq!(
+        hide(&format!("see \"{path}.\""), path),
+        "see \"(worktree).\""
+    );
+    assert_eq!(hide(&format!("(in {path}.)"), path), "(in (worktree).)");
+    assert_eq!(hide(&format!("{path}..."), path), "(worktree)...");
+    assert_eq!(hide(&format!("'{path}.'"), path), "'(worktree).'");
+}

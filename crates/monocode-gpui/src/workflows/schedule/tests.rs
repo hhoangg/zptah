@@ -353,6 +353,26 @@ fn a_resume_written_in_the_file_continues_an_interrupted_run(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn a_worktree_of_a_run_asked_to_resume_is_not_deleted_from_settings(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let tree = "/work/monocode-worktrees/resume-tree";
+    monocode_core::session_worktree::mark_workflow_worktree(
+        &s.store.lock().unwrap(),
+        tree,
+        "run-old",
+    )
+    .unwrap();
+    let holds = |cx: &mut TestAppContext| {
+        s.window
+            .update(cx, |shell, _, cx| shell.workflow_run_holds(tree, cx))
+            .unwrap()
+    };
+    assert_eq!(holds(cx), None);
+    put(&s, vec![waiting(&s, A, json!({"resumeRunId": "run-old"}))]);
+    assert!(holds(cx).unwrap().contains("workflow run is using"));
+}
+
+#[gpui::test]
 fn the_first_look_interrupts_runs_a_previous_session_left_but_not_the_ones_it_drives(
     cx: &mut TestAppContext,
 ) {

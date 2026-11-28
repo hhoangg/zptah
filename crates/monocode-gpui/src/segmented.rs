@@ -66,26 +66,45 @@ pub(crate) fn segmented_with<T: 'static>(
                 .rounded(px(5.))
                 .px(px(10.))
                 .py_1()
-                .map(|d| {
-                    if off {
-                        d.cursor_default().text_color(content(0.25))
-                    } else {
-                        d.cursor_pointer()
-                    }
-                })
-                .map(|d| {
-                    if off {
-                        d
-                    } else if selected {
-                        d.bg(content(0.1)).text_color(content(1.))
-                    } else {
-                        d.text_color(content(0.5))
-                            .hover(|s| s.text_color(content(1.)))
-                    }
-                })
+                .map(|d| option_look(d, selected, off))
                 .child(text.to_owned())
                 .when(!off, |d| {
                     d.on_click(cx.listener(move |this, _, _, cx| change(this, option, cx)))
                 })
         }))
+}
+
+/// An option's cursor, background and text. A chosen option keeps its background even when it is
+/// disabled (only its text is dimmed), so a stored value whose option is no longer pickable still
+/// reads as the chosen one.
+fn option_look(d: Stateful<Div>, selected: bool, off: bool) -> Stateful<Div> {
+    if off {
+        let d = d.cursor_default().text_color(content(0.25));
+        return if selected { d.bg(content(0.1)) } else { d };
+    }
+    if selected {
+        d.cursor_pointer().bg(content(0.1)).text_color(content(1.))
+    } else {
+        d.cursor_pointer()
+            .text_color(content(0.5))
+            .hover(|s| s.text_color(content(1.)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn background(selected: bool, off: bool) -> bool {
+        let mut d = option_look(div().id("o"), selected, off);
+        d.style().background.is_some()
+    }
+
+    #[test]
+    fn a_chosen_and_disabled_option_keeps_its_background() {
+        assert!(background(true, true));
+        assert!(background(true, false));
+        assert!(!background(false, true));
+        assert!(!background(false, false));
+    }
 }
