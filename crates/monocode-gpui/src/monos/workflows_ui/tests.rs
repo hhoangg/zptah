@@ -754,9 +754,16 @@ pub(in crate::monos) fn click(visual: &mut VisualTestContext, selector: &'static
 }
 
 /// Lets the page draw, so what is clicked is where it is drawn.
+///
+/// A canvas learns its size while it is painted and fits its view on the next draw. A refresh only
+/// marks the window dirty; the draw happens on the next window update, so each round ends with one.
 pub(super) fn settle(_: &Setup, visual: &mut VisualTestContext) {
+    for _ in 0..3 {
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        visual.update(|_, _| {});
+    }
     visual.run_until_parked();
-    visual.refresh().unwrap();
 }
 
 pub(super) fn notice(s: &Setup, visual: &mut VisualTestContext) -> Option<String> {
