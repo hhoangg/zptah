@@ -586,6 +586,21 @@ fn a_real_reply_of_huge_runs_fits_one_mebibyte() {
     let value = reply_of(&web(None, None), runs_of(&w, runs), &Links::new());
     assert!(serde_json::to_vec(&value).unwrap().len() <= 1024 * 1024);
     assert_eq!(value["runs"][0]["id"], "run-0");
+    // Runs left out are counted, and the ones kept are not marked as having lost outputs for it.
+    let kept = value["runs"].as_array().unwrap().len();
+    assert!(kept < 20);
+    assert_eq!(value["runsDropped"], 20 - kept);
+}
+
+#[test]
+fn runs_dropped_is_absent_when_every_run_fits() {
+    let w = workflow("w", &["/work/a"]);
+    let value = reply_of(
+        &web(None, None),
+        runs_of(&w, vec![run_of(&w, &[])]),
+        &Links::new(),
+    );
+    assert!(value.get("runsDropped").is_none());
 }
 
 // --- the background read ---
@@ -664,6 +679,7 @@ fn a_hidden_workflow_and_a_missing_one_get_the_same_reply_and_their_runs_are_nev
 
 #[test]
 fn a_runs_file_that_cannot_be_read_is_an_error_without_a_path_and_not_never_run() {
+    // A narrowed device and one with no selection classify the same file the same way.
     let dir = temp_dir();
     let known = vec!["/work/a".to_owned()];
     let device = web(None, None);

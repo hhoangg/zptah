@@ -19,7 +19,7 @@ use monocode_core::mono::workflows::{
     cli::{has_unresolved_project, workflow_projects},
     global::WorkflowsDir,
     model::{NodeKind, NodeRun, Workflow, WorkflowRun, with_run_values},
-    store::{last_run_of, load_runs_checked, load_workflows},
+    store::{load_runs_checked, load_workflows},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -146,7 +146,7 @@ fn strip_outputs(run: &mut Value) -> bool {
 
 /// Keeps the runs (newest first) under `budget` bytes. Every string is already capped, so this
 /// only chooses what to leave out: first the node outputs of the oldest runs (`outputsDropped` on
-/// each run that lost some), then the oldest runs themselves, and at last the tail of the newest
+/// each run that lost some), then the oldest runs themselves (the caller counts them as `runsDropped`), and at last the tail of the newest
 /// run's steps (`nodesTruncated`). Each run is sized once and the total follows incrementally.
 pub(super) fn bound_runs(runs: &mut Vec<Value>, budget: usize) {
     let mut sizes: Vec<usize> = runs.iter().map(json_len).collect();
@@ -272,14 +272,20 @@ pub(super) fn reply_of(device: &DeviceContext, loaded: Loaded, links: &Links) ->
                 .iter()
                 .map(|run| run_reply(device, run, links))
                 .collect();
+            let before = runs.len();
             bound_runs(&mut runs, MAX_REPLY_BYTES - REPLY_RESERVE);
-            json!({
+            let dropped = before - runs.len();
+            let mut reply = json!({
                 "workflow": {
                     "id": cap_text(&workflow.id, MAX_LABEL_BYTES),
                     "name": cap_text(&workflow.name, MAX_LABEL_BYTES),
                 },
                 "runs": runs,
-            })
+            });
+            if dropped > 0 {
+                reply["runsDropped"] = json!(dropped);
+            }
+            reply
         }
     }
 }
@@ -520,7 +526,7 @@ pub(super) fn read_files(
                 .into_iter()
                 .filter(|w| visible(w))
                 .map(|w| {
-                    let last = last_run(dir, device, &w.id, &run_visible);
+                    let last = last_run(dir, &w.id, &run_visible);
                     (w, last)
                 })
                 .collect(),
@@ -543,20 +549,9 @@ pub(super) fn read_files(
     }
 }
 
-/// The newest run the device may see. A device that sees every project needs only the first.
-fn last_run(
-    dir: &WorkflowsDir,
-    device: &DeviceContext,
-    id: &str,
-    run_visible: &impl Fn(&WorkflowRun) -> bool,
-) -> LastRun {
-    if device.projects.is_none() {
-        return match last_run_of(dir, id) {
-            Ok(Some((status, started))) => LastRun::Seen(status_of(&status), started),
-            Ok(None) => LastRun::Never,
-            Err(_) => LastRun::Unreadable,
-        };
-    }
+/// The newest run the device may see. Every device reads the file the same way, so a file that
+/// cannot be read is `Unreadable` for all of them.
+fn last_run(dir: &WorkflowsDir, id: &str, run_visible: &impl Fn(&WorkflowRun) -> bool) -> LastRun {
     match load_runs_checked(dir, id) {
         Ok(runs) => runs
             .iter()

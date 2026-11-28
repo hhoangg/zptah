@@ -938,6 +938,27 @@ fn last_run_of_tells_never_ran_from_unreadable() {
 }
 
 #[test]
+fn load_runs_checked_tells_a_missing_file_from_one_that_is_not_a_list() {
+    let root = temp_root();
+    let d = dir(&root);
+    // No file: never ran.
+    assert_eq!(load_runs_checked(&d, ID), Ok(Vec::new()));
+    // Not a list: the history is unknown.
+    d.save(RUNS, "{ not json", None).unwrap();
+    assert!(load_runs_checked(&d, ID).is_err());
+    // Valid runs come back newest first.
+    let h = d.read(RUNS).unwrap().hash;
+    d.save(RUNS, "[]", Some(&h)).unwrap();
+    update_runs(&d, ID, |_| Ok((vec![run("new"), run("old")], ()))).unwrap();
+    let ids: Vec<String> = load_runs_checked(&d, ID)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(ids, ["new", "old"]);
+}
+
+#[test]
 fn a_run_file_whose_definition_uses_the_old_output_key_still_loads() {
     let root = temp_root();
     let disk = dir(&root);

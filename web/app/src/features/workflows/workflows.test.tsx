@@ -188,6 +188,16 @@ describe("the runs of a workflow", () => {
     expect(within(runs[1]!).queryByText(/left out/)).toBeNull();
   });
 
+  it("says so when the desktop left older runs out", async () => {
+    FIXTURE_HANDLERS["workflows.runs"] = (() => ({
+      workflow: { id: "w", name: "X" },
+      runs: [{ id: "r1", status: "done", caller: { kind: "manual" }, startedAt: 2, nodes: [] }],
+      runsDropped: 3,
+    })) as never;
+    mount("workflows/w");
+    expect(await screen.findByText("Older runs left out (too large)")).toBeInTheDocument();
+  });
+
   it("answers like a missing workflow when the desktop hides it", async () => {
     mount("workflows/wf-hidden");
     expect(await screen.findByTestId("workflow-missing")).toHaveTextContent("Workflow not found");

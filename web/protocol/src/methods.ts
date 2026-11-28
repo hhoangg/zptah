@@ -382,6 +382,8 @@ export const WorkflowsRunsResultSchema = z.looseObject({
   /** Null when the workflow does not exist or this device may not see it. */
   workflow: z.looseObject({ id: z.string(), name: z.string() }).nullable(),
   runs: z.array(WorkflowRunSchema),
+  /** How many of the oldest runs the desktop left out to keep the reply small. */
+  runsDropped: z.number().optional(),
 });
 
 // --- Mono ---

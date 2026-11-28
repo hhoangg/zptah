@@ -35,7 +35,7 @@ export function WorkflowRunsScreen({ desktopId, workflowId }: { desktopId: strin
       </div>
     );
   }
-  const { workflow, runs } = query.data;
+  const { workflow, runs, runsDropped } = query.data;
   if (workflow === null) {
     return <EmptyState icon="branch" data-testid="workflow-missing" title="Workflow not found" description="It was removed, or this device may not see it." />;
   }
@@ -47,6 +47,7 @@ export function WorkflowRunsScreen({ desktopId, workflowId }: { desktopId: strin
       {runs.map((run) => (
         <RunRow key={run.id} desktopId={desktopId} run={run} />
       ))}
+      {runsDropped ? <li className="text-small text-muted-text">Older runs left out (too large)</li> : null}
     </ul>
   );
 }
