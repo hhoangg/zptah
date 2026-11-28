@@ -48,6 +48,19 @@ fn event_templates_use_valid_pairs_and_accept_edits() {
             matches!(&w.nodes[0].kind, NodeKind::Event(e) if e.source == *source && e.event == *event)
         );
         assert_eq!(w.nodes[1].kind.session_access(), "auto-accept-edits");
+        // The default is left out of the file.
+        assert!(matches!(
+            &w.nodes[1].kind,
+            NodeKind::Session { access: None, .. }
+        ));
+        // The prompt names the item the run is about.
+        let NodeKind::Session { prompt, .. } = &w.nodes[1].kind else {
+            unreachable!()
+        };
+        for field in ["{{trigger.item.ref}}", "{{trigger.item.url}}"] {
+            assert!(prompt.contains(field), "{}: {field}", t.id);
+        }
+        assert!(validate_workflow_on(&w, false).is_empty(), "{}", t.id);
     }
     let pr = template("review-pull-requests").unwrap();
     assert_eq!(pr.trigger_label(), "GitHub: Pull request opened");

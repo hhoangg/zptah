@@ -67,7 +67,7 @@
       "source": "github",
       "event": "pull_request_opened"
     },
-    "prompt": "Review the newly opened pull request.\n\nCheck for:\n- Correctness bugs and regressions\n- Missing tests for the changed behavior\n- Security or data-loss risks\n- API / contract breakage\n\nLeave a structured review: blockers first, then suggestions. Do not nitpick formatting. If the change is good, say so briefly and note residual risk."
+    "prompt": "Review the newly opened pull request.\n\nCheck for:\n- Correctness bugs and regressions\n- Missing tests for the changed behavior\n- Security or data-loss risks\n- API / contract breakage\n\nLeave a structured review: blockers first, then suggestions. Do not nitpick formatting. If the change is good, say so briefly and note residual risk.\n\nWork on this {{trigger.item.kind}}: {{trigger.item.ref}} {{trigger.item.title}}\n{{trigger.item.url}}"
   },
   {
     "id": "review-draft-prs",
@@ -79,7 +79,7 @@
       "source": "github",
       "event": "draft_opened"
     },
-    "prompt": "A draft pull request was opened. Give early, high-signal feedback.\n\nFocus on direction, missing tests, and likely bugs - not polish. Call out anything that will be expensive to change later. Keep the review short and specific to the diff."
+    "prompt": "A draft pull request was opened. Give early, high-signal feedback.\n\nFocus on direction, missing tests, and likely bugs - not polish. Call out anything that will be expensive to change later. Keep the review short and specific to the diff.\n\nWork on this {{trigger.item.kind}}: {{trigger.item.ref}} {{trigger.item.title}}\n{{trigger.item.url}}"
   },
   {
     "id": "dependency-audit",
@@ -121,7 +121,7 @@
       "source": "github",
       "event": "issue_opened"
     },
-    "prompt": "A new GitHub issue was opened. Triage it against this repo.\n\n- Reproduce or locate the relevant code if the report is specific enough\n- Label the severity in your summary (blocker / bug / request / unclear)\n- Add a concrete next step: file paths, likely cause, or the missing information\n- Do not implement a large fix unless the issue is clearly a small, validated bug"
+    "prompt": "A new GitHub issue was opened. Triage it against this repo.\n\n- Reproduce or locate the relevant code if the report is specific enough\n- Label the severity in your summary (blocker / bug / request / unclear)\n- Add a concrete next step: file paths, likely cause, or the missing information\n- Do not implement a large fix unless the issue is clearly a small, validated bug\n\nWork on this {{trigger.item.kind}}: {{trigger.item.ref}} {{trigger.item.title}}\n{{trigger.item.url}}"
   },
   {
     "id": "triage-new-issues",
@@ -133,7 +133,7 @@
       "source": "linear",
       "event": "issue_created"
     },
-    "prompt": "A new Linear issue was created. Triage it against this repo.\n\n- Reproduce or locate the relevant code if the report is specific enough\n- Label the severity in your summary (blocker / bug / request / unclear)\n- Add a concrete next step: file paths, likely cause, or the missing information\n- Do not implement a large fix unless the issue is clearly a small, validated bug"
+    "prompt": "A new Linear issue was created. Triage it against this repo.\n\n- Reproduce or locate the relevant code if the report is specific enough\n- Label the severity in your summary (blocker / bug / request / unclear)\n- Add a concrete next step: file paths, likely cause, or the missing information\n- Do not implement a large fix unless the issue is clearly a small, validated bug\n\nWork on this {{trigger.item.kind}}: {{trigger.item.ref}} {{trigger.item.title}}\n{{trigger.item.url}}"
   },
   {
     "id": "failing-ci-watch",

@@ -10,8 +10,8 @@
 //!    a retry can take it; a claim that never got a run is also released at startup.
 //!
 //! A paused workflow (`enabled` false) and one that needs a review never claim: the item is left
-//! for a later look (D45). A run that waits in the queue for a trigger is held again while the
-//! workflow is paused (see `tick::promote`).
+//! alone and the caller drops it (it is not offered again). A run that waits in the queue for a
+//! trigger is held again while the workflow is paused (see `tick::promote`, D45).
 use super::event::{event_key, trigger_item};
 use super::model::{CallerKind, NodeKind, RunCaller, Workflow, WorkflowRun, QUEUED_RUNS_MAX};
 use super::ordered::Json;

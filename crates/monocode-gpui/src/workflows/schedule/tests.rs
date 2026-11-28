@@ -206,7 +206,7 @@ fn a_workflow_that_cannot_start_gets_a_failed_run_with_its_message_on_the_run_pa
 /// A real (non-draft) session start, with every CLI pointed at a file that is not there: the
 /// first prompt reaches the session launch (the store row the app prepared for it), and the run
 /// ends with the start error instead of waiting for a turn.
-#[gpui::test]
+#[gpui::test(iterations = 20)]
 fn a_step_that_is_not_a_draft_hands_its_prompt_to_the_session_launch_and_fails_when_the_cli_is_missing(
     cx: &mut TestAppContext,
 ) {
@@ -580,7 +580,6 @@ fn probes(models: fn(Kind) -> Probe) -> Probes {
         models,
         requirements: preflight_met,
         draft_sessions: true,
-        watch_event_inbox: false,
     }
 }
 

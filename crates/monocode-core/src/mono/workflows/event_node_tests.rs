@@ -241,6 +241,19 @@ fn a_folder_only_applies_to_a_local_step() {
 }
 
 #[test]
+fn linking_the_work_item_only_applies_to_a_local_step() {
+    let cloud = r#","linkWorkItem":true,"target":{"kind":"sandbox"},"checkout":"root""#;
+    let w = workflow(PR_TRIGGER, cloud);
+    assert!(issues(&w)
+        .iter()
+        .any(|m| m.contains("linkWorkItem only applies to a local step")));
+    assert_eq!(
+        issues(&event_workflow(r#","linkWorkItem":true"#)),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn full_access_downstream_of_an_event_trigger_is_a_warning_not_an_error() {
     let w = event_workflow(r#","access":"full-access""#);
     assert_eq!(issues(&w), Vec::<String>::new());

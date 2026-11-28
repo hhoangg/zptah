@@ -88,6 +88,9 @@ pub(crate) struct OpenWorkflowSession(pub i64);
 pub(crate) struct AskMonoForWorkflow(pub String);
 /// The event inspector's Connect link: open Settings > Inbox.
 pub(crate) struct OpenInboxSettings;
+/// The event inspector is shown and does not know yet which sources are connected: the shell
+/// starts the Inbox, whose connections and items it then pushes in.
+pub(crate) struct NeedEventSources;
 /// The Mono's emoji settings asked for the shared library: Settings > Monos > Emoji.
 pub(crate) struct ShowEmojiLibrary;
 /// The Browser tab saved a new path for npx (empty is automatic): the shell keeps it in the
@@ -281,6 +284,7 @@ impl EventEmitter<ShowDetails> for Monos {}
 impl EventEmitter<OpenWorkflowSession> for Monos {}
 impl EventEmitter<AskMonoForWorkflow> for Monos {}
 impl EventEmitter<OpenInboxSettings> for Monos {}
+impl EventEmitter<NeedEventSources> for Monos {}
 impl EventEmitter<ShowEmojiLibrary> for Monos {}
 impl EventEmitter<NodePathChanged> for Monos {}
 impl EventEmitter<ChatOpened> for Monos {}

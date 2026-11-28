@@ -203,7 +203,7 @@ fn a_failed_claim_is_retried_and_then_succeeds_once(cx: &mut TestAppContext) {
         .setting(RETRY_SETTING)
         .unwrap()
         .unwrap();
-    assert_eq!(serde_json::from_str::<Vec<Item>>(&saved).unwrap().len(), 1);
+    assert_eq!(serde_json::from_str::<Vec<Retry>>(&saved).unwrap().len(), 1);
     claims_refuse(&s, false);
     // The next look has no new item: the retry map alone starts the run.
     appear(&s, cx, Vec::new());
@@ -232,6 +232,56 @@ fn a_saved_retry_is_offered_again_after_a_restart(cx: &mut TestAppContext) {
     assert_eq!(runs(&s, cx, WF), 1);
 }
 
+#[gpui::test]
+fn only_the_pairs_that_failed_are_offered_the_item_again(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    save(&s, cx, vec![workflow(&s, WF, json!({}))]);
+    claims_refuse(&s, true);
+    appear(&s, cx, vec![item(&s, 7)]);
+    let failed = s
+        .window
+        .update(cx, |shell, _, _| {
+            shell
+                .workflow_events
+                .retries
+                .values()
+                .map(|r| (r.failed.clone(), r.attempts))
+                .collect::<Vec<_>>()
+        })
+        .unwrap();
+    assert_eq!(failed, [(vec![(WF.to_string(), "start".to_string())], 1)]);
+    // A workflow made after the item came never sees it, retry or not.
+    save(
+        &s,
+        cx,
+        vec![
+            workflow(&s, WF, json!({})),
+            workflow(&s, "wf-inbox002", json!({})),
+        ],
+    );
+    claims_refuse(&s, false);
+    appear(&s, cx, Vec::new());
+    assert_eq!(runs(&s, cx, WF), 1);
+    assert_eq!(runs(&s, cx, "wf-inbox002"), 0);
+}
+
+#[gpui::test]
+fn an_item_is_given_up_on_after_five_failed_offers(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    save(&s, cx, vec![workflow(&s, WF, json!({}))]);
+    claims_refuse(&s, true);
+    appear(&s, cx, vec![item(&s, 7)]);
+    for _ in 1..RETRY_ATTEMPTS - 1 {
+        appear(&s, cx, Vec::new());
+        assert_eq!(retries(&s, cx), 1);
+    }
+    appear(&s, cx, Vec::new());
+    assert_eq!(retries(&s, cx), 0, "dropped after the last attempt");
+    claims_refuse(&s, false);
+    appear(&s, cx, Vec::new());
+    assert_eq!(runs(&s, cx, WF), 0);
+}
+
 #[test]
 fn the_retry_map_keeps_the_newest_items() {
     let mut map = HashMap::new();
@@ -244,13 +294,13 @@ fn the_retry_map_keeps_the_newest_items() {
             updated_at: format!("2026-11-28T10:{:02}:{:02}Z", number / 60 % 60, number % 60),
             ..Default::default()
         };
-        map.insert(item.key(), item);
+        map.insert(item.key(), Retry::new(item));
     }
     cap_retries(&mut map);
     assert_eq!(map.len(), RETRY_CAP);
     let newest = RETRY_CAP as i64 + 39;
-    assert!(map.values().any(|item| item.number == newest));
-    assert!(!map.values().any(|item| item.number == 0));
+    assert!(map.values().any(|r| r.item.number == newest));
+    assert!(!map.values().any(|r| r.item.number == 0));
 }
 
 #[test]
@@ -337,4 +387,18 @@ fn the_inbox_event_reaches_the_workflows(cx: &mut TestAppContext) {
         .unwrap();
     cx.run_until_parked();
     assert_eq!(runs(&s, cx, WF), 1);
+}
+
+#[gpui::test]
+fn opening_the_workflows_page_does_not_start_the_background_inbox(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.window
+        .update(cx, |shell, window, cx| shell.open_workflows(window, cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(
+        s.window
+            .update(cx, |shell, _, _| shell.inbox.is_none())
+            .unwrap()
+    );
 }

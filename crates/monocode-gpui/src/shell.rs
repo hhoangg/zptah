@@ -1626,6 +1626,18 @@ impl Shell {
         ));
         this.observations.push(cx.subscribe(
             &monos,
+            |_, _, _: &crate::monos::NeedEventSources, cx| {
+                cx.spawn(async move |this, cx| {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.ensure_background_inbox(window, cx);
+                        this.push_workflow_event_sources(cx);
+                    });
+                })
+                .detach();
+            },
+        ));
+        this.observations.push(cx.subscribe(
+            &monos,
             |_, _, _: &crate::monos::OpenInboxSettings, cx| {
                 cx.spawn(async move |this, cx| {
                     let _ = this.update_in(cx, |this, window, cx| {

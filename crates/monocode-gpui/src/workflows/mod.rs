@@ -69,9 +69,6 @@ pub(crate) struct Probes {
     /// The field does not exist in a real build, so no setting can put a run's prompt aside.
     #[cfg(test)]
     pub(crate) draft_sessions: bool,
-    /// Whether the shell looks every minute for an enabled event workflow, to start the
-    /// background Inbox. Tests turn it off and look by calling `sync_workflow_event_inbox`.
-    pub(crate) watch_event_inbox: bool,
 }
 
 impl Probes {
@@ -81,13 +78,11 @@ impl Probes {
             models: runner::trusting_probe,
             requirements: runner::trusting_preflight,
             draft_sessions: true,
-            watch_event_inbox: false,
         };
         #[cfg(not(test))]
         Self {
             models: monocode_core::mono::workflows::models::native_probe,
             requirements: monocode_core::mono::workflows::preflight::native_preflight,
-            watch_event_inbox: true,
         }
     }
 

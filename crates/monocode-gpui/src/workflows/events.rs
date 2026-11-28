@@ -56,7 +56,7 @@ pub(crate) enum EventStarted {
     Skipped { run_id: String },
     /// A run for this item exists already.
     Duplicate,
-    /// Left alone with no claim: the workflow is paused or needs a review. Look again later.
+    /// Left alone with no claim: the workflow is paused or needs a review. The caller drops the item.
     Held(Held),
     /// The workflow or the trigger is gone.
     Ignored,

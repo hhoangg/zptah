@@ -714,6 +714,12 @@ impl<'a> Checker<'a> {
                 at,
             );
         }
+        if link_work_item == Some(true) && cloud {
+            self.add(
+                "linkWorkItem only applies to a local step: a cloud session is not linked to a work item",
+                at,
+            );
+        }
         if link_work_item == Some(true) && !self.has_event_ancestor(&node.id) {
             self.add(
                 "linkWorkItem needs an event trigger before this step: only a run started by an event has an item to link",

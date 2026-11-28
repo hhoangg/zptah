@@ -522,8 +522,6 @@ impl Shell {
 
     pub(crate) fn open_workflows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.prepare_app_view(window, cx);
-        // The event inspector needs to know which sources are connected.
-        self.ensure_background_inbox(window, cx);
         if self.workflows_page.is_none()
             && let Some(monos) = self.monos.clone()
         {

@@ -52,6 +52,8 @@ pub(super) struct EventSources {
     pub(super) notice: Option<(String, String)>,
     /// A test run is being started.
     testing: bool,
+    /// The shell was asked for the Inbox (the sources are not known yet).
+    asked: bool,
 }
 
 impl EventSources {
@@ -117,6 +119,7 @@ impl Monos {
         cx: &mut Context<Self>,
     ) {
         let events = &mut self.wf.events;
+        events.asked &= connections.is_empty();
         if events.connections == connections && events.items == items {
             return;
         }
@@ -161,6 +164,11 @@ impl Monos {
     ) -> AnyElement {
         let id = node.id.clone();
         let connected = self.wf.events.connected(&trigger.source);
+        // Nothing is known about the sources until the Inbox runs: ask the shell to start it.
+        if self.wf.events.connections.is_empty() && !self.wf.events.asked {
+            self.wf.events.asked = true;
+            cx.emit(NeedEventSources);
+        }
         if trigger.source == "clickup" {
             self.load_event_spaces(cx);
         }
@@ -354,25 +362,19 @@ impl Monos {
                             .child(item_line(&item)),
                     )
                     .child(
-                        div()
-                            .id(SharedString::from(selector.clone()))
-                            .debug_selector(move || selector.clone())
-                            .role(Role::Button)
-                            .aria_label("Test run with this item")
-                            .self_start()
-                            .rounded_sm()
-                            .px_1p5()
-                            .py_0p5()
-                            .text_size(px(11.))
-                            .text_color(content(if testing { 0.3 } else { 0.7 }))
-                            .when(!testing, |d| {
-                                d.cursor_pointer()
-                                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                            })
-                            .child("Test run with this item")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.board_event_test_run(&trigger_id, picked.clone(), cx)
-                            })),
+                        super::super::panels::button(
+                            SharedString::from(selector.clone()),
+                            "Test run with this item",
+                        )
+                        .debug_selector(move || selector.clone())
+                        .self_start()
+                        .h(px(24.))
+                        .py_0()
+                        .text_size(px(11.))
+                        .when(testing, |d| d.opacity(0.4))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.board_event_test_run(&trigger_id, picked.clone(), cx)
+                        })),
                     ),
             );
         }

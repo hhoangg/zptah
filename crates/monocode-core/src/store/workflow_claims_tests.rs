@@ -17,10 +17,22 @@ fn claim_dedupes_within_one_open_and_across_reopen() {
 }
 
 #[test]
-fn legacy_open_creates_the_table_too() {
+fn legacy_open_creates_the_table_only_on_the_first_claim() {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(&dir.path().join("legacy.db")).unwrap();
+    let path = dir.path().join("legacy.db");
+    let has_table = || {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workflow_event_claims'",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok()
+    };
+    let store = Store::open(&path).unwrap();
+    assert!(!has_table(), "opening never changes the database");
     assert!(store.claim_workflow_event("w1", "t1", "k").unwrap());
+    assert!(has_table());
     assert!(!store.claim_workflow_event("w1", "t1", "k").unwrap());
 }
 

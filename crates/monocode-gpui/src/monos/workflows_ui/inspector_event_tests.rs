@@ -438,3 +438,37 @@ fn a_step_with_full_access_after_an_event_trigger_shows_the_warning(cx: &mut Tes
     settle(&s, &mut visual);
     assert!(visual.debug_bounds("wf-node-warning").is_none());
 }
+
+#[gpui::test]
+fn showing_an_event_trigger_asks_the_shell_to_start_the_inbox(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let asked = Rc::new(Cell::new(0));
+    let seen = asked.clone();
+    let _subscription = cx.update(|cx| {
+        cx.subscribe(
+            &s.manager,
+            move |_, _: &crate::monos::NeedEventSources, _| seen.set(seen.get() + 1),
+        )
+    });
+    let w = flow(&s, json!({}), json!({}));
+    let mut visual = open_board(&s, &w, cx);
+    let visual = &mut visual;
+    // A schedule or session node never asks.
+    assert_eq!(asked.get(), 0);
+    assert!(
+        s.window
+            .update(visual, |shell, _, _| !shell.has_background_inbox())
+            .unwrap()
+    );
+    event(&s, visual, GraphEvent::Click("start".into()));
+    settle(&s, visual);
+    settle(&s, visual);
+    // Asked once, however often the inspector is drawn.
+    assert_eq!(asked.get(), 1);
+    // The shell started the Inbox, so the sources can be known.
+    assert!(
+        s.window
+            .update(visual, |shell, _, _| shell.has_background_inbox())
+            .unwrap()
+    );
+}

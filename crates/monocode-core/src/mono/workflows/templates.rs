@@ -4,7 +4,6 @@
 use super::event::EventTrigger;
 use super::model::{
     new_workflow_id, Checkout, Edge, Node, NodeKind, Ui, Workflow, Workspace, WorkspaceMode,
-    DEFAULT_SESSION_ACCESS,
 };
 use super::ordered::OrderedMap;
 use crate::mono::habits::Schedule;
@@ -86,7 +85,7 @@ impl WorkflowTemplate {
                 timeout_minutes: None,
                 target: None,
                 account: None,
-                access: Some(DEFAULT_SESSION_ACCESS.into()),
+                access: None,
                 folder: None,
                 link_work_item: None,
             },

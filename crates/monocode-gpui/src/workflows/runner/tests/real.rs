@@ -466,10 +466,22 @@ fn a_turn_that_was_never_taken_is_given_up_on_and_an_idle_one_has_ended(cx: &mut
     let started = begin(&s, cx, request(&s)).unwrap();
     let id = local(&started);
     let workflows = workflows_of(&s, cx);
-    // Idle and armed: the turn is over.
+    // Idle and armed, but no turn has finished since: the prompt may not be taken yet, so the run
+    // does not call it over.
     let over = cx.update(|cx| workflows.update(cx, |w, cx| w.workflow_settled(id, true, cx)));
     let over = collect(cx, over);
     cx.run_until_parked();
+    assert!(over.borrow().is_none());
+    // A turn that finishes ends it.
+    s.window
+        .update(cx, |shell, _, cx| {
+            let view = shell.mono_session_entity(id).expect("the session");
+            view.update(cx, |view, _| view.finish_for_test("Ready"));
+        })
+        .unwrap();
+    cx.executor().advance_clock(Duration::from_secs(15));
+    cx.run_until_parked();
+    assert_eq!(over.borrow().clone().unwrap().error, None);
     assert_eq!(over.borrow().clone().unwrap().status, Status::Completed);
     // Idle and never seen working: the prompt was not taken, so the wait ends in a failure.
     let never = cx.update(|cx| workflows.update(cx, |w, cx| w.workflow_settled(id, false, cx)));
