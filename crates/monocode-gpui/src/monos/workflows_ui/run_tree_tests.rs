@@ -89,6 +89,18 @@ fn open_run(s: &Setup, visual: &mut VisualTestContext) {
     settle(s, visual);
 }
 
+/// The owner found through the real-path spelling, the key a mark is written under.
+fn owner_of(s: &Setup, path: &str) -> Option<String> {
+    let real = Path::new(path)
+        .canonicalize()
+        .map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned());
+    monocode_core::session_worktree::workflow_worktree_owner_checked(
+        &s.store.lock().unwrap(),
+        &real,
+    )
+    .unwrap()
+}
+
 fn marked(s: &Setup, path: &str) -> bool {
     monocode_core::session_worktree::is_workflow_worktree(&s.store.lock().unwrap(), path)
 }
@@ -232,6 +244,10 @@ fn remove_worktree_asks_first_lists_the_work_and_removes_only_on_the_click(
     assert!(marked(&s, &tree.path));
     assert!(history(&s, A)[0].worktree.is_some());
 
+    assert!(
+        owner_of(&s, &tree.path).is_some(),
+        "marked before the removal"
+    );
     // The click on Remove worktree takes the folder, keeps the branch, and forgets the record.
     click(visual, "wf-run-remove-tree");
     visual.run_until_parked();
@@ -248,6 +264,7 @@ fn remove_worktree_asks_first_lists_the_work_and_removes_only_on_the_click(
     assert_eq!(kept.branch, "wf/ship-it-1");
     assert!(kept.removed_at.is_some());
     assert!(!marked(&s, &tree.path), "the ownership mark goes with it");
+    assert_eq!(owner_of(&s, &tree.path), None);
     assert!(s.manager.read_with(visual, |m, _| m.wf.tree.is_none()));
     settle(&s, visual);
     assert!(visual.debug_bounds("wf-run-remove-tree").is_none());
@@ -285,6 +302,10 @@ fn work_added_after_the_dialog_opened_stops_the_removal_and_the_list_is_looked_a
     settle(&s, visual);
     // Nothing was removed, the dialog says why and lists the new file.
     assert!(Path::new(&tree.path).join("later.txt").is_file());
+    assert!(
+        owner_of(&s, &tree.path).is_some(),
+        "a refused removal keeps the mark"
+    );
     assert!(
         history(&s, A)[0]
             .worktree

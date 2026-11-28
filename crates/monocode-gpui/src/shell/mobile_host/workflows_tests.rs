@@ -907,4 +907,12 @@ fn a_path_ending_a_sentence_is_hidden() {
         "in (worktree). Next"
     );
     assert_eq!(hide(&format!("{path}.txt"), path), format!("{path}.txt"));
+    assert_eq!(hide(&format!("{path}./x"), path), format!("{path}./x"));
+    assert_eq!(
+        hide(&format!("see \"{path}.\""), path),
+        "see \"(worktree).\""
+    );
+    assert_eq!(hide(&format!("(in {path}.)"), path), "(in (worktree).)");
+    assert_eq!(hide(&format!("{path}..."), path), "(worktree)...");
+    assert_eq!(hide(&format!("'{path}.'"), path), "'(worktree).'");
 }

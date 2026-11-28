@@ -99,24 +99,18 @@ impl Workflows {
                             failure = Some(CHANGED_SINCE_CONFIRM.to_string());
                             break;
                         };
-                        // Unmark while the folder still exists, so both the real-path and the
-                        // raw key resolve. A failed removal puts the mark back.
-                        let mark = locked(&store).ok().and_then(|db| {
-                            let owner =
-                                monocode_core::session_worktree::workflow_worktree_owner(&db, path);
-                            let _ = monocode_core::session_worktree::unmark_workflow_worktree(
-                                &db, path,
-                            );
-                            owner
-                        });
-                        let removed = remove_worktree(Path::new(path), shown);
+                        let mark = match unmark_for_removal(&store, path) {
+                            Ok(mark) => mark,
+                            Err(error) => {
+                                failure = Some(error);
+                                break;
+                            }
+                        };
+                        let mut removed = remove_worktree(Path::new(path), shown);
                         if removed.is_err()
-                            && let Some(owner) = &mark
-                            && let Ok(db) = locked(&store)
+                            && let Err(error) = restore_mark(&store, path, mark.as_deref())
                         {
-                            let _ = monocode_core::session_worktree::mark_workflow_worktree(
-                                &db, path, owner,
-                            );
+                            removed = Err(error);
                         }
                         match removed {
                             Ok(main) => {
@@ -177,6 +171,33 @@ impl Workflows {
             failure.map_or(Ok(()), Err)
         })
     }
+}
+
+/// Drops the ownership mark of `path` while its folder still exists (so the real-path and the
+/// raw key both resolve) and returns the owner, to put back if the removal fails. A failed
+/// lookup or unmark is an error: nothing is removed on a guess.
+pub(crate) fn unmark_for_removal(
+    store: &crate::runtime::Database,
+    path: &str,
+) -> Result<Option<String>, String> {
+    let db = locked(store)?;
+    let owner = monocode_core::session_worktree::workflow_worktree_owner_checked(&db, path)?;
+    if owner.is_some() {
+        monocode_core::session_worktree::unmark_workflow_worktree(&db, path)?;
+    }
+    Ok(owner)
+}
+
+/// Puts the mark `unmark_for_removal` took back after a failed removal.
+pub(crate) fn restore_mark(
+    store: &crate::runtime::Database,
+    path: &str,
+    owner: Option<&str>,
+) -> Result<(), String> {
+    let Some(owner) = owner else { return Ok(()) };
+    let db = locked(store)?;
+    monocode_core::session_worktree::mark_workflow_worktree(&db, path, owner)
+        .map_err(|e| format!("Could not restore the workflow mark of {path}: {e}"))
 }
 
 /// A worktree some other path deleted (the Settings removal): any run that owned it says when it

@@ -112,11 +112,12 @@ fn name_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '\\')
 }
 
-/// A "." or "," then whitespace or the end of the text: punctuation after a path, not part of it.
+/// Punctuation after a path, not part of it: after any leading dots (`.`, `...`) the text ends
+/// or goes on with something that cannot be part of a name (`.)`, `."`, `. x`). A dot that
+/// leads into more name (`.txt`, `./x`) stays part of the path. A comma is not a name character.
 fn sentence_end(after: &str) -> bool {
-    after
-        .strip_prefix(['.', ','])
-        .is_some_and(|rest| rest.chars().next().is_none_or(char::is_whitespace))
+    let rest = after.trim_start_matches('.');
+    rest.len() < after.len() && rest.chars().next().is_none_or(|c| !name_char(c))
 }
 
 /// Replaces `path` in `text` where it stands as a whole path: not in the middle of a longer one.

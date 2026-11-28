@@ -651,7 +651,12 @@ impl Shell {
                 if delete_sessions {let store=locked(&store)?;let paths=store.session_worktrees()?;if store.sessions()?.iter().any(|s|is_equal_or_inside(paths.get(&s.id).and_then(|p|p.as_deref()).unwrap_or(&s.cwd),&worker_path)){return Err("Some sessions could not be deleted, so the worktree was kept.".into());}}
                 let snapshot=monocode_core::git::snapshot(Path::new(&worker_cwd))?;
                 let main=snapshot.worktrees.first().ok_or("No main working copy found")?;
-                monocode_core::worktree_management::remove(Path::new(&main.path),Path::new(&worker_path))?;
+                // Unmark while the folder exists; a failed removal puts the mark back.
+                let mark=crate::workflows::worktrees::unmark_for_removal(&store,&worker_path)?;
+                if let Err(e)=monocode_core::worktree_management::remove(Path::new(&main.path),Path::new(&worker_path)) {
+                    crate::workflows::worktrees::restore_mark(&store,&worker_path,mark.as_deref())?;
+                    return Err(e);
+                }
                 let db=locked(&store)?;
                 let detached=db.detach_worktree(&worker_path,&main.path);
                 // A worktree a workflow run owned: its record says it went, and the mark goes.
