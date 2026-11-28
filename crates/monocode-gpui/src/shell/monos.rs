@@ -31,6 +31,10 @@ impl Shell {
         self.mark_cloud_session(id);
         self.register_cloud_start(id);
         self.add_loaded(summary, cx);
+        #[cfg(test)]
+        if Self::test_chief_starts_held() {
+            self.sessions[&id].update(cx, |view, _| view.test_hold_launches());
+        }
         self.sessions[&id].update(cx, |view, cx| view.install_app_launch(settings, !draft, cx));
         self.track_cloud_start(id, cx);
         self.invalidate_chrome(cx);

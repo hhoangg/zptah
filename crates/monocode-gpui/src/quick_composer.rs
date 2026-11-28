@@ -127,6 +127,19 @@ pub(crate) struct Controller {
     config: String,
     #[cfg(all(target_os = "macos", not(test)))]
     registration: Option<crate::global_hotkey::Registration>,
+    /// The "Ask Chief" shortcut, kept apart from the composer's.
+    pub chief_task: Option<Task<()>>,
+    chief_config: String,
+    pub chief_error: Option<String>,
+    #[cfg(all(target_os = "macos", not(test)))]
+    chief_registration: Option<crate::global_hotkey::Registration>,
+}
+/// The shortcut that opens the Chief's panel, or `None` while the owner has not set one.
+pub(crate) fn chief_shortcut(prefs: &crate::settings::Preferences) -> Option<String> {
+    match prefs.keybindings.get("App: Ask Chief") {
+        Some(Some(v)) if !v.trim().is_empty() => Some(v.clone()),
+        _ => None,
+    }
 }
 impl Controller {
     pub fn configure(
@@ -155,6 +168,34 @@ impl Controller {
                         return Some(rx);
                     }
                     Err(e) => self.error = Some(e),
+                }
+            }
+        }
+        None
+    }
+    /// Registers the "Ask Chief" shortcut when one is set; nothing is registered otherwise.
+    /// Returns the receiver that fires when it is pressed.
+    pub fn configure_chief(
+        &mut self,
+        prefs: &crate::settings::Preferences,
+    ) -> Option<async_channel::Receiver<()>> {
+        let shortcut = chief_shortcut(prefs).unwrap_or_default();
+        if self.chief_config == shortcut {
+            return None;
+        }
+        self.chief_config = shortcut.clone();
+        self.chief_error = None;
+        self.chief_task = None;
+        #[cfg(all(target_os = "macos", not(test)))]
+        {
+            self.chief_registration = None;
+            if !shortcut.is_empty() {
+                match crate::global_hotkey::Registration::channel(&shortcut, "Ask Chief") {
+                    Ok((registration, rx)) => {
+                        self.chief_registration = Some(registration);
+                        return Some(rx);
+                    }
+                    Err(e) => self.chief_error = Some(e),
                 }
             }
         }

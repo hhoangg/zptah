@@ -1,0 +1,1 @@
+{"success":false,"data":null,"error":"Stale ref @e8: the page navigated since that snapshot. Run `ardia browse snapshot -i` again and use the new refs","code":"vocab_superseded","remedy":"ardia browse snapshot -i"}

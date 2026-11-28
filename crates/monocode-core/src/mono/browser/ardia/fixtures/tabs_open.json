@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "applied": 1,
+  "results": [
+    {
+      "op": "open",
+      "tabs": [
+        "tab-mwz5hptzy0zm-1"
+      ]
+    }
+  ],
+  "tabs": [
+    {
+      "type": "tab",
+      "id": "tab-mwz5hptzy0zm-1",
+      "url": "https://example.com",
+      "title": "",
+      "customTitle": null,
+      "icon": null,
+      "pin": null,
+      "pinned": false,
+      "folder": null,
+      "group": null,
+      "split": null,
+      "active": true,
+      "muted": false,
+      "asleep": false,
+      "index": -1
+    }
+  ],
+  "groups": [],
+  "windows": [
+    {
+      "id": "w-mwz3kap1pqq0-1",
+      "activeTab": "tab-mwz3kap1pqq0-4"
+    }
+  ]
+}

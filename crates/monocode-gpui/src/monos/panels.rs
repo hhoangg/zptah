@@ -445,12 +445,12 @@ fn empty(message: &str) -> AnyElement {
         .child(message.to_string())
         .into_any_element()
 }
-struct LookChanged {
-    mono: Mono,
+pub(super) struct LookChanged {
+    pub(super) mono: Mono,
 }
 /// Enter in the name field: MonoMenu commits the name and closes.
 struct LookSubmitted;
-struct LookEditor {
+pub(super) struct LookEditor {
     mono: Mono,
     name: Entity<Input>,
     color: Entity<Input>,
@@ -463,6 +463,12 @@ struct LookEditor {
 impl EventEmitter<LookChanged> for LookEditor {}
 impl EventEmitter<LookSubmitted> for LookEditor {}
 impl LookEditor {
+    /// The mascot and color pickers on their own, as the Mono settings page opens them.
+    pub(super) fn for_settings(mono: Mono, cx: &mut Context<Self>) -> Self {
+        let mut editor = Self::new(mono, cx);
+        editor.settings = true;
+        editor
+    }
     fn new(mono: Mono, cx: &mut Context<Self>) -> Self {
         let name = cx.new(|cx| {
             let mut f = Input::field("Mono name", mono.label(), content(0.45), cx);

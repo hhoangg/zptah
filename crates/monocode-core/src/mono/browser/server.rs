@@ -1,7 +1,7 @@
 //! The registry of the Monos' browser gates (one per Mono with a browser).
 //!
 //! The gate (see [`super::gate`]) is the only thing the agent talks to: a loopback MCP endpoint in
-//! front of the zptah Browser extension link. Its address stays the same while the Mono's browser
+//! front of Ardia. Its address stays the same while the Mono's browser
 //! stays on, so a parked agent process keeps a working URL.
 use super::gate::{self, Gate};
 use std::collections::HashMap;
@@ -14,6 +14,9 @@ pub struct BrowserServers {
     /// Why the last launch of a Mono could not attach its browser. The Browser tab shows it; a
     /// launch that attached clears it.
     attach_errors: Mutex<HashMap<String, String>>,
+    /// The Ardia controller of each Mono's gate, kept after the gate is gone so the Mono's tabs
+    /// can still be closed.
+    controllers: Mutex<HashMap<String, Arc<super::ardia::Controller>>>,
 }
 impl BrowserServers {
     pub fn new() -> Self {
@@ -34,15 +37,18 @@ impl BrowserServers {
             .get(mono_id)
             .cloned()
     }
-    /// This Mono's gate in front of the zptah Browser extension: the one it has (updated to the
-    /// current policy and upstream), or a new one.
-    pub(crate) fn gate_for_extension(
+    /// This Mono's gate in front of Ardia.
+    pub(crate) fn gate_for_ardia(
         &self,
         mono_id: &str,
-        upstream: Arc<gate::ExtensionUpstream>,
+        upstream: Arc<super::ardia::ArdiaUpstream>,
         policy: gate::Policy,
     ) -> Result<Arc<Gate>, String> {
-        let key = format!("extension-{:p}", Arc::as_ptr(&upstream));
+        let key = format!("ardia-{:p}", Arc::as_ptr(&upstream));
+        self.controllers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(mono_id.to_owned(), upstream.controller().clone());
         self.gate_for(mono_id, &key, upstream, policy)
     }
     /// This Mono's gate in front of `upstream` (named `key`; a new key means a new backend): the
@@ -94,20 +100,38 @@ impl BrowserServers {
             .unwrap_or_else(|e| e.into_inner())
             .remove(mono_id);
         if let Some(gate) = gate {
+            // A turn that still holds the old address gets a refusal, not a working browser.
+            gate.shut_down();
             gate.clear_output();
+        }
+    }
+    /// Ends every Ardia session of the Mono: closes the tabs zptah opened for it and releases the
+    /// holds, on a thread. For a browser turned off, a changed profile or a removed Mono; editing
+    /// the origin lists drops the gate ([`BrowserServers::stop`]) but leaves a running turn's
+    /// tabs alone.
+    pub fn end_sessions(&self, mono_id: &str) {
+        let controller = self
+            .controllers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(mono_id)
+            .cloned();
+        if let Some(controller) = controller {
+            controller.end_mono_in_background(mono_id, None);
         }
     }
     /// Drops every gate (the app quits).
     pub fn stop_everything(&self) {
-        let gates: Vec<Arc<Gate>> = self
+        let gates: Vec<(String, Arc<Gate>)> = self
             .gates
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .drain()
-            .map(|(_, gate)| gate)
             .collect();
-        for gate in gates {
+        for (mono_id, gate) in gates {
+            gate.shut_down();
             gate.clear_output();
+            self.end_sessions(&mono_id);
         }
     }
     pub fn running(&self) -> usize {

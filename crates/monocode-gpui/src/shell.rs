@@ -52,6 +52,7 @@ mod sandbox_picker;
 pub(crate) use app_commands::CLOUD_ARCHIVING;
 pub(crate) use cloud_app_archive::ArchiveFailure;
 pub(crate) use live_agents::live_elapsed;
+mod mobile_chief;
 mod mobile_host;
 mod mono_panes;
 pub(crate) mod monos;
@@ -59,6 +60,8 @@ pub(crate) mod new_chat_choice;
 #[cfg(test)]
 mod new_chat_choice_tests;
 mod notifications;
+#[cfg(test)]
+pub(crate) use notifications::ChiefNotices;
 mod orchestration;
 mod picker_preferences;
 mod pinned_tabs;
@@ -1561,6 +1564,12 @@ impl Shell {
                 this.push_mobile_watches(cx)
             }),
         );
+        // A change to the Chief's proposals reaches the web watches: the notes read the shell,
+        // so the value is rebuilt after this update.
+        this.observations.push(cx.subscribe(
+            &monos,
+            |this, _, _: &crate::monos::ChiefProposalsChanged, cx| this.refresh_chief_web(cx),
+        ));
         this.observations.push(cx.subscribe(
             &monos,
             |this, _, opened: &crate::monos::TabOpened, cx| {
@@ -1591,6 +1600,22 @@ impl Shell {
                 this.workspace.preferences.node_path = event.0.clone();
                 this.apply_preferences(cx);
                 this.persist(cx);
+            },
+        ));
+        this.observations.push(cx.subscribe(
+            &monos,
+            |_, _, event: &crate::monos::ShowChiefSettings, cx| {
+                let history = event.history;
+                cx.spawn(async move |this, cx| {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        if let Some(monos) = this.monos.clone() {
+                            monos
+                                .update(cx, |monos, cx| monos.set_chief_history_first(history, cx));
+                        }
+                        this.open_settings(crate::settings::Section::Chief, window, cx)
+                    });
+                })
+                .detach();
             },
         ));
         this.observations.push(cx.subscribe(
@@ -6184,7 +6209,7 @@ impl Shell {
                             TitleTab::Mono { id, .. } => self
                                 .monos
                                 .as_ref()
-                                .and_then(|m| m.read(cx).roster.get(id))
+                                .and_then(|m| m.read(cx).identity_for(id))
                                 .map(|m| m.label())
                                 .unwrap_or_default(),
                         }

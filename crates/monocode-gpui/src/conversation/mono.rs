@@ -135,6 +135,200 @@ impl Conversation {
         cx.emit(SessionChanged);
         Ok(())
     }
+    /// Puts back what the owner submitted to the Chief when it could not be sent, in front of
+    /// anything typed since.
+    pub(crate) fn chief_restore_composer(
+        &mut self,
+        text: String,
+        attachments: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let typed = self.input.read(cx).content.to_string();
+        let restored = if typed.trim().is_empty() {
+            text
+        } else {
+            format!("{text}\n{typed}")
+        };
+        self.input
+            .update(cx, |input, cx| input.set_text(restored, cx));
+        self.attachments.splice(0..0, attachments);
+        cx.notify();
+    }
+    /// Where a queued follow-up message stands, for the Chief's commands.
+    pub(crate) fn follow_up_status(&self, id: &str) -> FollowUpStatus {
+        if self.follow_ups.state.messages.iter().any(|m| m.id == id)
+            || self
+                .follow_ups
+                .state
+                .draft
+                .as_ref()
+                .is_some_and(|m| m.id == id)
+        {
+            FollowUpStatus::Queued
+        } else if !self.loaded || self.loading {
+            // The queue of a session still loading is not known yet.
+            FollowUpStatus::Queued
+        } else if self.follow_ups.state.delivered.iter().any(|d| d == id) {
+            FollowUpStatus::Delivered
+        } else {
+            FollowUpStatus::Gone
+        }
+    }
+    /// What the agent said last this turn, for the Chief to keep on a command it relayed.
+    pub(crate) fn chief_final_reply(&self, cx: &gpui::App) -> String {
+        monocode_core::response::final_reply(self.transcript.read(cx).source_rows())
+    }
+    /// The prompts launched so far, with no provider started from now on.
+    #[cfg(test)]
+    pub(crate) fn test_hold_launches(&mut self) {
+        self.hold_launches = true;
+    }
+    #[cfg(test)]
+    pub(crate) fn test_launched(&self) -> Vec<String> {
+        self.launched.clone()
+    }
+    /// The files waiting in the composer.
+    #[cfg(test)]
+    pub(crate) fn test_attachments(&self) -> Vec<PathBuf> {
+        self.attachments.clone()
+    }
+    /// Pauses the follow-up queue, as interrupting a turn does.
+    #[cfg(test)]
+    pub(crate) fn test_pause_queue(&mut self) {
+        self.follow_ups.state.paused = true;
+    }
+    /// The ids waiting in the follow-up queue.
+    #[cfg(test)]
+    pub(crate) fn test_queued_follow_ups(&self) -> Vec<String> {
+        self.follow_ups
+            .state
+            .messages
+            .iter()
+            .map(|m| m.id.clone())
+            .collect()
+    }
+    /// The provider accepted a queued message.
+    #[cfg(test)]
+    pub(crate) fn test_follow_up_delivered(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.follow_up_delivered(id, cx);
+    }
+    /// The owner removed a queued message.
+    #[cfg(test)]
+    pub(crate) fn test_remove_follow_up(&mut self, id: &str) {
+        self.follow_ups.state.messages.retain(|m| m.id != id);
+    }
+    /// A cloud session whose workspace is not connected: a send to it needs a wake.
+    pub(crate) fn chief_cloud_asleep(&self) -> bool {
+        self.is_cloud_session() && !self.remote_state.online
+    }
+    /// The session's follow-up queue is paused (the owner interrupted a turn), so a queued
+    /// command waits until the owner resumes it.
+    pub(crate) fn chief_queue_paused(&self) -> bool {
+        self.follow_ups.state.paused
+    }
+    /// Applies the Chief's model and effort to its open chat, as a Mono's settings do: the next
+    /// turn reads them and a reply still going is untouched. The caller has checked that the
+    /// Chief runs on Claude Code, the only harness it can use. `default_model` is the app's choice for that
+    /// harness, used while the Chief names no model.
+    pub(crate) fn chief_apply_settings(
+        &mut self,
+        chief: &monocode_core::mono::chief::Chief,
+        default_model: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let model = chief.model.clone().or(default_model);
+        if self.summary.provider != Kind::Claude.id() || self.model != model {
+            let _ = self.mono_config(Kind::Claude, model, std::collections::HashMap::new(), cx);
+        }
+        // A chat that answers at once: low effort unless the owner chose otherwise.
+        let effort = chief.effort.clone().unwrap_or_else(|| "low".into());
+        if self.settings.effort.as_deref() != Some(effort.as_str()) {
+            self.settings
+                .model_settings
+                .retain(|key, _| !is_effort_key(key));
+            self.settings.effort = Some(effort);
+            self.save_settings(cx);
+            cx.notify();
+        }
+    }
+    /// A command the app puts into the session on the owner's behalf (a Chief command): the
+    /// message is queued behind what the session is doing, and the owner's composer text,
+    /// attachments and saved draft stay as they are. Returns the queued message's id.
+    pub(crate) fn chief_queue(
+        &mut self,
+        prompt: String,
+        cx: &mut Context<Self>,
+    ) -> Result<String, String> {
+        if self.cloud_locked {
+            return Err(crate::shell::CLOUD_ARCHIVING.into());
+        }
+        if self.auto_stopping {
+            return Err(super::auto_stop::AUTO_STOPPING.into());
+        }
+        if self.move_locked {
+            return Err(MOVE_PAUSED.into());
+        }
+        if !self.history_ready() {
+            self.load(cx);
+        }
+        let composer = std::mem::take(&mut self.attachments);
+        self.enqueue_follow_up(prompt, None, cx);
+        self.attachments = composer;
+        let id = self
+            .follow_ups
+            .state
+            .messages
+            .last()
+            .map(|m| m.id.clone())
+            .ok_or("The message could not be queued")?;
+        if !self.busy {
+            self.pump_follow_ups(cx);
+        }
+        cx.emit(SessionChanged);
+        cx.notify();
+        Ok(id)
+    }
+    /// The owner's confirmed Chief command for an unowned session, put in as a web send is:
+    /// sent now when the session is idle, else queued. `Some(id)` is the queued message.
+    /// A cloud workspace that is not connected holds the message in the queue; the caller wakes
+    /// it ([`Conversation::chief_cloud_asleep`]), as any send does.
+    pub(crate) fn chief_direct(
+        &mut self,
+        prompt: String,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<String>, String> {
+        if self.chief_must_queue(cx) || !self.history_ready() || self.chief_cloud_asleep() {
+            return self.chief_queue(prompt, cx).map(Some);
+        }
+        if self.cloud_locked {
+            return Err(crate::shell::CLOUD_ARCHIVING.into());
+        }
+        if self.auto_stopping {
+            return Err(super::auto_stop::AUTO_STOPPING.into());
+        }
+        if self.move_locked {
+            return Err(MOVE_PAUSED.into());
+        }
+        self.mobile_no_wake = true;
+        self.submit_from_remote_now(prompt, Vec::new(), cx);
+        self.mobile_no_wake = false;
+        Ok(None)
+    }
+    /// Whether a send that must not disturb the owner has to wait: the session works, or the
+    /// owner has an unsent message or draft here.
+    pub(crate) fn chief_must_queue(&self, cx: &gpui::App) -> bool {
+        self.busy
+            || self.stopping
+            || self.preparing_worktree
+            || self.attaching
+            || self.mono_ui.external.is_some()
+            || self.has_saved_draft()
+            || !self.input.read(cx).content.trim().is_empty()
+            || !self.attachments.is_empty()
+            || self.editing_last_turn.pending()
+            || self.settings.pending_provider_switch.is_some()
+            || !self.follow_ups.state.messages.is_empty()
+    }
     pub(super) fn mono_flush_external(&mut self, cx: &mut Context<Self>) {
         if !self.history_ready() || self.stopping {
             return;
@@ -204,6 +398,41 @@ impl Conversation {
             root,
             executable: std::env::current_exe().unwrap_or_default(),
             browser_database,
+            role: monocode_core::agent::Role::Mono,
+        });
+        self.sync_tool_paths(cx);
+        cx.notify();
+    }
+    /// Makes this conversation the Chief's chat: the Mono chat machinery with the Chief's rules,
+    /// its own soul and memory under `root` (see `mono::chief_root`), and no browser or emoji.
+    /// The proposals stay in the roster; the context carries only the settings.
+    pub(crate) fn configure_chief(
+        &mut self,
+        chief: &monocode_core::mono::chief::Chief,
+        root: PathBuf,
+        environment: std::collections::HashMap<String, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let name = chief.label();
+        self.input
+            .update(cx, |input, cx| input.mono_composer(&name, cx));
+        self.transcript
+            .update(cx, |t, _| t.mono_mode(&chief.mascot, chief.color, &name));
+        self.settings.environment = environment;
+        self.mono_ui.pending.clear();
+        self.sync_mono_pending(cx);
+        let context = monocode_core::mono::chief::Chief {
+            proposals: Vec::new(),
+            ..chief.clone()
+        };
+        // Any tool but the allowlisted app tool waits for the owner's approval in this chat.
+        self.settings.access = AccessMode::Supervised;
+        self.settings.mono = Some(monocode_core::agent::MonoContext {
+            mono: monocode_core::mono::chief::stand_in(chief),
+            root,
+            executable: std::env::current_exe().unwrap_or_default(),
+            browser_database: None,
+            role: monocode_core::agent::Role::Chief(Box::new(context)),
         });
         self.sync_tool_paths(cx);
         cx.notify();
@@ -1521,4 +1750,15 @@ mod tests {
             });
         }
     }
+}
+
+/// Where a queued follow-up message stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FollowUpStatus {
+    /// Still in the queue (or the saved draft).
+    Queued,
+    /// The provider accepted it.
+    Delivered,
+    /// Neither: the owner removed it, or the app restarted since it was delivered.
+    Gone,
 }

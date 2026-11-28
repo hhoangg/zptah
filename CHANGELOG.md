@@ -9,10 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Mono Browser on Ardia: a Mono drives your Ardia browser (https://github.com/ardia-browser/ardia) through its `ardia` command instead of a Chrome extension. It uses one Ardia profile, opens its own background tabs, reads the page again before every step, asks before risky steps and always before an upload, can list, read, run and save Ardia flows, and stops from the "Working in Ardia" row in the conversation. zptah opens Ardia in the background when it needs it (macOS) and quits an Ardia it started after 10 idle minutes. See `docs/browser/zptah-browser.md`.
 - zptah Browser: a Chrome extension that lets a Mono use your real Chrome profile, with multi-Mono tab groups, approvals for risky actions (English and Vietnamese) and a Stop button per tab. See `docs/browser/zptah-browser.md`.
 
 ### Removed
 
+- The zptah Browser Chrome extension, its pairing and native messaging host, the Browser connection card, the Chrome and Full Disk Access checks, Show cursor, and browser recipes (replaced by Ardia flows). The recipe tables of the store are dropped at the next start; recipe files in a Mono's folder are left where they are. Old browser settings in saved Monos are ignored, and a Mono with its browser on shows the Ardia profile picker.
 - The Playwright MCP browser backend. Monos that used it show "Reconnect needed" until you connect the extension; their trust level moves to Act for me.
 
 ## [0.33.0] - 2026-10-24

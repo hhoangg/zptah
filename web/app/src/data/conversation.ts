@@ -6,7 +6,7 @@
 // reopened after every reconnect with `from` set to the first turn held) and unregisters it on unmount.
 import { queryOptions, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
-import type { Approval, Attachment, CloudField, ResultOf } from "@monoptah/protocol";
+import type { Approval, Attachment, ChiefExtra, CloudField, ResultOf } from "@monoptah/protocol";
 import { getLinkConnection, useLinkConnection, useLinkDesktopId, type LinkRequestError, type WatchRegistrationHandle } from "@/link";
 import type { LinkClient } from "./client.ts";
 import { getMutator } from "./mutations.ts";
@@ -424,6 +424,11 @@ function useConversationSelect<T>(sessionId: string, select: (state: Conversatio
 /** The `cloud` field of the conversation (from reads and frames), or undefined for a local session. */
 export function useCloud(sessionId: string): CloudField | undefined {
   return useConversationSelect(sessionId, (state) => state.cloud);
+}
+
+/** The Chief conversation's proposals as the last read or frame said (undefined elsewhere, and on a desktop without the Chief). */
+export function useChiefExtra(sessionId: string): ChiefExtra | undefined {
+  return useConversationSelect(sessionId, (state) => state.chief);
 }
 
 /** The pending tool approvals of the conversation. Empty when there are none or the desktop does not advertise `approvals`. */

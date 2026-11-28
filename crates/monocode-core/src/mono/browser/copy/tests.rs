@@ -56,9 +56,39 @@ fn all_cases() -> Vec<(&'static str, CardFacts)> {
     rule.rule = Some("ask: click \"Book\" on airbnb.com".into());
     let tainted = click("Submit", &[Category::Tainted]);
     let injection = click("Submit", &[Category::Injection]);
+    let unclear = click("Confirm", &[Category::Unclear]);
     let mut other = facts(ActionDesc::Other, &[Category::SoulRule]);
     other.agent_action = Some("Empty the trash".into());
     other.agent_details = Some("12 files".into());
+    let mut flow_run = facts(
+        ActionDesc::FlowRun {
+            name: "order-coffee".into(),
+            site: "evil-example.net".into(),
+            risky: vec![
+                "step 3: click \"Pay now\"".into(),
+                "step 5: goes to evil-example.net".into(),
+            ],
+            params: vec![
+                ("size".into(), "large".into()),
+                ("note".into(), "no sugar please".into()),
+            ],
+        },
+        &[Category::Payment, Category::UnrelatedDomain],
+    );
+    flow_run.url = "https://evil-example.net/x".into();
+    let flow_save = facts(
+        ActionDesc::FlowSave {
+            name: "order-coffee".into(),
+            site: "coffee.example".into(),
+            steps: 4,
+            listed: vec![
+                "1: open https://coffee.example/".into(),
+                "2: fill textbox \"Size\" <text, 5 characters>".into(),
+            ],
+            replaces: true,
+        },
+        &[],
+    );
     vec![
         ("payment", payment),
         ("destructive", destructive),
@@ -74,7 +104,10 @@ fn all_cases() -> Vec<(&'static str, CardFacts)> {
         ("soul_rule", rule),
         ("tainted", tainted),
         ("injection", injection),
+        ("unclear", unclear),
         ("other", other),
+        ("flow_run", flow_run),
+        ("flow_save", flow_save),
     ]
 }
 
@@ -106,7 +139,12 @@ const SNAPSHOTS: &[(&str, &str, &str)] = &[
     ("en", "soul_rule", "Mira wants to click \"Book\" on airbnb.com.\n  Your rule for Mira says to ask first: click \"Book\" on airbnb.com."),
     ("en", "tainted", "Mira wants to click \"Submit\" on shop.example.\n  It carries something read on another site to this one."),
     ("en", "injection", "Mira wants to click \"Submit\" on shop.example.\n  A page tried to give instructions to the Mono, so every change asks."),
+    ("en", "unclear", "Mira wants to click \"Confirm\" on shop.example.\n  zptah could not read enough of this page to tell what this does."),
     ("en", "other", "Mira asks your OK on shop.example: \"Empty the trash\"\n  Details from Mira: \"12 files\""),
+    ("en", "flow_run", "Mira wants to run the flow \"order-coffee\" on shop.example.\n  This looks like a payment.\n  This site is not part of what you asked for.\n  Steps that need your OK:\n  - step 3: click \"Pay now\"\n  - step 5: goes to evil-example.net\n  Parameters:\n  - size: \"large\"\n  - note: \"no sugar please\""),
+    ("en", "flow_save", "Mira wants to save the flow \"order-coffee\" in Ardia.\n  This writes a flow into Ardia's flow store, which you and every profile share.\n  Site: coffee.example.\n  It saves the 4 step(s) recorded in this conversation.\n  Steps (typed values are hidden here):\n  - 1: open https://coffee.example/\n  - 2: fill textbox \"Size\" <text, 5 characters>\n  Values typed in these steps are stored in Ardia's shared flow store exactly as they were typed, unless Ardia masks them (it masks passwords only).\n  A flow with this name already exists on this site and may be replaced."),
+    ("vi", "flow_run", "Mira muốn chạy luồng \"order-coffee\" trên shop.example.\n  Đây có vẻ là một khoản thanh toán.\n  Trang này không thuộc việc bạn yêu cầu.\n  Các bước cần bạn đồng ý:\n  - step 3: click \"Pay now\"\n  - step 5: goes to evil-example.net\n  Tham số:\n  - size: \"large\"\n  - note: \"no sugar please\""),
+    ("vi", "flow_save", "Mira muốn lưu luồng \"order-coffee\" vào Ardia.\n  Việc này ghi một luồng vào kho luồng của Ardia, nơi bạn và mọi hồ sơ dùng chung.\n  Trang: coffee.example.\n  Nó lưu 4 bước đã ghi trong cuộc trò chuyện này.\n  Các bước (giá trị đã nhập được ẩn ở đây):\n  - 1: open https://coffee.example/\n  - 2: fill textbox \"Size\" <text, 5 characters>\n  Các giá trị đã nhập trong những bước này được lưu trong kho luồng dùng chung của Ardia đúng như đã nhập, trừ khi Ardia che chúng (Ardia chỉ che mật khẩu).\n  Đã có một luồng cùng tên trên trang này và nó có thể bị thay thế."),
     ("vi", "payment", "Mira muốn bấm \"Pay 1,200,000 VND\" trên shopee.vn.\n  Đây có vẻ là một khoản thanh toán."),
     ("vi", "destructive", "Mira muốn bấm \"Delete\" trong hộp thoại trên mail.google.com.\n  Hộp thoại ghi: \"Delete 12 conversations?\""),
     ("vi", "account_security", "Mira muốn bấm \"Turn off 2-Step Verification\" trên myaccount.google.com.\n  Thao tác này thay đổi cách bảo vệ tài khoản của bạn."),
@@ -121,6 +159,7 @@ const SNAPSHOTS: &[(&str, &str, &str)] = &[
     ("vi", "soul_rule", "Mira muốn bấm \"Book\" trên airbnb.com.\n  Quy tắc bạn đặt cho Mira yêu cầu hỏi trước: click \"Book\" on airbnb.com."),
     ("vi", "tainted", "Mira muốn bấm \"Submit\" trên shop.example.\n  Việc này mang thông tin đọc được ở trang khác sang trang này."),
     ("vi", "injection", "Mira muốn bấm \"Submit\" trên shop.example.\n  Một trang web đã thử ra lệnh cho Mono, nên mọi thay đổi đều được hỏi."),
+    ("vi", "unclear", "Mira muốn bấm \"Confirm\" trên shop.example.\n  zptah không đọc đủ nội dung trang này để biết thao tác này làm gì."),
     ("vi", "other", "Mira xin bạn đồng ý trên shop.example: \"Empty the trash\"\n  Chi tiết từ Mira: \"12 files\""),
 ];
 
@@ -136,7 +175,7 @@ fn every_category_reads_well_in_english_and_vietnamese() {
 }
 
 #[test]
-fn all_fourteen_categories_and_other_have_a_card() {
+fn all_fifteen_categories_and_other_have_a_card() {
     let names: Vec<&str> = all_cases().iter().map(|(n, _)| *n).collect();
     for category in [
         Category::Payment,
@@ -153,10 +192,78 @@ fn all_fourteen_categories_and_other_have_a_card() {
         Category::SoulRule,
         Category::Tainted,
         Category::Injection,
+        Category::Unclear,
     ] {
         assert!(names.contains(&category.as_str()), "{}", category.as_str());
     }
     assert!(names.contains(&"other"));
+    // The flow cards have their own lines.
+    assert!(names.contains(&"flow_run") && names.contains(&"flow_save"));
+}
+
+#[test]
+fn a_flow_card_lists_at_most_six_steps_and_says_when_a_flow_is_unclear_or_has_no_parameters() {
+    let risky: Vec<String> = (1..=9)
+        .map(|n| format!("step {n}: click \"X{n}\""))
+        .collect();
+    let f = facts(
+        ActionDesc::FlowRun {
+            name: "big".into(),
+            site: "big.example".into(),
+            risky,
+            params: vec![],
+        },
+        &[Category::Unclear],
+    );
+    let en = render(Lang::En, &f);
+    assert!(
+        en.contains("step 6: click \"X6\"") && !en.contains("X7"),
+        "{en}"
+    );
+    assert!(
+        en.contains("- and 3 more") && en.contains("Parameters: none."),
+        "{en}"
+    );
+    assert!(
+        en.contains("could not tell what some steps of this flow do"),
+        "{en}"
+    );
+    let vi = render(Lang::Vi, &f);
+    assert!(
+        vi.contains("- và 3 bước nữa") && vi.contains("Tham số: không có."),
+        "{vi}"
+    );
+    // A text the page made is one clipped line, and a quote can not close the name.
+    let g = facts(
+        ActionDesc::FlowRun {
+            name: "a\"b".into(),
+            site: "a.example".into(),
+            risky: vec![format!("step 1:\n{}", "Z".repeat(300))],
+            params: vec![],
+        },
+        &[Category::Unclear],
+    );
+    let text = render(Lang::En, &g);
+    assert!(
+        text.contains("flow \"a'b\"") && text.matches('\n').count() < 8,
+        "{text}"
+    );
+    assert!(!text.contains(&"Z".repeat(200)), "{text}");
+    // A flow with a payment is not grantable.
+    assert!(card(
+        Lang::En,
+        &facts(
+            ActionDesc::FlowRun {
+                name: "p".into(),
+                site: "p.example".into(),
+                risky: vec![],
+                params: vec![]
+            },
+            &[Category::Payment]
+        )
+    )
+    .allow_conversation
+    .is_none());
 }
 
 #[test]
@@ -259,8 +366,6 @@ fn the_password_stop_the_banner_and_the_rule_review_have_both_languages() {
         "Mira cần mật khẩu của bạn trên accounts.google.com."
     );
     assert_eq!(vi.show_tab, "Xem tab");
-    assert_eq!(stopped_banner(Lang::En).1, "Resume");
-    assert_eq!(stopped_banner(Lang::Vi).1, "Tiếp tục");
     let review = rule_review(
         Lang::En,
         "Mira",

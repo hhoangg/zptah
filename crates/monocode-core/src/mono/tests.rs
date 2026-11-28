@@ -935,3 +935,18 @@ fn text_that_is_not_one_emoji_is_not_a_badge() {
     mono.normalize();
     assert_eq!(mono.badge_emoji, None, "falls back to the mascot");
 }
+
+#[test]
+fn a_monos_rules_name_the_chief_only_while_it_is_on() {
+    let mut mono = Mono::default();
+    let off = instructions(&mono, std::path::Path::new("/bin/app"));
+    assert!(!off.contains("Commands from the owner via the Chief"));
+    mono.chief_rules = true;
+    let on = instructions(&mono, std::path::Path::new("/bin/app"));
+    assert!(on.contains("Commands from the owner via the Chief"));
+    assert_ne!(
+        files::content_hash(&off),
+        files::content_hash(&on),
+        "the rules hash changes with the toggle"
+    );
+}

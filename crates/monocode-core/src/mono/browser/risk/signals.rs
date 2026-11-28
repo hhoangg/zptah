@@ -13,8 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
-const SITES_JSON: &str =
-    include_str!("../../../../../../extensions/zptah-browser/shared/risk-sites.json");
+const SITES_JSON: &str = include_str!("data/risk-sites.json");
 
 /// What a form field is for (spec 7.2). Field values are never read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -175,7 +174,7 @@ pub struct Sites {
 
 pub fn sites() -> &'static Sites {
     static CELL: OnceLock<Sites> = OnceLock::new();
-    CELL.get_or_init(|| serde_json::from_str(SITES_JSON).expect("shared/risk-sites.json is valid"))
+    CELL.get_or_init(|| serde_json::from_str(SITES_JSON).expect("data/risk-sites.json is valid"))
 }
 
 pub(crate) fn host_of(url: &str) -> Option<String> {

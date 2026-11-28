@@ -61,6 +61,12 @@ pub(crate) const BINDINGS: &[Binding] = &[
         fixed: false,
     },
     Binding {
+        command: "App: Ask Chief",
+        keys: "",
+        when: "Anywhere",
+        fixed: false,
+    },
+    Binding {
         command: crate::monos::hotkeys::COMMAND,
         keys: "⌃⌥1-9",
         when: "Anywhere",
@@ -652,7 +658,11 @@ impl SettingsView {
         }
     }
     fn binding_label(&self, row: &Binding) -> String {
-        command_shortcut(&self.prefs, row.command).unwrap_or_else(|| "Disabled".into())
+        match command_shortcut(&self.prefs, row.command) {
+            Some(label) if label.is_empty() => "Not set".into(),
+            Some(label) => label,
+            None => "Disabled".into(),
+        }
     }
     pub(in crate::settings) fn record_key(
         &mut self,
@@ -727,7 +737,7 @@ fn shown_here(row: &Binding) -> bool {
     cfg!(target_os = "macos")
         || !matches!(
             row.command,
-            "App: Quick Composer" | crate::monos::hotkeys::COMMAND
+            "App: Quick Composer" | "App: Ask Chief" | crate::monos::hotkeys::COMMAND
         )
 }
 /// Every shortcut a row holds: the Mono row expands its modifiers to the nine

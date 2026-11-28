@@ -11,6 +11,20 @@ impl Shell {
             }));
         }
     }
+    /// The optional "Ask Chief" shortcut opens the floating panel on the Chief.
+    pub(super) fn configure_chief_shortcut(&mut self, cx: &mut Context<Self>) {
+        if let Some(receiver) = self.quick.configure_chief(&self.workspace.preferences) {
+            self.quick.chief_task = Some(cx.spawn(async move |this, cx| {
+                while receiver.recv().await.is_ok() {
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(monos) = this.monos.clone() {
+                            monos.update(cx, |monos, cx| monos.open_chief_panel(cx));
+                        }
+                    });
+                }
+            }));
+        }
+    }
     fn toggle_quick_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(handle) = self.quick.window
             && handle

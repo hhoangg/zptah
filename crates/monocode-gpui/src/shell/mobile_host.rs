@@ -76,6 +76,9 @@ pub(super) struct Mobile {
     mono_previews: HashMap<i64, MonoPreview>,
     /// A web device's own runtimes of the visuals it taps (`visual.dispatch`), apart from the ones on screen here.
     visuals: crate::mobile::visual_remote::Remote,
+    /// The Chief's `chief` field (its proposals with their live notes) as a watch frame carries
+    /// it. Built outside a shell update, since the notes read the shell: see `refresh_chief_web`.
+    chief_web: Option<Value>,
 }
 
 #[derive(Clone)]
@@ -106,6 +109,8 @@ struct GitJob {
 enum Target {
     Session(i64),
     Mono(String),
+    /// The Chief's chat, conversation id [`policy::CHIEF_CONVERSATION`]. It is not a session.
+    Chief,
 }
 
 /// A conversation read from disk, reused until the session opens on desktop.
@@ -125,6 +130,10 @@ struct Saved {
     launches: HashMap<i64, Value>,
     /// The Mono's emoji library and settings as they stood on reading.
     emoji: Option<MonoEmoji>,
+    /// The commands the Chief relayed to the Mono, by stored proposal id.
+    chief_relays: HashMap<String, Value>,
+    /// Whether this is the Chief's own chat, the only one that draws proposal cards.
+    chief: bool,
 }
 
 /// How an older page's turns are drawn, as the conversation's own are.
@@ -132,6 +141,9 @@ struct PageLook {
     emoji: Option<MonoEmoji>,
     mono: Option<String>,
     launches: HashMap<i64, Value>,
+    chief_relays: HashMap<String, Value>,
+    /// Whether this is the Chief's own chat, the only one that draws proposal cards.
+    chief: bool,
     cwd: String,
     harness: String,
     model: Option<String>,
@@ -178,6 +190,10 @@ struct Snapshot<'a> {
     launches: &'a HashMap<i64, Value>,
     /// The Mono's emoji library and settings, to resolve its pictures.
     emoji: Option<MonoEmoji>,
+    /// The commands the Chief relayed to this Mono, by stored proposal id.
+    chief_relays: &'a HashMap<String, Value>,
+    /// Whether this is the Chief's own chat, the only one that draws proposal cards.
+    chief: bool,
     /// The question the agent waits on, as the phone's card shows it; null
     /// for none, as always for a saved conversation.
     question: Value,
@@ -201,6 +217,8 @@ impl Snapshot<'_> {
             pending: &self.pending,
             launches: self.launches,
             emoji: self.emoji.as_ref(),
+            chief_relays: self.chief_relays,
+            chief: self.chief,
         }
     }
 }
@@ -716,19 +734,46 @@ impl Shell {
     }
 
     fn mobile_catalog_sessions(&self, paths: &[String], cx: &App) -> Vec<CatalogEntry> {
-        self.order
-            .iter()
-            .filter(|id| !self.sidebar_hidden_sessions.contains(id))
+        self.catalog_sessions(paths, false, cx)
+    }
+
+    /// The catalog's sessions. A phone sees what the sidebar shows. The Chief also sees the
+    /// sessions a Mono started that the sidebar hides, because who owns a session is what it
+    /// asks; the chats, habit runs, workflow questions and workers stay hidden from both.
+    fn catalog_sessions(&self, paths: &[String], for_chief: bool, cx: &App) -> Vec<CatalogEntry> {
+        let mut ids = self.order.clone();
+        if for_chief {
+            let listed: HashSet<i64> = ids.iter().copied().collect();
+            ids.extend(
+                self.session_summaries
+                    .keys()
+                    .copied()
+                    .filter(|id| !listed.contains(id)),
+            );
+        }
+        ids.iter()
+            .filter(|id| {
+                !self.sidebar_hidden_sessions.contains(id)
+                    || (for_chief
+                        && self
+                            .monos
+                            .as_ref()
+                            .is_some_and(|m| m.read(cx).owned_by_a_mono(**id)))
+            })
             .filter_map(|&id| {
                 let metadata = self.session_metadata(id, cx);
                 let summary = metadata.summary;
                 if summary.archived
                     || !summary.has_messages
                     || self.orchestration_worker(id)
-                    || self
-                        .monos
-                        .as_ref()
-                        .is_some_and(|m| m.read(cx).hidden_session(id))
+                    || self.monos.as_ref().is_some_and(|m| {
+                        let m = m.read(cx);
+                        if for_chief {
+                            m.is_mono_session(id)
+                        } else {
+                            m.hidden_session(id)
+                        }
+                    })
                 {
                     return None;
                 }
@@ -772,6 +817,54 @@ impl Shell {
             .collect()
     }
 
+    /// The sessions the Chief's overview reads: the phone catalog's own list
+    /// (`catalog_sessions`), so both agree on what is hidden: archived and empty sessions,
+    /// Mono chats, the Chief's chat, habit runs, workflow questions and workers.
+    pub(crate) fn chief_catalog(&self, cx: &App) -> crate::monos::chief::Catalog {
+        let paths = self.mobile_projects(cx);
+        let entries = self.catalog_sessions(&paths, true, cx);
+        let projects: Vec<(String, String)> = paths
+            .iter()
+            .map(|path| (path.clone(), self.appearance(path).label(path).to_string()))
+            .collect();
+        let sessions = entries
+            .into_iter()
+            .map(|entry| {
+                let path = paths
+                    .iter()
+                    .find(|path| project_id(path) == entry.project)
+                    .cloned()
+                    .unwrap_or_else(|| monocode_core::files::path_key(&entry.summary.cwd));
+                let name = projects
+                    .iter()
+                    .find(|(known, _)| *known == path)
+                    .map(|(_, name)| name.clone())
+                    .unwrap_or_else(|| path.rsplit(['/', '\\']).next().unwrap_or(&path).to_owned());
+                let cloud = entry.cloud.as_ref().map(|view| {
+                    let mut card = json!({});
+                    cloud::annotate_card(&mut card, Some(view));
+                    card
+                });
+                crate::monos::chief::SessionFact {
+                    id: entry.id,
+                    title: entry.summary.title.clone(),
+                    provider: entry.summary.provider.clone(),
+                    cwd: entry.summary.cwd.clone(),
+                    updated_at: entry.summary.updated_at,
+                    project: path,
+                    project_name: name,
+                    live: entry.live,
+                    cloud,
+                }
+            })
+            .collect();
+        crate::monos::chief::Catalog {
+            focused: self.workspace.active,
+            projects,
+            sessions,
+        }
+    }
+
     /// Whether a publish may start now. While one runs, the ask is kept so it runs again after.
     fn claim_publish(&mut self) -> bool {
         if self.mobile.publishing {
@@ -782,13 +875,14 @@ impl Shell {
         true
     }
 
-    fn publish_mobile_catalog(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn publish_mobile_catalog(&mut self, cx: &mut Context<Self>) {
         let Some(host) = self.mobile.host.clone() else {
             return;
         };
         if !host.enabled() || !self.claim_publish() {
             return;
         }
+        self.refresh_chief_web(cx);
         let work = self.mobile_catalog_work(cx);
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -805,6 +899,14 @@ impl Shell {
             });
         })
         .detach();
+    }
+
+    /// The catalog `workspace.list` answers, built now, for tests of other modules.
+    #[cfg(test)]
+    pub(crate) fn mobile_catalog_for_test(&mut self, cx: &mut Context<Self>) -> Task<Value> {
+        let work = self.mobile_catalog_work(cx);
+        cx.background_executor()
+            .spawn(async move { work.await.expect("the catalog was built").0 })
     }
 
     /// Builds the catalog every device is told of (`workspace.list`, `sessions.list`): the
@@ -900,6 +1002,10 @@ impl Shell {
             .filter_map(|(mono, _)| mono.session_id)
             .map(|id| (id, self.session_summaries.get(&id).map(|s| s.updated_at)))
             .collect();
+        let chief = self.monos.as_ref().map_or_else(
+            || json!({"enabled": false, "openCount": 0}),
+            |m| m.read(cx).chief_catalog_entry(cx),
+        );
         let mut previews = self.mobile.mono_previews.clone();
         let store = self.store.clone();
         let mut ids = self.mobile.ids.clone();
@@ -1003,7 +1109,7 @@ impl Shell {
                 // and its phones hide them. `push`: it notifies phones through
                 // Expo, so they no longer post their own alerts. `monoFiles`:
                 // it reads and saves a Mono's soul and memory for the phone.
-                json!({"projects": projects, "monos": monos, "sessions": sessions, "folders": folders, "monoTools": true, "push": true, "monoFiles": true}),
+                json!({"projects": projects, "monos": monos, "sessions": sessions, "folders": folders, "chief": chief, "monoTools": true, "push": true, "monoFiles": true}),
                 ids,
                 previews,
             ))
@@ -1022,7 +1128,7 @@ impl Shell {
     ) -> Result<i64, Failure> {
         match self.mobile_target(id, device, cx)? {
             Target::Session(id) => Ok(id),
-            Target::Mono(_) => Err(policy::Code::UnsupportedTarget.failure()),
+            Target::Mono(_) | Target::Chief => Err(policy::Code::UnsupportedTarget.failure()),
         }
     }
 
@@ -1078,11 +1184,23 @@ impl Shell {
     ) -> Result<i64, Failure> {
         match self.mobile_target(id, device, cx)? {
             Target::Session(session) => Ok(session),
-            Target::Mono(_) => Err(policy::Code::UnsupportedTarget.failure()),
+            Target::Mono(_) | Target::Chief => Err(policy::Code::UnsupportedTarget.failure()),
         }
     }
 
     fn mobile_target(&self, id: &str, device: &DeviceContext, cx: &App) -> Result<Target, Failure> {
+        if id == policy::CHIEF_CONVERSATION {
+            // The Chief reads every session of every project: only a device with no narrowing.
+            if !policy::chief_visible(device) {
+                return Err(not_selected());
+            }
+            return self
+                .monos
+                .as_ref()
+                .is_some_and(|m| m.read(cx).chief_enabled())
+                .then_some(Target::Chief)
+                .ok_or_else(|| "The Chief is turned off".into());
+        }
         if let Some(mono) = id.strip_prefix("mono:") {
             if !in_selection(&device.monos, mono) {
                 return Err(not_selected());
@@ -1227,6 +1345,50 @@ impl Shell {
             .collect()
     }
 
+    /// The commands the Chief relayed to the Mono of `target`, by stored proposal id, as the
+    /// Mono's turns draw them ("From you, via <name>"). Empty for any other conversation.
+    fn mobile_chief_relays(&self, target: &Target, cx: &App) -> HashMap<String, Value> {
+        use monocode_core::mono::chief::Route;
+        let (Target::Mono(mono), Some(monos)) = (target, self.monos.as_ref()) else {
+            return HashMap::new();
+        };
+        let monos = monos.read(cx);
+        if !monos.chief_enabled() {
+            return HashMap::new();
+        }
+        let name = monos.chief_label();
+        monos
+            .chief_proposals()
+            .iter()
+            .filter(|p| matches!(&p.route, Route::ViaMono { mono_id } if mono_id == mono))
+            .map(|p| {
+                (
+                    p.id.clone(),
+                    json!({"proposalId": p.id, "instruction": p.instruction, "chiefName": name}),
+                )
+            })
+            .collect()
+    }
+
+    /// Rebuilds the Chief's web value once the update that asked is over (its notes read the
+    /// shell), then pushes it to the watches when it changed.
+    pub(super) fn refresh_chief_web(&mut self, cx: &mut Context<Self>) {
+        let Some(monos) = self.monos.clone() else {
+            return;
+        };
+        let shell = cx.weak_entity();
+        cx.defer(move |cx| {
+            let value = monos.read(cx).chief_web_value(cx);
+            let _ = shell.update(cx, |this, cx| {
+                let value = value["enabled"].as_bool().unwrap_or(false).then_some(value);
+                if this.mobile.chief_web != value {
+                    this.mobile.chief_web = value;
+                    this.schedule_mobile_push(cx);
+                }
+            });
+        });
+    }
+
     pub(super) fn mobile_session_id(&mut self, id: i64) -> String {
         if let Some(value) = self.mobile.ids.get(&id) {
             return value.clone();
@@ -1239,7 +1401,7 @@ impl Shell {
         value
     }
 
-    fn handle_mobile_request(
+    pub(crate) fn handle_mobile_request(
         &mut self,
         request: Request,
         window: &mut Window,
@@ -1258,6 +1420,8 @@ impl Shell {
                 self.mobile_mono(request, cx)
             }
             "mono.file" | "mono.saveFile" => self.mobile_mono_file(request, cx),
+            "chief.profile" | "chief.proposals" => self.mobile_chief_read(request, cx),
+            "chief.update" => self.mobile_chief_update(request, cx),
             "mono.emoji" => self.mobile_mono_emoji(request, cx),
             "project.fileHighlight" => {
                 let job = string(&request.params, "job").unwrap_or_default();
@@ -1374,9 +1538,20 @@ impl Shell {
                 return request.reply(Err(error));
             }
         };
+        if matches!(target, Target::Chief) {
+            let error = policy::Code::UnsupportedTarget.failure();
+            audited.record(
+                &Err(error.clone()),
+                &audited.path,
+                0,
+                Some(mention::rule::FAILED),
+            );
+            return request.reply(Err(error));
+        }
         let is_mono = matches!(target, Target::Mono(_));
         let (session, mono_projects) = match &target {
             Target::Session(id) => (Some(*id), Vec::new()),
+            Target::Chief => (None, Vec::new()),
             Target::Mono(id) => {
                 let mono = self
                     .monos
@@ -1570,6 +1745,14 @@ impl Shell {
             },
             None => None,
         };
+        if matches!(target, Some(Target::Chief)) {
+            let error = audited.refuse(
+                &request,
+                policy::Code::UnsupportedTarget.failure(),
+                mention::rule::FAILED,
+            );
+            return request.reply(Err(error));
+        }
         let mono_projects = match &target {
             Some(Target::Mono(id)) => self
                 .monos
@@ -1902,6 +2085,13 @@ impl Shell {
         device: &DeviceContext,
         cx: &App,
     ) -> Map<String, Value> {
+        if matches!(target, Target::Chief) {
+            let mut fields = Map::new();
+            if let Some(chief) = &self.mobile.chief_web {
+                fields.insert("chief".into(), chief.clone());
+            }
+            return fields;
+        }
         let Target::Session(id) = target else {
             return Map::new();
         };
@@ -1912,6 +2102,12 @@ impl Shell {
 
     /// The cloud and approval fields a watch frame adds for a session.
     fn mobile_frame_fields(&self, target: &Target, device: &DeviceContext, cx: &App) -> Value {
+        if matches!(target, Target::Chief) {
+            return match &self.mobile.chief_web {
+                Some(chief) => json!({"chief": chief}),
+                None => Value::Null,
+            };
+        }
         let Target::Session(id) = target else {
             return Value::Null;
         };
@@ -1943,6 +2139,13 @@ impl Shell {
                 });
                 (found.as_ref().and_then(|f| f.0), found.map(|f| f.1))
             }
+            Target::Chief => {
+                let found = self
+                    .monos
+                    .as_ref()
+                    .map(|m| (m.read(cx).chief_session(), m.read(cx).chief_label()));
+                (found.as_ref().and_then(|f| f.0), found.map(|f| f.1))
+            }
         };
         let Some(session) = session else {
             return request.reply(Ok(json!({"turns": [], "older": false})));
@@ -1953,6 +2156,8 @@ impl Shell {
                 emoji: s.emoji.clone(),
                 mono: s.mono.clone(),
                 launches: s.launches.clone(),
+                chief_relays: s.chief_relays.clone(),
+                chief: s.chief,
                 cwd: s.cwd.to_owned(),
                 harness: s.harness.to_owned(),
                 model: s.model.clone(),
@@ -1965,10 +2170,12 @@ impl Shell {
                             .monos
                             .as_ref()
                             .and_then(|m| m.read(cx).mobile_emoji_source(mono, cx)),
-                        Target::Session(_) => None,
+                        Target::Session(_) | Target::Chief => None,
                     },
                     mono: name,
                     launches: self.mobile_launches(target, device, cx),
+                    chief_relays: self.mobile_chief_relays(target, cx),
+                    chief: matches!(target, Target::Chief),
                     cwd: summary.map(|s| s.cwd.clone()).unwrap_or_default(),
                     harness: summary.map(|s| s.provider.clone()).unwrap_or_default(),
                     model: None,
@@ -1993,6 +2200,14 @@ impl Shell {
     ) -> Option<T> {
         let (view, mono, emoji) = match target {
             Target::Session(id) => (self.sessions.get(id)?.clone(), None, None),
+            Target::Chief => {
+                let manager = self.monos.as_ref()?.read(cx);
+                (
+                    manager.chief_chat()?.clone(),
+                    Some(manager.chief_label()),
+                    None,
+                )
+            }
             Target::Mono(id) => {
                 let manager = self.monos.as_ref()?.read(cx);
                 let name = manager.roster.get(id).map(|m| m.label());
@@ -2009,6 +2224,8 @@ impl Shell {
         }
         // Built for every streamed frame, so only once there's history to show.
         let launches = self.mobile_launches(target, device, cx);
+        let chief_relays = self.mobile_chief_relays(target, cx);
+        let chief = matches!(target, Target::Chief);
         let waiting = match chat.mobile_waiting(cx) {
             Some(crate::conversation::MobileWaiting::Approval) => Some("Waiting for approval"),
             Some(crate::conversation::MobileWaiting::Question) => Some("Waiting for answers"),
@@ -2028,6 +2245,8 @@ impl Shell {
             pending: chat.mobile_pending(cx),
             launches: &launches,
             emoji,
+            chief_relays: &chief_relays,
+            chief,
             question: chat.mobile_question(cx),
             history: chat.transcript.read(cx).older_history_cursor(),
         };
@@ -2042,6 +2261,14 @@ impl Shell {
     ) -> Task<Result<Arc<Saved>, String>> {
         let (id, mono, emoji) = match target {
             Target::Session(id) => (Some(*id), None, None),
+            Target::Chief => {
+                let manager = self.monos.as_ref().map(|m| m.read(cx));
+                (
+                    manager.and_then(|m| m.chief_session()),
+                    manager.map(|m| m.chief_label()),
+                    None,
+                )
+            }
             Target::Mono(mono) => {
                 let manager = self.monos.as_ref().map(|m| m.read(cx));
                 let found = manager.and_then(|m| m.roster.get(mono));
@@ -2054,6 +2281,8 @@ impl Shell {
         };
         let summary = id.and_then(|id| self.session_summaries.get(&id).cloned());
         let launches = self.mobile_launches(target, device, cx);
+        let chief_relays = self.mobile_chief_relays(target, cx);
+        let chief = matches!(target, Target::Chief);
         let store = self.store.clone();
         cx.background_executor().spawn(async move {
             let Some(id) = id else {
@@ -2068,6 +2297,8 @@ impl Shell {
                     mono,
                     launches,
                     emoji,
+                    chief_relays,
+                    chief,
                 }));
             };
             let store = locked(&store)?;
@@ -2093,6 +2324,8 @@ impl Shell {
                 mono,
                 launches,
                 emoji,
+                chief_relays,
+                chief,
             }))
         })
     }
@@ -2148,6 +2381,10 @@ impl Shell {
         let view = match &watch.target {
             Target::Session(session) => self.sessions.get(session).cloned(),
             Target::Mono(mono) => self.monos.as_ref().and_then(|m| m.read(cx).open_chat(mono)),
+            Target::Chief => self
+                .monos
+                .as_ref()
+                .and_then(|m| m.read(cx).chief_chat().cloned()),
         };
         let Some(view) = view else {
             return;
@@ -2276,6 +2513,7 @@ impl Shell {
                                     .monos
                                     .clone()
                                     .and_then(|m| m.update(cx, |m, cx| m.mobile_chat(&mono, cx))),
+                                Target::Chief => None,
                             };
                             if let Some(view) = view {
                                 view.update(cx, |v, cx| v.load(cx));
@@ -2362,6 +2600,9 @@ impl Shell {
             "mono.reset" => self.mobile_mono_reset(request, finish, cx),
             "session.start" => self.mobile_start(request, finish, cx),
             "conversation.send" => self.mobile_send(request, finish, cx),
+            "chief.proposal.send" | "chief.proposal.edit" | "chief.proposal.cancel" => {
+                self.mobile_chief_command(request, finish, cx)
+            }
             "session.answerApproval" => {
                 let result = approvals::dispatch(
                     self,
@@ -2456,7 +2697,9 @@ impl Shell {
         let session_of = |this: &Self, conversation: &str| -> Result<i64, Failure> {
             let session = match this.mobile_target(conversation, device, cx)? {
                 Target::Session(id) => id,
-                Target::Mono(_) => return Err(policy::Code::UnsupportedTarget.failure()),
+                Target::Mono(_) | Target::Chief => {
+                    return Err(policy::Code::UnsupportedTarget.failure());
+                }
             };
             if this.mobile_session_project(session, cx).as_deref() != Some(&request.project_id) {
                 return Err("Session is not in this project".into());
@@ -2516,6 +2759,10 @@ impl Shell {
         let conversation = string(params, "conversationId").unwrap_or_default();
         let target = self.mobile_target(&conversation, device, cx)?;
         let reply = json!({"sessionId": conversation});
+        // The Chief's chat is changed only through its own methods and `conversation.send`.
+        if matches!(target, Target::Chief) {
+            return Err(policy::Code::UnsupportedTarget.failure());
+        }
         match (method, &target) {
             ("session.cancel", Target::Session(id)) => {
                 if let Some(view) = self.sessions.get(id) {
@@ -2545,6 +2792,7 @@ impl Shell {
                         .monos
                         .clone()
                         .and_then(|m| m.update(cx, |m, cx| m.mobile_chat(mono, cx))),
+                    Target::Chief => None,
                 }
                 .ok_or("This conversation is still opening on desktop; try again")?;
                 // Resuming runs a turn: on a cloud conversation it wakes a stopped instance, so it
@@ -2553,7 +2801,7 @@ impl Shell {
                     Target::Session(id) => {
                         cloud::before_resume_usage(self, device, *id, params, cx)?
                     }
-                    Target::Mono(_) => false,
+                    Target::Mono(_) | Target::Chief => false,
                 };
                 view.update(cx, |v, cx| {
                     v.mobile_resume_usage(&params["token"], automatic, wake, cx)
@@ -2568,6 +2816,7 @@ impl Shell {
                         .monos
                         .clone()
                         .and_then(|m| m.update(cx, |m, cx| m.mobile_chat(mono, cx))),
+                    Target::Chief => None,
                 }
                 .ok_or("This conversation is still opening on desktop; try again")?;
                 let model = match (
@@ -2627,6 +2876,7 @@ impl Shell {
                     Target::Mono(mono) => {
                         self.monos.as_ref().and_then(|m| m.read(cx).open_chat(mono))
                     }
+                    Target::Chief => None,
                 }
                 .ok_or("This question was already answered")?;
                 let request_id = params["requestId"]
@@ -2680,7 +2930,7 @@ impl Shell {
             // start anything for one it may not reach.
             let session = match &target {
                 Target::Session(id) => Some(*id),
-                Target::Mono(_) => None,
+                Target::Mono(_) | Target::Chief => None,
             };
             let plan = cloud::before_send(self, &device, session, &params, cx)?;
             let text = message_text(&params)?;
@@ -2716,6 +2966,17 @@ impl Shell {
                                 }
                                 this.mobile.started.insert(*id);
                                 Ok(())
+                            }
+                            Target::Chief => {
+                                // The Chief answers text only; it has no files to read.
+                                if !attachments.is_empty() {
+                                    return Err(Failure::from("The Chief takes text only"));
+                                }
+                                this.monos
+                                    .clone()
+                                    .ok_or("The Chief is turned off")?
+                                    .update(cx, |m, cx| m.chief_send(text, cx))
+                                    .map_err(Failure::from)
                             }
                             Target::Mono(mono) => this
                                 .monos
@@ -2974,12 +3235,38 @@ impl Shell {
             title: &notice.title,
             preview: Some(raw),
             control_only: false,
+            whole_workspace_only: false,
         });
         // A phone is never pushed about a session only web devices see: it
         // cannot open it, and its path or instance name stays off the wire.
         if is_mono || self.mobile_phone_push_allowed(id, cx) {
             self.send_mobile_notice(category, notice, false, cx);
         }
+    }
+
+    /// Tells the paired web devices that see the whole workspace about a command the Chief
+    /// delivered. The text is the same short line as the desktop banner; a narrowed device never
+    /// gets it (it never sees the Chief).
+    pub(super) fn notify_chief_web(
+        &mut self,
+        summary: &Session,
+        chief_name: &str,
+        body: &str,
+        category: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let (project, _) = self.mobile_notice_project(summary, cx);
+        let session = self.mobile_session_id(summary.id);
+        notify::notify_web(&notify::WebNotice {
+            category,
+            session_id: Some(&session),
+            mono_id: None,
+            project: &project,
+            title: chief_name,
+            preview: Some(body),
+            control_only: false,
+            whole_workspace_only: true,
+        });
     }
 
     /// Whether phones may be pushed about session `id`: not when only web
@@ -3163,6 +3450,10 @@ impl Shell {
                         Target::Mono(mono) => {
                             self.monos.as_ref().and_then(|m| m.read(cx).open_chat(mono))
                         }
+                        Target::Chief => self
+                            .monos
+                            .as_ref()
+                            .and_then(|m| m.read(cx).chief_chat().cloned()),
                     };
                     match view {
                         Some(view) => {
@@ -3193,6 +3484,9 @@ impl Shell {
                                     Some(settings.account.id.clone()),
                                 ))
                             }
+                            Target::Chief => Err(Failure::from(
+                                "This conversation is still opening on desktop; try again",
+                            )),
                             // Not open here: what its saved conversation runs with.
                             Target::Mono(mono) => {
                                 let id = self
@@ -3383,6 +3677,7 @@ impl Shell {
                     .monos
                     .as_ref()
                     .and_then(|m| m.read(cx).roster.get(mono)?.session_id),
+                Target::Chief => None,
             };
             let Some(session) = session else {
                 return request.reply(Err(visual_gone()));
@@ -3506,7 +3801,19 @@ impl Shell {
         };
         let result = if request.method == "mono.create" {
             let result = monos.update(cx, |monos, cx| monos.mobile_create(cx));
-            if result.is_ok() {
+            if let Ok(created) = &result {
+                // The creator must be able to open and edit what it made, even
+                // when its selection lists only some Monos. The Mono exists and
+                // is saved by now: a failed grant is logged, never returned as
+                // an error (the user would press Create again and make a second
+                // Mono), and the catalog is published either way.
+                if let (Some(host), Some(new_id)) =
+                    (self.mobile.host.as_ref(), string(created, "monoId"))
+                    && let Err(error) =
+                        host.grant_mono(&request.device.id, request.device.kind, &new_id)
+                {
+                    eprintln!("Could not add the created Mono to the device's selection: {error}");
+                }
                 self.publish_mobile_catalog(cx);
             }
             result
@@ -3914,6 +4221,8 @@ fn older_page(
                 pending: Vec::new(),
                 launches: &look.launches,
                 emoji: look.emoji.clone(),
+                chief_relays: &look.chief_relays,
+                chief: look.chief,
                 question: Value::Null,
                 history: page.before,
                 usage_limit: Value::Null,
@@ -3973,6 +4282,8 @@ fn saved_snapshot(saved: &Saved) -> Snapshot<'_> {
         pending: Vec::new(),
         launches: &saved.launches,
         emoji: saved.emoji.clone(),
+        chief_relays: &saved.chief_relays,
+        chief: saved.chief,
         question: Value::Null,
         history: saved.history,
     }
@@ -4126,6 +4437,7 @@ fn hidden_providers(prefs: &crate::settings::Preferences, cwd: &str) -> Vec<Stri
     prefs.hidden_for(cwd)
 }
 
+mod chief_start;
 #[cfg(test)]
 mod cloud_lifecycle_tests;
 mod cloud_start;
@@ -5994,7 +6306,7 @@ mod tests {
         window.update(cx, |shell, window, cx| {
             let store = locked(&shell.store).unwrap();
             let summary = shell.session_summaries[&id].clone();
-            let saved = Saved { id, settings: store.agent_settings(id).unwrap().unwrap(), rows: store.load(id).unwrap().rows, harness: summary.provider, cwd: summary.cwd, history: None, mono: None, launches: HashMap::new(), emoji: None };
+            let saved = Saved { id, settings: store.agent_settings(id).unwrap().unwrap(), rows: store.load(id).unwrap().rows, harness: summary.provider, cwd: summary.cwd, history: None, mono: None, launches: HashMap::new(), emoji: None, chief_relays: HashMap::new(), chief: false };
             drop(store);
             let from_disk = saved_snapshot(&saved).usage_limit;
             let live = shell.with_live_snapshot(&Target::Session(id), &phone(), cx, |s| s.usage_limit.clone()).unwrap();
@@ -6005,7 +6317,7 @@ mod tests {
             assert!(shell.mobile_session_command(&phone(), "session.resumeUsageAtReset", &params, window, cx).unwrap_err().error.contains("changed"));
             shell.sessions[&id].update(cx, |v, _| {
                 v.settings.usage_limit.as_mut().unwrap().resets_at = None;
-                v.settings.mono = Some(monocode_core::agent::MonoContext { mono: Default::default(), root: "/fixture".into(), executable: "/fixture/binary".into(), browser_database: None });
+                v.settings.mono = Some(monocode_core::agent::MonoContext { mono: Default::default(), root: "/fixture".into(), executable: "/fixture/binary".into(), browser_database: None, role: Default::default() });
             });
             let token = shell.sessions[&id].read(cx).mobile_usage_limit(cx)["token"].clone();
             let params = json!({"conversationId":conversation, "token":token});
@@ -6037,6 +6349,8 @@ mod tests {
             mono: None,
             launches: HashMap::new(),
             emoji: None,
+            chief_relays: HashMap::new(),
+            chief: false,
         };
         let state = saved_snapshot(&saved).usage_limit;
         assert_eq!(state["resetsAt"], reset);

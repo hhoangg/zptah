@@ -269,6 +269,11 @@ function UserMessage({ item, mono }: { item: UserItem; mono: boolean }) {
   return (
     <div className={cn("flex flex-col items-end pr-5 pl-14", item.compact ? "pt-1" : "pt-1.5 pb-4")} data-chat-message-role="user">
       <div className={cn("relative max-w-full bg-bubble px-3.5 py-[9px] text-content", singleLine ? "rounded-[21px]" : "rounded-[14px]")}>
+        {item.chiefRelay ? (
+          <p data-testid="chief-relay-label" className="mb-1 text-meta text-muted-text">
+            From you, via {item.chiefRelay.chiefName}
+          </p>
+        ) : null}
         {item.attachments ? <p className="mb-1 text-meta text-muted-text">{item.attachments === 1 ? "1 attachment" : `${item.attachments} attachments`}</p> : null}
         {item.text ? (
           <p ref={ref} className={cn("text-[16px] leading-[23px] whitespace-pre-wrap select-text wrap-anywhere", !expanded && "line-clamp-4")}>

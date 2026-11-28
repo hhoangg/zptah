@@ -9,7 +9,9 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMediaQuery } from "@/ui/useMediaQuery";
 import { useCatalog, useConversation } from "@/data";
-import { useMonoTools } from "@/features/sessions/workspaceFilter";
+import { useMonoTools, type CatalogMono } from "@/features/sessions/workspaceFilter";
+import { ChiefCards, ChiefInlineCards, ChiefProposalsProvider } from "@/features/chief/ChiefCards";
+import { CHIEF_ID, CHIEF_DEFAULT_NAME } from "@/features/chief/chief";
 import { assertFitsRequest, toWire } from "@/features/composer/attachments";
 import { useRequestControl } from "@/features/composer/useRequestControl";
 import { readChatDraft, writeChatDraft } from "@/features/composer/chatDraft";
@@ -26,6 +28,8 @@ import { WIDE_QUERY, useReadOnly } from "@/features/sessions/WorkspaceFrame";
 import { useVisualController } from "@/features/visuals/useVisual";
 import { Transcript } from "@/features/transcript/Transcript";
 import type { TranscriptActions } from "@/features/transcript/context";
+import { readProposalIds } from "@/features/transcript/turnItems";
+import type { Turn } from "@monoptah/protocol";
 import { useOlderTurns } from "@/features/transcript/useOlderTurns";
 import { safeHexColor } from "@/lib/color";
 import { useLinkMutation } from "@/data";
@@ -48,7 +52,7 @@ const quote = (text: string) => {
 
 export const monoConversationId = (monoId: string) => `mono:${monoId}`;
 
-export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: string }) {
+export function MonoScreen({ desktopId, monoId, chief = false }: { desktopId: string; monoId: string; /** The Chief chat: conversation `chief`, its proposal cards under the transcript and its read-only profile. */ chief?: boolean }) {
   useRememberPlace();
   const navigate = useNavigate();
   // From 640 px the sidebar lists the Monos, so the chat has no Back to the list there.
@@ -58,9 +62,21 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
   const guard = useSendGuard();
   const catalogQuery = useCatalog();
   const catalog = catalogQuery.data;
-  const mono = catalog?.monos.find((candidate) => candidate.id === monoId);
+  const chiefCatalog = catalog?.chief?.enabled === true ? catalog.chief : undefined;
+  // The Chief is not in `monos`: it is drawn from the catalog's `chief` entry, so it has no project list or unread count.
+  const mono = useMemo<CatalogMono | undefined>(() => {
+    if (!chief) return catalog?.monos.find((candidate) => candidate.id === monoId);
+    if (!chiefCatalog) return undefined;
+    return {
+      id: CHIEF_ID,
+      name: chiefCatalog.name ?? CHIEF_DEFAULT_NAME,
+      ...(chiefCatalog.mascot ? { mascot: chiefCatalog.mascot } : {}),
+      ...(chiefCatalog.color ? { color: chiefCatalog.color } : {}),
+      ...(chiefCatalog.status ? { status: chiefCatalog.status } : {}),
+    };
+  }, [catalog, chief, chiefCatalog, monoId]);
   const monoTools = useMonoTools();
-  const conversationId = monoConversationId(monoId);
+  const conversationId = chief ? CHIEF_ID : monoConversationId(monoId);
   const conversation = useConversation(conversationId);
   const state = conversation.state;
   const missing = useConfirmedMissing(catalogQuery, catalog !== undefined, !mono) && (state?.turns.length ?? 0) === 0;
@@ -76,8 +92,8 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
 
   // F-17: the chat on screen is seen, and so is a reply that arrives while it is open.
   useEffect(() => {
-    if (mono) markMonoSeen(desktopId, mono);
-  }, [desktopId, mono]);
+    if (mono && !chief) markMonoSeen(desktopId, mono);
+  }, [chief, desktopId, mono]);
 
   const { send, retry: retryTurn } = conversation;
   // Retry and a tapped choice go through the send-guard like a typed message.
@@ -98,13 +114,14 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
         void navigate({ to: "/d/$desktopId/s/$sessionId", params: { desktopId, sessionId } });
       },
       isProjectAvailable: (id) => !catalog || catalog.projects.some((project) => project.id === id),
+      ...(chief ? { renderTurnExtra: (turn: Turn) => <ChiefInlineCards ids={readProposalIds(turn)} /> } : {}),
       ...(readOnly
         ? {}
         : {
             onChoose: replies.onChoose,
           }),
     }),
-    [catalog, desktopId, mentions.onOpenFile, monoId, navigate, readOnly, replies.onChoose, visuals],
+    [catalog, chief, desktopId, mentions.onOpenFile, monoId, navigate, readOnly, replies.onChoose, visuals],
   );
 
 
@@ -120,21 +137,28 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
     if (readChatDraft(desktopId, conversationId).trim() === text.trim()) writeChatDraft(desktopId, conversationId, "");
   };
 
-  const name = mono?.name ?? "Mono";
+  const name = mono?.name ?? (chief ? CHIEF_DEFAULT_NAME : "Mono");
   const working = mono?.status === "working" || state?.busy === true;
   const empty = !!state && older.turns.length === 0 && (state.optimistic ?? []).length === 0;
   const monoColor = mono?.color;
   const monoMascot = mono?.mascot;
+  const chiefEmoji = chief ? chiefCatalog?.emoji : undefined;
   const agent = useMemo(
-    () => ({ id: monoId, name, ...(monoMascot ? { mascot: monoMascot } : {}), ...(monoColor ? { color: safeHexColor(monoColor) } : {}) }),
-    [monoId, name, monoColor, monoMascot],
+    () => ({
+      id: monoId,
+      name,
+      ...(monoMascot ? { mascot: monoMascot } : {}),
+      ...(chiefEmoji ? { emoji: chiefEmoji } : {}),
+      ...(monoColor ? { color: safeHexColor(monoColor) } : {}),
+    }),
+    [monoId, name, monoColor, monoMascot, chiefEmoji],
   );
 
-  return (
+  const screen = (
     // "route-stub" and `data-route` are the outlet marker that test/routes.test.tsx (WS-L) looks for.
     <div
       data-testid="route-stub"
-      data-route="/d/:desktopId/monos/:monoId"
+      data-route={chief ? "/d/:desktopId/monos/chief" : "/d/:desktopId/monos/:monoId"}
       style={accentStyle}
       className={`${BACKGROUND_CONTAINER_CLASS} flex h-full min-h-0 flex-1 flex-col`}
     >
@@ -151,7 +175,7 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
             <Icon name="chevronDown" size={20} className="rotate-90" />
           </Link>
         )}
-        <MonoAvatar monoId={monoId} name={name} mascot={mono?.mascot} color={mono?.color} working={working} size={32} />
+        <MonoAvatar monoId={monoId} name={name} mascot={mono?.mascot} emoji={chiefEmoji} color={mono?.color} working={working} size={32} />
         <div className="min-w-0 flex-1">
           <PaneHeading className="truncate text-h font-semibold">{name}</PaneHeading>
           {working ? <p className="truncate text-meta text-muted-text">Working</p> : null}
@@ -164,7 +188,16 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
               </Badge>
             </Glass>
           ) : null}
-          {monoTools ? (
+          {chief ? (
+            <Link
+              to="/d/$desktopId/monos/chief/profile"
+              params={{ desktopId }}
+              aria-label="Chief profile"
+              className="inline-flex size-11 shrink-0 items-center justify-center rounded-pill bg-fill hover:bg-selection pointer-fine:size-9"
+            >
+              <Icon name="info" size={18} />
+            </Link>
+          ) : monoTools ? (
             <Link
               to="/d/$desktopId/monos/$monoId/profile"
               params={{ desktopId, monoId }}
@@ -189,7 +222,7 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
       {missing ? (
         <div className="mx-auto w-full max-w-[768px] px-5">
           <Notice variant="error">
-            This Mono is not available on this device. It may have been deleted, or this device has no access to it.
+            {chief ? "The Chief is off or not available on this device." : "This Mono is not available on this device. It may have been deleted, or this device has no access to it."}
           </Notice>
         </div>
       ) : null}
@@ -202,7 +235,7 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
 
       {empty ? (
         <div className="mx-auto flex min-h-0 w-full max-w-[768px] flex-1 flex-col items-center justify-center gap-3 px-5 text-center" data-testid="mono-empty">
-          <MonoAvatar monoId={monoId} name={name} mascot={mono?.mascot} color={mono?.color} working={working} size={96} />
+          <MonoAvatar monoId={monoId} name={name} mascot={mono?.mascot} emoji={chiefEmoji} color={mono?.color} working={working} size={96} />
           <p className="text-h font-semibold">{name}</p>
           <p className="max-w-sm text-body text-muted-text">{readOnly ? "No messages yet." : `Say hello. ${name} works in the background and replies here.`}</p>
         </div>
@@ -215,7 +248,7 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
           onReply={setReplyTo}
           onMarkUnread={() => {
             if (!mono) return;
-            markMonoUnread(desktopId, mono);
+            if (!chief) markMonoUnread(desktopId, mono);
             void navigate({ to: "/d/$desktopId", params: { desktopId } });
           }}
         >
@@ -236,6 +269,7 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
           </ModelNamesProvider>
         </MessageActions>
       )}
+      {chief && mono ? <ChiefCards /> : null}
       <ComposerRegion
         desktopId={desktopId}
         sessionId={conversationId}
@@ -281,4 +315,6 @@ export function MonoScreen({ desktopId, monoId }: { desktopId: string; monoId: s
       {mentions.dialog}
     </div>
   );
+  // The Chief's proposal cards sit inline after their turn, so the provider wraps both the transcript and the fallback list.
+  return chief ? <ChiefProposalsProvider turns={older.turns}>{screen}</ChiefProposalsProvider> : screen;
 }

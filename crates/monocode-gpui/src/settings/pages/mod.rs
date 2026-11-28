@@ -2,6 +2,7 @@
 mod appearance;
 mod archive;
 mod chat;
+mod chief;
 mod cloud;
 mod cloud_auto_stop;
 pub(super) mod cloud_backends;
@@ -55,6 +56,7 @@ impl SettingsView {
             Section::Mcp => self.mcp_page(cx),
             Section::Skills => self.skills_page(cx),
             Section::Monos => self.monos_page(cx),
+            Section::Chief => self.chief_page(cx),
             Section::Inbox => self.inbox_page(cx),
             Section::Archive => self.archive_page(cx),
             Section::Worktrees => self.worktrees_page(cx),

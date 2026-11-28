@@ -36,7 +36,10 @@ describe("every method of methods.json is served", () => {
 
   it.each(withoutTerminal)("handler of %s returns a result that matches the protocol result schema", async (name) => {
     const device: MockDevice = { fingerprint: "ff", status: "confirmed", permission: "control", selection: { projects: null, monos: null } };
-    const ctx: HandlerContext = { world: new MockWorld(), device };
+    const world = new MockWorld();
+    // Send from the web is off by default; the handler is checked with it on.
+    world.setChief({ allowWebSend: true });
+    const ctx: HandlerContext = { world, device };
     const params = METHODS[name].params.parse(SAMPLE_PARAMS[name]);
     // `file.prepare` answers after its upload, the others at once.
     const result = await (FIXTURE_HANDLERS[name] as (p: unknown, c: HandlerContext) => unknown)(params, ctx);
@@ -47,6 +50,7 @@ describe("every method of methods.json is served", () => {
   describe("over the Noise link with both desktop toggles on", () => {
     it.each(withoutTerminal)("%s answers as its class says", async (name) => {
       const s = await setup({ desktop: { flags: BOTH_TOGGLES } });
+      s.desktop.world.setChief({ allowWebSend: true });
       const params = SAMPLE_PARAMS[name];
       const resolved = classify(name, params, BOTH_TOGGLES);
       if (name === "conversation.watch") {

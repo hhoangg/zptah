@@ -1,7 +1,8 @@
 // What the turn components need from the screen that hosts them (the session screen here, the Mono chat
 // of WS-P later). Everything is optional: a host that does not provide an action gets a read-only
 // transcript (chips and cards disabled, file links shown unlinked).
-import { createContext, use } from "react";
+import { createContext, use, type ReactNode } from "react";
+import type { Turn } from "@monoptah/protocol";
 import type { VisualController } from "@/features/visuals/VisualController";
 import type { DocumentItem, NoticeItem } from "./turnItems";
 
@@ -12,6 +13,8 @@ export interface TranscriptAgent {
   name: string;
   /** The desktop's mascot name; absent (an older desktop) or unknown shows the initial. */
   mascot?: string;
+  /** The Chief's emoji: shown in place of the mascot. */
+  emoji?: string;
   /** `#rrggbb`; anything else is ignored. */
   color?: string;
 }
@@ -31,6 +34,8 @@ export interface TranscriptActions {
   isProjectAvailable?: (projectId: string) => boolean;
   /** Runs the controls of an inline visual on the desktop. Absent (an older desktop): the controls are disabled. */
   visuals?: VisualController;
+  /** Extra content drawn right after a turn (the Chief's proposal cards). Absent: nothing extra. */
+  renderTurnExtra?: (turn: Turn) => ReactNode;
 }
 
 export const TranscriptActionsContext = createContext<TranscriptActions>({});

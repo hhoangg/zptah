@@ -493,6 +493,8 @@ fn run_turn_using(
         })?;
         // These providers parse slash arguments themselves. App context before
         // the command would turn it into an ordinary message instead.
+        // What the user typed, before anything is added to it (see `user_words`).
+        settings.user_prompt = user_words(&settings, &prompt);
         let prompt = settings.prepared_prompt.take().unwrap_or(prompt);
         let raw_native_command = matches!(kind, Kind::Omp | Kind::Devin)
             && provider::native_prompt(kind, &prompt)
@@ -501,7 +503,15 @@ fn run_turn_using(
         let prompt = if raw_native_command {
             prompt
         } else if let Some(mono) = &settings.mono {
-            let files = monocode_core::mono::load_files(&mono.root, &mono.mono)?;
+            let chief = match &mono.role {
+                monocode_core::agent::Role::Chief(chief) => Some(chief),
+                monocode_core::agent::Role::Mono => None,
+            };
+            let files = if chief.is_some() {
+                monocode_core::mono::load_chief_files(&mono.root)?
+            } else {
+                monocode_core::mono::load_files(&mono.root, &mono.mono)?
+            };
             let rotated = provider_id.is_some() && context.ratio().is_some_and(|r| r >= 0.8);
             if rotated {
                 // The replaced session keeps its files; remember it for a later reset.
@@ -517,19 +527,17 @@ fn run_turn_using(
                 }
             }
             let receipt = locked(&store)?.setting(&format!("mono-context:{}", summary.id))?;
-            let rules = monocode_core::mono::files::content_hash(
-                &monocode_core::mono::instructions(&mono.mono, &mono.executable),
-            );
+            let rules = monocode_core::mono::files::content_hash(&match chief {
+                Some(chief) => monocode_core::mono::chief::instructions(chief),
+                None => monocode_core::mono::instructions(&mono.mono, &mono.executable),
+            });
             let held_rules = receipt
                 .as_deref()
                 .and_then(|r| serde_json::from_str::<serde_json::Value>(r).ok())
                 .and_then(|r| r["rules"].as_str().map(str::to_owned));
             // A library that cannot be read adds no emoji block; the turn still runs. Reading never
             // removes anything.
-            let emoji = mono
-                .mono
-                .emoji
-                .enabled
+            let emoji = (mono.mono.emoji.enabled && chief.is_none())
                 .then(|| {
                     monocode_core::mono::emoji::load(&monocode_core::mono::emoji::dir_for_root(
                         &mono.root,
@@ -540,18 +548,22 @@ fn run_turn_using(
                 .and_then(|loaded| {
                     monocode_core::mono::emoji::context_block(&loaded.library, &mono.mono.emoji)
                 });
-            let added = monocode_core::mono::context(
-                &mono.mono,
-                &files,
-                &mono.executable,
-                monocode_core::mono::rules_in_system(
-                    kind,
-                    provider_id.is_some(),
-                    held_rules.as_deref(),
-                    &rules,
-                ),
-                emoji.as_deref(),
+            let in_system = monocode_core::mono::rules_in_system(
+                kind,
+                provider_id.is_some(),
+                held_rules.as_deref(),
+                &rules,
             );
+            let added = match chief {
+                Some(chief) => monocode_core::mono::chief::context(chief, &files, in_system),
+                None => monocode_core::mono::context(
+                    &mono.mono,
+                    &files,
+                    &mono.executable,
+                    in_system,
+                    emoji.as_deref(),
+                ),
+            };
             let fingerprint = monocode_core::mono::files::content_hash(&added);
             mono_fingerprint = Some((fingerprint.clone(), rules.clone()));
             let expected =
@@ -1275,6 +1287,63 @@ fn shlex_quote(text: &str) -> String {
             .replace('$', "\\$")
             .replace('`', "\\`")
     )
+}
+
+/// The words the browser gate counts as the user's own for this turn: what the user typed, or
+/// the stored prompt of an automation (the user wrote it). A message from another Mono, from the
+/// app or from a scheduler or workflow brings none, and neither does a turn that only the app
+/// started: `None` there, so such a run does not lift a Stop either.
+fn user_words(settings: &Settings, prompt: &str) -> Option<String> {
+    (!settings.internal_message && !settings.automatic_resume).then(|| prompt.to_owned())
+}
+
+#[cfg(test)]
+mod user_words_tests {
+    use super::*;
+
+    #[test]
+    fn a_typed_message_and_an_automations_stored_prompt_are_the_users_words() {
+        let typed = Settings::default();
+        assert_eq!(
+            user_words(&typed, "open shop.example").as_deref(),
+            Some("open shop.example")
+        );
+        let automated = Settings {
+            automated: true,
+            ..Settings::default()
+        };
+        assert_eq!(
+            user_words(&automated, "check the dashboard at status.example").as_deref(),
+            Some("check the dashboard at status.example"),
+            "the stored automation prompt is the user's own text"
+        );
+    }
+
+    #[test]
+    fn the_automatic_usage_limit_resume_is_not_the_users_words() {
+        let automatic = Settings {
+            automatic_resume: true,
+            ..Settings::default()
+        };
+        assert_eq!(
+            user_words(&automatic, "Continue from where you left off."),
+            None
+        );
+        // A resume the user clicks is typed: it is not marked.
+        assert_eq!(
+            user_words(&Settings::default(), "Continue from where you left off.").as_deref(),
+            Some("Continue from where you left off.")
+        );
+    }
+
+    #[test]
+    fn internal_and_mono_to_mono_messages_are_not() {
+        let internal = Settings {
+            internal_message: true,
+            ..Settings::default()
+        };
+        assert_eq!(user_words(&internal, "message from another Mono"), None);
+    }
 }
 
 #[cfg(test)]

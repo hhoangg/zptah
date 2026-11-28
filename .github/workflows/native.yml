@@ -31,10 +31,8 @@ concurrency:
 # Job graph:
 #   changes -> core, desktop-lint, desktop, desktop-test-build -> desktop-test (shards),
 #              core-windows-build -> core-windows-test (shards)
-#   extension (zptah Browser extension: node tests, tsc, build; runs on every run, no path
-#              filter, so it can never stay pending)
-#   changes -> extension-e2e (headless Chrome for Testing end-to-end test; only when the
-#              `browser` filter matched)
+#   changes -> risk-data (generated risk lexicon in sync with its generator, plus the generator's
+#              node test; only when the `risk` filter matched)
 #   release-cache, release-cache-rpm (push to main only, never blocking)
 #   ci-passed waits for every job above and is the one check to require for merging.
 #
@@ -54,7 +52,7 @@ jobs:
       pull-requests: read
     outputs:
       native: ${{ steps.decide.outputs.native }}
-      browser: ${{ steps.decide.outputs.browser }}
+      risk: ${{ steps.decide.outputs.risk }}
     steps:
       - id: filter
         if: github.event_name == 'pull_request'
@@ -94,36 +92,28 @@ jobs:
               - 'package-lock.json'
               - '.github/workflows/native*.yml'
               - '.github/actions/**'
-            # What the headless browser end-to-end test (extension-e2e) builds or loads: the
-            # extension, the browser core, the app-side example, the build profiles and this file.
-            browser:
-              - 'extensions/**'
-              - 'crates/monocode-core/src/mono/browser.rs'
-              - 'crates/monocode-core/src/mono/browser/**'
-              - 'crates/monocode-core/examples/**'
-              - 'crates/monocode-core/Cargo.toml'
-              - 'crates/monocode-gpui/Cargo.toml'
-              - '**/Cargo.lock'
-              - '**/rust-toolchain*'
-              - '**/.cargo/**'
+            # What the risk-data job checks: the generated risk lexicon and site table, their
+            # generator and manual input, the spec appendix it reads, and this file.
+            risk:
+              - 'crates/monocode-core/src/mono/browser/risk/data/**'
+              - 'docs/superpowers/specs/2026-11-25-zptah-browser-extension.md'
               - 'package.json'
-              - 'package-lock.json'
               - '.github/workflows/native.yml'
       - id: decide
         env:
           EVENT: ${{ github.event_name }}
           FILTERED: ${{ steps.filter.outputs.native }}
-          FILTERED_BROWSER: ${{ steps.filter.outputs.browser }}
+          FILTERED_RISK: ${{ steps.filter.outputs.risk }}
         run: |
           if [ "$EVENT" = "pull_request" ]; then
             native="$FILTERED"
-            browser="$FILTERED_BROWSER"
+            risk="$FILTERED_RISK"
           else
             native=true
-            browser=true
+            risk=true
           fi
           # Fail closed: an empty or unexpected filter result must not skip the jobs.
-          for value in "$native" "$browser"; do
+          for value in "$native" "$risk"; do
             case "$value" in
               true|false) ;;
               *) echo "Unexpected filter result: '$value'"; exit 1 ;;
@@ -131,8 +121,8 @@ jobs:
           done
           echo "native=$native" >> "$GITHUB_OUTPUT"
           echo "native=$native"
-          echo "browser=$browser" >> "$GITHUB_OUTPUT"
-          echo "browser=$browser"
+          echo "risk=$risk" >> "$GITHUB_OUTPUT"
+          echo "risk=$risk"
 
   # Core crate on Linux: native node tests, clippy and the tests in one job. The Windows
   # core tests are sharded below (core-windows-build and core-windows-test).
@@ -520,11 +510,13 @@ jobs:
       - if: steps.cache.outputs.cache-hit != 'true'
         run: cargo build --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-gpui --release
 
-  # The zptah Browser extension (extensions/zptah-browser): node tests, type check and the
-  # build with its forbidden-API scan. Cheap, so it has no path filter and `ci-passed`
-  # always gets a result from it.
-  extension:
-    name: Extension (ubuntu-latest)
+  # The generated risk lexicon (crates/monocode-core/src/mono/browser/risk/data) must equal a
+  # fresh generation from its inputs, and the generator's node test must pass. Cheap, but it
+  # runs only when the `risk` filter matched; `ci-passed` accepts a skip only then.
+  risk-data:
+    name: Risk data (ubuntu-latest)
+    needs: changes
+    if: needs.changes.outputs.risk == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -532,45 +524,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm ci --ignore-scripts
-      - run: npm run ext:test
-      - run: npm run ext:check
-      - run: npm run ext:build
-
-  # Headless end-to-end test of the zptah Browser extension against a pinned Chrome for Testing
-  # (spec 16.3): real extension, real native messaging host, app side from the monocode-core
-  # example `browser_e2e_app`. Heavier than `extension`, so it runs only when the extension or
-  # the browser core changed (the `browser` filter above). `ci-passed` accepts a skip only when
-  # the filter said it was not needed.
-  extension-e2e:
-    name: Extension e2e (ubuntu-latest)
-    needs: changes
-    if: needs.changes.outputs.browser == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: crates/monocode-gpui
-          cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install Linux core dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libdbus-1-dev pkg-config
-      # The pinned Chrome for Testing zip is verified by sha256 on every run; the cache only
-      # saves the download.
-      - uses: actions/cache@v4
-        with:
-          path: .cache/zptah-e2e
-          key: cft-${{ hashFiles('extensions/zptah-browser/test/e2e/cft-pin.json') }}
-      - run: npm ci --ignore-scripts
-      - run: npm run ext:e2e
+      - run: npm run risk:lexicon -- --check
+      - run: npm run risk:test
 
   # The one check to require for merging. It runs on every pull request and push
   # (the workflow has no path filter), also when jobs failed or were skipped.
@@ -579,8 +534,7 @@ jobs:
     if: always()
     needs:
       - changes
-      - extension
-      - extension-e2e
+      - risk-data
       - core
       - desktop-lint
       - desktop
@@ -599,11 +553,11 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           native="$(jq -r '.changes.outputs.native // ""' <<<"$NEEDS")"
-          browser="$(jq -r '.changes.outputs.browser // ""' <<<"$NEEDS")"
+          risk="$(jq -r '.changes.outputs.risk // ""' <<<"$NEEDS")"
           changes_result="$(jq -r '.changes.result' <<<"$NEEDS")"
           failed=0
           printf '%-24s %-10s %s\n' JOB RESULT VERDICT
-          for job in changes extension extension-e2e core core-windows-build core-windows-test desktop-lint desktop desktop-test-build desktop-test release-cache release-cache-rpm; do
+          for job in changes risk-data core core-windows-build core-windows-test desktop-lint desktop desktop-test-build desktop-test release-cache release-cache-rpm; do
             result="$(jq -r --arg job "$job" '.[$job].result' <<<"$NEEDS")"
             reason=""
             case "$result" in
@@ -612,12 +566,11 @@ jobs:
                 case "$job" in
                   release-cache|release-cache-rpm) ;; # main pushes only
                   changes) reason="the change detection must run" ;;
-                  extension) reason="the extension job always runs" ;;
-                  extension-e2e)
+                  risk-data)
                     if [ "$changes_result" != success ]; then
                       reason="skipped but change detection did not succeed"
-                    elif [ "$browser" = true ]; then
-                      reason="skipped although extension or browser core paths changed"
+                    elif [ "$risk" = true ]; then
+                      reason="skipped although risk data paths changed"
                     fi
                     ;;
                   *)
@@ -638,7 +591,7 @@ jobs:
               printf '%-24s %-10s ok\n' "$job" "$result"
             fi
           done
-          echo "native changes: ${native:-unknown}, browser changes: ${browser:-unknown}"
+          echo "native changes: ${native:-unknown}, risk changes: ${risk:-unknown}"
           if [ "$failed" -ne 0 ]; then
             echo "CI failed: see the FAIL rows above."
             exit 1

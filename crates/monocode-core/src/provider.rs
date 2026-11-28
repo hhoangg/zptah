@@ -1510,6 +1510,34 @@ fn write_mcp_config(
     Ok(file)
 }
 
+/// The Claude rule that keeps a Mono's shell from running `ardia`, for a launch whose browser
+/// is not attached (an attached one carries it in `Runtime::claude_disallowed`).
+pub(crate) fn unattached_shell_deny(settings: &Settings, attached: bool) -> Option<&'static str> {
+    (!attached && settings.mono.is_some() && !settings.text_only)
+        .then_some(crate::mono::browser::SHELL_DENY)
+}
+
+/// Why the Chief does not run on another harness: only Claude Code can drop every built-in tool
+/// (`--tools ""`) and ignore the user's MCP servers (`--strict-mcp-config`). Codex keeps
+/// `apply_patch` and the servers of the user's own config however its features are set.
+pub const CHIEF_HARNESS_REFUSAL: &str =
+    "The Chief runs on Claude Code only: no other harness can be limited to the app tool. Choose Claude Code in the Chief's settings.";
+
+/// What limits a Chief's Claude run to the `app` tool: no built-in tool at all (no shell, file,
+/// web, sub-agent or skill tool), no MCP server but the one the launch adds (`--strict-mcp-config`
+/// also drops the servers a plugin brings, checked against Claude Code 2.1.332), no slash commands.
+/// The MCP server and its allowlist entry are added by the launch as for any Mono.
+/// The permission mode of a Chief run: `default`, the one of `AccessMode::Supervised`. A tool
+/// that is not on the allowlist (only the app tool is) waits for the owner's approval.
+pub const CHIEF_PERMISSION_MODE: &str = "default";
+
+pub const CHIEF_CLAUDE_ARGS: [&str; 4] = [
+    "--tools",
+    "",
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+];
+
 /// Resolves the Mono's browser once and records the outcome in the settings, so the rules the
 /// provider gets agree with what the launch adds (the server, or the reason it is missing).
 fn apply_browser(
@@ -1521,7 +1549,7 @@ fn apply_browser(
     let attach = settings
         .mono
         .as_ref()
-        .filter(|_| !settings.text_only)
+        .filter(|mono| !settings.text_only && !mono.is_chief())
         .map_or(Attach::Off, resolve);
     if let Attach::Unavailable(reason) = &attach {
         settings.browser_unavailable = Some(reason.clone());
@@ -1545,6 +1573,23 @@ fn run_operation(
     if cancel.load(Ordering::Relaxed) {
         return Err("Stopped".into());
     }
+    if request.settings.mono.as_ref().is_some_and(|m| m.is_chief()) && request.kind != Kind::Claude
+    {
+        return Err(CHIEF_HARNESS_REFUSAL.into());
+    }
+    // A Mono's shell command that runs `ardia` skips the browser gate: it is recorded in the audit.
+    let mut shell_audit = crate::mono::browser::ardia::shell::ShellAudit::new(
+        request.settings.mono.as_ref(),
+        process::owner(),
+    );
+    let mut emit = move |events: Vec<Event>| {
+        for event in &events {
+            if let Event::Tool(tool) = event {
+                shell_audit.see(tool);
+            }
+        }
+        emit(events)
+    };
     if request.kind == Kind::OpenCode {
         return opencode::run(request, cancel, controls, probe, compact, emit);
     }
@@ -1574,7 +1619,14 @@ fn run_operation(
     // A run is one agent turn: the gate starts its taint and intent tracking from the user's own
     // request text, never from anything a page returns.
     if let Some(runtime) = &browser {
-        runtime.begin_turn(&request.prompt);
+        // Never `request.prompt`: that is the assembled prompt (Mono context, attachments, note
+        // bodies, earlier assistant text, handoff briefs) and can carry words the user never wrote.
+        // An automation's stored prompt is the user's text (task words) but was not typed in this
+        // turn: it never lifts a Stop, only a message the user typed does (spec section 9).
+        runtime.begin_turn(
+            request.settings.user_prompt.as_deref().unwrap_or(""),
+            !request.settings.automated,
+        );
         // The extension backend asks through its own cards (`mono::browser::trust::approval`):
         // nobody can answer one in a plan run, at read-only access or without controls.
         runtime.set_can_answer(
@@ -1626,7 +1678,12 @@ fn run_operation(
                 "stdio",
             ]);
             let settings = &request.settings;
-            let mode = if settings.plan {
+            let chief = settings.mono.as_ref().is_some_and(|m| m.is_chief());
+            // The Chief always asks: any tool but the allowlisted app tool needs the owner's
+            // approval in its chat, whatever mode the saved chat settings name.
+            let mode = if chief {
+                CHIEF_PERMISSION_MODE
+            } else if settings.plan {
                 "plan"
             } else {
                 settings.access.claude()
@@ -1643,12 +1700,14 @@ fn run_operation(
                     "--mcp-config",
                     "{\"mcpServers\":{}}",
                 ]);
+            } else if chief {
+                command.args(CHIEF_CLAUDE_ARGS);
             }
-            let visual_server = (!settings.text_only)
+            let visual_server = (!settings.text_only && !chief)
                 .then(|| crate::visual_bridge::mcp_server(&settings.environment))
                 .flatten();
             let mut allowed: Vec<String> = Vec::new();
-            if !settings.text_only && settings.access == AccessMode::ReadOnly {
+            if !settings.text_only && !chief && settings.access == AccessMode::ReadOnly {
                 command.args(["--tools", "Read,Glob,Grep,Bash"]);
                 allowed.push("Read,Glob,Grep,Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(pwd),Bash(ls *),Bash(rg *)".into());
             }
@@ -1671,13 +1730,19 @@ fn run_operation(
                 allowed.push(browser.claude_allowed());
                 disallowed.push(browser.claude_disallowed());
             }
+            // The browser is off or could not be attached: the shell route to Ardia is closed
+            // all the same.
+            disallowed.extend(unattached_shell_deny(settings, browser.is_some()).map(String::from));
             let mut system = Vec::new();
             if let Some(mono) = settings.mono.as_ref().filter(|_| !settings.text_only) {
-                system.push(crate::mono::browser::launch_instructions(
-                    mono,
-                    browser.is_some(),
-                    settings.browser_unavailable.as_deref(),
-                ));
+                system.push(match &mono.role {
+                    crate::agent::Role::Chief(chief) => crate::mono::chief::instructions(chief),
+                    crate::agent::Role::Mono => crate::mono::browser::launch_instructions(
+                        mono,
+                        browser.is_some(),
+                        settings.browser_unavailable.as_deref(),
+                    ),
+                });
             }
             if let Some(server) = visual_server {
                 servers.insert("monocode_visual".into(), server);
@@ -1708,7 +1773,7 @@ fn run_operation(
                 command.arg("--allow-dangerously-skip-permissions");
             }
             let mut config = json!({});
-            if settings.disable_claude_hooks || settings.text_only {
+            if settings.disable_claude_hooks || settings.text_only || chief {
                 config["disableAllHooks"] = true.into();
             }
             if settings.fast {
@@ -2184,6 +2249,7 @@ mod tests {
             root: "/monos".into(),
             executable: "/bin/monocode-gpui".into(),
             browser_database: None,
+            role: Default::default(),
         });
         let mut out = Vec::new();
         p.frame(json!({"id":1,"result":{}}), &mut out).unwrap();
@@ -2221,6 +2287,7 @@ mod tests {
             root: "/monos".into(),
             executable: "/bin/monocode-gpui".into(),
             browser_database: None,
+            role: Default::default(),
         }));
         assert_eq!(mono.matches(rule).count(), 1, "{mono}");
     }
@@ -2233,8 +2300,7 @@ mod tests {
                 mono: crate::mono::Mono {
                     browser: Some(crate::mono::browser::MonoBrowser {
                         enabled: true,
-                        ready: true,
-                        profile_dir: "Default".into(),
+                        ardia_profile: "default".into(),
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -2242,6 +2308,7 @@ mod tests {
                 root: "/monos".into(),
                 executable: "/bin/monocode-gpui".into(),
                 browser_database: None,
+                role: Default::default(),
             });
             let mut out = Vec::new();
             p.frame(json!({"id":1,"result":{}}), &mut out).unwrap();
@@ -2259,8 +2326,7 @@ mod tests {
             mono: crate::mono::Mono {
                 browser: Some(crate::mono::browser::MonoBrowser {
                     enabled: true,
-                    ready: false,
-                    profile_dir: "Default".into(),
+                    ardia_profile: "default".into(),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -2268,7 +2334,29 @@ mod tests {
             root: "/monos".into(),
             executable: "/bin/monocode-gpui".into(),
             browser_database: None,
+            role: Default::default(),
         }
+    }
+    #[test]
+    fn every_claude_mono_launch_denies_the_ardia_shell_route() {
+        let mono = Settings {
+            mono: Some(browser_mono_context()),
+            ..Default::default()
+        };
+        // Browser off, unavailable or attached (the attached one has it in `claude_disallowed`).
+        assert_eq!(unattached_shell_deny(&mono, false), Some("Bash(ardia:*)"));
+        assert_eq!(unattached_shell_deny(&mono, true), None);
+        let plain = Settings::default();
+        assert_eq!(unattached_shell_deny(&plain, false), None, "not a Mono run");
+        let text_only = Settings {
+            text_only: true,
+            ..mono
+        };
+        assert_eq!(
+            unattached_shell_deny(&text_only, false),
+            None,
+            "no tools at all"
+        );
     }
     #[test]
     fn codex_is_told_why_an_enabled_browser_could_not_be_attached() {
@@ -2469,7 +2557,6 @@ mod tests {
                 },
                 reply,
                 abandoned: abandoned.clone(),
-                never: Default::default(),
             },
             can_answer,
         );
@@ -2518,42 +2605,6 @@ mod tests {
                 assert!(p.gate_asks.is_empty());
             }
         }
-    }
-    #[test]
-    fn the_recipe_suggestion_card_offers_never_for_this_site_through_the_session_answer() {
-        use crate::mono::browser::gate::{ApprovalRequest, Ask, Category, SUGGEST_ID_PREFIX};
-        let mut p = protocol(Kind::Claude);
-        let (reply, answer) = mpsc::channel();
-        let never = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let events = p.gate_ask(
-            Ask {
-                request: ApprovalRequest {
-                    category: Category::Suggestion,
-                    action: "Save it".into(),
-                    url: "https://shop.example".into(),
-                    details: String::new(),
-                },
-                reply,
-                abandoned: Default::default(),
-                never: never.clone(),
-            },
-            true,
-        );
-        let Event::Approval(card) = &events[0] else {
-            panic!("card")
-        };
-        assert!(card.id.starts_with(SUGGEST_ID_PREFIX) && card.can_remember);
-        let mut sink = Vec::new();
-        p.respond(
-            Control {
-                id: card.id.clone(),
-                decision: Decision::Session,
-            },
-            &mut sink,
-        )
-        .unwrap();
-        assert!(answer.recv().unwrap());
-        assert!(never.load(Ordering::SeqCst));
     }
     #[test]
     fn browser_gate_cards_are_denied_when_nobody_can_answer_and_when_the_user_denies() {
@@ -2629,6 +2680,7 @@ mod tests {
                 root: "/tmp/mono".into(),
                 executable: "/bin/app".into(),
                 browser_database: None,
+                role: Default::default(),
             });
             parked::key(&request)
         };
@@ -2676,6 +2728,62 @@ mod tests {
         );
         assert!(rules.contains("Google Chrome was not found"), "{rules}");
         assert!(rules.contains("could not be attached"));
+    }
+    fn chief_context() -> crate::agent::MonoContext {
+        crate::agent::MonoContext {
+            role: crate::agent::Role::Chief(Default::default()),
+            ..browser_mono_context()
+        }
+    }
+    #[test]
+    fn a_chief_run_has_no_built_in_tool_no_browser_and_no_other_mcp_server() {
+        // Claude: no built-in tool, only the servers the launch adds, no skills or commands.
+        assert_eq!(CHIEF_CLAUDE_ARGS[..2], ["--tools", ""]);
+        assert!(CHIEF_CLAUDE_ARGS.contains(&"--strict-mcp-config"));
+        assert!(CHIEF_CLAUDE_ARGS.contains(&"--disable-slash-commands"));
+        // Supervised, never auto or full access: only the allowlisted app tool runs unasked.
+        assert_eq!(CHIEF_PERMISSION_MODE, AccessMode::Supervised.claude());
+        for tool in ["Bash", "Read", "Edit", "WebFetch", "Task"] {
+            assert!(!CHIEF_CLAUDE_ARGS.contains(&tool));
+        }
+        // The browser is never resolved for a Chief, whatever the Mono data says.
+        let mut settings = Settings {
+            mono: Some(chief_context()),
+            ..Default::default()
+        };
+        let runtime = apply_browser(&mut settings, |_| panic!("a Chief resolves no browser"));
+        assert!(runtime.is_none());
+        assert!(!settings.browser_available);
+        assert!(settings.browser_unavailable.is_none());
+        // Its one MCP server is the app tool, started in the Chief's mode.
+        let environment = crate::mono::bridge::Server::start()
+            .unwrap()
+            .0
+            .environment(9);
+        let server = crate::mono::bridge::mcp_server(settings.mono.as_ref(), &environment).unwrap();
+        assert_eq!(server["args"], json!(["app-mcp", "--chief"]));
+        let description = crate::mono::bridge::tool_definitions_for(true)[0]["description"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(description.contains("chief.overview"));
+        assert!(!description.contains("sessions.start"));
+        // Every other harness is refused before anything starts.
+        for kind in [Kind::Codex, Kind::OpenCode, Kind::Cursor] {
+            let mut request = protocol(kind).request;
+            request.settings.mono = Some(chief_context());
+            let error = run_operation(
+                request,
+                Arc::new(AtomicBool::new(false)),
+                None,
+                false,
+                false,
+                false,
+                |_| Ok(()),
+            )
+            .unwrap_err();
+            assert_eq!(error, CHIEF_HARNESS_REFUSAL);
+        }
     }
     #[test]
     fn approvals_wait_for_a_decision_and_keep_the_requested_input() {

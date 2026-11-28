@@ -88,19 +88,18 @@ pub enum ActionDesc {
     Press {
         key: String,
     },
-    Drag,
     Hover,
-    Scroll,
     /// Upload files from the user's computer.
     Upload {
         names: Vec<String>,
     },
+    /// Tick (`on`) or untick a checkbox, radio or switch.
+    Check {
+        label: String,
+        on: bool,
+    },
     /// Open an address (navigation, a tab).
     Navigate,
-    /// Answer a JavaScript dialog.
-    Dialog {
-        accept: bool,
-    },
     /// Take over a tab another Mono owns (spec 9.3 "tab transfer").
     TabTransfer {
         title: String,
@@ -108,6 +107,30 @@ pub enum ActionDesc {
     },
     /// An action the Mono described itself with `browser_request_approval`.
     Other,
+    /// Run an Ardia flow on `site`. `risky` are the steps that need the user's OK (one line each,
+    /// already cleaned), `params` the parameters as name and the value as it is shown (clipped and
+    /// cleaned; only a card-number-like value is masked).
+    FlowRun {
+        name: String,
+        site: String,
+        risky: Vec<String>,
+        params: Vec<(String, String)>,
+    },
+    /// Save the session's recorded steps as a flow in Ardia's store (shared with the user and
+    /// every profile). `site`: where the flow will be stored (empty when it can not be told),
+    /// `steps`: how many steps it saves, `listed`: those steps as lines with every typed value
+    /// masked, `replaces`: a flow of that name exists on that site.
+    FlowSave {
+        name: String,
+        site: String,
+        steps: usize,
+        listed: Vec<String>,
+        replaces: bool,
+    },
+    /// Reload the page.
+    Reload,
+    /// Go back to the previous page.
+    GoBack,
 }
 
 /// What the card needs to know. All text is what the page or the Mono said: it is clipped and
@@ -207,7 +230,7 @@ fn primary(categories: &[Category]) -> Option<Category> {
 
 /// The categories present, most serious first.
 fn ordered(categories: &[Category]) -> Vec<Category> {
-    const ORDER: [Category; 14] = [
+    const ORDER: [Category; 15] = [
         Category::Payment,
         Category::Destructive,
         Category::AccountSecurity,
@@ -221,6 +244,7 @@ fn ordered(categories: &[Category]) -> Vec<Category> {
         Category::Tainted,
         Category::UnrelatedDomain,
         Category::SensitiveSite,
+        Category::Unclear,
         Category::SoulRule,
     ];
     ORDER
@@ -286,16 +310,18 @@ fn verb_phrase(lang: Lang, facts: &CardFacts) -> String {
             Some(noun) => format!("nhập {noun}"),
             None => format!("nhập vào {}", label(l)),
         },
+        (ActionDesc::Check { label: l, on }, Lang::En) => {
+            format!("{} {}", if *on { "check" } else { "uncheck" }, label(l))
+        }
+        (ActionDesc::Check { label: l, on }, Lang::Vi) => {
+            format!("{} {}", if *on { "chọn" } else { "bỏ chọn" }, label(l))
+        }
         (ActionDesc::Select { label: l }, Lang::En) => format!("change {}", label(l)),
         (ActionDesc::Select { label: l }, Lang::Vi) => format!("chọn ở {}", label(l)),
         (ActionDesc::Press { key }, Lang::En) => format!("press the {} key", clean(key, 32)),
         (ActionDesc::Press { key }, Lang::Vi) => format!("nhấn phím {}", clean(key, 32)),
-        (ActionDesc::Drag, Lang::En) => "drag an item".into(),
-        (ActionDesc::Drag, Lang::Vi) => "kéo một mục".into(),
         (ActionDesc::Hover, Lang::En) => "point at an item".into(),
         (ActionDesc::Hover, Lang::Vi) => "trỏ vào một mục".into(),
-        (ActionDesc::Scroll, Lang::En) => "scroll the page".into(),
-        (ActionDesc::Scroll, Lang::Vi) => "cuộn trang".into(),
         (ActionDesc::Upload { names }, Lang::En) => {
             format!("upload {} from your computer", file_list(names))
         }
@@ -304,20 +330,6 @@ fn verb_phrase(lang: Lang, facts: &CardFacts) -> String {
         }
         (ActionDesc::Navigate, Lang::En) => "open".into(),
         (ActionDesc::Navigate, Lang::Vi) => "mở".into(),
-        (ActionDesc::Dialog { accept }, Lang::En) => {
-            if *accept {
-                "accept a dialog".into()
-            } else {
-                "dismiss a dialog".into()
-            }
-        }
-        (ActionDesc::Dialog { accept }, Lang::Vi) => {
-            if *accept {
-                "bấm Đồng ý trong hộp thoại".into()
-            } else {
-                "bấm Hủy trong hộp thoại".into()
-            }
-        }
         (ActionDesc::TabTransfer { title, from }, Lang::En) => format!(
             "take over the tab {} from {}",
             quoted(title, MAX_LABEL),
@@ -330,7 +342,138 @@ fn verb_phrase(lang: Lang, facts: &CardFacts) -> String {
         ),
         (ActionDesc::Other, Lang::En) => "do something that needs your OK".into(),
         (ActionDesc::Other, Lang::Vi) => "làm một việc cần bạn đồng ý".into(),
+        (ActionDesc::Reload, Lang::En) => "reload the page".into(),
+        (ActionDesc::Reload, Lang::Vi) => "tải lại trang".into(),
+        (ActionDesc::GoBack, Lang::En) => "go back to the previous page".into(),
+        (ActionDesc::GoBack, Lang::Vi) => "quay lại trang trước".into(),
+        (ActionDesc::FlowRun { name, .. }, Lang::En) => {
+            format!("run the flow {}", quoted(name, MAX_LABEL))
+        }
+        (ActionDesc::FlowRun { name, .. }, Lang::Vi) => {
+            format!("chạy luồng {}", quoted(name, MAX_LABEL))
+        }
+        (ActionDesc::FlowSave { name, .. }, Lang::En) => {
+            format!("save the flow {}", quoted(name, MAX_LABEL))
+        }
+        (ActionDesc::FlowSave { name, .. }, Lang::Vi) => {
+            format!("lưu luồng {}", quoted(name, MAX_LABEL))
+        }
     }
+}
+
+/// The lines only a flow card has: the steps that ask and the parameters (names and lengths, never
+/// values), or what a save writes.
+fn flow_lines(lang: Lang, facts: &CardFacts) -> Vec<String> {
+    const MAX_STEPS: usize = 6;
+    let mut lines = Vec::new();
+    match &facts.action {
+        ActionDesc::FlowRun { risky, params, .. } => {
+            if !risky.is_empty() {
+                lines.push(
+                    match lang {
+                        Lang::En => "Steps that need your OK:",
+                        Lang::Vi => "Các bước cần bạn đồng ý:",
+                    }
+                    .to_owned(),
+                );
+                for step in risky.iter().take(MAX_STEPS) {
+                    lines.push(format!("- {}", clean(step, 120)));
+                }
+                let more = risky.len().saturating_sub(MAX_STEPS);
+                if more > 0 {
+                    lines.push(match lang {
+                        Lang::En => format!("- and {more} more"),
+                        Lang::Vi => format!("- và {more} bước nữa"),
+                    });
+                }
+            }
+            if params.is_empty() {
+                lines.push(
+                    match lang {
+                        Lang::En => "Parameters: none.",
+                        Lang::Vi => "Tham số: không có.",
+                    }
+                    .to_owned(),
+                );
+            } else {
+                lines.push(
+                    match lang {
+                        Lang::En => "Parameters:",
+                        Lang::Vi => "Tham số:",
+                    }
+                    .to_owned(),
+                );
+                for (name, value) in params.iter().take(10) {
+                    lines.push(format!("- {}: {}", clean(name, 40), quoted(value, 80)));
+                }
+                let more = params.len().saturating_sub(10);
+                if more > 0 {
+                    lines.push(match lang {
+                        Lang::En => format!("- and {more} more"),
+                        Lang::Vi => format!("- và {more} tham số nữa"),
+                    });
+                }
+            }
+        }
+        ActionDesc::FlowSave {
+            site,
+            steps,
+            listed,
+            replaces,
+            ..
+        } => {
+            const MAX_LISTED: usize = 12;
+            lines.push(match lang {
+                Lang::En => "This writes a flow into Ardia's flow store, which you and every profile share.".to_owned(),
+                Lang::Vi => "Việc này ghi một luồng vào kho luồng của Ardia, nơi bạn và mọi hồ sơ dùng chung.".to_owned(),
+            });
+            if !site.is_empty() {
+                lines.push(match lang {
+                    Lang::En => format!("Site: {}.", clean(site, 80)),
+                    Lang::Vi => format!("Trang: {}.", clean(site, 80)),
+                });
+            }
+            lines.push(match lang {
+                Lang::En => format!("It saves the {steps} step(s) recorded in this conversation."),
+                Lang::Vi => format!("Nó lưu {steps} bước đã ghi trong cuộc trò chuyện này."),
+            });
+            if !listed.is_empty() {
+                lines.push(
+                    match lang {
+                        Lang::En => "Steps (typed values are hidden here):",
+                        Lang::Vi => "Các bước (giá trị đã nhập được ẩn ở đây):",
+                    }
+                    .to_owned(),
+                );
+                for step in listed.iter().take(MAX_LISTED) {
+                    lines.push(format!("- {}", clean(step, 120)));
+                }
+                let more = listed.len().saturating_sub(MAX_LISTED);
+                if more > 0 {
+                    lines.push(match lang {
+                        Lang::En => format!("- and {more} more"),
+                        Lang::Vi => format!("- và {more} bước nữa"),
+                    });
+                }
+            }
+            lines.push(match lang {
+                Lang::En => "Values typed in these steps are stored in Ardia's shared flow store exactly as they were typed, unless Ardia masks them (it masks passwords only).".to_owned(),
+                Lang::Vi => "Các giá trị đã nhập trong những bước này được lưu trong kho luồng dùng chung của Ardia đúng như đã nhập, trừ khi Ardia che chúng (Ardia chỉ che mật khẩu).".to_owned(),
+            });
+            if *replaces {
+                lines.push(match lang {
+                    Lang::En => {
+                        "A flow with this name already exists on this site and may be replaced."
+                            .to_owned()
+                    }
+                    Lang::Vi => "Đã có một luồng cùng tên trên trang này và nó có thể bị thay thế."
+                        .to_owned(),
+                });
+            }
+        }
+        _ => {}
+    }
+    lines
 }
 
 fn file_list(names: &[String]) -> String {
@@ -493,6 +636,30 @@ fn tail(lang: Lang, category: Category, facts: &CardFacts) -> Option<String> {
                 clean(&facts.mono, MAX_LABEL)
             ),
         },
+        (Category::Unclear, Lang::En) if matches!(facts.action, ActionDesc::Reload) => {
+            "Reloading may send the form again.".into()
+        }
+        (Category::Unclear, Lang::Vi) if matches!(facts.action, ActionDesc::Reload) => {
+            "Tải lại trang có thể gửi lại biểu mẫu.".into()
+        }
+        (Category::Unclear, Lang::En) if matches!(facts.action, ActionDesc::GoBack) => {
+            "Going back may send the form again.".into()
+        }
+        (Category::Unclear, Lang::Vi) if matches!(facts.action, ActionDesc::GoBack) => {
+            "Quay lại trang trước có thể gửi lại biểu mẫu.".into()
+        }
+        (Category::Unclear, Lang::En) if matches!(facts.action, ActionDesc::FlowRun { .. }) => {
+            "zptah could not tell what some steps of this flow do.".into()
+        }
+        (Category::Unclear, Lang::Vi) if matches!(facts.action, ActionDesc::FlowRun { .. }) => {
+            "zptah không biết một số bước của luồng này làm gì.".into()
+        }
+        (Category::Unclear, Lang::En) => {
+            "zptah could not read enough of this page to tell what this does.".into()
+        }
+        (Category::Unclear, Lang::Vi) => {
+            "zptah không đọc đủ nội dung trang này để biết thao tác này làm gì.".into()
+        }
         (Category::Tainted, Lang::En) => {
             "It carries something read on another site to this one.".into()
         }
@@ -551,7 +718,9 @@ fn extra(lang: Lang, category: Category, facts: &CardFacts) -> Option<String> {
             )
         }
         (Category::SoulRule, _) => return tail(lang, category, facts),
-        (Category::Tainted, _) | (Category::Injection, _) => return tail(lang, category, facts),
+        (Category::Tainted, _) | (Category::Injection, _) | (Category::Unclear, _) => {
+            return tail(lang, category, facts)
+        }
     })
 }
 
@@ -589,6 +758,12 @@ pub fn card(lang: Lang, facts: &CardFacts) -> CardText {
                 None => format!("{mono} xin bạn đồng ý trên {site}."),
             }
         }
+        (Lang::En, _, _) if matches!(facts.action, ActionDesc::FlowSave { .. }) => {
+            format!("{mono} wants to {phrase} in Ardia.")
+        }
+        (Lang::Vi, _, _) if matches!(facts.action, ActionDesc::FlowSave { .. }) => {
+            format!("{mono} muốn {phrase} vào Ardia.")
+        }
         (Lang::En, _, _) => match &facts.action {
             ActionDesc::Upload { .. } => format!("{mono} wants to {phrase} to {site}."),
             _ => format!("{mono} wants to {phrase} on {site}."),
@@ -620,6 +795,15 @@ pub fn card(lang: Lang, facts: &CardFacts) -> CardText {
                 }
             }
         }
+    }
+    lines.extend(flow_lines(lang, facts));
+    // The user's own tab: the card says which page is being handed over.
+    if matches!(facts.action, ActionDesc::TabTransfer { .. }) && !facts.url.is_empty() {
+        let url = clean(&facts.url, 300);
+        lines.push(match lang {
+            Lang::En => format!("Address: {url}"),
+            Lang::Vi => format!("Địa chỉ: {url}"),
+        });
     }
     if facts.categories.contains(&Category::Payment) && !facts.amounts.is_empty() {
         let amounts = join(&facts.amounts, 3);
@@ -712,20 +896,6 @@ pub fn password_stop(lang: Lang, mono: &str, site: &str) -> CardText {
         allow_conversation: None,
         deny: b.deny,
         show_tab: b.show_tab,
-    }
-}
-
-/// The banner shown after the toolbar Stop: what happened and the label of the resume button.
-pub fn stopped_banner(lang: Lang) -> (&'static str, &'static str) {
-    match lang {
-        Lang::En => (
-            "zptah Browser is stopped. No Mono can use the browser until you resume it.",
-            "Resume",
-        ),
-        Lang::Vi => (
-            "zptah Browser đã dừng. Không Mono nào dùng được trình duyệt cho đến khi bạn tiếp tục.",
-            "Tiếp tục",
-        ),
     }
 }
 

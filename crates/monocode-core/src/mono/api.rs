@@ -35,7 +35,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "accounts.list"=>"provider",
         "sessions.list"|"folders.list"|"worktrees.list"=>"project",
         "sessions.read"=>"sessionId project before limit maxChars",
-        "sessions.start"=>"prompt project harness model modelSettings effort runtimeMode title draft reveal workspaceMode worktreeBase worktreeCwd placement besideSessionId notifyOnComplete completionDelivery parentSessionId folderName folderId target account",
+        "sessions.start"=>"proposalId prompt project harness model modelSettings effort runtimeMode title draft reveal workspaceMode worktreeBase worktreeCwd placement besideSessionId notifyOnComplete completionDelivery parentSessionId folderName folderId target account",
         action if action.starts_with("cloud.") => {
             cloud_fields = cloud::fields(action).ok_or("Unknown app action. Run app help")?;
             cloud_fields.as_str()
@@ -43,7 +43,8 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         action if super::move_api::is_move_action(action) => {
             super::move_api::fields(action).ok_or("Unknown app action. Run app help")?
         }
-        "sessions.send"=>"sessionId prompt project notifyOnComplete completionDelivery",
+        "sessions.send"=>"sessionId prompt project notifyOnComplete completionDelivery proposalId",
+        action if super::chief::is_action(action) => super::chief::fields(action).unwrap_or_default(),
         "sessions.draft"=>"sessionId prompt project",
         "sessions.pullEvidence"=>"sessionId project path taskId",
         "sessions.stop"=>"sessionId project",
@@ -269,6 +270,10 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     if action.starts_with("cloud.") {
         cloud::validate_action(action, input)?;
     }
+    if action.starts_with("chief.") {
+        super::chief::validate(action, input)?;
+    }
+    super::chief::validate_proposal_id(input)?;
     if input
         .get("cloud")
         .is_some_and(|cloud| !matches!(cloud.as_str(), Some("keep" | "stop" | "delete")))

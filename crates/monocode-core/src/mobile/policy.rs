@@ -458,6 +458,17 @@ pub const METHODS: &[Entry] = &[
     app("mono.file", Class::Read),
     app("mono.emoji", Class::Read),
     app("mono.saveFile", Class::Denied),
+    // The Chief (a Mono that commands sessions). Reading its profile and proposals is a read. Edit and cancel are
+    // Control. Send is Control AND the desktop's own "Allow Send from the web" setting of the Chief
+    // (`chief_send_allowed`): the app checks that setting, so it can never be widened by the device.
+    app("chief.profile", Class::Read),
+    app("chief.proposals", Class::Read),
+    app("chief.proposal.send", Class::Control),
+    app("chief.proposal.edit", Class::Control),
+    app("chief.proposal.cancel", Class::Control),
+    // Settings from the web: Control, and the app accepts only name, look, model, effort and the delivery
+    // notice (`Chief::apply_remote_update`): never enabled, harness, account, Send from the web or the soul.
+    app("chief.update", Class::Control),
     app("cloud.instances", Class::Read),
     app("cloud.startOptions", Class::Read),
     app("cloud.stop", Class::Control),
@@ -572,6 +583,31 @@ fn toggle_on(toggle: Toggle, flags: &PolicyFlags) -> bool {
         Toggle::RemoteCloudStart => flags.remote_cloud_start,
         Toggle::RemoteGitPush => flags.remote_git_push,
     }
+}
+
+/// The conversation id of the Chief's chat.
+pub const CHIEF_CONVERSATION: &str = "chief";
+
+/// Whether `method`/`params` reach the Chief (its methods or its chat).
+fn names_the_chief(method: &str, params: &Value) -> bool {
+    method.starts_with("chief.") || params["conversationId"] == CHIEF_CONVERSATION
+}
+
+/// Whether a device with `selection` may see the Chief at all. The Chief reads every session of
+/// every project, so a device narrowed to some projects or Monos never gets it.
+pub fn chief_visible(device: &DeviceContext) -> bool {
+    device.projects.is_none() && device.monos.is_none()
+}
+
+/// The rule of `chief.proposal.send`, checked by the app with the Chief's own setting
+/// (`allow_web_send`, off by default): a Control device AND the setting. A read-only device is
+/// refused whatever the setting says.
+pub fn chief_send_allowed(device: &DeviceContext, allow_web_send: bool) -> Result<(), Denial> {
+    require_control(device)?;
+    if !allow_web_send {
+        return Err(Denial::new(Code::Disabled));
+    }
+    Ok(())
 }
 
 fn require_control(device: &DeviceContext) -> Result<(), Denial> {
@@ -692,6 +728,9 @@ pub fn authorize_full(
     if method == "session.answerApproval" && !approvals_effective(flags, approvals_gate) {
         return Err(Denial::new(Code::Disabled));
     }
+    if names_the_chief(method, params) && !chief_visible(device) {
+        return Err(Denial::new(Code::NotSelected));
+    }
     check_selection(device, params)
 }
 
@@ -710,6 +749,11 @@ pub fn filter_reply(device: &DeviceContext, method: &str, reply: &mut Value) {
 }
 
 fn narrow_catalog(device: &DeviceContext, reply: &mut Value) {
+    if !chief_visible(device) {
+        if let Some(map) = reply.as_object_mut() {
+            map.remove("chief");
+        }
+    }
     let selected = |list: &Option<Vec<String>>, id: Option<&str>| match (list, id) {
         (None, _) => true,
         (Some(list), Some(id)) => list.iter().any(|v| v == id),
@@ -1076,6 +1120,98 @@ mod tests {
         }
         assert!(capabilities_with(&PolicyFlags::default(), false)
             .contains(&"mentionedFiles".to_owned()));
+    }
+
+    #[test]
+    fn the_chief_methods_follow_read_and_control_and_send_needs_the_desktop_setting() {
+        for (method, class) in [
+            ("chief.profile", Class::Read),
+            ("chief.proposals", Class::Read),
+            ("chief.proposal.send", Class::Control),
+            ("chief.proposal.edit", Class::Control),
+            ("chief.proposal.cancel", Class::Control),
+            ("chief.update", Class::Control),
+        ] {
+            let entry = entry(method).unwrap();
+            assert_eq!((entry.class, entry.transport), (class, Transport::App));
+        }
+        let params = json!({"proposalId": "p_00000001", "instruction": "go"});
+        for kind in [DeviceKind::Phone, DeviceKind::Web] {
+            let reader = ctx(kind, Permission::Read);
+            let control = ctx(kind, Permission::Control);
+            for method in ["chief.profile", "chief.proposals"] {
+                assert_eq!(call(&reader, method, json!({}), &ON), None, "{method}");
+            }
+            // A read-only device may read the Chief's chat but not write to it, or act on a card.
+            let chat = json!({"conversationId": "chief"});
+            for method in ["conversation.read", "conversation.older"] {
+                assert_eq!(call(&reader, method, chat.clone(), &ON), None, "{method}");
+            }
+            for method in [
+                "conversation.send",
+                "chief.proposal.send",
+                "chief.proposal.edit",
+                "chief.proposal.cancel",
+                "chief.update",
+            ] {
+                assert_eq!(
+                    call(&reader, method, params.clone(), &ON),
+                    Some(Code::ReadOnly),
+                    "{method}"
+                );
+                assert_eq!(call(&control, method, params.clone(), &ON), None);
+            }
+            // Send: Control AND the Chief's own setting. The setting is not a policy flag, so
+            // the app asks `chief_send_allowed` with it.
+            assert_eq!(
+                code(chief_send_allowed(&control, false)),
+                Some(Code::Disabled)
+            );
+            assert_eq!(code(chief_send_allowed(&control, true)), None);
+            assert_eq!(
+                code(chief_send_allowed(&reader, true)),
+                Some(Code::ReadOnly)
+            );
+        }
+    }
+
+    #[test]
+    fn a_device_narrowed_to_some_projects_or_monos_never_reaches_the_chief() {
+        let chat = json!({"conversationId": "chief"});
+        for kind in [DeviceKind::Phone, DeviceKind::Web] {
+            let mut device = ctx(kind, Permission::Control);
+            device.projects = Some(vec!["p1".into()]);
+            for (method, params) in [
+                ("conversation.read", chat.clone()),
+                ("conversation.send", chat.clone()),
+                ("chief.proposals", json!({})),
+                ("chief.profile", json!({})),
+                ("chief.proposal.cancel", json!({"proposalId": "p_00000001"})),
+                ("chief.update", json!({"name": "Boss"})),
+            ] {
+                assert_eq!(
+                    call(&device, method, params, &ON),
+                    Some(Code::NotSelected),
+                    "{method}"
+                );
+            }
+            device.projects = None;
+            device.monos = Some(vec![]);
+            assert_eq!(
+                call(&device, "chief.proposals", json!({}), &ON),
+                Some(Code::NotSelected)
+            );
+            let mut reply = json!({"projects": [], "chief": {"enabled": true}});
+            filter_reply(&device, "workspace.list", &mut reply);
+            assert!(reply.get("chief").is_none());
+        }
+        let mut reply = json!({"projects": [], "chief": {"enabled": true}});
+        filter_reply(
+            &ctx(DeviceKind::Web, Permission::Read),
+            "workspace.list",
+            &mut reply,
+        );
+        assert_eq!(reply["chief"]["enabled"], true);
     }
 
     #[test]

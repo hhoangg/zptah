@@ -272,6 +272,7 @@ impl super::Mono {
                 launch.dismissed = previous.dismissed;
                 launch.each = previous.each;
                 launch.visible = previous.visible;
+                launch.origin = previous.origin.clone();
             }
         }
         self.documents.retain(|d| {
@@ -393,6 +394,7 @@ mod tests {
             dismissed: false,
             each: false,
             visible,
+            origin: None,
         };
         let mut mono = super::super::Mono::default();
         mono.launches.push(launch(true));

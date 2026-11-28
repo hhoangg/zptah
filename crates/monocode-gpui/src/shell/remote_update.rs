@@ -502,6 +502,7 @@ impl Shell {
             title: &name,
             preview: Some(text),
             control_only: true,
+            whole_workspace_only: false,
         });
         let notice = notify::Notice {
             title: name,
@@ -548,6 +549,7 @@ impl Shell {
         _cx.default_global::<State>().notices.push(body.to_owned());
         let sequence = monocode_core::time::now_ms();
         let _ = platform::show(platform::Notification {
+            title: None,
             tag: format!("{tag}:{sequence}"),
             subtitle: subtitle.into(),
             body: crate::notifications::delivery::clip_body(body),

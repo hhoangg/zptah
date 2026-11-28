@@ -1,5 +1,7 @@
 # Browser recipes: repeatable, cheap Mono browsing - design
 
+> Superseded by [2026-11-27-ardia-browser.md](2026-11-27-ardia-browser.md) (Mono Browser on Ardia). Kept as history.
+
 Status: spec, not scheduled. Native app only. Date: 2026-11-22.
 Builds on `2026-11-21-mono-browser-design.md` (the per-Mono Browser, shipped) and
 `2026-11-22-browser-all-tabs-research.md` (what the Bridge extension can and cannot share).

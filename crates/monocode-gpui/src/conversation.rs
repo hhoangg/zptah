@@ -72,7 +72,7 @@ pub(crate) use mobile::{
 };
 pub(crate) use mono::QueueChanged as MonoQueueChanged;
 pub(crate) use mono::Submitted as MonoSubmitted;
-pub(crate) use mono::{TurnEnd, WorkflowTurn};
+pub(crate) use mono::{FollowUpStatus, TurnEnd, WorkflowTurn};
 use monocode_core::{
     agent::{AccessMode, Approval, Control, Decision, Settings},
     catalog::{self, Model},
@@ -292,9 +292,15 @@ pub(crate) struct Conversation {
     /// Every prompt `launch_prompt` was asked to send, for tests that count sends.
     #[cfg(test)]
     pub(super) launched: Vec<String>,
+    /// A test that only counts sends: no provider is started after the prompt is recorded.
+    #[cfg(test)]
+    pub(super) hold_launches: bool,
     /// For each run that started, whether it was marked no-wake.
     #[cfg(test)]
     pub(super) launched_no_wake: Vec<bool>,
+    /// For each run that started: whether its settings said `automated` and `automatic_resume`.
+    #[cfg(test)]
+    pub(super) launched_marks: Vec<(bool, bool)>,
     notification_cancelled: bool,
     /// The store's saved-draft flag, until the conversation loads its own.
     pub(crate) draft_hint: bool,
@@ -803,7 +809,11 @@ impl Conversation {
             #[cfg(test)]
             launched: Vec::new(),
             #[cfg(test)]
+            hold_launches: false,
+            #[cfg(test)]
             launched_no_wake: Vec::new(),
+            #[cfg(test)]
+            launched_marks: Vec::new(),
             notification_cancelled: false,
             draft_hint: false,
             model: std::env::var(format!(
@@ -1152,6 +1162,10 @@ impl Conversation {
         self.input
             .update(cx, |input, cx| input.set_text(prompt, cx));
         self.send(cx);
+        // What `send` did not hand to a run or to a queued message is dropped: the marks are for
+        // this prompt only, and must not wait for the next message the user types.
+        self.settings.automated = false;
+        self.settings.automatic_resume = false;
     }
     /// A cloud session whose local copy is being saved takes no new message.
     pub(crate) fn refuse_while_saving_copy(&mut self, cx: &mut Context<Self>) -> bool {
@@ -1367,6 +1381,13 @@ impl Conversation {
                 .is_some_and(|center| !center.read(cx).book.exists(kind, &self.settings.account.id))
     }
     fn launch_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
+        // `automated` and `automatic_resume` belong to this one message: taken here, so no early
+        // return below (and no queued or deferred launch) leaves them on the conversation for the
+        // next message the user types. A queued or deferred message carries them itself.
+        let marks = (
+            std::mem::take(&mut self.settings.automated),
+            std::mem::take(&mut self.settings.automatic_resume),
+        );
         if self.reset_in_progress() {
             self.status = "Resetting to local. Send again in a moment.".into();
             cx.notify();
@@ -1374,6 +1395,10 @@ impl Conversation {
         }
         #[cfg(test)]
         self.launched.push(prompt.clone());
+        #[cfg(test)]
+        if self.hold_launches {
+            return;
+        }
         if self.stopping && self.is_remote() {
             // Local follow-ups are never delivered to a host: queueing here would lose the prompt.
             self.status =
@@ -1391,6 +1416,8 @@ impl Conversation {
             } else {
                 None
             };
+            // The queued message carries the marks (taken by `enqueue_follow_up`).
+            (self.settings.automated, self.settings.automatic_resume) = marks;
             self.enqueue_follow_up(prompt, mode.map(str::to_owned), cx);
             if self.mobile_no_wake
                 && let Some(message) = self.follow_ups.state.messages.last()
@@ -1417,6 +1444,7 @@ impl Conversation {
             self.defer_history_action(
                 move |this, cx| {
                     let outer = std::mem::replace(&mut this.mobile_no_wake, no_wake);
+                    (this.settings.automated, this.settings.automatic_resume) = marks;
                     this.launch_prompt(prompt, cx);
                     this.mobile_no_wake = outer;
                 },
@@ -1476,6 +1504,9 @@ impl Conversation {
             || self.settings.orchestrator
             || self.settings.access == AccessMode::ReadOnly;
         let mut settings = self.settings.clone();
+        // These two belong to this run only (taken at the top): they never stick to the
+        // conversation and reach the next message the user types.
+        (settings.automated, settings.automatic_resume) = marks;
         if let Some(model) = self.model_info() {
             for control in &model.controls {
                 settings
@@ -1581,7 +1612,11 @@ impl Conversation {
             self.mobile_no_wake_ids.remove(id);
         }
         #[cfg(test)]
-        self.launched_no_wake.push(no_wake);
+        {
+            self.launched_no_wake.push(no_wake);
+            self.launched_marks
+                .push((settings.automated, settings.automatic_resume));
+        }
         cx.background_executor()
             .spawn(async move {
                 crate::runtime::remote::run_without_waking(no_wake, || {

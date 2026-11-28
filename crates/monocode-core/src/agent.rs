@@ -125,6 +125,23 @@ pub struct Settings {
     pub mono_sent_at: Option<u64>,
     #[serde(skip)]
     pub internal_message: bool,
+    /// The run was started by an automation, not by a message the user typed. Its stored prompt
+    /// is still the user's own text, so it counts as `user_prompt` below, but it does not lift a
+    /// browser Stop (the gate is told it was not typed, see `Runtime::begin_turn`).
+    #[serde(skip)]
+    pub automated: bool,
+    /// The run is the app's own "Continue from where you left off." after a usage limit reset,
+    /// not words the user wrote: it brings no user words to the browser gate and never lifts a
+    /// Stop. A resume the user clicks is typed and leaves this false.
+    #[serde(skip)]
+    pub automatic_resume: bool,
+    /// The text the user wrote for this turn: a typed message or an automation's stored prompt
+    /// (`Some`), never a message from another Mono, from the app or from a scheduler or
+    /// workflow (`None`), and never the assembled prompt (attachments, notes, Mono context,
+    /// earlier assistant text). The browser gate starts its task tracking from it and lifts a
+    /// Stop only when it is non-empty and typed in this turn (`automated` is false).
+    #[serde(skip)]
+    pub user_prompt: Option<String>,
     #[serde(skip)]
     pub attachments: Vec<std::path::PathBuf>,
     pub revision: u64,
@@ -184,6 +201,20 @@ pub struct MonoContext {
     pub executable: std::path::PathBuf,
     /// The database that holds the Mono's browser token. None: no browser server is added.
     pub browser_database: Option<std::path::PathBuf>,
+    pub role: Role,
+}
+/// What the chat behind a [`MonoContext`] is. A Chief chat reuses the Mono chat machinery (a
+/// hidden conversation, the `app` tool, rotation) with its own rules, files and tool set.
+#[derive(Clone, Debug, Default)]
+pub enum Role {
+    #[default]
+    Mono,
+    Chief(Box<crate::mono::chief::Chief>),
+}
+impl MonoContext {
+    pub fn is_chief(&self) -> bool {
+        matches!(self.role, Role::Chief(_))
+    }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]

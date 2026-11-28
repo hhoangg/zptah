@@ -976,3 +976,15 @@ mod queue {
         assert_eq!(waiting.join().unwrap(), Outcome::Answered(UserAnswer::Deny));
     }
 }
+
+#[test]
+fn a_run_no_user_message_started_adds_no_words_of_the_users_own() {
+    // An automation or another Mono starts a run with no text of the user's: it must not make a
+    // site, a recipient or a path count as named.
+    let mut s = state();
+    s.begin_run("");
+    s.begin_run("   ");
+    assert!(s.user_texts(None).is_empty());
+    s.begin_run("open example.org please");
+    assert_eq!(s.user_texts(None).len(), 1);
+}

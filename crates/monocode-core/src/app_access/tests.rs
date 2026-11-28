@@ -543,3 +543,15 @@ fn operator_may_stop_the_instance_of_a_deleted_cloud_session_but_not_delete_it()
     )
     .is_err());
 }
+
+#[test]
+fn an_operator_cannot_carry_a_chief_proposal_id() {
+    for action in ["sessions.send", "sessions.start"] {
+        let mut input = serde_json::json!({"prompt": "go", "proposalId": "p_00000001"});
+        if action == "sessions.send" {
+            input["sessionId"] = 5.into();
+        }
+        let error = validate_operator(action, &input).unwrap_err();
+        assert!(error.contains("proposalId"), "{action}: {error}");
+    }
+}

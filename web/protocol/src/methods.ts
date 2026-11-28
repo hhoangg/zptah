@@ -9,6 +9,7 @@
 import "./zod-config.ts";
 import { z } from "zod";
 import { MAX_MESSAGE_CHARS } from "./limits.ts";
+import { ChiefCatalogSchema, ChiefExtraSchema, ChiefProfileResultSchema, ChiefProposalResultSchema, ChiefProposalsResultSchema } from "./chief.ts";
 import {
   AttachmentsSchema,
   HarnessSchema,
@@ -172,6 +173,8 @@ export const WorkspaceListResultSchema = z.looseObject({
   monoTools: z.boolean().optional(),
   monoFiles: z.boolean().optional(),
   push: z.boolean().optional(),
+  /** The Chief (absent on an older desktop and on a device narrowed to some projects or Monos). */
+  chief: ChiefCatalogSchema.optional(),
 });
 
 export const SessionsListParamsSchema = z.object({
@@ -394,6 +397,8 @@ export const METHODS = {
       question: QuestionPromptSchema.nullable().optional(),
       cloud: CloudFieldSchema.nullable().optional(),
       approvals: ApprovalsFieldSchema.optional(),
+      /** Only on the `chief` conversation. */
+      chief: ChiefExtraSchema.optional(),
     }),
   }),
   "conversation.older": method({
@@ -808,6 +813,54 @@ export const METHODS = {
     result: Json,
   }),
   "mono.delete": method({ class: "denied", transport: "app", params: z.object({ monoId: z.string().min(1) }), result: Json }),
+
+  // The Chief (a special Mono that proposes commands). Send needs Control AND the desktop toggle "Allow Send from the web".
+  "chief.profile": method({ class: "read", transport: "app", params: Empty, result: ChiefProfileResultSchema }),
+  "chief.proposals": method({ class: "read", transport: "app", params: Empty, result: ChiefProposalsResultSchema }),
+  // A Control device may change only the Chief's look and its own model and notify setting. Everything else (enabled,
+  // harness, account, allowWebSend, soul) is refused by the schema, so a remote device cannot widen its own power.
+  "chief.update": method({
+    class: "control",
+    transport: "app",
+    params: z
+      .strictObject({
+        name: z.string().max(200).refine((value) => value.trim().length >= 1 && value.trim().length <= 40, "Name must be 1 to 40 characters").optional(),
+        mascot: z.string().min(1).max(64).optional(),
+        /** `null` resets to the mascot's emoji. */
+        emoji: z.string().min(1).max(64).nullable().optional(),
+        color: z.string().regex(/^#?[0-9a-fA-F]{6}$/, "Color must be #rrggbb").optional(),
+        /** `null`: the app default. */
+        model: z.string().min(1).max(256).nullable().optional(),
+        effort: z.string().min(1).max(64).nullable().optional(),
+        notifyOnDelivery: z.boolean().optional(),
+      })
+      .refine((value) => Object.keys(value).length > 0, "At least one field is required"),
+    result: ChiefProfileResultSchema,
+  }),
+  "chief.proposal.send": method({
+    class: "control",
+    transport: "app",
+    params: z.object({
+      proposalId: z.string().min(1).max(64),
+      /** The text the device showed when the owner clicked Send. The desktop refuses a Send whose stored text differs. */
+      expectedInstruction: z.string().min(1).max(MAX_MESSAGE_CHARS),
+      /** An edit sent with the click, replacing the text. */
+      instruction: z.string().max(MAX_MESSAGE_CHARS).optional(),
+    }),
+    result: ChiefProposalResultSchema,
+  }),
+  "chief.proposal.edit": method({
+    class: "control",
+    transport: "app",
+    params: z.object({ proposalId: z.string().min(1).max(64), instruction: z.string().min(1).max(MAX_MESSAGE_CHARS) }),
+    result: ChiefProposalResultSchema,
+  }),
+  "chief.proposal.cancel": method({
+    class: "control",
+    transport: "app",
+    params: z.object({ proposalId: z.string().min(1).max(64) }),
+    result: ChiefProposalResultSchema,
+  }),
 
   // Answered in core (host)
   "workspace.list": method({ class: "read", transport: "host", params: Empty, result: WorkspaceListResultSchema }),

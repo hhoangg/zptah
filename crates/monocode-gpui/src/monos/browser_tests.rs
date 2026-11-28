@@ -1,98 +1,196 @@
-//! The Browser page of a Mono's settings: its states, the Chrome profile and the safety rules.
-//! Nothing here starts Chrome or reaches a gate; `Fake` stands in for both.
+//! The Browser page of a Mono's settings: its states, the Ardia readiness, profile and idle quit,
+//! and the safety rules. Nothing here runs or looks up Ardia; `Fake` stands in for it.
 use super::browser_ui::BrowserOps;
 use super::workflows_ui::tests::click;
 use super::*;
 use crate::monos::tests::{Setup, setup};
 use gpui::{TestAppContext, VisualTestContext};
-use monocode_core::mono::browser::recipe::manage::DryRunReport;
-use monocode_core::mono::browser::{self, BrowserLevel, MonoBrowser, MonoBrowserStore, PrereqEnv};
+use monocode_core::mono::browser::ardia::controller::{IDLE_SETTING_KEY, LiveInfo};
+use monocode_core::mono::browser::ardia::{ArdiaProfile, Owner, Readiness, Report};
+use monocode_core::mono::browser::{self, BrowserLevel, MonoBrowser, MonoBrowserStore};
 use std::sync::{Arc, Mutex as StdMutex};
 
-#[derive(Default)]
-struct Fake {
-    fda: StdMutex<u32>,
-    /// What the next recipe dry run answers, and which ones were asked for.
-    dry: StdMutex<Option<Result<DryRunReport, String>>>,
-    dry_asked: StdMutex<Vec<(String, String)>>,
+/// Scrolls the Browser page until `selector` is well inside it, then clicks it: the cards below
+/// the Ardia ones are far below the fold of the test window, and a click only lands on what is
+/// visible. A selector outside the page (the conversation's) is clicked where it is.
+pub(super) fn tap(visual: &mut VisualTestContext, selector: &'static str) {
+    use gpui::{ScrollDelta, ScrollWheelEvent, point, px};
+    for _ in 0..60 {
+        visual.refresh().unwrap();
+        let (Some(target), Some(page)) = (
+            visual.debug_bounds(selector),
+            visual.debug_bounds("mono-browser-page"),
+        ) else {
+            break;
+        };
+        let y = target.center().y;
+        if y > page.top() + px(120.) && y < page.bottom() - px(60.) {
+            break;
+        }
+        let dy = if y > page.center().y { -240. } else { 240. };
+        visual.simulate_event(ScrollWheelEvent {
+            position: page.center(),
+            delta: ScrollDelta::Pixels(point(px(0.), px(dy))),
+            ..Default::default()
+        });
+        visual.run_until_parked();
+    }
+    click(visual, selector);
+}
+
+/// A fake Ardia: what it answers is set by the test, what was asked is recorded.
+pub(super) struct Fake {
+    pub(super) report: StdMutex<Report>,
+    pub(super) profiles: StdMutex<Result<Vec<ArdiaProfile>, Readiness>>,
+    pub(super) can_launch: StdMutex<bool>,
+    pub(super) start: StdMutex<Result<bool, Readiness>>,
+    pub(super) quit: StdMutex<Result<(), String>>,
+    pub(super) started: StdMutex<u32>,
+    pub(super) quit_calls: StdMutex<u32>,
+    pub(super) idle: StdMutex<Vec<u32>>,
+    pub(super) reports_for: StdMutex<Vec<String>>,
+    pub(super) working: StdMutex<bool>,
+    pub(super) stops: StdMutex<Vec<(String, i64)>>,
+    pub(super) uploads: StdMutex<bool>,
+}
+impl Default for Fake {
+    fn default() -> Self {
+        Self {
+            report: StdMutex::new(closed()),
+            profiles: StdMutex::new(Ok(listed())),
+            can_launch: StdMutex::new(true),
+            start: StdMutex::new(Ok(true)),
+            quit: StdMutex::new(Ok(())),
+            started: StdMutex::new(0),
+            quit_calls: StdMutex::new(0),
+            idle: StdMutex::new(Vec::new()),
+            reports_for: StdMutex::new(Vec::new()),
+            working: StdMutex::new(false),
+            stops: StdMutex::new(Vec::new()),
+            uploads: StdMutex::new(true),
+        }
+    }
+}
+impl Fake {
+    pub(super) fn set_report(&self, report: Report) {
+        *self.report.lock().unwrap() = report;
+    }
 }
 impl BrowserOps for Fake {
-    fn open_full_disk_access(&self) {
-        *self.fda.lock().unwrap() += 1;
+    fn ardia_report(&self, profile: &str) -> Report {
+        self.reports_for.lock().unwrap().push(profile.to_owned());
+        self.report.lock().unwrap().clone()
     }
-    fn dry_run_recipe(&self, mono_id: &str, recipe_id: &str) -> Result<DryRunReport, String> {
-        self.dry_asked
+    fn ardia_profiles(&self) -> Result<Vec<ArdiaProfile>, Readiness> {
+        self.profiles.lock().unwrap().clone()
+    }
+    fn ardia_start(&self) -> Result<bool, Readiness> {
+        *self.started.lock().unwrap() += 1;
+        let result = self.start.lock().unwrap().clone();
+        if result.is_ok() {
+            // Ardia is up now: it lists its profiles.
+            *self.profiles.lock().unwrap() = Ok(listed());
+            let mut report = self.report.lock().unwrap();
+            report.running = true;
+            report.owner = Owner::Zptah;
+        }
+        result
+    }
+    fn ardia_quit(&self) -> Result<(), String> {
+        *self.quit_calls.lock().unwrap() += 1;
+        let result = self.quit.lock().unwrap().clone();
+        if result.is_ok() {
+            *self.report.lock().unwrap() = closed();
+            *self.profiles.lock().unwrap() = Err(Readiness::NotRunning);
+        }
+        result
+    }
+    fn ardia_can_launch(&self) -> bool {
+        *self.can_launch.lock().unwrap()
+    }
+    fn ardia_owned(&self) -> bool {
+        self.report.lock().unwrap().owner == Owner::Zptah
+    }
+    fn ardia_set_idle_minutes(&self, minutes: u32) {
+        self.idle.lock().unwrap().push(minutes);
+    }
+    fn browser_working(&self, _conversation: i64) -> bool {
+        *self.working.lock().unwrap()
+    }
+    fn uploads_available(&self) -> bool {
+        *self.uploads.lock().unwrap()
+    }
+    fn stop_browser(&self, mono_id: &str, conversation: i64) {
+        self.stops
             .lock()
             .unwrap()
-            .push((mono_id.into(), recipe_id.into()));
-        self.dry
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap_or(Err("no gate".into()))
+            .push((mono_id.to_owned(), conversation));
+        // Stop ends the call in flight.
+        *self.working.lock().unwrap() = false;
     }
 }
 
-const LOCAL_STATE: &str = r#"{"profile":{"info_cache":{
-  "Default":{"name":"Personal","user_name":"me@example.com"},
-  "Profile 6":{"name":"Work","user_name":"work@example.com","avatar_icon":"chrome://theme/IDR_PROFILE_AVATAR_26"}}}}"#;
-
-/// A Chrome that exists, with its profile list readable.
-fn chrome_env(dir: &std::path::Path, complete: bool) -> PrereqEnv {
-    let chrome = dir.join("chrome-bin");
-    let data = dir.join("Chrome");
-    if complete {
-        std::fs::write(&chrome, "").unwrap();
-        std::fs::create_dir_all(&data).unwrap();
-        std::fs::write(data.join("Local State"), LOCAL_STATE).unwrap();
+/// Ardia is closed and nothing failed.
+pub(super) fn closed() -> Report {
+    Report {
+        failure: None,
+        running: false,
+        cached: Some(LiveInfo {
+            version: "0.2.49".into(),
+            protocol: 4,
+        }),
+        owner: Owner::Nobody,
     }
-    PrereqEnv {
-        chrome_binaries: vec![chrome],
-        user_data_dir: data,
+}
+/// Ardia is up; `owner` says who started it.
+pub(super) fn running(owner: Owner) -> Report {
+    Report {
+        running: true,
+        owner,
+        ..closed()
     }
+}
+fn failing(why: Readiness) -> Report {
+    Report {
+        failure: Some(why),
+        ..closed()
+    }
+}
+fn listed() -> Vec<ArdiaProfile> {
+    vec![
+        ArdiaProfile {
+            id: "default".into(),
+            name: "Personal".into(),
+        },
+        ArdiaProfile {
+            id: "p-work-1".into(),
+            name: "Work".into(),
+        },
+    ]
 }
 
 struct Page {
     s: Setup,
     visual: VisualTestContext,
     ops: Arc<Fake>,
-    env: PrereqEnv,
-    _dir: TempDir,
 }
-/// A scratch folder that goes away with the test.
-struct TempDir(PathBuf);
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-fn open_with(cx: &mut TestAppContext, complete: bool) -> Page {
+fn open_with(cx: &mut TestAppContext, ops: Fake) -> Page {
     let s = setup(cx);
     cx.update(|cx| {
         cx.set_reduce_motion(true);
         crate::input::bind(cx);
         crate::popover::bind(cx);
     });
-    let dir = std::env::temp_dir().join(format!("native-browser-{}", mono::new_id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let dir = TempDir(dir);
-    let env = chrome_env(&dir.0, complete);
-    let ops = Arc::new(Fake::default());
-    let (o, e) = (ops.clone(), env.clone());
-    s.manager.update(cx, |m, _| m.browser_ui.use_fakes(o, e));
+    let ops = Arc::new(ops);
+    let o = ops.clone();
+    s.manager.update(cx, |m, _| m.browser_ui.use_fakes(o));
     let mut visual = VisualTestContext::from_window(s.window.into(), cx);
     click(&mut visual, "mono-settings-Browser");
     visual.refresh().unwrap();
-    Page {
-        s,
-        visual,
-        ops,
-        env,
-        _dir: dir,
-    }
+    Page { s, visual, ops }
 }
 fn open(cx: &mut TestAppContext) -> Page {
-    open_with(cx, true)
+    open_with(cx, Fake::default())
 }
 
 impl Page {
@@ -104,14 +202,25 @@ impl Page {
     fn on(&mut self, selector: &'static str) -> bool {
         self.visual.debug_bounds(selector).is_some()
     }
-    fn click(&mut self, selector: &'static str) {
-        click(&mut self.visual, selector);
+    fn top(&mut self, selector: &'static str) -> f32 {
+        self.visual
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is not on screen"))
+            .top()
+            .as_f32()
+    }
+    /// Lets the worker answers reach the page.
+    fn settle(&mut self) {
+        self.visual.run_until_parked();
         self.visual.refresh().unwrap();
+    }
+    fn click(&mut self, selector: &'static str) {
+        tap(&mut self.visual, selector);
+        self.settle();
     }
     fn manager<R>(&mut self, f: impl FnOnce(&mut Monos, &mut Context<Monos>) -> R) -> R {
         let r = self.s.manager.update(&mut self.visual, f);
-        self.visual.run_until_parked();
-        self.visual.refresh().unwrap();
+        self.settle();
         r
     }
     fn type_into(&mut self, key: &str, text: &str) {
@@ -121,8 +230,7 @@ impl Page {
             .read_with(&self.visual, |m, _| m.fields.get(key).cloned())
             .unwrap_or_else(|| panic!("no field {key}"));
         field.update(&mut self.visual, |f, cx| f.set_text(text.to_owned(), cx));
-        self.visual.run_until_parked();
-        self.visual.refresh().unwrap();
+        self.settle();
     }
     fn secrets(&self) -> MonoBrowserStore {
         MonoBrowserStore::for_store(&locked(&self.s.store).unwrap()).unwrap()
@@ -130,40 +238,20 @@ impl Page {
     fn enable(&mut self) {
         self.click("mono-browser-enabled");
     }
-    fn choose(&mut self, dir: &str) {
-        let dir = dir.to_owned();
-        self.manager(|m, cx| m.browser_choose_profile(&dir, cx));
+    fn choose(&mut self, id: &str) {
+        let id = id.to_owned();
+        self.manager(|m, cx| m.browser_choose_profile(&id, cx));
     }
     fn ui<R>(&self, f: impl FnOnce(&browser_ui::BrowserUi) -> R) -> R {
         self.s
             .manager
             .read_with(&self.visual, |m, _| f(&m.browser_ui))
     }
-    /// Scrolls the page until `selector` is well inside it, then clicks it: the recipes
-    /// sit below the safety rules, and a click only lands on what is visible.
-    fn tap(&mut self, selector: &'static str) {
-        use gpui::{ScrollDelta, ScrollWheelEvent, point, px};
-        for _ in 0..60 {
-            self.visual.refresh().unwrap();
-            let (Some(target), Some(page)) = (
-                self.visual.debug_bounds(selector),
-                self.visual.debug_bounds("mono-browser-page"),
-            ) else {
-                break;
-            };
-            let y = target.center().y;
-            if y > page.top() + px(120.) && y < page.bottom() - px(60.) {
-                break;
-            }
-            let dy = if y > page.center().y { -240. } else { 240. };
-            self.visual.simulate_event(ScrollWheelEvent {
-                position: page.center(),
-                delta: ScrollDelta::Pixels(point(px(0.), px(dy))),
-                ..Default::default()
-            });
-            self.visual.run_until_parked();
-        }
-        self.click(selector);
+    fn saved_idle(&self) -> Option<String> {
+        locked(&self.s.store)
+            .unwrap()
+            .setting(IDLE_SETTING_KEY)
+            .unwrap()
     }
 }
 
@@ -172,19 +260,32 @@ fn the_browser_tab_starts_off_and_shows_only_the_switch(cx: &mut TestAppContext)
     let mut page = open(cx);
     assert!(page.on("mono-browser-page"));
     assert!(page.on("mono-browser-enabled"));
-    assert!(!page.on("mono-browser-prereq-chrome") && !page.on("mono-browser-profile"));
+    for hidden in [
+        "mono-browser-readiness-closed",
+        "mono-browser-profile",
+        "mono-browser-idle-save",
+        "mono-browser-control-note",
+    ] {
+        assert!(!page.on(hidden), "{hidden}");
+    }
     assert!(
         page.setting().is_none(),
         "nothing is saved until the user turns it on"
     );
+    assert!(
+        page.ops.reports_for.lock().unwrap().is_empty(),
+        "an Ardia that is not used is never asked"
+    );
 }
 
 #[gpui::test]
-fn turning_it_on_shows_the_chrome_check_and_an_empty_blocklist(cx: &mut TestAppContext) {
-    let mut page = open_with(cx, false);
+fn turning_it_on_shows_the_ardia_cards_in_order_and_none_of_the_chrome_ones(
+    cx: &mut TestAppContext,
+) {
+    let mut page = open(cx);
     page.enable();
     let setting = page.setting().unwrap();
-    assert!(setting.enabled && !setting.ready);
+    assert!(setting.enabled);
     assert_eq!(
         setting.trust,
         BrowserLevel::Act,
@@ -192,89 +293,273 @@ fn turning_it_on_shows_the_chrome_check_and_an_empty_blocklist(cx: &mut TestAppC
     );
     // New Monos block nothing: the sensitive-site rule asks on banking and payment sites.
     assert!(setting.blocked_origins.is_empty());
-    for id in [
+    let order = [
+        "mono-browser-readiness-closed",
+        "mono-browser-profile",
+        "mono-browser-idle-save",
+        "mono-browser-control-note",
+        browser_ui::trust_selector(BrowserLevel::Act),
+    ];
+    let tops: Vec<f32> = order.iter().map(|id| page.top(id)).collect();
+    assert!(
+        tops.windows(2).all(|w| w[0] < w[1]),
+        "readiness, profile, idle quit, Control note, then the level: {tops:?}"
+    );
+    assert!(page.on("mono-browser-ardia-retry"));
+    assert!(!page.on("mono-browser-ardia-running"), "Ardia is closed");
+    assert!(!page.on("mono-browser-blocked-0"));
+    for gone in [
         "mono-browser-prereq-chrome",
         "mono-browser-prereq-fda",
-        browser_ui::trust_selector(BrowserLevel::Act),
-    ] {
-        assert!(page.on(id), "{id}");
-    }
-    assert!(!page.on("mono-browser-blocked-0"));
-    // No Node.js, token, Playwright or connection test: the extension needs none of them.
-    for gone in [
-        "mono-browser-prereq-node",
-        "mono-browser-node-path-save",
-        "mono-browser-token-save",
-        "mono-browser-open-token-page",
-        "mono-browser-test",
-        "mono-browser-install",
-        "mono-browser-use-extension",
-        "mono-browser-blocked-reset",
+        "mono-browser-fda-fix",
+        "mono-connect-status",
+        "mono-connect-start",
+        "mono-browser-reconnect",
+        "mono-browser-notice-dismiss",
+        "mono-browser-show-actions",
+        "mono-recipes-empty",
+        "mono-recipes-import",
+        "mono-browser-defaults-switch",
     ] {
         assert!(!page.on(gone), "{gone}");
     }
-    let prereq = page.ui(|u| u.prereq.clone()).unwrap();
-    assert!(!prereq.all_ok() && !prereq.chrome.is_ok());
     // Turning it off again keeps the choices but removes the controls.
     page.enable();
     assert!(!page.setting().unwrap().enabled);
-    assert!(!page.on("mono-browser-prereq-chrome"));
+    assert!(!page.on("mono-browser-readiness-closed") && !page.on("mono-browser-profile"));
 }
 
 #[gpui::test]
-fn a_refused_profile_read_offers_the_full_disk_access_fix(cx: &mut TestAppContext) {
+fn the_readiness_row_shows_the_first_failing_check_with_its_fix_and_try_again_rereads_it(
+    cx: &mut TestAppContext,
+) {
     let mut page = open(cx);
+    page.ops.set_report(failing(Readiness::ControlOff));
     page.enable();
-    assert!(!page.on("mono-browser-fda-fix"), "readable: nothing to fix");
-    page.manager(|m, cx| {
-        let mut prereq = m.browser_ui.prereq.clone().unwrap();
-        prereq.full_disk_access = browser::Check::Denied;
-        m.browser_ui.prereq = Some(prereq);
-        cx.notify();
-    });
-    page.click("mono-browser-fda-fix");
-    assert_eq!(*page.ops.fda.lock().unwrap(), 1);
+    for id in [
+        "mono-browser-readiness-check",
+        "mono-browser-readiness-problem",
+        "mono-browser-readiness-fix",
+    ] {
+        assert!(page.on(id), "{id}");
+    }
+    assert!(!page.on("mono-browser-readiness-ok") && !page.on("mono-browser-readiness-closed"));
+    let failure = page.ui(|u| u.ardia.report.as_ref().and_then(|r| r.failure.clone()));
+    assert_eq!(failure, Some(Readiness::ControlOff));
+    assert_eq!(failure.unwrap().check(), "Control on");
+
+    // The user fixes it in Ardia and presses Try again.
+    page.ops.set_report(running(Owner::User));
+    page.click("mono-browser-ardia-retry");
+    assert!(page.on("mono-browser-readiness-ok"));
+    assert!(!page.on("mono-browser-readiness-fix"));
+    page.ops.set_report(failing(Readiness::NotInstalled));
+    page.click("mono-browser-ardia-retry");
+    assert!(page.on("mono-browser-readiness-fix") && !page.on("mono-browser-readiness-ok"));
 }
 
 #[gpui::test]
-fn the_picker_lists_chrome_profiles_and_changing_one_keeps_it_ready(cx: &mut TestAppContext) {
+fn a_mono_without_a_profile_asks_for_one_and_the_report_is_for_the_saved_profile(
+    cx: &mut TestAppContext,
+) {
     let mut page = open(cx);
+    page.ops.set_report(failing(Readiness::NoProfile));
     page.enable();
-    let labels = page.ui(|u| u.profiles.iter().map(|p| p.label()).collect::<Vec<_>>());
     assert_eq!(
-        labels,
-        ["Personal (me@example.com)", "Work (work@example.com)"]
+        page.ui(|u| u.ardia.report.as_ref().and_then(|r| r.failure.clone())),
+        Some(Readiness::NoProfile)
     );
+    page.choose("p-work-1");
+    assert_eq!(
+        page.ops
+            .reports_for
+            .lock()
+            .unwrap()
+            .last()
+            .map(String::as_str),
+        Some("p-work-1"),
+        "choosing a profile reads the readiness of that profile"
+    );
+}
+
+#[gpui::test]
+fn a_closed_ardia_shows_what_was_last_seen_and_a_running_one_its_version(cx: &mut TestAppContext) {
+    let mut page = open(cx);
+    page.enable();
+    assert!(page.on("mono-browser-readiness-closed") && page.on("mono-browser-readiness-last"));
+    page.ops.set_report(running(Owner::User));
+    page.click("mono-browser-ardia-retry");
+    assert!(page.on("mono-browser-readiness-ok"));
+    assert!(!page.on("mono-browser-readiness-closed"));
+}
+
+#[gpui::test]
+fn the_running_row_and_quit_show_only_for_an_ardia_zptah_started(cx: &mut TestAppContext) {
+    let mut page = open(cx);
+    page.enable();
+    for (report, shown) in [
+        (running(Owner::Zptah), true),
+        (running(Owner::User), false),
+        (running(Owner::Nobody), false),
+        (
+            Report {
+                running: false,
+                owner: Owner::Zptah,
+                ..closed()
+            },
+            false,
+        ),
+    ] {
+        assert_eq!(report.quittable(), shown);
+        page.ops.set_report(report);
+        page.click("mono-browser-ardia-retry");
+        assert_eq!(page.on("mono-browser-ardia-running"), shown);
+        assert_eq!(page.on("mono-browser-ardia-quit"), shown);
+    }
+}
+
+#[gpui::test]
+fn quit_asks_ardia_to_quit_once_and_the_row_goes_away(cx: &mut TestAppContext) {
+    let mut page = open(cx);
+    page.ops.set_report(running(Owner::Zptah));
+    page.enable();
+    assert!(page.on("mono-browser-ardia-quit"));
+    page.click("mono-browser-ardia-quit");
+    assert_eq!(*page.ops.quit_calls.lock().unwrap(), 1);
+    assert!(!page.on("mono-browser-ardia-running"));
+    assert!(page.on("mono-browser-readiness-closed"));
+    assert!(!page.on("mono-browser-ardia-error"));
+}
+
+#[gpui::test]
+fn a_failed_quit_is_shown_and_the_row_stays(cx: &mut TestAppContext) {
+    let mut page = open(cx);
+    page.ops.set_report(running(Owner::Zptah));
+    *page.ops.quit.lock().unwrap() = Err("Ardia would not quit".into());
+    page.enable();
+    page.click("mono-browser-ardia-quit");
+    assert_eq!(*page.ops.quit_calls.lock().unwrap(), 1);
+    assert!(page.on("mono-browser-ardia-error"));
+    assert!(page.on("mono-browser-ardia-running"));
+}
+
+#[gpui::test]
+fn the_picker_lists_ardias_profiles_and_choosing_one_saves_its_id_and_name(
+    cx: &mut TestAppContext,
+) {
+    let mut page = open(cx);
+    page.enable();
+    let ids = page.ui(|u| {
+        u.ardia
+            .listed()
+            .iter()
+            .map(|p| (p.id.clone(), p.name.clone()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        ids,
+        [
+            ("default".to_owned(), "Personal".to_owned()),
+            ("p-work-1".to_owned(), "Work".to_owned())
+        ]
+    );
+    assert!(!page.on("mono-browser-ardia-start") && !page.on("mono-browser-ardia-open"));
     page.click("mono-browser-profile");
     assert!(page.ui(|u| u.select_is_open()));
+    assert!(page.on("menu-action-0") && page.on("menu-action-1"));
     page.click("mono-browser-profile");
     assert!(
         !page.ui(|u| u.select_is_open()),
         "the trigger closes it again"
     );
 
-    page.choose("Profile 6");
+    page.click("mono-browser-profile");
+    page.click("menu-action-1");
     let setting = page.setting().unwrap();
     assert_eq!(
-        (setting.profile_dir.as_str(), setting.profile_name.as_str()),
-        ("Profile 6", "Work")
+        (
+            setting.ardia_profile.as_str(),
+            setting.ardia_profile_name.as_str()
+        ),
+        ("p-work-1", "Work")
     );
-    assert!(page.setting().unwrap().ready, "Chrome and a profile");
-    page.choose("Profile 6");
-    assert!(page.setting().unwrap().ready, "same profile keeps it");
-    page.choose("Default");
-    assert_eq!(page.setting().unwrap().profile_dir, "Default");
+    assert!(setting.active());
+    assert!(!page.ui(|u| u.select_is_open()));
+    page.choose("default");
+    assert_eq!(page.setting().unwrap().ardia_profile, "default");
+}
+
+#[gpui::test]
+fn a_closed_ardia_offers_start_ardia_where_zptah_can_launch_it(cx: &mut TestAppContext) {
+    let mut page = open(cx);
+    *page.ops.profiles.lock().unwrap() = Err(Readiness::NotRunning);
+    page.enable();
+    assert!(page.on("mono-browser-ardia-start"));
+    assert!(!page.on("mono-browser-ardia-open"));
+    page.click("mono-browser-ardia-start");
+    assert_eq!(*page.ops.started.lock().unwrap(), 1);
+    // It started, so its profiles are listed now and the button is gone.
+    assert_eq!(page.ui(|u| u.ardia.listed().len()), 2);
+    assert!(!page.on("mono-browser-ardia-start"));
     assert!(
-        page.setting().unwrap().ready,
-        "Chrome is there and so is a profile"
+        page.on("mono-browser-ardia-running"),
+        "zptah started it, so it can quit it"
     );
+}
+
+#[gpui::test]
+fn a_failed_start_shows_why_and_keeps_the_button(cx: &mut TestAppContext) {
+    let mut page = open(cx);
+    *page.ops.profiles.lock().unwrap() = Err(Readiness::NotRunning);
+    *page.ops.start.lock().unwrap() = Err(Readiness::DidntStart);
+    page.enable();
+    page.click("mono-browser-ardia-start");
+    assert!(page.on("mono-browser-ardia-error"));
+    assert!(page.on("mono-browser-ardia-start"));
+}
+
+#[gpui::test]
+fn a_closed_ardia_says_open_ardia_where_zptah_cannot_launch_it(cx: &mut TestAppContext) {
+    let mut page = open(cx);
+    *page.ops.profiles.lock().unwrap() = Err(Readiness::NotRunning);
+    *page.ops.can_launch.lock().unwrap() = false;
+    page.enable();
+    assert!(page.on("mono-browser-ardia-open"));
+    assert!(!page.on("mono-browser-ardia-start"));
+    assert_eq!(*page.ops.started.lock().unwrap(), 0);
+}
+
+#[gpui::test]
+fn the_saved_profile_is_the_current_choice_even_when_the_list_cannot_be_read(
+    cx: &mut TestAppContext,
+) {
+    let mut page = open(cx);
+    page.enable();
+    page.choose("p-work-1");
+    *page.ops.profiles.lock().unwrap() = Err(Readiness::NotRunning);
+    page.click("mono-browser-ardia-retry");
+    assert!(page.ui(|u| u.ardia.listed().is_empty()));
+    let choices = page.s.manager.read_with(&page.visual, |m, _| {
+        m.browser_ardia_choices()
+            .into_iter()
+            .map(|c| (c.value, c.label.to_string(), c.checked))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(choices, [("p-work-1".to_owned(), "Work".to_owned(), true)]);
+    // The picker still opens, and a valid id always takes effect.
+    page.click("mono-browser-profile");
+    assert!(page.ui(|u| u.select_is_open()));
+    page.choose("default");
+    assert_eq!(page.setting().unwrap().ardia_profile, "default");
+    page.choose("../etc");
+    assert_eq!(page.setting().unwrap().ardia_profile, "default");
 }
 
 #[gpui::test]
 fn another_mono_on_the_same_profile_gets_a_warning(cx: &mut TestAppContext) {
     let mut page = open(cx);
     page.enable();
-    page.choose("Profile 6");
+    page.choose("p-work-1");
     assert!(!page.on("mono-browser-shared-warning"));
     page.manager(|m, cx| {
         let other = m.roster.create(Vec::new()).id.clone();
@@ -282,7 +567,7 @@ fn another_mono_on_the_same_profile_gets_a_warning(cx: &mut TestAppContext) {
         mono.name = "Other".into();
         mono.browser = Some(MonoBrowser {
             enabled: true,
-            profile_dir: "Profile 6".into(),
+            ardia_profile: "p-work-1".into(),
             ..Default::default()
         });
         cx.notify();
@@ -291,13 +576,16 @@ fn another_mono_on_the_same_profile_gets_a_warning(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_browser_is_ready_only_with_chrome_and_a_profile(cx: &mut TestAppContext) {
+fn choosing_a_profile_alone_makes_the_browser_active(cx: &mut TestAppContext) {
     let mut page = open(cx);
     page.enable();
-    assert!(!page.setting().unwrap().ready, "no profile yet");
-    page.choose("Profile 6");
+    assert!(!page.setting().unwrap().active(), "no profile yet");
+    page.choose("p-work-1");
     let setting = page.setting().unwrap();
-    assert!(setting.ready && setting.active());
+    assert!(
+        setting.active(),
+        "the profile alone makes it active; Ardia's readiness is checked live"
+    );
     // The Mono's rules now carry the browser paragraph for the chosen profile.
     let rules = page.s.manager.read_with(&page.visual, |m, _| {
         monocode_core::mono::instructions(
@@ -305,8 +593,83 @@ fn the_browser_is_ready_only_with_chrome_and_a_profile(cx: &mut TestAppContext) 
             std::path::Path::new("/bin/app"),
         )
     });
-    assert!(rules.contains("## Browser") && rules.contains("profile \"Work\""));
+    assert!(rules.contains("## Browser") && rules.contains("(\"Work\")"));
     assert!(!rules.to_lowercase().contains("playwright"));
+}
+
+#[gpui::test]
+fn the_idle_quit_defaults_to_ten_minutes_and_is_applied_when_the_page_opens(
+    cx: &mut TestAppContext,
+) {
+    let mut page = open(cx);
+    page.enable();
+    assert_eq!(page.ui(|u| u.ardia.idle_minutes), 10);
+    assert_eq!(page.ops.idle.lock().unwrap().last(), Some(&10));
+    assert_eq!(page.saved_idle(), None, "the default is not written");
+}
+
+#[gpui::test]
+fn a_saved_idle_quit_is_read_back_and_applied_when_the_page_opens(cx: &mut TestAppContext) {
+    let mut page = open(cx);
+    locked(&page.s.store)
+        .unwrap()
+        .save_setting(IDLE_SETTING_KEY, "30")
+        .unwrap();
+    page.enable();
+    assert_eq!(page.ui(|u| u.ardia.idle_minutes), 30);
+    assert_eq!(page.ops.idle.lock().unwrap().last(), Some(&30));
+}
+
+#[gpui::test]
+fn saving_the_idle_quit_writes_the_store_key_and_applies_it_and_zero_means_never(
+    cx: &mut TestAppContext,
+) {
+    let mut page = open(cx);
+    page.enable();
+    page.type_into("browser-idle-minutes", "25");
+    page.click("mono-browser-idle-save");
+    assert_eq!(page.saved_idle().as_deref(), Some("25"));
+    assert_eq!(page.ops.idle.lock().unwrap().last(), Some(&25));
+    assert_eq!(page.ui(|u| u.ardia.idle_minutes), 25);
+    page.type_into("browser-idle-minutes", " 0 ");
+    page.click("mono-browser-idle-save");
+    assert_eq!(page.saved_idle().as_deref(), Some("0"));
+    assert_eq!(page.ops.idle.lock().unwrap().last(), Some(&0));
+}
+
+#[gpui::test]
+fn an_idle_quit_that_is_not_a_number_is_refused_and_changes_nothing(cx: &mut TestAppContext) {
+    let mut page = open(cx);
+    page.enable();
+    for bad in ["soon", "-5", "", "99999999"] {
+        page.type_into("browser-idle-minutes", bad);
+        page.click("mono-browser-idle-save");
+        assert!(page.ui(|u| u.error().is_some()), "{bad:?}");
+        assert_eq!(page.saved_idle(), None, "{bad:?}");
+    }
+    assert_eq!(page.ops.idle.lock().unwrap().last(), Some(&10));
+}
+
+#[gpui::test]
+fn the_page_says_that_ardias_control_lets_any_local_program_drive_the_browser(
+    cx: &mut TestAppContext,
+) {
+    let mut page = open(cx);
+    page.enable();
+    assert!(page.on("mono-browser-control-note"));
+    assert!(browser_ardia::CONTROL_NOTE.contains("any local program"));
+}
+
+#[gpui::test]
+fn a_system_with_no_private_upload_folder_says_uploads_are_not_available(cx: &mut TestAppContext) {
+    let mut works = open(cx);
+    works.enable();
+    assert!(!works.on("mono-browser-uploads-note"), "uploads work here");
+    let mut page = open(cx);
+    *page.ops.uploads.lock().unwrap() = false;
+    page.enable();
+    assert!(page.on("mono-browser-uploads-note"));
+    assert!(browser_ardia::NO_UPLOADS_NOTE.contains("Uploads are not available on this system"));
 }
 
 #[gpui::test]
@@ -374,7 +737,7 @@ fn the_trust_selector_offers_only_read_only_and_act_for_me(cx: &mut TestAppConte
 fn a_stored_legacy_level_reads_as_act_for_me_and_an_unknown_one_as_read_only(
     cx: &mut TestAppContext,
 ) {
-    use super::browser_migration::{CHOICES, trust_label};
+    use super::browser_ui::{CHOICES, trust_label};
     use monocode_core::mono::browser::copy::Lang;
     assert_eq!(CHOICES, [BrowserLevel::ReadOnly, BrowserLevel::Act]);
     for (stored, shown) in [
@@ -400,111 +763,6 @@ fn a_stored_legacy_level_reads_as_act_for_me_and_an_unknown_one_as_read_only(
     assert!(page.on(browser_ui::trust_selector(BrowserLevel::Act)));
 }
 
-/// A migrated Mono: the notice, the offer and a profile with no connection.
-fn migrated() -> MonoBrowser {
-    MonoBrowser {
-        enabled: true,
-        profile_dir: "Default".into(),
-        migration_notice: true,
-        suggest_new_defaults: true,
-        migrated: 1,
-        ..MonoBrowser::default()
-    }
-}
-
-#[gpui::test]
-fn the_migration_notice_shows_until_dismissed_and_the_dismissal_is_saved(cx: &mut TestAppContext) {
-    let mut page = open(cx);
-    page.enable();
-    assert!(
-        !page.on("mono-browser-notice-dismiss"),
-        "a new Mono has no notice"
-    );
-    page.manager(|m, cx| m.browser_edit(cx, |b| *b = migrated()));
-    for id in [
-        "mono-browser-notice-dismiss",
-        "mono-browser-notice-trust",
-        "mono-browser-notice-tab-group",
-    ] {
-        assert!(page.on(id), "{id}");
-    }
-    page.click("mono-browser-notice-dismiss");
-    assert!(!page.setting().unwrap().migration_notice);
-    assert!(!page.on("mono-browser-notice-dismiss"));
-    // It is on disk: a fresh load of the roster does not bring it back.
-    for _ in 0..200 {
-        page.visual.run_until_parked();
-        let saved = mono::Roster::load(&locked(&page.s.store).unwrap()).unwrap();
-        if saved
-            .get(&page.s.id)
-            .and_then(|m| m.browser.as_ref())
-            .is_some_and(|b| !b.migration_notice)
-        {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    panic!("the dismissal was not saved");
-}
-
-#[gpui::test]
-fn switch_and_keep_resolve_the_blocked_list_offer_once(cx: &mut TestAppContext) {
-    let mut page = open(cx);
-    page.enable();
-    let mut custom = migrated();
-    custom.blocked_origins.push("https://bank.example".into());
-    page.manager(|m, cx| m.browser_edit(cx, |b| *b = custom.clone()));
-    assert!(page.on("mono-browser-defaults-switch") && page.on("mono-browser-defaults-keep"));
-    page.manager(|m, cx| m.browser_switch_defaults(cx));
-    let after = page.setting().unwrap();
-    assert!(!after.suggest_new_defaults);
-    assert!(
-        after
-            .blocked_origins
-            .iter()
-            .any(|o| o == "https://bank.example")
-    );
-    assert!(
-        !after
-            .blocked_origins
-            .iter()
-            .any(|o| o == "https://www.paypal.com")
-    );
-    assert!(!page.on("mono-browser-defaults-switch"));
-
-    page.manager(|m, cx| m.browser_edit(cx, |b| *b = custom.clone()));
-    page.manager(|m, cx| m.browser_keep_list(cx));
-    let kept = page.setting().unwrap();
-    assert!(!kept.suggest_new_defaults);
-    assert_eq!(kept.blocked_origins, custom.blocked_origins);
-    assert!(!page.on("mono-browser-defaults-keep"));
-}
-
-#[gpui::test]
-fn a_migrated_mono_without_a_connection_shows_reconnect_needed(cx: &mut TestAppContext) {
-    let mut page = open(cx);
-    page.enable();
-    page.manager(|m, cx| {
-        m.browser_edit(cx, |b| {
-            *b = migrated();
-            b.migrated = 0;
-        })
-    });
-    assert!(!page.on("mono-browser-reconnect"), "never migrated");
-    page.manager(|m, cx| m.browser_edit(cx, |b| b.migrated = 1));
-    assert!(page.setting().unwrap().needs_reconnect());
-    assert!(page.on("mono-browser-reconnect"));
-    page.manager(|m, cx| m.browser_edit(cx, |b| b.profile_dir.clear()));
-    assert!(!page.on("mono-browser-reconnect"), "no saved profile");
-    page.manager(|m, cx| {
-        m.browser_edit(cx, |b| {
-            b.profile_dir = "Default".into();
-            b.connection = Some("link-1".into())
-        })
-    });
-    assert!(!page.on("mono-browser-reconnect"));
-}
-
 #[gpui::test]
 fn changing_the_level_reconfigures_the_gate_and_keeps_it(cx: &mut TestAppContext) {
     use monocode_core::mono::browser::gate::Policy;
@@ -520,36 +778,9 @@ fn changing_the_level_reconfigures_the_gate_and_keeps_it(cx: &mut TestAppContext
     other.trust = BrowserLevel::Act;
     assert_eq!(setting.server_key(), other.server_key());
     assert_eq!(
-        Policy::new(setting.trust, setting.blocked_origins.clone()).trust,
+        Policy::ardia(setting.trust, setting.blocked_origins.clone()).trust,
         BrowserLevel::ReadOnly
     );
-}
-
-#[gpui::test]
-fn showing_agent_actions_defaults_on_and_the_switch_reaches_the_roster(cx: &mut TestAppContext) {
-    use monocode_core::mono::browser::roster::entry_for;
-    let mut page = open(cx);
-    page.enable();
-    page.choose("Profile 6");
-    assert!(page.on("mono-browser-show-actions"));
-    let entry = |page: &mut Page| {
-        page.s.manager.read_with(&page.visual, |m, _| {
-            entry_for(m.roster.get(&page.s.id).unwrap()).map(|(_, entry)| entry.cursor)
-        })
-    };
-    let setting = page.setting().unwrap();
-    assert!(setting.show_actions, "the cursor is on by default");
-    assert_eq!(entry(&mut page), Some(true));
-    page.manager(|m, cx| m.browser_toggle_show_actions(cx));
-    let setting = page.setting().unwrap();
-    assert!(!setting.show_actions);
-    assert_eq!(entry(&mut page), Some(false));
-    // The switch is not part of the gate's shape: flipping it never drops the gate.
-    let mut other = setting.clone();
-    other.show_actions = true;
-    assert_eq!(setting.server_key(), other.server_key());
-    page.manager(|m, cx| m.browser_toggle_show_actions(cx));
-    assert!(page.setting().unwrap().show_actions);
 }
 
 #[gpui::test]
@@ -572,66 +803,12 @@ fn the_activity_log_lists_this_monos_browser_calls(cx: &mut TestAppContext) {
 fn deleting_a_mono_deletes_its_activity(cx: &mut TestAppContext) {
     let mut page = open(cx);
     page.enable();
-    page.choose("Profile 6");
+    page.choose("p-work-1");
     let entry = browser::audit_entry("mcp__playwright_browser__browser_click", "{}", 1).unwrap();
     page.secrets().record(&page.s.id, &entry).unwrap();
     let id = page.s.id.clone();
     page.manager(|m, cx| m.remove_mono(&id, cx));
     assert!(page.secrets().recent(&id, 10).is_empty());
-}
-
-#[test]
-fn the_full_disk_access_link_uses_the_dotted_system_settings_scheme() {
-    assert_eq!(
-        browser_ui::FULL_DISK_ACCESS_URL,
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
-    );
-    assert!(!browser_ui::FULL_DISK_ACCESS_URL.starts_with("x-apple-"));
-}
-
-#[gpui::test]
-fn the_picker_changes_the_profile_when_profiles_are_listed(cx: &mut TestAppContext) {
-    let mut page = open(cx);
-    page.enable();
-    page.choose("Default");
-    assert_eq!(page.setting().unwrap().profile_dir, "Default");
-    page.click("mono-browser-profile");
-    assert!(page.ui(|u| u.select_is_open()));
-    page.choose("Profile 6");
-    let setting = page.setting().unwrap();
-    assert_eq!(
-        (setting.profile_dir.as_str(), setting.profile_name.as_str()),
-        ("Profile 6", "Work")
-    );
-    assert!(!page.ui(|u| u.profiles_unreadable) && !page.on("mono-browser-profiles-note"));
-}
-
-#[gpui::test]
-fn without_chromes_profile_list_the_saved_profile_still_shows_and_works(cx: &mut TestAppContext) {
-    let mut page = open(cx);
-    page.enable();
-    page.choose("Profile 6");
-    assert!(page.setting().unwrap().ready);
-    // Full Disk Access is gone: Chrome's Local State cannot be read.
-    std::fs::remove_file(page.env.user_data_dir.join("Local State")).unwrap();
-    page.manager(|m, cx| m.browser_refresh(cx));
-    assert!(page.ui(|u| u.profiles_unreadable));
-    assert_eq!(
-        page.ui(|u| u.profiles.iter().map(|p| p.dir.clone()).collect::<Vec<_>>()),
-        ["Profile 6"]
-    );
-    assert!(page.on("mono-browser-profiles-note"));
-    // The saved profile is not lost and the browser is not marked unready by it.
-    let setting = page.setting().unwrap();
-    assert_eq!(setting.profile_dir, "Profile 6");
-    assert!(setting.ready && setting.active());
-    // The picker opens, and a choice (a valid directory name) always takes effect.
-    page.click("mono-browser-profile");
-    assert!(page.ui(|u| u.select_is_open()));
-    page.choose("Default");
-    assert_eq!(page.setting().unwrap().profile_dir, "Default");
-    page.choose("../etc");
-    assert_eq!(page.setting().unwrap().profile_dir, "Default");
 }
 
 #[gpui::test]
@@ -647,361 +824,4 @@ fn the_reason_a_launch_could_not_attach_the_browser_is_shown_on_the_tab(cx: &mut
     browser::server::servers().set_attach_error(&id, None);
     page.manager(|m, cx| m.browser_refresh(cx));
     assert!(!page.on("mono-browser-attach-error"));
-}
-
-// ---- Recipes (Phase 4) ----
-
-mod recipes {
-    use super::*;
-    use crate::monos::recipes_ui::export_file_name;
-    use monocode_core::mono::browser::recipe::{
-        manage::{self, Status},
-        model::Recipe,
-        share::{self, Library},
-        store::RecipeStore,
-    };
-    use serde_json::json;
-
-    const ORIGIN: &str = "https://news.example";
-
-    fn recipe() -> Recipe {
-        let recipe: Recipe = serde_json::from_value(json!({
-            "schema": 1, "id": "rcp_0a1b2c3d", "origin": ORIGIN, "intent": "news.archive",
-            "description": "Read stories", "version": 1,
-            "params": [{"name": "n", "type": "integer", "description": "how many", "default": 2}],
-            "steps": [
-                {"op": "open", "url": "https://news.example/archive",
-                 "expect": [{"url_matches": "^https://news\\.example/archive"}]},
-                {"op": "extract", "scope": {"candidates": [{"role": "list", "name": "Stories"}]},
-                 "each": {"role": "listitem"}, "take_first": "{n}",
-                 "fields": {"title": {"role": "link", "from": "name"}},
-                 "max_chars_per_field": 100, "expect": [{"count_at_least": 1}]},
-            ],
-            "risk": "read", "playwright_mcp": "0.0.86",
-        }))
-        .unwrap();
-        recipe.validate().unwrap();
-        recipe
-    }
-    fn dry_ok() -> DryRunReport {
-        DryRunReport {
-            ok: true,
-            steps_run: 2,
-            stopped_before: None,
-            failure: None,
-        }
-    }
-
-    impl Page {
-        fn recipe_store(&self) -> RecipeStore {
-            RecipeStore::new(browser::recipes_dir(&self.s.root, &self.s.id))
-        }
-        fn library(&self) -> Library {
-            Library::new(browser::shared_recipes_dir(&self.s.root))
-        }
-        /// A recipe the user approved earlier, on a Mono that has the browser on.
-        fn with_recipe(&mut self, recipe: &Recipe) {
-            self.enable();
-            self.recipe_store().save(recipe).unwrap();
-            self.secrets()
-                .approve_recipe(&self.s.id, &recipe.id, &recipe.content_hash())
-                .unwrap();
-            self.manager(|m, cx| m.browser_refresh(cx));
-        }
-        fn rows(&self) -> Vec<manage::Row> {
-            self.ui(|u| u.recipes.rows.clone())
-        }
-        fn status(&self) -> Status {
-            self.rows()[0].status
-        }
-        fn notice(&self) -> Option<String> {
-            self.ui(|u| u.recipes.notice.clone())
-        }
-        fn problem(&self) -> Option<String> {
-            self.ui(|u| u.recipes.error.clone())
-        }
-        fn dry_run_answers(&self, answer: Result<DryRunReport, String>) {
-            *self.ops.dry.lock().unwrap() = Some(answer);
-        }
-        fn import(&mut self, text: &str) {
-            let text = text.to_owned();
-            self.manager(|m, cx| m.recipes_import_text(&text, cx));
-        }
-    }
-
-    fn exported_text() -> String {
-        share::export(&recipe()).unwrap()
-    }
-
-    #[gpui::test]
-    fn the_list_shows_title_origin_version_last_run_success_rate_and_the_flaky_flag(
-        cx: &mut TestAppContext,
-    ) {
-        let mut page = open(cx);
-        page.with_recipe(&recipe());
-        page.recipe_store().update_stats(&recipe(), |s| {
-            s.runs = 10;
-            s.ok = 8;
-            s.last_run_ms = monocode_core::time::now_ms() - 2 * 3_600_000;
-            s.flaky = true;
-        });
-        page.manager(|m, cx| m.browser_refresh(cx));
-        let row = page.rows().remove(0);
-        assert_eq!(
-            (row.intent.as_str(), row.origin.as_str(), row.version),
-            ("news.archive", ORIGIN, 1)
-        );
-        assert_eq!(row.success_percent(), Some(80));
-        assert!(row.flaky && row.status == Status::Approved);
-        for id in [
-            "mono-recipe-0",
-            "mono-recipe-title-0",
-            "mono-recipe-status-0",
-            "mono-recipe-meta-0",
-            "mono-recipe-flaky-0",
-            "mono-recipe-view-0",
-            "mono-recipe-dryrun-0",
-            "mono-recipe-share-0",
-            "mono-recipe-export-0",
-            "mono-recipe-delete-0",
-            "mono-recipes-import",
-        ] {
-            assert!(page.on(id), "{id}");
-        }
-        assert!(!page.on("mono-recipe-rollback-0"), "no earlier version");
-        assert!(!page.on("mono-recipes-empty"));
-    }
-
-    #[gpui::test]
-    fn an_empty_list_says_so_and_the_section_follows_the_browser_switch(cx: &mut TestAppContext) {
-        let mut page = open(cx);
-        assert!(!page.on("mono-recipes-import"), "off: no recipes section");
-        page.enable();
-        assert!(page.on("mono-recipes-empty") && page.on("mono-recipes-import"));
-        assert!(page.on("mono-recipes-shared-empty"));
-    }
-
-    #[gpui::test]
-    fn the_steps_are_shown_in_words_with_placeholders_and_no_value(cx: &mut TestAppContext) {
-        let mut page = open(cx);
-        page.with_recipe(&recipe());
-        assert!(!page.on("mono-recipe-steps-0"));
-        page.tap("mono-recipe-view-0");
-        assert!(page.on("mono-recipe-steps-0"));
-        let steps = page.ui(|u| u.recipes.open.clone()).unwrap().steps;
-        assert!(
-            steps.contains("{n}") && steps.contains("Risk: read"),
-            "{steps}"
-        );
-        assert!(!page.on("mono-recipe-approve-0"), "already approved");
-        page.tap("mono-recipe-view-0");
-        assert!(!page.on("mono-recipe-steps-0"));
-    }
-
-    #[gpui::test]
-    fn an_imported_recipe_is_a_draft_that_needs_the_users_approval_and_then_a_dry_run(
-        cx: &mut TestAppContext,
-    ) {
-        let mut page = open(cx);
-        page.enable();
-        page.import(&exported_text());
-        assert_eq!(page.status(), Status::Draft);
-        assert_eq!(page.rows()[0].outside.as_deref(), Some("import"));
-        // Its steps are open for review, with the approval button; no dry run until approved.
-        assert!(page.on("mono-recipe-steps-0") && page.on("mono-recipe-approve-0"));
-        assert!(!page.on("mono-recipe-dryrun-0"));
-        assert!(!page.on("mono-recipe-share-0"));
-        assert!(page.notice().unwrap().contains("approve"));
-        page.tap("mono-recipe-approve-0");
-        assert_eq!(page.status(), Status::NeedsDryRun);
-        assert!(page.notice().unwrap().contains("dry run"));
-        assert!(page.on("mono-recipe-dryrun-0"));
-        assert!(
-            !page.on("mono-recipe-share-0"),
-            "not shareable before it passed"
-        );
-        // A failing dry run keeps it locked and says why; an error from the gate too.
-        page.dry_run_answers(Ok(DryRunReport {
-            ok: false,
-            steps_run: 1,
-            stopped_before: None,
-            failure: Some("Step 2 (extract): No locator candidate matched.".into()),
-        }));
-        page.tap("mono-recipe-dryrun-0");
-        assert!(page.problem().unwrap().contains("No locator"));
-        assert_eq!(page.status(), Status::NeedsDryRun);
-        page.dry_run_answers(Err("This Mono's browser is not running yet.".into()));
-        page.tap("mono-recipe-dryrun-0");
-        assert!(page.problem().unwrap().contains("not running"));
-        assert_eq!(page.status(), Status::NeedsDryRun);
-        // The gate does the dry run; the page only shows its answer. Here the fake gate also
-        // records the pass the way the real one does.
-        let (id, mono) = (page.rows()[0].id.clone(), page.s.id.clone());
-        let hash = page.rows()[0].hash.clone();
-        page.dry_run_answers(Ok(dry_ok()));
-        page.tap("mono-recipe-dryrun-0");
-        assert_eq!(
-            page.ops.dry_asked.lock().unwrap().last().cloned(),
-            Some((mono.clone(), id.clone()))
-        );
-        assert!(page.notice().unwrap().contains("passed"));
-        // (The fake did not write the dry run row, so the real status is still locked.)
-        assert_eq!(page.status(), Status::NeedsDryRun);
-        page.secrets().mark_dry_run(&mono, &id, &hash).unwrap();
-        page.manager(|m, cx| m.browser_refresh(cx));
-        assert_eq!(page.status(), Status::Approved);
-        assert!(page.on("mono-recipe-share-0"));
-    }
-
-    #[gpui::test]
-    fn import_refuses_a_blocked_site_a_tampered_file_and_says_why(cx: &mut TestAppContext) {
-        let mut page = open(cx);
-        page.enable();
-        page.manager(|m, cx| m.browser_edit(cx, |b| b.blocked_origins.push(ORIGIN.into())));
-        page.import(&exported_text());
-        assert!(page.problem().unwrap().contains("blocked"));
-        assert!(page.on("mono-recipes-error"));
-        assert!(page.rows().is_empty());
-        page.manager(|m, cx| m.browser_edit(cx, |b| b.blocked_origins.clear()));
-        let tampered = exported_text().replace("/archive", "/evil");
-        page.import(&tampered);
-        assert!(page.problem().unwrap().contains("hash"));
-        assert!(page.rows().is_empty());
-        page.import("not a recipe");
-        assert!(page.problem().is_some() && page.rows().is_empty());
-        assert!(!page.recipe_store().dir().join("anything").exists());
-    }
-
-    #[gpui::test]
-    fn a_picked_file_is_imported_and_a_big_one_is_refused_unread(cx: &mut TestAppContext) {
-        let mut page = open(cx);
-        page.enable();
-        let file = std::env::temp_dir().join(format!("recipe-pick-{}.json", mono::new_id()));
-        std::fs::write(&file, exported_text()).unwrap();
-        page.tap("mono-recipes-import");
-        assert!(page.visual.did_prompt_for_paths());
-        let picked = file.clone();
-        page.visual
-            .simulate_path_prompt_response(move |_| Some(vec![picked.clone()]));
-        page.visual.run_until_parked();
-        page.visual.refresh().unwrap();
-        assert_eq!(page.status(), Status::Draft);
-        std::fs::write(&file, "x".repeat(share::MAX_FILE_BYTES + 1)).unwrap();
-        page.tap("mono-recipes-import");
-        let picked = file.clone();
-        page.visual
-            .simulate_path_prompt_response(move |_| Some(vec![picked.clone()]));
-        page.visual.run_until_parked();
-        assert!(page.problem().unwrap().contains("too big"));
-        assert_eq!(page.rows().len(), 1);
-        let _ = std::fs::remove_file(file);
-    }
-
-    #[gpui::test]
-    fn approve_is_bound_to_the_steps_that_were_shown(cx: &mut TestAppContext) {
-        let mut page = open(cx);
-        page.enable();
-        page.import(&exported_text());
-        let id = page.rows()[0].id.clone();
-        // The file is replaced after its steps were shown and before the click.
-        let mut changed = page.recipe_store().get(&id).unwrap();
-        changed.description = "Something else entirely".into();
-        page.recipe_store().save(&changed).unwrap();
-        page.tap("mono-recipe-approve-0");
-        assert!(page.problem().unwrap().contains("changed"));
-        assert_eq!(page.status(), Status::Draft);
-        assert!(page.secrets().approved_hash(&page.s.id, &id).is_none());
-    }
-
-    #[gpui::test]
-    fn export_saves_the_recipe_file_where_the_user_picks(cx: &mut TestAppContext) {
-        let mut page = open(cx);
-        page.with_recipe(&recipe());
-        assert_eq!(
-            export_file_name("news.archive"),
-            "news.archive.monoptah-recipe.json"
-        );
-        page.tap("mono-recipe-export-0");
-        assert!(page.visual.did_prompt_for_new_path());
-        let target = std::env::temp_dir().join(format!("recipe-export-{}.json", mono::new_id()));
-        let file = target.clone();
-        page.visual.simulate_new_path_selection(move |_| Some(file));
-        page.visual.run_until_parked();
-        let text = std::fs::read_to_string(&target).unwrap();
-        assert!(text.contains("\"hash\": \"sha256:"));
-        assert!(share::parse(&text, &[]).is_ok());
-        assert!(page.notice().unwrap().contains("Exported"));
-        let _ = std::fs::remove_file(target);
-    }
-
-    #[gpui::test]
-    fn share_adopt_and_unshare_go_through_the_library_and_a_copy_starts_unapproved(
-        cx: &mut TestAppContext,
-    ) {
-        let mut page = open(cx);
-        page.with_recipe(&recipe());
-        page.tap("mono-recipe-share-0");
-        assert_eq!(page.library().list().len(), 1);
-        assert!(page.on("mono-recipe-shared-0") && page.on("mono-recipe-unshare-0"));
-        assert!(!page.on("mono-recipe-share-0"));
-        // This Mono has it already: no copy button. After deleting it there is one.
-        assert!(!page.on("mono-recipe-adopt-0"));
-        page.tap("mono-recipe-delete-0");
-        assert!(page.on("mono-recipe-delete-0"), "the first click only asks");
-        assert_eq!(page.rows().len(), 1);
-        page.tap("mono-recipe-delete-0");
-        assert!(page.rows().is_empty());
-        assert!(page.on("mono-recipe-adopt-0"));
-        page.tap("mono-recipe-adopt-0");
-        let row = page.rows().remove(0);
-        assert_eq!(row.status, Status::Draft);
-        assert_eq!(row.outside.as_deref(), Some("shared"));
-        assert!(
-            page.on("mono-recipe-approve-0"),
-            "its steps open for review"
-        );
-        // Unshare takes it out of the library and leaves the copy.
-        page.tap("mono-recipe-shared-remove-0");
-        assert!(page.library().list().is_empty());
-        assert_eq!(page.rows().len(), 1);
-        assert!(page.notice().unwrap().contains("Unshared"));
-    }
-
-    #[gpui::test]
-    fn a_blocked_site_stops_a_copy_from_the_library(cx: &mut TestAppContext) {
-        let mut page = open(cx);
-        page.with_recipe(&recipe());
-        page.tap("mono-recipe-share-0");
-        page.tap("mono-recipe-delete-0");
-        page.tap("mono-recipe-delete-0");
-        page.manager(|m, cx| m.browser_edit(cx, |b| b.blocked_origins.push(ORIGIN.into())));
-        page.tap("mono-recipe-adopt-0");
-        assert!(page.problem().unwrap().contains("blocked"));
-        assert!(page.rows().is_empty());
-    }
-
-    #[gpui::test]
-    fn rollback_goes_to_the_previous_version_and_delete_asks_twice(cx: &mut TestAppContext) {
-        let mut page = open(cx);
-        let v1 = recipe();
-        page.with_recipe(&v1);
-        let mut v2 = v1.clone();
-        v2.version = 2;
-        v2.description = "Read stories, second version".into();
-        page.recipe_store().save(&v2).unwrap();
-        page.manager(|m, cx| m.browser_refresh(cx));
-        assert_eq!(page.rows()[0].previous, Some(1));
-        assert_eq!(page.status(), Status::Draft, "v2 was never approved");
-        page.tap("mono-recipe-rollback-0");
-        assert_eq!(page.rows()[0].version, 1);
-        assert_eq!(page.status(), Status::Approved, "v1 was approved before");
-        assert!(page.notice().unwrap().contains("version 1"));
-        page.tap("mono-recipe-delete-0");
-        page.tap("mono-recipe-view-0");
-        page.tap("mono-recipe-delete-0");
-        assert_eq!(page.rows().len(), 1, "another click in between asks again");
-        page.tap("mono-recipe-delete-0");
-        assert!(page.rows().is_empty());
-        assert!(page.secrets().approved_hash(&page.s.id, &v1.id).is_none());
-    }
 }

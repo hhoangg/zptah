@@ -449,6 +449,7 @@ impl Shell {
         settings.operator = false;
         settings.orchestrator = false;
         settings.prepared_prompt = None;
+        settings.automated = true;
         let store = self.store.clone();
         let launch = due.clone();
         let revision = self.navigation_revision;

@@ -1,0 +1,3 @@
+{"event":"tab.opened","time":1795794428359,"data":{"windowId":"w-mwz3kap1pqq0-1","tabId":"tab-mwz5hptzy0zm-5","profile":"p-mwz3kap1pqq0-8","url":"https://example.com","title":""}}
+{"event":"tab.navigated","time":1795794428477,"data":{"windowId":"w-mwz3kap1pqq0-1","tabId":"tab-mwz5hptzy0zm-5","profile":"p-mwz3kap1pqq0-8","url":"https://example.com/","title":"","sameDocument":false}}
+{"event":"tab.closed","time":1795794429505,"data":{"windowId":"w-mwz3kap1pqq0-1","tabId":"tab-mwz5hptzy0zm-5","profile":"p-mwz3kap1pqq0-8","url":"https://example.com/","title":"Example Domain"}}
