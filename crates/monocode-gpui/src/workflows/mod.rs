@@ -215,6 +215,16 @@ impl Workflows {
         self.runner.is_run_live(run_id) || self.signals.has_run_anywhere(run_id)
     }
 
+    /// Whether a resume was asked for the run and is waiting to be claimed. A file that cannot be
+    /// read counts as asked: the caller refuses on a guess.
+    pub(crate) fn resume_asked_for(&self, run_id: &str) -> bool {
+        monocode_core::mono::workflows::store::load_workflows(&self.dir).map_or(true, |file| {
+            file.workflows
+                .iter()
+                .any(|w| w.resume_run_id.as_deref() == Some(run_id))
+        })
+    }
+
     /// Whether a run of the workflow is going.
     #[cfg(test)]
     pub(crate) fn is_running(&self, workflow_id: &str) -> bool {

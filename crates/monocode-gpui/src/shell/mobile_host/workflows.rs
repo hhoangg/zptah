@@ -112,6 +112,13 @@ fn name_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '\\')
 }
 
+/// A "." or "," then whitespace or the end of the text: punctuation after a path, not part of it.
+fn sentence_end(after: &str) -> bool {
+    after
+        .strip_prefix(['.', ','])
+        .is_some_and(|rest| rest.chars().next().is_none_or(char::is_whitespace))
+}
+
 /// Replaces `path` in `text` where it stands as a whole path: not in the middle of a longer one.
 fn replace_path(text: &str, path: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -123,7 +130,8 @@ fn replace_path(text: &str, path: &str) -> String {
         let end_ok = after
             .chars()
             .next()
-            .is_none_or(|c| !(name_char(c) && c != '/' && c != '\\'));
+            .is_none_or(|c| !(name_char(c) && c != '/' && c != '\\'))
+            || sentence_end(after);
         out.push_str(before);
         if start_ok && end_ok {
             out.push_str("(worktree)");
@@ -134,6 +142,11 @@ fn replace_path(text: &str, path: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+#[cfg(test)]
+pub(super) fn replace_path_for_test(text: &str, path: &str) -> String {
+    replace_path(text, path)
 }
 
 /// Replaces the run's worktree paths wherever text carries them (a summary built from

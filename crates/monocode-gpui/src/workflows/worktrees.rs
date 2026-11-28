@@ -99,13 +99,29 @@ impl Workflows {
                             failure = Some(CHANGED_SINCE_CONFIRM.to_string());
                             break;
                         };
-                        match remove_worktree(Path::new(path), shown) {
+                        // Unmark while the folder still exists, so both the real-path and the
+                        // raw key resolve. A failed removal puts the mark back.
+                        let mark = locked(&store).ok().and_then(|db| {
+                            let owner =
+                                monocode_core::session_worktree::workflow_worktree_owner(&db, path);
+                            let _ = monocode_core::session_worktree::unmark_workflow_worktree(
+                                &db, path,
+                            );
+                            owner
+                        });
+                        let removed = remove_worktree(Path::new(path), shown);
+                        if removed.is_err()
+                            && let Some(owner) = &mark
+                            && let Ok(db) = locked(&store)
+                        {
+                            let _ = monocode_core::session_worktree::mark_workflow_worktree(
+                                &db, path, owner,
+                            );
+                        }
+                        match removed {
                             Ok(main) => {
                                 gone.push(path.clone());
                                 if let Ok(db) = locked(&store) {
-                                    let _ = monocode_core::session_worktree::unmark_workflow_worktree(
-                                        &db, path,
-                                    );
                                     // The sessions that worked there keep their history.
                                     if let Some(main) = main
                                         && let Ok(moved) = db.detach_worktree(path, &main)
