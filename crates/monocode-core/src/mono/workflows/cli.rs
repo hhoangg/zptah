@@ -626,6 +626,33 @@ pub fn workflow_projects(w: &Workflow) -> (Vec<String>, bool) {
     (projects, dynamic)
 }
 
+/// Whether some step's project cannot be told from the definition: it comes from a previous step,
+/// or from an input that is not declared or has no value. The mobile link hides such a workflow
+/// from a device that sees only some projects.
+pub fn has_unresolved_project(w: &Workflow) -> bool {
+    w.nodes.iter().any(|node| {
+        let (NodeKind::Session { project, .. } | NodeKind::Command { project, .. }) = &node.kind
+        else {
+            return false;
+        };
+        let project = project.trim();
+        match project
+            .strip_prefix("{{")
+            .and_then(|rest| rest.strip_suffix("}}"))
+            .map(str::trim)
+        {
+            Some(reference) => match reference.strip_prefix("inputs.") {
+                Some(name) => !matches!(
+                    w.input_values.get(name),
+                    Some(InputValue::String(value)) if !value.trim().is_empty()
+                ),
+                None => true,
+            },
+            None => project.contains("{{") || project.is_empty(),
+        }
+    })
+}
+
 /// Whether a step names `{{inputs.<name>}}` as its `project`, whatever the input's declared type.
 fn used_as_project(w: &Workflow, name: &str) -> bool {
     w.nodes.iter().any(|node| match &node.kind {

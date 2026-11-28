@@ -102,6 +102,8 @@ pub(super) const APP_METHODS: &[&str] = &[
     "cloud.cancelMove",
     "desktop.updateStatus",
     "desktop.update",
+    "workflows.list",
+    "workflows.runs",
 ];
 /// Under the phone's own wait, so it hears why rather than timing out.
 const REPLY_WAIT: Duration = Duration::from_secs(25);

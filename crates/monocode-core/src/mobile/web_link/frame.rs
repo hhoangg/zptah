@@ -520,6 +520,7 @@ pub const KNOWN_CAPABILITIES: &[&str] = &[
     "monoEmoji",
     "monoReset",
     "visualControls",
+    "workflows",
 ];
 
 /// Codes in the ERROR relay frame body.
