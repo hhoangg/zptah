@@ -12,8 +12,8 @@ use gpui::Pixels;
 use monocode_core::mono::workflows::{
     board_edit::*,
     board_model::{
-        BoardNodeData, Flow, FlowKind, NodeType, Point, absolute, blank_workflow, definition_key,
-        issues_by_node, node_height, to_flow,
+        BoardNodeData, Flow, FlowKind, NodeType, Point, absolute, definition_key, issues_by_node,
+        node_height, to_flow,
     },
     model::{
         InputValue, LoopSpec, Node, NodeKind, Requirement, RequirementKind, SWITCH_DEFAULT,
@@ -292,7 +292,7 @@ impl Monos {
                     None => return false,
                 }
             }
-            _ => (blank_workflow(now_ms()), true),
+            _ => (self.new_board_workflow(scope, now_ms()), true),
         };
         let canvas = cx.new(|_| GraphCanvas::new(scope.color));
         canvas.update(cx, |c, _| c.set_editable(Rc::new(|_, _, _| false)));

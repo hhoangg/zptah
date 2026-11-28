@@ -100,6 +100,7 @@ impl Monos {
             None => self.workflows_home(&scope, window, cx),
             Some(WfRoute::Review(id, intent)) => self.workflow_review_page(&id, intent, cx),
             Some(WfRoute::Import) => self.import_workflow_page(&scope, cx),
+            Some(WfRoute::Templates) => self.workflow_templates_page(cx),
             Some(
                 route
                 @ (WfRoute::New | WfRoute::Board(_) | WfRoute::Workflow(_) | WfRoute::Run(..)),

@@ -29,34 +29,7 @@ mod editor;
 mod gallery;
 mod trigger_menu;
 
-/// Providers whose mark keeps its own colours instead of taking the text colour.
-fn color_artwork(kind: &str) -> Option<&'static str> {
-    match kind {
-        "gitlab" => Some("inbox-gitlab-color.svg"),
-        "clickup" => Some("inbox-clickup.svg"),
-        _ => None,
-    }
-}
-
-/// Event providers and schedules are separate from agent harness branding.
-fn trigger_mark(kind: &str, side: f32) -> AnyElement {
-    if let Some(path) = color_artwork(kind) {
-        return gpui::img(path)
-            .size(px(side))
-            .flex_shrink_0()
-            .object_fit(gpui::ObjectFit::Contain)
-            .into_any_element();
-    }
-    let (path, color) = match kind {
-        "time" => ("clock", content(0.45)),
-        "github" => ("inbox-github", content(0.65)),
-        "linear" => ("inbox-linear", content(0.65)),
-        "jira" => ("inbox-jira", rgb(0x2684ff).into()),
-        "azuredevops" => ("inbox-azuredevops", content(0.65)),
-        _ => ("zap", content(0.45)),
-    };
-    icon(path, side).text_color(color).into_any_element()
-}
+use crate::template_gallery::{color_artwork, trigger_mark};
 
 pub(crate) enum Event {
     Close,

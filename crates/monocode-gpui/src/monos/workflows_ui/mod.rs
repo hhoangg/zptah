@@ -61,6 +61,9 @@ mod run_tests;
 mod run_tree_dialog;
 #[cfg(test)]
 mod run_tree_tests;
+mod templates;
+#[cfg(test)]
+mod templates_tests;
 #[cfg(test)]
 pub(in crate::monos) mod tests;
 pub(in crate::monos) mod view;
@@ -106,6 +109,8 @@ pub(in crate::monos) enum WfRoute {
     Board(String),
     Review(String, ReviewIntent),
     New,
+    /// The gallery of starter workflows.
+    Templates,
     Import,
 }
 
@@ -151,6 +156,8 @@ pub(super) struct WorkflowsUi {
     events: inspector_event::EventSources,
     /// The open page, or the list when `None`.
     route: Option<WfRoute>,
+    /// The template the next new board is filled from (see `start_from_template`).
+    template: Option<String>,
     /// Whether the Workflows view is the one on screen.
     open: bool,
     /// The page of a workflow is on its Settings mode (the Edit mode otherwise, for the routes

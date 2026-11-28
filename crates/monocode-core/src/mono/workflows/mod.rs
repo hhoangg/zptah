@@ -66,6 +66,9 @@ pub mod store;
 #[cfg(test)]
 mod store_tests;
 pub mod template;
+pub mod templates;
+#[cfg(test)]
+mod templates_tests;
 #[cfg(test)]
 mod tests;
 pub mod tick;
