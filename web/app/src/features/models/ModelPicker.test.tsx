@@ -105,6 +105,7 @@ describe("ModelPicker (dialog layout)", () => {
     await user.click(screen.getByRole("button", { name: "Account: Personal" }));
     await user.click(screen.getByRole("radio", { name: "Work" }));
     expect(onChange.mock.calls[0]![0]).toMatchObject({ providerAccountId: "work" });
+    expect(onChange.mock.calls[0]![1]).toEqual({ accountPicked: true });
     NO_FULL(onChange.mock.calls);
   });
 
@@ -118,6 +119,16 @@ describe("ModelPicker (dialog layout)", () => {
     await user.click(screen.getByRole("radio", { name: "Work" }));
     expect(onSwitchAccount).toHaveBeenCalledWith("work", expect.objectContaining({ providerAccountId: "work" }));
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("a chat switched in place (no onSwitchAccount) does not say a new chat opens", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<ModelPicker open onOpenChange={() => {}} catalog={catalog} value={currentSelection(catalog)} onChange={onChange} existingSession />);
+    await user.click(await screen.findByRole("button", { name: "Account: Personal" }));
+    expect(screen.queryByText("Switching accounts opens a new chat.")).toBeNull();
+    await user.click(screen.getByRole("radio", { name: "Work" }));
+    expect(onChange.mock.calls[0]![1]).toEqual({ accountPicked: true });
   });
 });
 

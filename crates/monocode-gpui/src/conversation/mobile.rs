@@ -273,6 +273,17 @@ impl Conversation {
         cx.emit(SessionChanged);
     }
 
+    /// Whether a model pick that moves this conversation to `kind` can be applied now.
+    /// `apply_model_pick` refuses it during a handoff or an edit of the last turn; the phone
+    /// asks first so a refused request applies nothing (settings and access included).
+    pub(crate) fn mobile_model_ready(&self, kind: Kind) -> Result<(), String> {
+        if self.summary.provider != kind.id()
+            && (self.editing_last_turn.pending() || self.status == "Preparing handoff…")
+        {
+            return Err("Wait for the handoff to finish before changing the provider".into());
+        }
+        Ok(())
+    }
     /// The phone's model and access sheets. A provider switch is armed as the
     /// desktop picker arms it, and hands off on the next send.
     pub(crate) fn mobile_configure(

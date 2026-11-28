@@ -120,7 +120,105 @@ describe("ModelControls", () => {
   });
 });
 
+describe("ModelControls account intent", () => {
+  const flush = async () => {
+    await act(async () => {
+      vi.advanceTimersByTime(CONFIGURE_DEBOUNCE_MS + 10);
+    });
+  };
+  const sent = () => mutate.mock.calls.map((call) => call[1] as Record<string, unknown>);
+
+  it("a setting change never resends the cached account, even a stale one", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      // The snapshot says "work"; the desktop may have moved the chat to another account since.
+      const catalog = makeCatalog();
+      queryState.data = { ...catalog, current: { ...catalog.current, providerAccountId: "work" } };
+      render(<ModelControls conversationId="mono:m1" />, { wrapper: wrap });
+      await user.click(screen.getByRole("button", { name: "Access: Supervised" }));
+      await user.click(within(await screen.findByRole("menu")).getAllByRole("menuitemradio")[2]!);
+      await flush();
+      expect(sent()).toHaveLength(1);
+      expect(sent()[0]).toMatchObject({ conversationId: "mono:m1", runtimeMode: "auto" });
+      expect("providerAccountId" in sent()[0]!).toBe(false);
+      expect("switchAccount" in sent()[0]!).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("after a provider switch the old provider's account is neither shown nor sent", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const catalog = makeCatalog();
+      queryState.data = { ...catalog, current: { ...catalog.current, providerAccountId: "work" } };
+      render(<ModelControls conversationId="mono:m1" />, { wrapper: wrap });
+      await user.click(screen.getByRole("button", { name: "Model: Opus, Medium" }));
+      await user.click(await screen.findByRole("button", { name: /Codex/ }));
+      await user.click(screen.getByRole("button", { name: /GPT-5/ }));
+      await user.keyboard("{Escape}");
+      await user.click(screen.getByRole("button", { name: /^Access:/ }));
+      await user.click(within(await screen.findByRole("menu")).getAllByRole("menuitemradio")[2]!);
+      await flush();
+      const last = sent().at(-1)!;
+      expect(last).toMatchObject({ harness: "codex", model: "gpt-5", runtimeMode: "auto" });
+      expect(JSON.stringify(sent())).not.toContain("work");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an account pick (a Mono, no onSwitchAccount) asks for the switch", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<ModelControls conversationId="mono:m1" />, { wrapper: wrap });
+      await user.click(screen.getByRole("button", { name: "Model: Opus, Medium" }));
+      await user.click(await screen.findByRole("button", { name: /^Account:/ }));
+      await user.click(screen.getByRole("radio", { name: "Work" }));
+      await flush();
+      expect(sent().at(-1)).toMatchObject({ conversationId: "mono:m1", providerAccountId: "work", switchAccount: true });
+      expect(SessionConfigureParamsSchema.safeParse(sent().at(-1)).success).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("useSessionConfigure", () => {
+  it("keeps an account pick through a later change in the same debounce, and refreshes the catalog", () => {
+    vi.useFakeTimers();
+    try {
+      const client = new QueryClient();
+      const invalidate = vi.spyOn(client, "invalidateQueries");
+      const { result } = renderHook(() => useSessionConfigure("c1"), {
+        wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+      });
+      const base = { harness: "claude", model: "opus", modelSettings: { effort: "low" }, providerAccountId: "work" };
+      act(() => {
+        result.current.configure(base, { switchAccount: true });
+        result.current.configure({ ...base, modelSettings: { effort: "high" } });
+        vi.advanceTimersByTime(CONFIGURE_DEBOUNCE_MS);
+      });
+      expect(mutate).toHaveBeenCalledTimes(1);
+      const [, params, options] = mutate.mock.calls[0]! as [string, unknown, { onSuccess: () => void }];
+      expect(params).toMatchObject({ modelSettings: { effort: "high" }, providerAccountId: "work", switchAccount: true });
+      expect(invalidate).not.toHaveBeenCalled();
+      options.onSuccess();
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["link", "dk1", "models.list"] });
+      // The pick was sent: the next change is a plain one again.
+      act(() => {
+        result.current.configure(base);
+        vi.advanceTimersByTime(CONFIGURE_DEBOUNCE_MS);
+      });
+      expect("switchAccount" in (mutate.mock.calls[1]![1] as object)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sends only the latest selection, and flushes on unmount", () => {
     vi.useFakeTimers();
     try {

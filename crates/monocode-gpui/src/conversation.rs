@@ -3126,6 +3126,14 @@ impl Conversation {
         )
     }
     #[cfg(test)]
+    pub(crate) fn set_status_for_test(&mut self, status: &str) {
+        self.status = status.into();
+    }
+    #[cfg(test)]
+    pub(crate) fn account_switching_for_test(&self) -> bool {
+        self.account_switching
+    }
+    #[cfg(test)]
     pub(crate) fn finish_for_test(&mut self, status: &str) {
         self.busy = false;
         self.status = status.into();

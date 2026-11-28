@@ -441,6 +441,44 @@ impl Conversation {
         .detach();
         cx.notify();
     }
+    /// Whether the phone may move this conversation to account `id` now. Checked
+    /// before any other part of the request is applied, so a pick refused here
+    /// leaves the model, settings and access as they were. A model pick that
+    /// `apply_model_pick` would refuse is caught by `mobile_model_ready` first.
+    pub(crate) fn mobile_account_ready(&self, id: &str) -> Result<(), String> {
+        if self.settings.account.id != id
+            && (self.busy
+                || self.stopping
+                || self.account_switching
+                || self.editing_last_turn.pending())
+        {
+            return Err("Wait for the reply to finish before changing the account".into());
+        }
+        Ok(())
+    }
+    /// The phone's account pick, applied as the desktop pickers apply it: a
+    /// conversation with history moves in place, a blank one just takes the
+    /// account. Refuses what the desktop would ignore, so the phone never
+    /// hears "ok" for a switch that did not happen.
+    pub(crate) fn mobile_switch_account(
+        &mut self,
+        profile: Profile,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.settings.account.id == profile.id {
+            return Ok(());
+        }
+        self.mobile_account_ready(&profile.id)?;
+        if self.summary.has_messages
+            || self.needs_history_restore()
+            || self.account_recovery_limit(cx).is_some()
+        {
+            self.switch_account(profile, cx);
+        } else {
+            self.set_blank_account(profile, cx);
+        }
+        Ok(())
+    }
     pub(crate) fn account_unavailable(&mut self, cx: &mut Context<Self>) {
         self.stop_if_busy(cx);
         self.follow_ups.state.paused = true;
