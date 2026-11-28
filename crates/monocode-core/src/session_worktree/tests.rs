@@ -410,9 +410,11 @@ fn a_worktree_a_workflow_run_owns_is_never_planned_for_removal_with_a_session() 
 fn the_mark_holds_for_the_real_path_and_for_another_spelling_of_it() {
     let f = Fixture::new();
     let (_, path) = f.session();
+    // The fixture's path is canonical, so on Windows it is a verbatim `\\?\` path, which
+    // takes `..` literally. Spell the folder another way from its plain form.
     let spelled = format!(
         "{}/../{}",
-        path.display(),
+        strip_verbatim_prefix(&path.to_string_lossy()),
         path.file_name().unwrap().to_string_lossy()
     );
     mark_workflow_worktree(&f.store, &path.to_string_lossy(), "run-1").unwrap();
