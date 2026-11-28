@@ -16,6 +16,9 @@ pub(super) struct TreeEntry {
     pub(super) branch: String,
 }
 
+/// What the dialog says first: what removing takes, ignored files included.
+pub(super) const TREE_NOTE: &str = "The run keeps its worktree until you remove it. Removing it deletes the folder, including files Git ignores (build output, .env files); the branch and its commits stay.";
+
 /// The open dialog.
 pub(super) struct TreeDialog {
     pub(super) workflow: String,
@@ -105,13 +108,25 @@ impl Monos {
         self.wf.tree = Some(TreeDialog {
             workflow: run.workflow_id.clone(),
             run: run.id.clone(),
-            trees: trees.clone(),
+            trees,
             risks: None,
             removing: false,
             notice: None,
             generation,
         });
-        let paths: Vec<String> = trees.into_iter().map(|t| t.path).collect();
+        self.run_tree_check(cx);
+        cx.notify();
+    }
+
+    /// Asks Git what each worktree of the open dialog holds, and shows it.
+    fn run_tree_check(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.wf.tree.as_mut() else {
+            return;
+        };
+        dialog.generation += 1;
+        dialog.risks = None;
+        let generation = dialog.generation;
+        let paths: Vec<String> = dialog.trees.iter().map(|t| t.path.clone()).collect();
         let work = cx.background_executor().spawn(async move {
             paths
                 .iter()
@@ -153,6 +168,13 @@ impl Monos {
             return;
         };
         let (workflow, run) = (dialog.workflow.clone(), dialog.run.clone());
+        // What the user was shown, per worktree: the removal looks again and refuses a change.
+        let shown: Vec<(String, AtRisk)> = dialog
+            .trees
+            .iter()
+            .map(|t| t.path.clone())
+            .zip(dialog.risks.clone().unwrap_or_default())
+            .collect();
         let Some(workflows) = self
             .workflows_entity
             .as_ref()
@@ -165,7 +187,7 @@ impl Monos {
         dialog.removing = true;
         dialog.notice = None;
         let task = workflows.update(cx, |workflows, cx| {
-            workflows.remove_run_worktrees(workflow, run, cx)
+            workflows.remove_run_worktrees(workflow, run, shown, cx)
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -177,6 +199,8 @@ impl Monos {
                             dialog.removing = false;
                             dialog.notice = Some(error);
                         }
+                        // What it holds may have changed: look again, so the list is true.
+                        this.run_tree_check(cx);
                     }
                 }
                 this.refresh_workflows(cx);
@@ -200,10 +224,7 @@ impl Monos {
         let removing = dialog.removing;
         let checking = dialog.risks.is_none();
         let mut body = div().flex().flex_col().gap_2();
-        body = body.child(text_line(
-            "The run keeps its worktree until you remove it. Removing it deletes the folder; the branch and its commits stay.",
-            0.6,
-        ));
+        body = body.child(text_line(TREE_NOTE, 0.6));
         for (at, tree) in dialog.trees.iter().enumerate() {
             let mut block = div().flex().flex_col().gap_0p5().child(
                 div()
@@ -229,112 +250,50 @@ impl Monos {
         if let Some(notice) = dialog.notice.clone() {
             body = body.child(text_line(notice, 0.85));
         }
-        let size = window.viewport_size();
         let weak = cx.weak_entity();
-        let width = 460f32.min(size.width.as_f32() - 24.);
-        let tall = (size.height.as_f32() - 48.).max(160.);
-        Some(
-            div()
-                .absolute()
-                .size_full()
-                .child(
-                    gpui::deferred(
-                        gpui::anchored()
-                            .position(gpui::point(px(0.), px(0.)))
-                            .child(
-                                div()
-                                    .w(size.width)
-                                    .h(size.height)
-                                    .bg(crate::modal::scrim_color())
-                                    .occlude(),
-                            ),
+        let header = crate::modal::title("Remove the run's worktree?");
+        let footer = crate::modal::actions()
+            .child(
+                crate::modal::ghost_button("wf-run-tree-cancel", "Cancel")
+                    .debug_selector(|| "wf-run-tree-cancel".into())
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| this.run_tree_close(cx))),
+            )
+            .child(
+                crate::modal::disabled(
+                    crate::modal::danger_button(
+                        "wf-run-tree-remove",
+                        if removing {
+                            "Removing\u{2026}"
+                        } else {
+                            "Remove worktree"
+                        },
                     )
-                    .with_priority(79),
+                    .debug_selector(|| "wf-run-tree-remove".into()),
+                    removing || checking,
                 )
-                .child(
-                    popover("wf-run-tree-modal", Anchor::Center)
-                        .modal_surface(true)
-                        .width(width)
-                        .gap(0.)
-                        .priority(80)
-                        .max_height(tall)
-                        .on_dismiss(move |_, cx| {
-                            let _ = weak.update(cx, |this, cx| this.run_tree_close(cx));
-                        })
-                        .child(
-                            div()
-                                .id("wf-run-tree")
-                                .debug_selector(|| "wf-run-tree".into())
-                                .role(Role::Dialog)
-                                .aria_label("Remove the run's worktree")
-                                .max_h(px(tall))
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .px_4()
-                                        .pt_4()
-                                        .text_size(px(14.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(content(1.))
-                                        .child("Remove the run's worktree?"),
-                                )
-                                .child(
-                                    div()
-                                        .id("wf-run-tree-body")
-                                        .debug_selector(|| "wf-run-tree-body".into())
-                                        .flex_1()
-                                        .min_h_0()
-                                        .overflow_y_scroll()
-                                        .px_4()
-                                        .py_3()
-                                        .child(body),
-                                )
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .px_4()
-                                        .pb_4()
-                                        .flex()
-                                        .items_center()
-                                        .justify_end()
-                                        .gap_2()
-                                        .child(
-                                            crate::modal::ghost_button(
-                                                "wf-run-tree-cancel",
-                                                "Cancel",
-                                            )
-                                            .debug_selector(|| "wf-run-tree-cancel".into())
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| {
-                                                    this.run_tree_close(cx)
-                                                }),
-                                            ),
-                                        )
-                                        .child(
-                                            crate::modal::disabled(
-                                                crate::modal::primary_button(
-                                                    "wf-run-tree-remove",
-                                                    if removing {
-                                                        "Removing\u{2026}"
-                                                    } else {
-                                                        "Remove worktree"
-                                                    },
-                                                )
-                                                .debug_selector(|| "wf-run-tree-remove".into()),
-                                                removing || checking,
-                                            )
-                                            .on_click(
-                                                cx.listener(move |this, _, _, cx| {
-                                                    this.run_tree_confirm(cx)
-                                                }),
-                                            ),
-                                        ),
-                                ),
-                        ),
-                )
-                .into_any_element(),
+                .on_click(cx.listener(move |this, _, _, cx| this.run_tree_confirm(cx))),
+            );
+        let card = crate::modal::scroll_card(
+            "wf-run-tree-body",
+            crate::modal::max_card_height(window),
+            header,
+            div().pt_3().child(body),
+            footer,
+        )
+        .w(px(460.))
+        .id("wf-run-tree")
+        .debug_selector(|| "wf-run-tree".into())
+        .role(Role::Dialog)
+        .aria_label("Remove the run's worktree");
+        Some(
+            crate::modal::window_overlay(
+                window,
+                crate::modal::overlay("wf-run-tree-modal", card, move |_, cx| {
+                    let _ = weak.update(cx, |this, cx| this.run_tree_close(cx));
+                }),
+            )
+            .into_any_element(),
         )
     }
 }

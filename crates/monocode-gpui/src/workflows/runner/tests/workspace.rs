@@ -326,6 +326,118 @@ fn a_resumed_run_goes_on_in_the_worktree_it_has(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_resumed_run_whose_worktree_was_removed_gets_it_back_from_its_branch(cx: &mut TestAppContext) {
+    let def = spaced(
+        vec![trigger(), plain_session("dev", json!({}))],
+        vec![edge("start", "dev")],
+        json!({}),
+    );
+    let mut run = numbered(&def, "run-1", 3);
+    run.worktree = Some(RunWorktree {
+        path: "/code/app-worktrees/earlier".into(),
+        branch: "wf/ship-it-3".into(),
+        base: "old-base".into(),
+        removed_at: Some(7),
+    });
+    let rig = Rig::new(&["done"]);
+    rig.start_run(cx, run);
+    cx.run_until_parked();
+    let w = rig.fake.world();
+    // Not a second, new worktree: the removed one is made again where it was.
+    assert!(w.run_trees.is_empty());
+    assert_eq!(w.restored_trees, ["/code/app-worktrees/earlier"]);
+    assert_eq!(
+        w.starts[0].worktree_cwd.as_deref(),
+        Some("/code/app-worktrees/earlier")
+    );
+    drop(w);
+    let kept = saved(&rig, "run-1").worktree.unwrap();
+    assert_eq!(kept.removed_at, None);
+    assert_eq!(kept.branch, "wf/ship-it-3");
+}
+
+#[gpui::test]
+fn a_removed_worktree_that_cannot_come_back_fails_the_run_with_the_reason(cx: &mut TestAppContext) {
+    let def = spaced(
+        vec![trigger(), plain_session("dev", json!({}))],
+        vec![edge("start", "dev")],
+        json!({}),
+    );
+    let mut run = numbered(&def, "run-1", 3);
+    run.worktree = Some(RunWorktree {
+        path: "/code/app-worktrees/earlier".into(),
+        branch: "wf/ship-it-3".into(),
+        base: "old-base".into(),
+        removed_at: Some(7),
+    });
+    let rig = Rig::new(&["done"]);
+    rig.fake
+        .trees_fail("The branch wf/ship-it-3 no longer exists");
+    rig.start_run(cx, run);
+    cx.run_until_parked();
+    let run = saved(&rig, "run-1");
+    assert_eq!(run.status, RunStatus::Failed);
+    assert!(
+        run.error.as_deref().unwrap().contains("no longer exists"),
+        "{:?}",
+        run.error
+    );
+    assert!(rig.fake.world().starts.is_empty());
+}
+
+#[gpui::test]
+fn the_worktrees_of_a_run_cannot_be_removed_while_the_runner_holds_the_run(
+    cx: &mut TestAppContext,
+) {
+    let def = spaced(
+        vec![trigger(), plain_session("dev", json!({"checkout": "root"}))],
+        vec![edge("start", "dev")],
+        json!({}),
+    );
+    let rig = Rig::new(&["one"]);
+    let hold = rig.fake.hold();
+    rig.start_run(cx, numbered(&def, "run-1", 1));
+    cx.run_until_parked();
+    // Going.
+    assert!(rig.runner.begin_removal(WF, "run-1").is_err());
+    // Stopping: the record says stopped before the execution has let go of its sessions.
+    assert!(rig.runner.stop(WF, Some("run-1")));
+    let error = rig.runner.begin_removal(WF, "run-1").err();
+    hold.close();
+    cx.run_until_parked();
+    if rig.runner.is_run_live("run-1") {
+        assert!(
+            error.is_some(),
+            "a run the runner still holds keeps its folders"
+        );
+    }
+    // Over for good: it may be taken, once, and nothing starts it meanwhile.
+    assert!(!rig.runner.is_run_live("run-1"));
+    let guard = rig.runner.begin_removal(WF, "run-1").expect("free now");
+    assert!(
+        rig.runner.begin_removal(WF, "run-1").is_err(),
+        "one removal at a time"
+    );
+    assert!(
+        !rig.start_run(cx, numbered(&def, "run-1", 1)),
+        "no start during a removal"
+    );
+    drop(guard);
+    assert!(rig.start_run(cx, numbered(&def, "run-1", 1)));
+}
+
+#[gpui::test]
+fn a_claimed_start_or_resume_keeps_the_worktrees(cx: &mut TestAppContext) {
+    let _ = cx;
+    let rig = Rig::new(&[]);
+    rig.signals.claim_run(WF, "run-1");
+    let error = rig.runner.begin_removal(WF, "run-1").err().unwrap();
+    assert!(error.contains("about to start or resume"), "{error}");
+    rig.signals.release_run(WF, "run-1");
+    assert!(rig.runner.begin_removal(WF, "run-1").is_ok());
+}
+
+#[gpui::test]
 fn a_step_in_another_project_is_refused_the_run_worktree_at_run_time_too(cx: &mut TestAppContext) {
     // Validation refuses this, but a definition from an older file may slip past: the run says so
     // instead of working in the wrong project's folder.

@@ -3,8 +3,8 @@
 use super::model::{
     CallerKind, Checkout, Concurrency, Cwd, Decide, DecisionModel, Edge, Handle, InputType,
     InputValue, LoopSpec, Node, NodeKind, OutputField, OutputFieldType, ReportTo, Requirement,
-    RequirementKind, RunCaller, SessionTarget, TargetInstance, Ui, Workflow, WorkflowInput,
-    WorkflowUi, Workspace, WorkspaceMode, DECIDE_AI, DIRECTION_LR, NODE_TYPES,
+    RequirementKind, RunCaller, RunRequest, SessionTarget, TargetInstance, Ui, Workflow,
+    WorkflowInput, WorkflowUi, Workspace, WorkspaceMode, DECIDE_AI, DIRECTION_LR, NODE_TYPES,
 };
 use super::ordered::{Json, OrderedMap};
 use crate::mono::habits::Schedule;
@@ -68,9 +68,11 @@ fn worktree_of(raw: &Json) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Absent means `run`, the run's own worktree. None for a value that is not a checkout.
-fn parse_checkout(raw: Option<&Json>) -> Option<Checkout> {
+/// Absent means `run`, the run's own worktree, and `root` for a cloud step (which works in its
+/// instance's own checkout). None for a value that is not a checkout.
+fn parse_checkout(raw: Option<&Json>, cloud: bool) -> Option<Checkout> {
     match raw {
+        None | Some(Json::Null) if cloud => Some(Checkout::Root),
         None | Some(Json::Null) => Some(Checkout::Run),
         Some(Json::String(s)) if s == "run" => Some(Checkout::Run),
         Some(Json::String(s)) if s == "root" => Some(Checkout::Root),
@@ -242,23 +244,26 @@ pub fn parse_node(raw: &Json) -> Option<Node> {
             schedule: parse_schedule(raw.get("schedule"))?,
         },
         "manual" => NodeKind::Manual,
-        "session" => NodeKind::Session {
-            project: parse_project(raw)?,
-            prompt: str_of(raw, "prompt")?,
-            checkout: parse_checkout(raw.get("checkout"))?,
-            // `outputs` is what is written; `output` is what older files and the first design say.
-            output: parse_output(raw.get("outputs").or_else(|| raw.get("output")))?,
-            mode: str_of(raw, "mode"),
-            surface: str_of(raw, "surface"),
-            harness: str_of(raw, "harness"),
-            model: str_of(raw, "model"),
-            effort: str_of(raw, "effort"),
-            reuse_session: bool_of(raw, "reuseSession"),
-            nest_under: str_of(raw, "nestUnder"),
-            timeout_minutes: num_of(raw, "timeoutMinutes"),
-            target: parse_target(raw.get("target"))?,
-            account: parse_account(raw.get("account"))?,
-        },
+        "session" => {
+            let target = parse_target(raw.get("target"))?;
+            NodeKind::Session {
+                project: parse_project(raw)?,
+                prompt: str_of(raw, "prompt")?,
+                checkout: parse_checkout(raw.get("checkout"), target.is_some())?,
+                // `outputs` is what is written; `output` is what older files and the first design say.
+                output: parse_output(raw.get("outputs").or_else(|| raw.get("output")))?,
+                mode: str_of(raw, "mode"),
+                surface: str_of(raw, "surface"),
+                harness: str_of(raw, "harness"),
+                model: str_of(raw, "model"),
+                effort: str_of(raw, "effort"),
+                reuse_session: bool_of(raw, "reuseSession"),
+                nest_under: str_of(raw, "nestUnder"),
+                timeout_minutes: num_of(raw, "timeoutMinutes"),
+                target,
+                account: parse_account(raw.get("account"))?,
+            }
+        }
         "command" => NodeKind::Command {
             project: parse_project(raw)?,
             command: str_of(raw, "command")?,
@@ -267,7 +272,12 @@ pub fn parse_node(raw: &Json) -> Option<Node> {
                 Some(o @ Json::Object(_)) => worktree_of(o).map(Cwd::WorktreeOf),
                 _ => None,
             },
-            on_failure: str_of(raw, "onFailure"),
+            // Anything but text is a mistake, not a missing value: the step is unreadable.
+            on_failure: match raw.get("onFailure") {
+                None | Some(Json::Null) => None,
+                Some(Json::String(s)) => Some(s.clone()),
+                Some(_) => return None,
+            },
             timeout_minutes: num_of(raw, "timeoutMinutes"),
         },
         "if" => NodeKind::If {
@@ -587,6 +597,22 @@ pub fn parse_workflow(raw: &Json) -> Option<Workflow> {
         report_to,
         summary_template: str_of(raw, "summaryTemplate"),
         run_caller: raw.get("runCaller").and_then(parse_caller),
+        run_backlog: raw
+            .get("runBacklog")
+            .and_then(Json::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter(|entry| is_rec(entry))
+                    .map(|entry| RunRequest {
+                        caller: entry.get("caller").and_then(parse_caller),
+                        values: entry
+                            .get("values")
+                            .filter(|v| is_rec(v))
+                            .map(|v| parse_input_values(Some(v))),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         workspace,
         concurrency,
         stop_run_ids: raw

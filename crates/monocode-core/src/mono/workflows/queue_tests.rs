@@ -158,3 +158,51 @@ fn a_run_is_not_queued_for_a_workflow_that_was_removed() {
     assert!(load_runs(&disk, ID).unwrap().is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn a_promoted_run_the_app_refused_goes_back_in_the_queue_with_its_values() {
+    use super::engine::start_run;
+    let root = temp_root();
+    let disk = MonoDir::new(&root, "mono-1");
+    stored(&disk);
+    // Promoted: the queued record was replaced by the run that was about to start.
+    let mut asked = workflow();
+    let mut values = super::ordered::OrderedMap::new();
+    values.insert("count".to_string(), InputValue::Number(3.0));
+    asked.run_values = Some(values);
+    let mut effective = with_run_values(&asked);
+    effective.run_values = None;
+    let mut run = start_run(
+        &effective,
+        RunCaller::new(CallerKind::Manual, "start"),
+        500,
+        "run-p",
+    );
+    run.number = Some(4);
+    run.queued_at = Some(100);
+    // The workflow has only a trigger, which finishes at once: this one is held as going.
+    run.status = RunStatus::Running;
+    run.ended_at = None;
+    update_runs(&disk, ID, |_| Ok((vec![run.clone()], ()))).unwrap();
+    assert_eq!(load_runs(&disk, ID).unwrap()[0].status, RunStatus::Running);
+
+    assert!(requeue(&disk, &run).unwrap());
+    let back = &load_runs(&disk, ID).unwrap()[0];
+    assert_eq!(back.status, RunStatus::Queued);
+    assert_eq!(back.number, Some(4));
+    assert_eq!(back.queued_at, Some(100));
+    assert_eq!(back.caller, run.caller);
+    // The values the run had are what the next promotion starts it with.
+    assert_eq!(
+        back.definition.run_values,
+        Some(run.definition.input_values.clone())
+    );
+    assert_eq!(queue_len(&disk, ID).unwrap(), 1);
+    // Asked again, there is no running record left to put back.
+    assert!(!requeue(&disk, &run).unwrap());
+    // A run that was never queued is left alone.
+    let mut fresh = run.clone();
+    fresh.queued_at = None;
+    assert!(!requeue(&disk, &fresh).unwrap());
+    std::fs::remove_dir_all(root).unwrap();
+}

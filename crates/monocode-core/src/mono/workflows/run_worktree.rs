@@ -9,6 +9,9 @@ use super::model::RunWorktree;
 use crate::git;
 use std::path::Path;
 
+/// Why a run worktree is not made for a project on another machine (D49).
+pub const REMOTE_WORKTREE: &str = "A run worktree is made on this computer only, so a project on a remote machine cannot have one: use workspace mode none for it";
+
 /// How many branch names are tried before giving up on a collision.
 const NAME_ATTEMPTS: u32 = 20;
 /// The longest workflow slug used in a branch name.
@@ -102,6 +105,9 @@ pub fn create_run_worktree(
     slug: &str,
     number: u64,
 ) -> Result<RunWorktree, String> {
+    if crate::files::remote::is_remote(project) {
+        return Err(REMOTE_WORKTREE.into());
+    }
     let base = base_commit(project, base_branch)?;
     let mut last = String::new();
     for attempt in 0..NAME_ATTEMPTS {
@@ -132,6 +138,10 @@ pub fn fork_branch_worktree(
     index: usize,
 ) -> Result<RunWorktree, String> {
     let cwd = Path::new(&run.path);
+    // Git runs on this computer: a path on another machine is never handed to it.
+    if crate::files::remote::is_remote(cwd) {
+        return Err(REMOTE_WORKTREE.into());
+    }
     let base = head_of(cwd)?;
     let wanted = branch_worktree_branch(&run.branch, group, index);
     let mut last = String::new();
@@ -173,10 +183,17 @@ pub struct AtRisk {
     pub more_commits: usize,
     /// The folder is gone or Git could not tell: nothing is known about the work in it.
     pub unknown: bool,
+    /// A fingerprint of everything above, listed or not, and of the files' sizes and times: two
+    /// looks that differ in it saw different work, even when the lists read the same.
+    pub digest: u64,
 }
 
 /// How many files and commits the confirmation lists.
 pub const LISTED: usize = 12;
+
+/// Why a removal was refused because the work changed after the user looked.
+pub const CHANGED_SINCE_CONFIRM: &str =
+    "This worktree changed since the list was shown. Review what it holds and confirm again.";
 
 impl AtRisk {
     pub fn is_clear(&self) -> bool {
@@ -186,8 +203,10 @@ impl AtRisk {
 
 /// The uncommitted and unpushed work in `path`. Nothing is changed.
 pub fn at_risk(path: &Path) -> AtRisk {
+    use std::hash::{Hash, Hasher};
     let mut risk = AtRisk::default();
-    if !path.is_dir() {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    if crate::files::remote::is_remote(path) || !path.is_dir() {
         risk.unknown = true;
         return risk;
     }
@@ -196,6 +215,17 @@ pub fn at_risk(path: &Path) -> AtRisk {
             let lines: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
             risk.more_files = lines.len().saturating_sub(LISTED);
             risk.uncommitted = lines.iter().take(LISTED).map(|l| l.to_string()).collect();
+            for line in &lines {
+                line.hash(&mut hasher);
+                // A file edited again after the list was shown keeps its status line.
+                let name = line.get(3..).unwrap_or("").trim().trim_matches('"');
+                if let Ok(meta) = std::fs::metadata(path.join(name)) {
+                    meta.len().hash(&mut hasher);
+                    if let Ok(time) = meta.modified() {
+                        time.hash(&mut hasher);
+                    }
+                }
+            }
         }
         Err(_) => risk.unknown = true,
     }
@@ -215,26 +245,130 @@ pub fn at_risk(path: &Path) -> AtRisk {
             let lines: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
             risk.more_commits = lines.len().saturating_sub(LISTED);
             risk.unpushed = lines.iter().take(LISTED).map(|l| l.to_string()).collect();
+            lines.hash(&mut hasher);
         }
         Err(_) => risk.unknown = true,
     }
+    risk.digest = hasher.finish();
     risk
 }
 
-/// Removes a worktree the run made, after the user confirmed what `at_risk` listed. Its branch
-/// and commits stay. Refuses the main checkout and anything that is not a linked worktree of the
-/// repository.
-pub fn remove_worktree(path: &Path) -> Result<(), String> {
+/// Removes a worktree the run made, after the user confirmed what `confirmed` listed. The work
+/// is looked at again right before: when it is not what the user saw, nothing is removed. A
+/// worktree that held nothing at risk is removed without force, so Git itself refuses one that
+/// gained work meanwhile. Its branch and commits stay. Refuses the main checkout, a remote path
+/// and anything that is not a linked worktree of the repository. Returns the main working copy
+/// of the repository (so the sessions that used the worktree can be moved there), or `None` when
+/// the folder was gone already.
+pub fn remove_worktree(path: &Path, confirmed: &AtRisk) -> Result<Option<String>, String> {
+    if crate::files::remote::is_remote(path) {
+        return Err("A worktree on a remote machine is not removed from here".into());
+    }
     if !path.exists() {
-        return Ok(());
+        return Ok(None);
+    }
+    if at_risk(path) != *confirmed {
+        return Err(CHANGED_SINCE_CONFIRM.into());
     }
     let snapshot = git::snapshot(path)?;
-    let main = snapshot
+    let main_path = snapshot
         .worktrees
         .first()
-        .ok_or("No main working copy found")?;
-    let main = Path::new(&main.path);
-    crate::worktree_management::remove(main, path)?;
+        .ok_or("No main working copy found")?
+        .path
+        .clone();
+    let main = Path::new(&main_path);
+    if confirmed.is_clear() {
+        crate::worktree_management::remove_clean(path)?;
+    } else {
+        crate::worktree_management::remove(main, path)?;
+    }
     let _ = git::git(main, &["worktree", "prune"]);
-    Ok(())
+    Ok(Some(main_path))
+}
+
+/// The repository a run worktree was made from. The app keeps worktrees in `<repo>-worktrees`,
+/// so the repository is the sibling without that suffix.
+fn repo_of(tree_path: &str) -> Option<std::path::PathBuf> {
+    let folder = Path::new(tree_path).parent()?;
+    let name = folder.file_name()?.to_str()?.strip_suffix("-worktrees")?;
+    let repo = folder.with_file_name(name);
+    repo.is_dir().then_some(repo)
+}
+
+/// Whether `branch` exists in the repository `repo`.
+fn branch_exists(repo: &Path, branch: &str) -> bool {
+    git::git(
+        repo,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .is_ok()
+}
+
+/// Why a worktree the user removed cannot be made again, or `None` when it can: its branch is
+/// what the run's work is kept on, so a branch that is gone ends the run's workspace.
+pub fn restore_problem(tree: &RunWorktree) -> Option<String> {
+    if !tree.is_removed() {
+        return None;
+    }
+    let Some(repo) = repo_of(&tree.path) else {
+        return Some(format!(
+            "The repository of the removed worktree {} cannot be found, so the run cannot continue.",
+            tree.path
+        ));
+    };
+    if !branch_exists(&repo, &tree.branch) {
+        return Some(format!(
+            "The branch {} of the removed worktree no longer exists, so the run cannot continue. Its work cannot be recovered.",
+            tree.branch
+        ));
+    }
+    None
+}
+
+/// Why a stored run cannot be resumed because of the worktrees the user removed from it.
+pub fn resume_problem(run: &super::model::WorkflowRun) -> Option<String> {
+    run.worktree
+        .iter()
+        .chain(run.branch_worktrees.values())
+        .find_map(restore_problem)
+}
+
+/// Makes a removed worktree again from the branch the removal kept: the folder returns where it
+/// was, with the committed work of the run. Uncommitted work and ignored files were deleted with
+/// it. Err says why it cannot.
+pub fn restore_worktree(tree: &RunWorktree) -> Result<RunWorktree, String> {
+    if let Some(problem) = restore_problem(tree) {
+        return Err(problem);
+    }
+    let repo = repo_of(&tree.path).ok_or("The repository of the worktree cannot be found")?;
+    let made = git::create_project_worktree(&repo, &tree.branch, None, true)?;
+    if crate::files::path_key(&made.path) != crate::files::path_key(&tree.path) {
+        // Not where the run's steps expect it: undo rather than leave a second copy around.
+        let _ = remove_worktree(Path::new(&made.path), &at_risk(Path::new(&made.path)));
+        return Err(format!(
+            "The worktree could not be made again at {}",
+            tree.path
+        ));
+    }
+    Ok(RunWorktree {
+        removed_at: None,
+        ..tree.clone()
+    })
+}
+
+/// The worktrees of a run that are still on disk (not removed): its own and its For each
+/// branches', as `(path, branch)`.
+pub fn kept_worktrees(run: &super::model::WorkflowRun) -> Vec<(String, String)> {
+    run.worktree
+        .iter()
+        .chain(run.branch_worktrees.values())
+        .filter(|t| !t.is_removed())
+        .map(|t| (t.path.clone(), t.branch.clone()))
+        .collect()
 }

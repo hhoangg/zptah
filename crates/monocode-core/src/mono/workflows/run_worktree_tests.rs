@@ -142,19 +142,130 @@ fn what_a_removal_would_lose_is_listed() {
     assert!(gone.unknown && !gone.is_clear());
 }
 
+fn seen(path: &str) -> AtRisk {
+    at_risk(Path::new(path))
+}
+
 #[test]
 fn removing_a_run_worktree_keeps_its_branch_and_never_touches_the_main_checkout() {
     let repo = Repo::new();
     let tree = create_run_worktree(&repo.path(), "main", "nightly", 1).unwrap();
-    remove_worktree(Path::new(&tree.path)).unwrap();
+    let main = remove_worktree(Path::new(&tree.path), &seen(&tree.path)).unwrap();
     assert!(!Path::new(&tree.path).exists());
+    assert!(main.is_some());
     let branches = repo.git(&["branch", "--list", "wf/nightly-1"]);
     assert!(branches.contains("wf/nightly-1"));
     // The main checkout is refused.
-    assert!(remove_worktree(&repo.path()).is_err());
+    assert!(remove_worktree(&repo.path(), &AtRisk::default()).is_err());
     assert!(repo.path().join("file").is_file());
     // A worktree that is already gone is not an error.
-    remove_worktree(Path::new(&tree.path)).unwrap();
+    assert_eq!(
+        remove_worktree(Path::new(&tree.path), &seen(&tree.path)).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn work_added_after_the_user_looked_stops_the_removal() {
+    let repo = Repo::new();
+    let tree = create_run_worktree(&repo.path(), "main", "nightly", 1).unwrap();
+    let path = Path::new(&tree.path);
+    std::fs::write(path.join("scratch"), "first").unwrap();
+    let confirmed = seen(&tree.path);
+    assert!(!confirmed.is_clear());
+    // Another file after the dialog opened: the confirmed list is stale.
+    std::fs::write(path.join("later"), "more").unwrap();
+    let error = remove_worktree(path, &confirmed).unwrap_err();
+    assert_eq!(error, CHANGED_SINCE_CONFIRM);
+    assert!(path.join("later").is_file(), "nothing was removed");
+    // The same file edited again keeps its status line, and still counts as a change.
+    let again = seen(&tree.path);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(path.join("later"), "much more than before").unwrap();
+    assert_eq!(
+        remove_worktree(path, &again).unwrap_err(),
+        CHANGED_SINCE_CONFIRM
+    );
+    // Confirmed after looking again, it goes.
+    remove_worktree(path, &seen(&tree.path)).unwrap();
+    assert!(!path.exists());
+}
+
+#[test]
+fn a_commit_made_after_the_user_looked_stops_the_removal() {
+    let repo = Repo::new();
+    let tree = create_run_worktree(&repo.path(), "main", "nightly", 1).unwrap();
+    let path = Path::new(&tree.path);
+    let confirmed = seen(&tree.path);
+    assert!(confirmed.is_clear());
+    commit_in(path, "late");
+    assert_eq!(
+        remove_worktree(path, &confirmed).unwrap_err(),
+        CHANGED_SINCE_CONFIRM
+    );
+    assert!(path.is_dir());
+}
+
+#[test]
+fn a_remote_path_is_never_removed_or_made_here() {
+    let remote = Path::new("remote://box/home/dev/app");
+    assert!(remove_worktree(remote, &AtRisk::default())
+        .unwrap_err()
+        .contains("remote"));
+    assert!(at_risk(remote).unknown);
+    assert_eq!(
+        create_run_worktree(remote, "main", "nightly", 1).unwrap_err(),
+        REMOTE_WORKTREE
+    );
+    let tree = RunWorktree {
+        path: "remote://box/home/dev/app-worktrees/wf".into(),
+        branch: "wf/x-1".into(),
+        base: "abc".into(),
+        removed_at: None,
+    };
+    assert_eq!(
+        fork_branch_worktree(&tree, "each", 0).unwrap_err(),
+        REMOTE_WORKTREE
+    );
+}
+
+#[test]
+fn a_removed_worktree_comes_back_from_its_kept_branch() {
+    let repo = Repo::new();
+    let tree = create_run_worktree(&repo.path(), "main", "nightly", 1).unwrap();
+    let path = Path::new(&tree.path);
+    commit_in(path, "kept");
+    remove_worktree(path, &seen(&tree.path)).unwrap();
+    assert!(!path.exists());
+    let gone = RunWorktree {
+        removed_at: Some(5),
+        ..tree.clone()
+    };
+    assert_eq!(restore_problem(&gone), None);
+    let back = restore_worktree(&gone).unwrap();
+    assert_eq!(back.removed_at, None);
+    assert_eq!(back.path, tree.path);
+    assert!(Path::new(&back.path).join("kept").is_file());
+    // A worktree that is not removed has nothing to restore.
+    assert_eq!(restore_problem(&back), None);
+}
+
+#[test]
+fn without_its_branch_a_removed_worktree_cannot_come_back() {
+    let repo = Repo::new();
+    let tree = create_run_worktree(&repo.path(), "main", "nightly", 1).unwrap();
+    remove_worktree(Path::new(&tree.path), &seen(&tree.path)).unwrap();
+    repo.git(&["branch", "-D", &tree.branch]);
+    let gone = RunWorktree {
+        removed_at: Some(5),
+        ..tree
+    };
+    let problem = restore_problem(&gone).unwrap();
+    assert!(
+        problem.contains("wf/nightly-1") && problem.contains("no longer exists"),
+        "{problem}"
+    );
+    assert_eq!(restore_worktree(&gone).unwrap_err(), problem);
 }
 
 #[test]

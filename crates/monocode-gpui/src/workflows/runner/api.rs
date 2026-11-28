@@ -283,6 +283,11 @@ pub(crate) trait WorkflowHost {
         group: String,
         index: usize,
     ) -> Fut<Result<RunWorktree, String>>;
+    /// Makes a worktree the user removed from the run again, from the branch the removal kept
+    /// (a resumed run continues in it), and marks it as the run's own. Err when the branch is
+    /// gone. Git runs off the UI thread.
+    fn restore_worktree(&self, run_id: &str, tree: RunWorktree)
+    -> Fut<Result<RunWorktree, String>>;
 }
 
 /// The worktree a run asks for before its first step (`workspace.mode = perRun`).

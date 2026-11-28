@@ -665,6 +665,72 @@ fn a_claim_that_is_not_started_gives_the_mark_back(cx: &mut TestAppContext) {
     assert!(runs(&s, A).is_empty());
 }
 
+#[gpui::test]
+fn a_queued_run_promoted_when_the_app_quits_goes_back_in_the_queue(cx: &mut TestAppContext) {
+    use monocode_core::mono::workflows::queue::queued_run;
+    let s = setup(cx);
+    let mut w = waiting(&s, A, json!({"concurrency": {"max": 1}}));
+    w.last_run_id = Some("run-0".into());
+    put(&s, vec![w.clone()]);
+    let mut waiting_run = queued_run(
+        &w,
+        RunCaller::new(CallerKind::Manual, "start"),
+        1,
+        "run-q",
+        50,
+    );
+    waiting_run.workflow_id = A.into();
+    put_runs(&s, A, vec![waiting_run]);
+    // The look promotes it: the file says `running` before the app starts anything.
+    let looked = half_a_look(&s, cx);
+    assert_eq!(runs(&s, A)[0].status, RunStatus::Running);
+    // The app begins to quit before the look ends: nothing starts, and the record is a queued
+    // run again, not a ghost that never ran.
+    cx.update(begin_quit);
+    let workflows = workflows_of(&s, cx);
+    cx.update(|cx| workflows.update(cx, |w, cx| w.workflows_looked(looked, cx)));
+    cx.run_until_parked();
+    let history = runs(&s, A);
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].status, RunStatus::Queued);
+    assert_eq!(history[0].number, Some(1));
+    assert_eq!(history[0].queued_at, Some(50));
+    let signals = cx.update(|cx| s.manager.read(cx).workflow_signals.clone());
+    assert!(!signals.is_running(A));
+}
+
+#[gpui::test]
+fn several_runs_asked_for_in_one_turn_each_start_or_queue_in_order(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut w = waiting(
+        &s,
+        A,
+        json!({"concurrency": {"max": 1}, "runRequested": true}),
+    );
+    for _ in 0..2 {
+        w.run_backlog
+            .push(monocode_core::mono::workflows::model::RunRequest {
+                caller: None,
+                values: None,
+            });
+    }
+    put(&s, vec![w]);
+    look(&s, cx);
+    // The first goes; the other two were claimed in their turn and wait in the queue.
+    look(&s, cx);
+    look(&s, cx);
+    let history = runs(&s, A);
+    assert_eq!(history.len(), 3, "{history:?}");
+    assert_eq!(
+        history
+            .iter()
+            .filter(|r| r.status == RunStatus::Queued)
+            .count(),
+        2
+    );
+    assert!(!saved(&s)[0].run_requested && saved(&s)[0].run_backlog.is_empty());
+}
+
 // --- concurrency and the queue ---------------------------------------------------------------
 
 fn request_run(s: &Setup, workflow: &str) {

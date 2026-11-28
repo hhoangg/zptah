@@ -710,6 +710,26 @@ impl WorkflowHost for AppHost {
         Box::pin(work)
     }
 
+    fn restore_worktree(
+        &self,
+        run_id: &str,
+        tree: RunWorktree,
+    ) -> Fut<Result<RunWorktree, String>> {
+        let store = self.with(|w, _| w.store.clone());
+        let run_id = run_id.to_string();
+        let work = self.cx.background_executor().spawn(async move {
+            let store = store.ok_or("The app is closing")?;
+            let tree = run_worktree::restore_worktree(&tree)?;
+            monocode_core::session_worktree::mark_workflow_worktree(
+                &*locked(&store)?,
+                &tree.path,
+                &run_id,
+            )?;
+            Ok(tree)
+        });
+        Box::pin(work)
+    }
+
     fn save_run(&self, run: WorkflowRun) -> Fut<Result<(), String>> {
         let executor = self.cx.background_executor().clone();
         let dir = self.dir.clone();

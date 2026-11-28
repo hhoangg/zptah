@@ -67,6 +67,8 @@ pub(super) struct World {
     /// Every run worktree asked for, and every For each branch worktree (`group`, `index`).
     pub(super) run_trees: Vec<RunWorktreeRequest>,
     pub(super) branch_trees: Vec<(String, usize)>,
+    /// The paths of the worktrees made again from their branches.
+    pub(super) restored_trees: Vec<String>,
     /// Why the next run worktree cannot be made.
     tree_error: Option<String>,
 }
@@ -495,6 +497,23 @@ impl WorkflowHost for FakeHost {
             removed_at: None,
         };
         Box::pin(async move { Ok(tree) })
+    }
+
+    fn restore_worktree(
+        &self,
+        _run_id: &str,
+        tree: RunWorktree,
+    ) -> Fut<Result<RunWorktree, String>> {
+        let mut w = self.0.borrow_mut();
+        w.restored_trees.push(tree.path.clone());
+        let result = match w.tree_error.clone() {
+            Some(error) => Err(error),
+            None => Ok(RunWorktree {
+                removed_at: None,
+                ..tree
+            }),
+        };
+        Box::pin(async move { result })
     }
 
     fn save_run(&self, run: WorkflowRun) -> Fut<Result<(), String>> {

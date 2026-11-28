@@ -14,6 +14,7 @@ pub(in crate::monos) mod actions;
 mod app_page;
 #[cfg(test)]
 mod app_page_tests;
+mod ask_dialogs;
 mod board;
 #[cfg(test)]
 mod board_canvas_tests;
@@ -40,6 +41,8 @@ pub(in crate::monos) mod page;
 mod page_tests;
 mod requirements;
 pub(in crate::monos) mod review;
+#[cfg(test)]
+mod review_fix_tests;
 #[cfg(test)]
 mod review_tests;
 mod run_details;
@@ -176,6 +179,9 @@ pub(super) struct WorkflowsUi {
     board: Option<board::BoardState>,
     /// The open "Remove worktree" confirmation of the run page.
     tree: Option<run_tree_dialog::TreeDialog>,
+    /// The open "Which run should stop?" and "Remove this workflow?" confirmations.
+    stop_ask: Option<ask_dialogs::StopAsk>,
+    remove_ask: Option<ask_dialogs::RemoveAsk>,
     /// The open Run or Resume dialog, and the number of the last check it asked for.
     gate: Option<run_gate::RunGate>,
     gate_generation: u64,

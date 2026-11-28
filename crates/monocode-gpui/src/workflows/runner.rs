@@ -32,7 +32,7 @@ use monocode_core::mono::workflows::{
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     future::Future,
     pin::Pin,
     rc::Rc,
@@ -290,7 +290,7 @@ impl Exec {
     /// `workspace.mode = perRun`: makes the run's worktree, once (a resumed run keeps its own).
     /// Err is why the run cannot start.
     async fn prepare_workspace(self: &Rc<Self>) -> Result<(), String> {
-        let (workspace, name, number, run_id, made) = {
+        let (workspace, name, number, run_id, current) = {
             let state = self.state.borrow();
             let run = &state.run;
             (
@@ -298,11 +298,27 @@ impl Exec {
                 run.definition.name.clone(),
                 run.number,
                 run.id.clone(),
-                run.worktree.as_ref().is_some_and(|t| !t.is_removed()),
+                run.worktree.clone(),
             )
         };
-        if !workspace.per_run() || made {
+        if !workspace.per_run() {
             return Ok(());
+        }
+        match current {
+            Some(tree) if !tree.is_removed() => return Ok(()),
+            // The user removed it and the run is resumed: it comes back from its branch, so the
+            // work the run committed is there again (D48).
+            Some(tree) => {
+                let again = self
+                    .host
+                    .restore_worktree(&run_id, tree)
+                    .await
+                    .map_err(|error| format!("Could not make the run's worktree again: {error}"))?;
+                self.state.borrow_mut().run.worktree = Some(again);
+                self.save();
+                return Ok(());
+            }
+            None => {}
         }
         let Some(project) = self.project_for(&workspace.project, "", "") else {
             return Err(format!(
@@ -355,6 +371,15 @@ impl Exec {
                 .filter(|t| !t.is_removed())
                 .cloned()
         };
+        let removed = |this: &Self| {
+            this.state
+                .borrow()
+                .run
+                .branch_worktrees
+                .get(&key)
+                .filter(|t| t.is_removed())
+                .cloned()
+        };
         if let Some(tree) = known(self) {
             return Ok(Some(tree));
         }
@@ -364,11 +389,21 @@ impl Exec {
             return Ok(Some(tree));
         }
         let run_id = self.state.borrow().run.id.clone();
-        let tree = self
-            .host
-            .fork_branch_worktree(&run_id, run_tree, split.group_id.clone(), split.index)
-            .await
-            .map_err(|error| format!("Could not make the worktree of this branch: {error}"))?;
+        // One the user removed comes back from its branch instead of forking a second one.
+        let tree = match removed(self) {
+            Some(gone) => self
+                .host
+                .restore_worktree(&run_id, gone)
+                .await
+                .map_err(|error| {
+                    format!("Could not make the worktree of this branch again: {error}")
+                })?,
+            None => self
+                .host
+                .fork_branch_worktree(&run_id, run_tree, split.group_id.clone(), split.index)
+                .await
+                .map_err(|error| format!("Could not make the worktree of this branch: {error}"))?,
+        };
         self.state
             .borrow_mut()
             .run
@@ -1859,6 +1894,20 @@ pub(crate) struct WorkflowRunner {
     limits: Limits,
     /// The app is quitting: nothing new starts.
     quitting: Rc<Cell<bool>>,
+    /// Runs whose worktrees are being removed: none of them starts or resumes meanwhile.
+    removing: Rc<RefCell<HashSet<String>>>,
+}
+
+/// Held while a run's worktrees are removed; the run cannot start or resume until it drops.
+pub(crate) struct RemovalGuard {
+    removing: Rc<RefCell<HashSet<String>>>,
+    run_id: String,
+}
+
+impl Drop for RemovalGuard {
+    fn drop(&mut self) {
+        self.removing.borrow_mut().remove(&self.run_id);
+    }
 }
 
 impl WorkflowRunner {
@@ -1868,7 +1917,33 @@ impl WorkflowRunner {
             signals,
             limits: Limits::default(),
             quitting: Default::default(),
+            removing: Default::default(),
         }
+    }
+
+    /// Takes the run for the removal of its worktrees. Err says why the run is still using them:
+    /// it is going or stopping, a start or a resume was claimed for it, or a removal is going.
+    pub(crate) fn begin_removal(
+        &self,
+        workflow_id: &str,
+        run_id: &str,
+    ) -> Result<RemovalGuard, String> {
+        if self.is_run_live(run_id) {
+            return Err(
+                "The run is still going or stopping. Wait until it ends, then remove its worktree"
+                    .into(),
+            );
+        }
+        if self.signals.has_run(workflow_id, run_id) {
+            return Err("The run is about to start or resume. Try again in a moment".into());
+        }
+        if !self.removing.borrow_mut().insert(run_id.to_string()) {
+            return Err("This run's worktree is being removed already".into());
+        }
+        Ok(RemovalGuard {
+            removing: self.removing.clone(),
+            run_id: run_id.to_string(),
+        })
     }
 
     #[cfg(test)]
@@ -1902,6 +1977,18 @@ impl WorkflowRunner {
             .values()
             .filter(|exec| exec.workflow_id == workflow_id)
             .count()
+    }
+
+    /// The runs of the workflow that are going, oldest first, as `(run id, run number, start
+    /// time)`, for a page that asks which one to stop.
+    pub(crate) fn live_runs_of(&self, workflow_id: &str) -> Vec<(String, Option<u64>, u64)> {
+        self.execs_of(workflow_id)
+            .iter()
+            .map(|exec| {
+                let state = exec.state.borrow();
+                (state.run.id.clone(), state.run.number, state.run.started_at)
+            })
+            .collect()
     }
 
     /// Whether the run is going.
@@ -2004,6 +2091,7 @@ impl WorkflowRunner {
         let workflow_id = run.workflow_id.clone();
         let run_id = run.id.clone();
         if self.quitting.get()
+            || self.removing.borrow().contains(&run_id)
             || self.is_run_live(&run_id)
             || self.live_count(&workflow_id) >= run.definition.concurrency.limit()
         {

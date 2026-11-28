@@ -876,7 +876,7 @@ pub fn new_node(ty: NodeType, w: &Workflow) -> Node {
         NodeType::Session => NodeKind::Session {
             project: default_project(w),
             prompt: String::new(),
-            checkout: Checkout::Root,
+            checkout: Checkout::Run,
             output: OrderedMap::new(),
             mode: None,
             surface: None,

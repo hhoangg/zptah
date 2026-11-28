@@ -200,6 +200,22 @@ fn begin(claimed: &Workflow, origin: Origin, tick: &Tick, run_id: &str) -> Start
 /// definition is checked rather than the live one so the run keeps its own steps; the live
 /// `requires` are added because they may have grown since.
 fn resume_or_refuse(run: WorkflowRun, live: Option<&Workflow>, tick: &Tick) -> Start {
+    // A worktree the user removed comes back from its branch; without the branch the run stays
+    // interrupted.
+    if let Some(problem) = super::run_worktree::resume_problem(&run) {
+        let name = run.definition.name.clone();
+        return Start::Refused {
+            workflow_id: run.workflow_id,
+            workflow_name: name.clone(),
+            run_id: run.id,
+            failure: Failure {
+                title: format!("{name} \u{b7} not resumed"),
+                text: format!(
+                    "## {name} \u{b7} not resumed\n\nThe run could not continue and stays interrupted. {problem}"
+                ),
+            },
+        };
+    }
     let requires = union_requires(
         &run.definition.requires,
         live.map_or(&[][..], |w| &w.requires),

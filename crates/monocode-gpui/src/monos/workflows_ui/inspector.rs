@@ -1092,6 +1092,26 @@ impl Monos {
                     cx,
                 );
             }
+            BoardPick::WorkspaceMode => self.board_meta_edit(
+                |m| {
+                    m.workspace.mode = if v == "none" {
+                        monocode_core::mono::workflows::model::WorkspaceMode::None
+                    } else {
+                        monocode_core::mono::workflows::model::WorkspaceMode::PerRun
+                    }
+                },
+                cx,
+            ),
+            BoardPick::WorkspaceProject => {
+                self.board_meta_edit(|m| m.workspace.project = v.clone(), cx)
+            }
+            BoardPick::Concurrency => {
+                let max = v.parse::<f64>().unwrap_or(1.);
+                self.board_meta_edit(
+                    |m| m.concurrency = monocode_core::mono::workflows::model::Concurrency { max },
+                    cx,
+                )
+            }
             BoardPick::DecisionEffort => self.board_meta_edit(
                 |m| {
                     if let Some(model) = m.decision_model.as_mut() {

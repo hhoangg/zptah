@@ -12,7 +12,7 @@ use monocode_core::mono::workflows::{
     model::{CallerKind, RunCaller, RunStatus, RunWorktree, WorkflowRun},
     queue::queued_run,
     run_worktree::{AtRisk, create_run_worktree},
-    store::update_runs,
+    store::{update_runs, update_workflows},
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -163,6 +163,7 @@ fn the_confirmation_lists_files_and_commits_and_says_when_nothing_would_be_lost(
         unpushed: vec!["abc1234 Add the thing".into()],
         more_commits: 0,
         unknown: false,
+        digest: 0,
     };
     let lines = risk_lines(&risk);
     assert_eq!(lines[0], "Uncommitted changes (5):");
@@ -261,6 +262,179 @@ fn remove_worktree_asks_first_lists_the_work_and_removes_only_on_the_click(
             .and_then(|r| r.worktree.as_ref())
             .map(|t| t.removed_at.is_some())),
         Some(true)
+    );
+}
+
+#[gpui::test]
+fn work_added_after_the_dialog_opened_stops_the_removal_and_the_list_is_looked_at_again(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let s = setup(cx);
+    let (_repo, tree) = run_with_work(&s, cx);
+    let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    open_run(&s, visual);
+    click(visual, "wf-run-remove-tree");
+    visual.run_until_parked();
+    settle(&s, visual);
+    // The list was made; then more work lands in the worktree.
+    std::fs::write(Path::new(&tree.path).join("later.txt"), "more").unwrap();
+    click(visual, "wf-run-tree-remove");
+    visual.run_until_parked();
+    settle(&s, visual);
+    // Nothing was removed, the dialog says why and lists the new file.
+    assert!(Path::new(&tree.path).join("later.txt").is_file());
+    assert!(
+        history(&s, A)[0]
+            .worktree
+            .as_ref()
+            .unwrap()
+            .removed_at
+            .is_none()
+    );
+    let (notice, listed) = s.manager.read_with(visual, |m, _| {
+        let dialog = m.wf.tree.as_ref().expect("still open");
+        (
+            dialog.notice.clone().unwrap_or_default(),
+            dialog.risks.as_ref().map(|r| risk_lines(&r[0])),
+        )
+    });
+    assert!(notice.contains("changed since"), "{notice}");
+    assert!(
+        listed
+            .expect("looked at again")
+            .iter()
+            .any(|l| l.contains("later.txt")),
+        "the new file is on the list the user confirms next"
+    );
+    // Confirming what is listed now removes it.
+    click(visual, "wf-run-tree-remove");
+    visual.run_until_parked();
+    assert!(!Path::new(&tree.path).exists());
+}
+
+#[gpui::test]
+fn a_run_the_runner_still_holds_or_claimed_keeps_its_worktree_on_remove(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let s = setup(cx);
+    let (_repo, tree) = run_with_work(&s, cx);
+    let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    open_run(&s, visual);
+    click(visual, "wf-run-remove-tree");
+    visual.run_until_parked();
+    settle(&s, visual);
+    // A start or a resume was claimed for the run meanwhile.
+    let signals = s
+        .manager
+        .read_with(visual, |m, _| m.workflow_signals.clone());
+    signals.claim_run(A, "run-1");
+    click(visual, "wf-run-tree-remove");
+    visual.run_until_parked();
+    let notice = s
+        .manager
+        .read_with(visual, |m, _| {
+            m.wf.tree.as_ref().and_then(|d| d.notice.clone())
+        })
+        .unwrap_or_default();
+    assert!(notice.contains("about to start or resume"), "{notice}");
+    assert!(Path::new(&tree.path).join("notes.txt").is_file());
+    signals.release_run(A, "run-1");
+    // A resume asked for, and not yet claimed, holds it too.
+    update_workflows(&s.workflows_dir(), |mut list| {
+        list[0].resume_run_id = Some("run-1".into());
+        Ok((list, ()))
+    })
+    .unwrap();
+    click(visual, "wf-run-tree-remove");
+    visual.run_until_parked();
+    let notice = s
+        .manager
+        .read_with(visual, |m, _| {
+            m.wf.tree.as_ref().and_then(|d| d.notice.clone())
+        })
+        .unwrap_or_default();
+    assert!(notice.contains("asked to resume"), "{notice}");
+    assert!(Path::new(&tree.path).join("notes.txt").is_file());
+    assert!(
+        history(&s, A)[0]
+            .worktree
+            .as_ref()
+            .unwrap()
+            .removed_at
+            .is_none()
+    );
+}
+
+#[gpui::test]
+fn the_confirmation_says_ignored_files_go_too_and_uses_the_shared_modal(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let s = setup(cx);
+    let (_repo, _tree) = run_with_work(&s, cx);
+    let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    open_run(&s, visual);
+    click(visual, "wf-run-remove-tree");
+    visual.run_until_parked();
+    settle(&s, visual);
+    // A card of the shared modal: a dialog with the modal's own buttons.
+    assert!(visual.debug_bounds("wf-run-tree").is_some());
+    assert!(visual.debug_bounds("wf-run-tree-cancel").is_some());
+    assert!(super::run_tree_dialog::TREE_NOTE.contains("ignores"));
+    assert!(super::run_tree_dialog::TREE_NOTE.contains(".env"));
+    // A press on the scrim, outside the card, dismisses it.
+    visual.simulate_click(gpui::point(px(4.), px(4.)), Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("wf-run-tree").is_none());
+}
+
+#[gpui::test]
+fn the_sessions_that_worked_in_a_removed_worktree_keep_their_history_and_move_to_the_main_checkout(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let s = setup(cx);
+    let (repo, tree) = run_with_work(&s, cx);
+    // A conversation of the run that worked in its worktree.
+    let id = {
+        let store = s.store.lock().unwrap();
+        let session = store
+            .create("claude", &tree.path)
+            .expect("a session in the worktree");
+        store
+            .save_agent_settings(
+                session.id,
+                &monocode_core::agent::Settings {
+                    worktree_cwd: Some(tree.path.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        session.id
+    };
+    let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    open_run(&s, visual);
+    click(visual, "wf-run-remove-tree");
+    visual.run_until_parked();
+    settle(&s, visual);
+    click(visual, "wf-run-tree-remove");
+    visual.run_until_parked();
+    assert!(!Path::new(&tree.path).exists());
+    let store = s.store.lock().unwrap();
+    let kept = store
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .find(|session| session.id == id)
+        .expect("the session stays");
+    let settings = store.agent_settings(id).unwrap().unwrap();
+    assert!(settings.worktree_removed, "it knows its folder is gone");
+    assert_eq!(
+        Path::new(&kept.cwd).canonicalize().unwrap(),
+        repo.path.canonicalize().unwrap(),
+        "it is attached to the main checkout again"
     );
 }
 

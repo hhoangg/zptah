@@ -529,7 +529,7 @@ pub fn workflow_guide() -> String {
             "",
             r##"A workflow is a graph of nodes that the app runs for the user, on a schedule or on demand. Most nodes start a session (an agent run in one of the user's projects); the app passes each node's results to the nodes after it, runs For each groups once per list item, repeats steps in loops, and ends every run with a summary. You build and change workflows through the `app workflows.*` actions; the user sees and runs them on the Workflows board."##,
             "",
-            r##"A workflow has 1 to 5 trigger nodes, all leading to the same first step (any one of them starts a run), and no absolute paths: projects are always inputs, so a workflow can be shared. Every run ends with a summary the app writes itself: it goes to the run page and a notification, to the Mono named in `reportTo` and to the Mono that started the run. A `summaryTemplate` shapes it."##,
+            r##"A workflow has 1 to 5 trigger nodes, all leading to the same first step (any one of them starts a run), and no absolute paths in prompts or commands: name projects with inputs, so a workflow can be shared (a project path or name of one of the app's projects also works, but a workflow with a project path cannot be exported). Every run ends with a summary the app writes itself: it goes to the run page and a notification, to the Mono named in `reportTo` and to the Mono that started the run. A `summaryTemplate` shapes it."##,
         ],
     );
     add(
@@ -556,7 +556,7 @@ pub fn workflow_guide() -> String {
             "",
             r##"### Projects are inputs"##,
             "",
-            r##"Declare an input of type `project`, give it a value in `inputValues`, and set `workspace.project` to `"{{inputs.<name>}}"`; a session or command node without its own `project` uses it. A node may name another project with `"project": "{{inputs.<name>}}"` (exactly that form) or a project path; a node whose project differs from `workspace.project` cannot use `checkout: "run"`. No node text may contain an absolute path (a home or system directory such as `/Users/...`, `/home/...`, `/tmp/...`, `~/...`, or a drive like `C:\`); use the project input or a relative path. A bare URL path like `/api/users` in a prompt is fine."##,
+            r##"Declare an input of type `project`, give it a value in `inputValues`, and set `workspace.project` to `"{{inputs.<name>}}"`; a session or command node without its own `project` uses it. A node may name another project with `"project": "{{inputs.<name>}}"` (exactly that form) or the path or name of one of the app's projects (a project the app does not have is refused); a node whose project differs from `workspace.project` (compared by the path each names) cannot use `checkout: "run"`. Outside `project` and `workspace.project`, no node text may contain an absolute path (a home or system directory such as `/Users/...`, `/home/...`, `/tmp/...`, `~/...`, or a drive like `C:\`); use the project input or a relative path. A bare URL path like `/api/users` in a prompt is fine."##,
             "",
             r##"### Requires: what the steps need on the machine"##,
             "",

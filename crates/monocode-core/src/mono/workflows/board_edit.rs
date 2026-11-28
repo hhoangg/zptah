@@ -11,9 +11,9 @@ use super::board_model::{
 };
 use super::engine::looped_node_ids;
 use super::model::{
-    Checkout, Cwd, Decide, DecisionModel, Handle, InputValue, LoopSpec, Node, NodeId, NodeKind,
-    OutputField, ReportTo, Requirement, Workflow, WorkflowInput, DECIDE_AI, TRIGGERS_MAX,
-    WORKFLOWS_MAX,
+    Checkout, Concurrency, Cwd, Decide, DecisionModel, Handle, InputValue, LoopSpec, Node, NodeId,
+    NodeKind, OutputField, ReportTo, Requirement, Workflow, WorkflowInput, Workspace, DECIDE_AI,
+    TRIGGERS_MAX, WORKFLOWS_MAX,
 };
 use super::models::{workflow_issues, ModelCatalog};
 use super::ordered::OrderedMap;
@@ -48,6 +48,8 @@ pub struct Meta {
     pub decision_model: Option<DecisionModel>,
     pub report_to: Option<ReportTo>,
     pub summary_template: Option<String>,
+    pub workspace: Workspace,
+    pub concurrency: Concurrency,
 }
 
 impl Meta {
@@ -62,6 +64,8 @@ impl Meta {
             decision_model: w.decision_model.clone(),
             report_to: w.report_to.clone(),
             summary_template: w.summary_template.clone(),
+            workspace: w.workspace.clone(),
+            concurrency: w.concurrency,
         }
     }
 }
@@ -78,6 +82,8 @@ pub fn current(base: &Workflow, flow: &Flow, meta: &Meta) -> Workflow {
     w.decision_model = meta.decision_model.clone();
     w.report_to = meta.report_to.clone();
     w.summary_template = meta.summary_template.clone();
+    w.workspace = meta.workspace.clone();
+    w.concurrency = meta.concurrency;
     w
 }
 

@@ -265,7 +265,7 @@ fn the_prompt_and_help_describe_workflows() {
         "workflows.resumeRun",
         "{{nodeId.field}}",
         "{{run.round}}",
-        "Projects are always inputs, never paths.",
+        "A project is one of the app's projects: name it with a project input ({{inputs.X}}, preferred, so the workflow can be shared and exported) or by the path or name the app lists it under",
         "show them the steps first",
         "only then save it with workflows.add or workflows.update",
         "A workflow you add is always saved paused, however clean it is: the user reviews and enables it in Workflows",
@@ -281,6 +281,8 @@ fn the_prompt_and_help_describe_workflows() {
         context.find("Habits are scheduled work").unwrap()
             < context.find("Workflows are graphs of steps").unwrap()
     );
+    // A project may be a path or a name of the app's projects, not only an input (F11).
+    assert!(!context.contains("Projects are always inputs, never paths"));
     assert!(!context.contains("`app workflows"));
     assert!(!context.contains("workflows_rules"));
     for action in [

@@ -1062,6 +1062,17 @@ pub fn finish_import(
     finish_import_with_id(preview, input_values, now, new_workflow_id())
 }
 
+/// The warnings (advice that never blocks) of the workflow a file would make.
+pub fn draft_warnings(draft: &WorkflowDraft) -> Vec<WorkflowIssue> {
+    let mut workflow = Workflow::new("draft", draft.name.clone());
+    workflow.inputs = draft.inputs.clone();
+    workflow.workspace = draft.workspace.clone();
+    workflow.concurrency = draft.concurrency;
+    workflow.nodes = draft.nodes.clone();
+    workflow.edges = draft.edges.clone();
+    super::validate::workflow_warnings(&workflow)
+}
+
 /// `finish_import` with the id chosen by the caller.
 pub fn finish_import_with_id(
     preview: &ImportPreview,

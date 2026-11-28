@@ -186,6 +186,44 @@ pub fn cancel_queued(
     })
 }
 
+/// Puts a promoted run back in the queue when the app refused to start it (it is quitting, or no
+/// slot was free after all), so its record does not say `running` for a run that never ran. The
+/// run keeps its place by number and its queue time; its values are kept for the next promotion.
+/// False when the record is not a running one that was promoted.
+pub fn requeue(files: &impl MonoFiles, run: &WorkflowRun) -> Result<bool, String> {
+    if run.status != RunStatus::Running || run.queued_at.is_none() {
+        return Ok(false);
+    }
+    update_runs(files, &run.workflow_id, |runs| {
+        let mut back = false;
+        let list = runs
+            .into_iter()
+            .map(|stored| {
+                // Only the record this call is about, and only while it has not begun any step.
+                if stored.id == run.id
+                    && stored.status == RunStatus::Running
+                    && stored.worktree.is_none()
+                {
+                    let mut claimed = run.definition.clone();
+                    claimed.run_values = Some(run.definition.input_values.clone());
+                    let mut queued = queued_run(
+                        &claimed,
+                        run.caller.clone(),
+                        run.number.unwrap_or(0),
+                        &run.id,
+                        run.queued_at.unwrap_or(run.started_at),
+                    );
+                    queued.queued_at = run.queued_at;
+                    back = true;
+                    return queued;
+                }
+                stored
+            })
+            .collect();
+        Ok((list, back))
+    })
+}
+
 /// How many runs of the workflow wait in the queue.
 pub fn queue_len(files: &impl MonoFiles, workflow_id: &str) -> Result<usize, String> {
     super::store::queued_count_of(files, workflow_id)

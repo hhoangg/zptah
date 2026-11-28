@@ -204,6 +204,8 @@ impl Monos {
             .collect::<Vec<_>>();
         let notice = this.wf.notice.clone();
         let gate = self.run_gate_dialog(scope, window, cx);
+        let stopping = self.stop_ask_dialog(window, cx);
+        let removing = self.remove_ask_dialog(window, cx);
         div()
             .size_full()
             .min_w_0()
@@ -223,6 +225,8 @@ impl Monos {
                     .children(rows),
             )
             .children(gate)
+            .children(stopping)
+            .children(removing)
             .into_any_element()
     }
 
@@ -390,10 +394,9 @@ impl Monos {
                         let suffix = suffix.clone();
                         move || format!("mono-workflow-stop{suffix}")
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.stop_workflow_run(&stop, None);
-                        cx.notify();
-                    })),
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.workflow_stop_clicked(&stop, cx)),
+                    ),
                 )
             })
             .child(
@@ -467,10 +470,13 @@ impl Monos {
         );
     }
 
-    pub(in crate::monos) fn workflow_remove_clicked(
+    /// Removes the workflow now; `cancel_queued` first cancels the runs that wait (the user was
+    /// asked and agreed).
+    pub(super) fn workflow_remove_now(
         &mut self,
         id: &str,
         page: bool,
+        cancel_queued: bool,
         cx: &mut Context<Self>,
     ) {
         let id = id.to_string();
@@ -479,7 +485,12 @@ impl Monos {
             move |host| {
                 // Read before the history goes: it is the only place that names them.
                 let left = actions::left_instances(host, &id);
-                (actions::remove(host, &id), left)
+                let notice = if cancel_queued {
+                    actions::remove_cancelling_queue(host, &id)
+                } else {
+                    actions::remove(host, &id)
+                };
+                (notice, left)
             },
             move |this, (notice, left), cx| {
                 let mut page = page;

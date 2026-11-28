@@ -132,6 +132,13 @@ pub fn after_claim(workflow: &Workflow, now: u64, run_id: Option<&str>) -> Workf
     next.run_caller = None;
     // The values were for the run that is being claimed now; they never carry to a later one.
     next.run_values = None;
+    // The next request asked for behind it becomes the pending one, so it is claimed in its turn.
+    if !next.run_backlog.is_empty() {
+        let following = next.run_backlog.remove(0);
+        next.run_requested = true;
+        next.run_caller = following.caller;
+        next.run_values = following.values;
+    }
     // A stop asked for before a run started was meant for an earlier one. Moving the schedule
     // past a workflow whose run is still going must keep a stop written for that run.
     next.stop_requested = workflow.stop_requested && run_id.is_none();
@@ -201,6 +208,32 @@ mod tests {
 
     mod after_claim_tests {
         use super::*;
+
+        #[test]
+        fn a_claim_promotes_the_next_request_asked_for_behind_it() {
+            use crate::mono::workflows::model::RunRequest;
+            let mut w = workflow();
+            w.run_requested = true;
+            w.run_backlog = vec![
+                RunRequest {
+                    caller: None,
+                    values: None,
+                },
+                RunRequest {
+                    caller: None,
+                    values: None,
+                },
+            ];
+            // Each claim answers one request and the one behind it becomes the pending one.
+            let first = after_claim(&w, now(), Some("run-1"));
+            assert!(first.run_requested);
+            assert_eq!(first.run_backlog.len(), 1);
+            let second = after_claim(&first, now(), Some("run-2"));
+            assert!(second.run_requested);
+            assert!(second.run_backlog.is_empty());
+            let third = after_claim(&second, now(), Some("run-3"));
+            assert!(!third.run_requested);
+        }
 
         #[test]
         fn a_claim_clears_the_run_request_and_any_stop_asked_for_before_it() {

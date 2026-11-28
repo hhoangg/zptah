@@ -103,6 +103,7 @@ fn run_row(
     run: &WorkflowRun,
     workflow: &str,
     picked: bool,
+    place: Option<(usize, usize)>,
     color: u32,
     now: u64,
     cx: &mut Context<Monos>,
@@ -114,6 +115,14 @@ fn run_row(
         None => "-".into(),
     };
     let (workflow, id) = (workflow.to_string(), run.id.clone());
+    // A run that waits says its place; it has not started, so there is no time to show.
+    let detail = match (run.status == RunStatus::Queued, place) {
+        (true, Some((at, of))) => format!("Place {at} of {of}"),
+        (true, None) => "Waiting".to_string(),
+        (false, _) => format!("{} \u{b7} {took}", when(run.started_at, now)),
+    };
+    let queued = run.status == RunStatus::Queued;
+    let (cancel_workflow, cancel_run) = (workflow.clone(), id.clone());
     div()
         .id(SharedString::from(format!("mono-workflow-run-{}", run.id)))
         .debug_selector({
@@ -162,9 +171,24 @@ fn run_row(
                         .truncate()
                         .text_size(px(11.))
                         .text_color(content(0.4))
-                        .child(format!("{} \u{b7} {took}", when(run.started_at, now))),
+                        .debug_selector({
+                            let id = run.id.clone();
+                            move || format!("wf-run-row-detail-{id}")
+                        })
+                        .child(detail),
                 ),
         )
+        .when(queued, |d| {
+            let selector = format!("wf-run-row-cancel-{}", run.id);
+            d.child(
+                icon_button("wf-run-row-cancel", "Cancel queued run", "x")
+                    .debug_selector(move || selector.clone())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.run_cancel_queued(&cancel_workflow, &cancel_run, cx);
+                    })),
+            )
+        })
         .on_click(cx.listener(move |this, _, _, cx| {
             this.open_workflow_route(WfRoute::Run(workflow.clone(), id.clone()), cx)
         }))
@@ -438,11 +462,14 @@ impl Monos {
                 );
             }
             Some(runs) => {
+                let of = queued_count(&runs);
                 for run in &runs {
+                    let place = queue_position(&runs, &run.id).map(|at| (at, of));
                     rows = rows.child(run_row(
                         run,
                         workflow,
                         picked == Some(run.id.as_str()),
+                        place,
                         scope.color,
                         now,
                         cx,
@@ -451,6 +478,11 @@ impl Monos {
             }
             None => {}
         }
+        let slots = super::list::slots_subtitle(self.workflow_slots(workflow));
+        let waiting = self
+            .workflow_runs_of(workflow)
+            .map_or(0, |runs| queued_count(runs));
+        let bulk = workflow.to_string();
         div()
             .id("wf-runs-list")
             .debug_selector(|| "wf-runs-list".into())
@@ -467,10 +499,38 @@ impl Monos {
                     .px_3()
                     .pt_2()
                     .pb_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
                     .text_size(px(11.))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(content(0.4))
-                    .child("Runs"),
+                    .child(div().child("Runs"))
+                    .children(slots.map(|text| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(gpui::FontWeight::NORMAL)
+                            .debug_selector(|| "wf-runs-slots".into())
+                            .child(text)
+                    }))
+                    .when(waiting > 1, |d| {
+                        d.child(
+                            crate::modal::ghost_button(
+                                "wf-runs-cancel-queued",
+                                "Cancel all queued",
+                            )
+                            .debug_selector(|| "wf-runs-cancel-queued".into())
+                            .h(px(22.))
+                            .px_1p5()
+                            .text_size(px(11.))
+                            .cursor_pointer()
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| this.run_cancel_all_queued(&bulk, cx),
+                            )),
+                        )
+                    }),
             )
             .child(rows)
             .into_any_element()
@@ -633,6 +693,25 @@ impl Monos {
             |this, result, cx| {
                 this.workflow_said(result.err(), true, cx);
             },
+            cx,
+        );
+    }
+
+    /// Cancels every run of the workflow that waits in its queue.
+    pub(super) fn run_cancel_all_queued(&mut self, workflow: &str, cx: &mut Context<Self>) {
+        let workflow = workflow.to_string();
+        self.workflow_said(None, true, cx);
+        self.workflow_task(
+            move |host| {
+                let runs = host.runs(&workflow).unwrap_or_default();
+                for run in monocode_core::mono::workflows::queue::queued_fifo(&runs) {
+                    if let Err(error) = host.cancel_queued(&workflow, &run.id) {
+                        return Some(error);
+                    }
+                }
+                None
+            },
+            |this, notice, cx| this.workflow_said(notice, true, cx),
             cx,
         );
     }

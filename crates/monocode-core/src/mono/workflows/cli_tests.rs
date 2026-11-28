@@ -3386,10 +3386,12 @@ fn run_starts_now_when_a_slot_is_free_and_reports_the_queue_place_when_not() {
     let result = f.ok("workflows.run", json!({"id": id}));
     assert!(!flag(&result, "queued"));
     assert_eq!(text(&result, "note"), "It starts now, on its own.");
-    // A request nobody picked up yet is not asked twice.
-    let e = f.err("workflows.run", json!({"id": id}));
-    assert!(e.contains("already waiting to start"), "{e}");
+    // A request nobody picked up yet does not refuse the next one: it waits behind it.
+    let second = f.ok("workflows.run", json!({"id": id}));
+    assert!(flag(&second, "queued"));
+    assert_eq!(f.host.stored[0].run_backlog.len(), 1);
     f.host.stored[0].run_requested = false;
+    f.host.stored[0].run_backlog.clear();
     // Both slots taken, one run already waits: this one is second.
     f.host.live_n.insert(id.clone(), 2);
     f.host.runs.insert(id.clone(), vec![queued("q1", &id, 1)]);
@@ -3636,4 +3638,114 @@ fn the_store_host_cancels_a_queued_run_in_the_file_and_counts_live_runs_per_run(
     )
     .unwrap_err();
     assert!(again.contains("not going or queued"), "{again}");
+}
+
+#[test]
+fn several_runs_asked_in_one_turn_each_queue_in_order_and_none_is_refused() {
+    let mut f = Fx::new();
+    let id = running_workflow(
+        &mut f,
+        json!({
+            "inputs": {"project": {"type": "project"}, "n": {"type": "string"}},
+            "inputValues": {"project": "/code/app", "n": "0"}
+        }),
+    );
+    for n in ["1", "2", "3"] {
+        f.ok("workflows.run", json!({"id": id, "values": {"n": n}}));
+    }
+    let w = &f.stored()[0];
+    assert!(w.run_requested);
+    // The first request is the pending one; the others wait behind it, oldest first.
+    assert_eq!(
+        w.run_values.as_ref().and_then(|v| v.get("n")).cloned(),
+        Some(InputValue::String("1".into()))
+    );
+    let waiting: Vec<_> = w
+        .run_backlog
+        .iter()
+        .map(|r| r.values.as_ref().and_then(|v| v.get("n")).cloned())
+        .collect();
+    assert_eq!(
+        waiting,
+        [
+            Some(InputValue::String("2".into())),
+            Some(InputValue::String("3".into()))
+        ]
+    );
+    // The queue cap counts what has not been claimed yet.
+    for _ in 0..QUEUED_RUNS_MAX {
+        let _ = f.call("workflows.run", json!({"id": id}));
+    }
+    let w = &f.stored()[0];
+    assert!(w.run_backlog.len() < QUEUED_RUNS_MAX);
+    let e = f.err("workflows.run", json!({"id": id}));
+    assert!(e.contains("runs waiting"), "{e}");
+}
+
+#[test]
+fn stopping_a_run_by_id_names_that_run_in_the_answer() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({"concurrency": {"max": 2}}));
+    f.host.live.insert(id.clone());
+    f.host
+        .runs
+        .insert(id.clone(), vec![run("run-7", RunStatus::Running, &id)]);
+    let result = f.ok("workflows.stop", json!({"id": id, "runId": "run-7"}));
+    assert_eq!(text(&result, "runId"), "run-7");
+    assert_eq!(f.stored()[0].stop_run_ids, ["run-7"]);
+}
+
+#[test]
+fn removing_a_workflow_names_the_worktrees_its_runs_leave_on_disk() {
+    let mut f = Fx::new();
+    let id = id_of(&f.add(definition(json!({}))));
+    let tree = |path: &str, branch: &str, removed: Option<u64>| RunWorktree {
+        path: path.into(),
+        branch: branch.into(),
+        base: "abc".into(),
+        removed_at: removed,
+    };
+    let mut kept = run("run-1", RunStatus::Done, &id);
+    kept.worktree = Some(tree("/code/app-worktrees/wf-x-1", "wf/x-1", None));
+    kept.branch_worktrees.insert(
+        "each#0".into(),
+        tree("/code/app-worktrees/wf-x-1-each-0", "wf/x-1-each-0", None),
+    );
+    let mut gone = run("run-2", RunStatus::Done, &id);
+    gone.worktree = Some(tree("/code/app-worktrees/wf-x-2", "wf/x-2", Some(9)));
+    f.host.runs.insert(id.clone(), vec![gone, kept]);
+    let result = f.ok("workflows.remove", json!({"id": id}));
+    let left = list(&result, "worktreesKept");
+    assert_eq!(left.len(), 2, "{}", result.stringify(false));
+    let note = text(&result, "worktreesNote");
+    assert!(
+        note.contains("2 worktrees") && note.contains("wf/x-1-each-0"),
+        "{note}"
+    );
+    assert!(
+        !note.contains("wf/x-2"),
+        "a removed worktree is not on disk: {note}"
+    );
+    // Nothing to say when none stay.
+    let mut f = Fx::new();
+    let id = id_of(&f.add(definition(json!({}))));
+    let result = f.ok("workflows.remove", json!({"id": id}));
+    assert!(result.get("worktreesKept").is_none());
+}
+
+#[test]
+fn resuming_a_run_whose_removed_worktree_has_no_repository_or_branch_is_refused() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({}));
+    let mut stopped = run("run-1", RunStatus::Interrupted, &id);
+    stopped.worktree = Some(RunWorktree {
+        path: "/nowhere/app-worktrees/wf-x-1".into(),
+        branch: "wf/x-1".into(),
+        base: "abc".into(),
+        removed_at: Some(5),
+    });
+    f.host.runs.insert(id.clone(), vec![stopped]);
+    let e = f.err("workflows.resumeRun", json!({"id": id, "runId": "run-1"}));
+    assert!(e.contains("cannot continue"), "{e}");
+    assert!(f.stored()[0].resume_run_id.is_none());
 }

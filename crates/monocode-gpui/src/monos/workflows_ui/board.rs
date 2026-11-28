@@ -71,6 +71,8 @@ pub(super) enum BoardField {
     Description,
     /// The text of the template the run summary is made from.
     SummaryTemplate,
+    /// The branch a run worktree starts from (empty: main).
+    BaseBranch,
     Title(String),
     Prompt(String),
     Command(String),
@@ -141,6 +143,12 @@ pub(in crate::monos) enum BoardPick {
     DecisionEffort,
     /// The Mono the run summary goes to (empty: none).
     ReportTo,
+    /// Whether each run works in a worktree of its own (`perRun`) or in the project folder.
+    WorkspaceMode,
+    /// The project a run works in: an app project path or `{{inputs.<name>}}`.
+    WorkspaceProject,
+    /// How many runs go at the same time (1 to 10).
+    Concurrency,
 }
 
 /// The loop being asked for after a connection back up a branch.
@@ -184,6 +192,8 @@ pub(super) struct BoardState {
         std::collections::HashMap<String, Vec<monocode_core::mono::workflows::variables::Variable>>,
     /// Whether the "Available variables" list is folded away; kept while the board is open.
     pub variables_folded: bool,
+    /// Advice that never blocks a save or a run (see `workflow_warnings`).
+    pub warnings: Vec<WorkflowIssue>,
     pub canvas: Entity<GraphCanvas>,
     /// A new key makes the canvas fit its view again.
     pub fit_gen: u64,
@@ -305,6 +315,7 @@ impl Monos {
             issues: Vec::new(),
             variables: Default::default(),
             variables_folded: false,
+            warnings: Vec::new(),
             canvas,
             fit_gen: 0,
             more_anchor: AnchorSlot::default(),
@@ -335,12 +346,22 @@ impl Monos {
     /// Draws the board again: the issues, the cards and the lines, and asks which models exist.
     pub(super) fn board_rebuild(&mut self, cx: &mut Context<Self>) {
         let mono_kind = self.board_mono_kind(cx);
+        let projects = self.wf.scope.projects.clone();
         let Some(b) = self.wf.board.as_mut() else {
             return;
         };
         let w = b.current();
         b.issues = problems_of(&w, &b.catalog);
         b.variables.clear();
+        b.warnings = monocode_core::mono::workflows::validate::workflow_warnings(&w);
+        // A project the app does not have cannot run (D3). The run says so itself, and a draft
+        // naming a project the app lost must still be saveable, so here it is advice, not a
+        // blocking problem. The app's projects are known on this page.
+        if !projects.is_empty() {
+            b.warnings.extend(
+                monocode_core::mono::workflows::validate::unknown_project_issues(&w, &projects),
+            );
+        }
         let by_node = issues_by_node(&b.issues);
         let loops: Vec<(&str, &str)> = w
             .edges
@@ -808,6 +829,9 @@ impl Monos {
             BoardField::Description => self.board_meta_edit(|m| m.description = Some(text), cx),
             BoardField::SummaryTemplate => {
                 self.board_meta_edit(|m| m.summary_template = some(&text), cx)
+            }
+            BoardField::BaseBranch => {
+                self.board_meta_edit(|m| m.workspace.base_branch = some(text.trim()), cx)
             }
             BoardField::Title(id) => self.board_node_edit(id, |n| n.title = some(&text), cx),
             BoardField::Time(id) => self.board_node_edit(

@@ -6,8 +6,9 @@ use super::fixtures::workflow_from;
 use super::model::*;
 use super::models::ModelCatalog;
 use super::ordered::Json;
+use super::parse::parse_workflow;
 use super::template::render_template;
-use super::validate::{validate_workflow, workflow_warnings};
+use super::validate::{unknown_project_issues, validate_workflow, workflow_warnings};
 use super::yaml::{export_workflow, finish_import, preview_import};
 use serde_json::{json, Value};
 
@@ -282,15 +283,17 @@ fn a_cloud_step_cannot_use_the_run_worktree_or_an_existing_folder() {
             "{checkout}: {found:?}"
         );
     }
-    // A cloud step that forgets its checkout gets the default, which is refused with the way out.
+    // A cloud step that forgets its checkout works in its instance's own checkout: root.
     let forgot = flow(
         PER_RUN(),
         vec![session("a", json!({"target": {"kind": "codespace"}}))],
         chain(&["a"]),
     );
-    assert!(issues(&forgot)
-        .iter()
-        .any(|m| m.contains("use checkout \"root\"")));
+    assert_eq!(session_kind(&forgot, "a").1, Checkout::Root);
+    assert_eq!(issues(&forgot), Vec::<String>::new());
+    // A local step that forgets it still gets the run worktree.
+    let local = flow(PER_RUN(), vec![session("a", json!({}))], chain(&["a"]));
+    assert_eq!(session_kind(&local, "a").1, Checkout::Run);
     let root = flow(
         PER_RUN(),
         vec![session(
@@ -602,4 +605,197 @@ fn the_json_of_an_unreadable_workspace_is_left_unread() {
         "workspace": {"mode": 5}
     });
     assert!(super::parse::parse_workflow(&Json::parse(&spec.to_string()).unwrap()).is_none());
+}
+
+// --- review fixes --------------------------------------------------------------------------
+
+#[test]
+fn a_for_each_that_runs_items_in_parallel_warns_when_every_item_writes_into_one_folder() {
+    let each = |parallel: Value, inner: Value, workspace: Value| {
+        flow(
+            json!({
+                "workspace": workspace,
+                "concurrency": {"max": 1},
+                "inputs": {"project": {"type": "project"}, "items": {"type": "string"}},
+                "inputValues": {"project": "/code/app", "items": "x"}
+            }),
+            vec![
+                {
+                    let mut node = json!({"id": "each", "type": "forEach", "in": "{{inputs.items}}", "as": "item"});
+                    if !parallel.is_null() {
+                        node["maxParallel"] = parallel;
+                    }
+                    node
+                },
+                session("inner", {
+                    let mut extra = json!({"parent": "each"});
+                    for (k, v) in inner.as_object().unwrap() {
+                        extra[k] = v.clone();
+                    }
+                    extra
+                }),
+            ],
+            vec![json!({"from": "start", "to": "each"})],
+        )
+    };
+    let per_run = json!({"mode": "perRun", "project": "{{inputs.project}}"});
+    // The project folder, shared by the items: warned (the default is three at a time).
+    let root = each(Value::Null, json!({"checkout": "root"}), per_run.clone());
+    let found = warnings(&root);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].contains("several items at the same time"),
+        "{found:?}"
+    );
+    // An existing folder too.
+    let existing = each(
+        json!(2),
+        json!({"checkout": {"existing": "/code/app-worktrees/x"}}),
+        per_run.clone(),
+    );
+    assert_eq!(warnings(&existing).len(), 1);
+    // Mode none: the run checkout is the project folder itself.
+    let none = each(
+        json!(2),
+        json!({}),
+        json!({"mode": "none", "project": "{{inputs.project}}"}),
+    );
+    assert_eq!(warnings(&none).len(), 1, "{:?}", warnings(&none));
+    // One item at a time, a worktree per branch, or a worktree of its own: nothing to say.
+    for ok in [
+        each(json!(1), json!({"checkout": "root"}), per_run.clone()),
+        each(Value::Null, json!({}), per_run.clone()),
+        each(
+            Value::Null,
+            json!({"checkout": "newWorktree"}),
+            per_run.clone(),
+        ),
+    ] {
+        assert_eq!(warnings(&ok), Vec::<String>::new());
+    }
+}
+
+#[test]
+fn projects_are_compared_after_their_inputs_are_resolved() {
+    // A path literal and an input holding the same path are one project.
+    let same = flow(
+        PER_RUN(),
+        vec![session("a", json!({"project": "/code/app"}))],
+        chain(&["a"]),
+    );
+    assert_eq!(issues(&same), Vec::<String>::new());
+    // Two inputs that hold the same path are one project too.
+    let twin = flow(
+        json!({
+            "workspace": {"mode": "perRun", "project": "{{inputs.project}}"},
+            "inputValues": {"project": "/code/app/", "other": "/code/app"}
+        }),
+        vec![session("a", json!({"project": "{{inputs.other}}"}))],
+        chain(&["a"]),
+    );
+    assert_eq!(issues(&twin), Vec::<String>::new());
+    // Two inputs that resolve differently are an error.
+    let apart = flow(
+        PER_RUN(),
+        vec![session("a", json!({"project": "{{inputs.other}}"}))],
+        chain(&["a"]),
+    );
+    assert!(issues(&apart)
+        .iter()
+        .any(|m| m.contains("checkout run works in the run worktree")));
+    // So is a literal path that is another project.
+    let literal = flow(
+        PER_RUN(),
+        vec![session("a", json!({"project": "/code/lib"}))],
+        chain(&["a"]),
+    );
+    assert!(issues(&literal)
+        .iter()
+        .any(|m| m.contains("checkout run works in the run worktree")));
+}
+
+#[test]
+fn a_per_run_workspace_needs_a_local_project() {
+    let remote = |project: &str, mode: &str| {
+        flow(
+            json!({
+                "workspace": {"mode": mode, "project": project},
+                "inputValues": {"project": "remote://box/home/dev/app", "other": "/code/lib"}
+            }),
+            vec![command("a", json!({"cwd": "root"}))],
+            chain(&["a"]),
+        )
+    };
+    for project in ["remote://box/home/dev/app", "{{inputs.project}}"] {
+        let found = issues(&remote(project, "perRun"));
+        assert!(
+            found
+                .iter()
+                .any(|m| m.contains("remote machine") && m.contains("workspace mode none")),
+            "{project}: {found:?}"
+        );
+    }
+    // Mode none is the way out for a remote project.
+    assert_eq!(
+        issues(&remote("remote://box/home/dev/app", "none")),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_project_the_app_does_not_have_is_named_in_the_issues() {
+    let w = flow(
+        PER_RUN(),
+        vec![
+            session("a", json!({"project": "/code/app"})),
+            session(
+                "b",
+                json!({"project": "/code/elsewhere", "checkout": "root"}),
+            ),
+            command("c", json!({"project": "{{inputs.other}}", "cwd": "root"})),
+        ],
+        chain(&["a", "b", "c"]),
+    );
+    let app = vec!["/code/app".to_string(), "/code/lib".to_string()];
+    // Only /code/elsewhere is not the app's.
+    let found = unknown_project_issues(&w, &app);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].node_id.as_deref(), Some("b"));
+    // The app has lost /code/lib as well.
+    let only_app = vec!["/code/app".to_string()];
+    let found = unknown_project_issues(&w, &only_app);
+    let nodes: Vec<_> = found.iter().map(|i| i.node_id.clone()).collect();
+    assert_eq!(nodes, [Some("b".to_string()), Some("c".to_string())]);
+    assert!(found[0].message.contains("not one of the app's projects"));
+    // A project may be named by its folder name, as the app resolves it.
+    let named = flow(
+        PER_RUN(),
+        vec![session("a", json!({"project": "app"}))],
+        chain(&["a"]),
+    );
+    assert_eq!(unknown_project_issues(&named, &app), vec![]);
+}
+
+#[test]
+fn on_failure_that_is_not_text_makes_the_step_unreadable() {
+    let spec = |value: Value| {
+        json!({
+            "id": "wf-spaces01", "name": "Spaces", "enabled": false, "createdAt": 1,
+            "inputs": {"project": {"type": "project"}},
+            "inputValues": {"project": "/code/app"},
+            "nodes": [
+                {"id": "start", "type": "manual"},
+                {"id": "a", "type": "command", "command": "true", "onFailure": value}
+            ],
+            "edges": [{"from": "start", "to": "a"}]
+        })
+    };
+    for bad in [json!(true), json!(1), json!(["continue"]), json!({"x": 1})] {
+        assert!(
+            parse_workflow(&Json::from(&spec(bad.clone()))).is_none(),
+            "{bad} must not be read as a missing onFailure"
+        );
+    }
+    assert!(parse_workflow(&Json::from(&spec(json!("continue")))).is_some());
+    assert!(parse_workflow(&Json::from(&spec(Value::Null))).is_some());
 }

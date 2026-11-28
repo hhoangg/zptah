@@ -476,6 +476,15 @@ impl CallerKind {
     }
 }
 
+/// One run asked for while another request was still waiting to be claimed.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RunRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caller: Option<RunCaller>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<OrderedMap<InputValue>>,
+}
+
 /// Who or what started a run, and through which trigger node. It replaces the old `RunTrigger`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -875,6 +884,11 @@ pub struct Workflow {
     /// Who asked for the pending `run_requested` run. App-managed, never exported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_caller: Option<RunCaller>,
+    /// Runs asked for behind the pending `run_requested` one (a Mono or habit that calls
+    /// `workflows.run` several times in one turn), oldest first. Each is promoted to the pending
+    /// request when the one before it was claimed, so none is dropped. App-managed, never exported.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub run_backlog: Vec<RunRequest>,
     /// Whether a run gets a worktree, and from which project and branch.
     #[serde(skip_serializing_if = "Workspace::is_default")]
     pub workspace: Workspace,
@@ -921,6 +935,7 @@ impl Workflow {
             report_to: None,
             summary_template: None,
             run_caller: None,
+            run_backlog: Vec::new(),
             workspace: Workspace::default(),
             concurrency: Concurrency::default(),
             stop_run_ids: Vec::new(),

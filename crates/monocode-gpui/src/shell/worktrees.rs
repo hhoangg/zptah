@@ -21,6 +21,58 @@ impl Shell {
         }
     }
 
+    /// The sessions that work inside `path`, unless something there is in use: a terminal pane
+    /// open in it, or a session of it that is busy. Err says which. The one guard behind removing
+    /// a worktree, from the Settings and from a workflow run.
+    pub(crate) fn worktree_users(&self, path: &str, cx: &App) -> Result<Vec<i64>, String> {
+        use monocode_core::files::is_equal_or_inside;
+        if self
+            .terminals
+            .values()
+            .flatten()
+            .any(|t| is_equal_or_inside(&t.read(cx).cwd, path))
+        {
+            return Err("Close the terminals using this worktree first.".into());
+        }
+        let ids = self
+            .session_summaries
+            .keys()
+            .filter(|id| is_equal_or_inside(self.session_working_copy(**id, cx), path))
+            .copied()
+            .collect::<Vec<_>>();
+        if ids
+            .iter()
+            .any(|id| self.sessions.get(id).is_some_and(|v| v.read(cx).busy))
+        {
+            return Err("Stop the running sessions using this worktree first.".into());
+        }
+        Ok(ids)
+    }
+
+    /// Shows the sessions `detach_worktree` moved off a removed worktree: they keep their history
+    /// and no longer point into the folder that is gone.
+    pub(crate) fn worktree_detached(
+        &mut self,
+        detached: Vec<(
+            monocode_core::store::Session,
+            monocode_core::agent::Settings,
+        )>,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) {
+        use monocode_core::files::is_equal_or_inside;
+        for (summary, settings) in detached {
+            self.session_summaries.insert(summary.id, summary.clone());
+            self.session_worktrees
+                .insert(summary.id, settings.worktree_cwd.clone());
+            if let Some(view) = self.sessions.get(&summary.id) {
+                view.update(cx, |v, cx| v.worktree_deleted(summary, settings, cx));
+            }
+        }
+        self.worktree_focus
+            .retain(|_, focus| !is_equal_or_inside(&focus.path, path));
+    }
+
     pub(super) fn working_copy(&self) -> &str {
         self.worktree_focus
             .get(&self.workspace.project)

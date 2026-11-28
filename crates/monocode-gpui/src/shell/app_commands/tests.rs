@@ -2242,6 +2242,64 @@ fn a_session_in_a_worktree_sees_only_terminals_in_that_worktree_or_the_project(
 }
 
 #[gpui::test]
+fn a_terminal_or_a_busy_session_in_a_worktree_keeps_it_from_being_removed(cx: &mut TestAppContext) {
+    let (window, caller) = plain_session(cx);
+    let tree = "/work/monocode-worktrees/feature";
+    window
+        .update(cx, |shell, _, cx| {
+            shell.sessions[&caller].update(cx, |v, cx| {
+                v.install_transfer(
+                    Settings {
+                        worktree_cwd: Some(tree.into()),
+                        ..Default::default()
+                    },
+                    None,
+                    cx,
+                );
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    // Nothing runs there: the sessions that work in it are the ones that move on removal.
+    let users = window
+        .update(cx, |shell, _, cx| shell.worktree_users(tree, cx))
+        .unwrap();
+    assert_eq!(users, Ok(vec![caller]));
+    // A session that is busy keeps it.
+    window
+        .update(cx, |shell, _, cx| {
+            shell.sessions[&caller].update(cx, |v, _| v.busy = true)
+        })
+        .unwrap();
+    let busy = window
+        .update(cx, |shell, _, cx| shell.worktree_users(tree, cx))
+        .unwrap();
+    assert!(busy.unwrap_err().contains("Stop the running sessions"));
+    window
+        .update(cx, |shell, _, cx| {
+            shell.sessions[&caller].update(cx, |v, _| v.busy = false)
+        })
+        .unwrap();
+    // A terminal open in it keeps it; one beside it does not.
+    user_shell(
+        window,
+        WORK,
+        "/work/monocode-worktrees/other/src",
+        "beside",
+        cx,
+    );
+    let beside = window
+        .update(cx, |shell, _, cx| shell.worktree_users(tree, cx))
+        .unwrap();
+    assert!(beside.is_ok());
+    user_shell(window, WORK, &format!("{tree}/src"), "inside", cx);
+    let inside = window
+        .update(cx, |shell, _, cx| shell.worktree_users(tree, cx))
+        .unwrap();
+    assert!(inside.unwrap_err().contains("Close the terminals"));
+}
+
+#[gpui::test]
 fn a_session_may_only_read_terminals_every_other_action_is_refused(cx: &mut TestAppContext) {
     let (window, caller) = plain_session(cx);
     user_shell(window, WORK, WORK, "mine", cx);

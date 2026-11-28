@@ -1091,6 +1091,47 @@ fn met_requirements_start_the_run_and_a_workflow_without_any_is_never_preflighte
 }
 
 #[test]
+fn a_resume_is_refused_when_the_removed_worktree_has_no_repository_to_come_back_from() {
+    let root = temp_root();
+    let disk = dir(&root);
+    let mut run = mark_interrupted(&start_run(
+        &workflow(json!({})),
+        RunCaller::new(CallerKind::Manual, "start"),
+        1_000,
+        "run-old",
+    ));
+    run.worktree = Some(RunWorktree {
+        path: "/nowhere/app-worktrees/wf-x-1".into(),
+        branch: "wf/x-1".into(),
+        base: "abc".into(),
+        removed_at: Some(5),
+    });
+    save(
+        &disk,
+        &[workflow(
+            json!({"enabled": false, "resumeRunId": "run-old"}),
+        )],
+    );
+    put_runs(&disk, ID, vec![run]);
+    let found = look(&disk, &idle);
+    let Start::Refused {
+        run_id, failure, ..
+    } = &found.starts[0]
+    else {
+        panic!("not refused: {:?}", found.starts);
+    };
+    assert_eq!(run_id, "run-old");
+    assert!(failure.text.contains("cannot continue"), "{}", failure.text);
+    // The run stays interrupted and the request is consumed.
+    assert_eq!(
+        load_runs(&disk, ID).unwrap()[0].status,
+        RunStatus::Interrupted
+    );
+    assert_eq!(stored_one(&disk).resume_run_id, None);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn a_resume_is_refused_while_a_requirement_is_missing_and_the_run_stays_interrupted() {
     let root = temp_root();
     let disk = dir(&root);

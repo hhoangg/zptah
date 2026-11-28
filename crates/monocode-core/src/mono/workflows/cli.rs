@@ -17,7 +17,7 @@ use super::guide::workflow_guide;
 use super::model::{
     definition_fingerprint, interrupted_instances, left_instances_text, new_workflow_id,
     with_run_values, Edge, InputValue, Node, NodeKind, ReportTo, RequirementKind, RunCaller,
-    RunInstance, RunStatus, Workflow, WorkflowRun, QUEUED_RUNS_MAX, WORKFLOWS_MAX,
+    RunInstance, RunRequest, RunStatus, Workflow, WorkflowRun, QUEUED_RUNS_MAX, WORKFLOWS_MAX,
     WORKFLOW_DEFINITION_MAX_BYTES, WORKFLOW_DESCRIPTION_MAX, WORKFLOW_NAME_MAX,
 };
 use super::models::{harnesses_used, native_probe, workflow_issues, ModelCatalog, Probe};
@@ -83,6 +83,11 @@ pub trait WorkflowHost: Sized {
     fn preflight(&mut self, w: &Workflow) -> Preflight;
     /// The assigned project an input value names (a full path, or a folder name), if any.
     fn project_path(&self, input: &str) -> Option<String>;
+    /// The app's project paths, when the host knows them (the app's own pages do). Without them
+    /// a project named in a workflow is not checked against the app until the run starts.
+    fn app_projects(&self) -> Option<Vec<String>> {
+        None
+    }
     /// Why a cloud step cannot run with the Claude account `selector` (it names no account, or
     /// one without the setup token or API key an instance needs), if the host can tell. The
     /// answer never holds a credential. A host without the account book says nothing and the
@@ -193,6 +198,14 @@ impl Signals {
     pub fn is_running(&self, workflow_id: &str) -> bool {
         self.live_runs(workflow_id) > 0
     }
+    /// Whether `run_id` is counted as live in the workflow (claimed or started).
+    pub fn has_run(&self, workflow_id: &str, run_id: &str) -> bool {
+        self.running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(workflow_id)
+            .is_some_and(|runs| runs.contains(run_id))
+    }
     /// How many runs of the workflow are live.
     pub fn live_runs(&self, workflow_id: &str) -> usize {
         self.running
@@ -233,6 +246,8 @@ pub struct StoreHost {
     /// Where the Monos' old per-Mono folders are, to recognise an old workflow id.
     legacy_root: Option<PathBuf>,
     accounts: Option<AccountCheck>,
+    /// The app's project paths, when known.
+    projects: Option<Vec<String>>,
 }
 
 impl StoreHost {
@@ -245,11 +260,17 @@ impl StoreHost {
             caller: None,
             legacy_root: None,
             accounts: None,
+            projects: None,
         }
     }
     /// Replaces how requirements are checked (tests must never reach real CLIs or shells).
     pub fn with_preflight(mut self, preflight: fn(&Workflow) -> Preflight) -> Self {
         self.preflight = preflight;
+        self
+    }
+    /// The app's project paths: a project a workflow names must be one of them.
+    pub fn with_app_projects(mut self, projects: Vec<String>) -> Self {
+        self.projects = Some(projects);
         self
     }
     /// How cloud step accounts are judged (the app's account book is not in this crate).
@@ -319,6 +340,9 @@ impl WorkflowHost for StoreHost {
             None => Some(input.to_string()),
             Some(caller) => crate::mono::resolve_project(&caller.projects, input).ok(),
         }
+    }
+    fn app_projects(&self) -> Option<Vec<String>> {
+        self.projects.clone()
     }
     fn account_problem(&mut self, selector: &str) -> Option<String> {
         self.accounts.as_ref().and_then(|check| check(selector))
@@ -509,6 +533,9 @@ fn problems<H: WorkflowHost>(host: &mut H, w: &Workflow) -> Vec<WorkflowIssue> {
             }),
     );
     issues.extend(account_issues(host, w));
+    if let Some(projects) = host.app_projects() {
+        issues.extend(super::validate::unknown_project_issues(w, &projects));
+    }
     issues
 }
 
@@ -1578,14 +1605,11 @@ fn run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
     if current.needs_review {
         return Err(NEEDS_REVIEW.into());
     }
-    if current.run_requested {
-        return Err(
-            "A run of that workflow is already waiting to start; ask again in a moment".into(),
-        );
-    }
     // A workflow starts up to concurrency.max runs at once and queues the rest.
     let waiting = queued_count(&host.runs(&current.id)?);
-    if waiting >= QUEUED_RUNS_MAX {
+    // Requests not claimed yet will queue too: they count against the cap.
+    let unclaimed = usize::from(current.run_requested) + current.run_backlog.len();
+    if waiting + unclaimed >= QUEUED_RUNS_MAX {
         return Err(format!(
             "That workflow already has {QUEUED_RUNS_MAX} runs waiting in its queue, the most it keeps. Wait for some to start, or cancel some with workflows.stop and a runId"
         ));
@@ -1622,22 +1646,32 @@ fn run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         if !latest.enabled {
             return Err(NOT_ENABLED.into());
         }
+        let request = RunRequest {
+            caller: run_caller_of(caller.as_ref(), &latest),
+            // Only for the run that is about to start; never written to the stored input values.
+            values: (!values.is_empty()).then(|| values.clone()),
+        };
         if latest.run_requested {
-            return Err(
-                "A run of that workflow is already waiting to start; ask again in a moment".into(),
-            );
+            // Several calls in one turn: each waits behind the one before it.
+            if latest.run_backlog.len() + 1 + waiting >= QUEUED_RUNS_MAX {
+                return Err(format!(
+                    "That workflow already has {QUEUED_RUNS_MAX} runs waiting, the most it keeps. Wait for some to start, or cancel some with workflows.stop and a runId"
+                ));
+            }
+            latest.run_backlog.push(request);
+        } else {
+            latest.run_requested = true;
+            latest.run_caller = request.caller;
+            latest.run_values = request.values;
         }
-        latest.run_requested = true;
-        latest.run_caller = run_caller_of(caller.as_ref(), &latest);
-        // Only for the run that is about to start; never written to the stored input values.
-        latest.run_values = (!values.is_empty()).then(|| values.clone());
         Ok((replace(list, latest), ()))
     })?;
     host.request_check_now();
-    let queued = waiting > 0 || host.live_runs(&current.id) >= current.concurrency.limit();
+    let queued =
+        waiting + unclaimed > 0 || host.live_runs(&current.id) >= current.concurrency.limit();
     let mut result = vec![("id", st(&current.id))];
     if queued {
-        let position = waiting + 1;
+        let position = waiting + unclaimed + 1;
         result.push(("queued", Json::Bool(true)));
         result.push(("position", Json::Number(position as f64)));
         result.push((
@@ -1742,6 +1776,9 @@ fn stop<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         ("id", st(&current.id)),
         ("note", st("Stop requested; the run ends within seconds.")),
     ];
+    if let Some(run_id) = &named {
+        result.push(("runId", st(run_id)));
+    }
     // A stop never stops or deletes a cloud instance: say which ones the run leaves.
     let stopping = runs.iter().find(|r| match &named {
         Some(run_id) => r.id == *run_id,
@@ -1816,6 +1853,11 @@ fn resume_run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, Strin
             status.as_str().unwrap_or_default()
         ));
     }
+    // A worktree the user removed is made again from its branch; without the branch the run
+    // has nowhere to continue.
+    if let Some(problem) = super::run_worktree::resume_problem(&run) {
+        return Err(problem);
+    }
     // What the run was made with and what the workflow asks now both have to be there.
     // The run executes its own snapshot with its effective values, so that is what is checked.
     check_scope(host.caller(), &with_run_values(&run.definition))?;
@@ -1869,10 +1911,25 @@ fn remove<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
     })?;
     // An interrupted run never reported, so its history is the only place that names the cloud
     // instances it left. They are not stopped or deleted: they are named in the answer.
-    let left = interrupted_instances(&host.runs(&current.id).unwrap_or_default());
+    let history = host.runs(&current.id).unwrap_or_default();
+    let left = interrupted_instances(&history);
+    // The worktrees of its runs stay on disk: the history that named them goes with the workflow.
+    let trees = worktrees_left(&history);
     // The history of a workflow that is gone is of no use; losing the cleanup is harmless.
     host.clear_runs(&current.id);
     let mut result = vec![("removed", st(&current.name))];
+    if !trees.is_empty() {
+        result.push((
+            "worktreesKept",
+            Json::Array(
+                trees
+                    .iter()
+                    .map(|(path, branch)| obj([("path", st(path)), ("branch", st(branch))]))
+                    .collect(),
+            ),
+        ));
+        result.push(("worktreesNote", st(worktrees_left_text(&trees))));
+    }
     if !left.is_empty() {
         result.push(("cloudInstances", instances_json(&left)));
         result.push((
@@ -1884,6 +1941,31 @@ fn remove<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         ));
     }
     Ok(Json::Object(result.into_iter().collect()))
+}
+
+/// The worktrees the runs of a workflow leave on disk, as `(path, branch)`, each once.
+pub fn worktrees_left(runs: &[WorkflowRun]) -> Vec<(String, String)> {
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for tree in runs.iter().flat_map(super::run_worktree::kept_worktrees) {
+        if !seen.contains(&tree) {
+            seen.push(tree);
+        }
+    }
+    seen
+}
+
+/// What the removal of a workflow says about the worktrees its runs leave.
+pub fn worktrees_left_text(trees: &[(String, String)]) -> String {
+    let list: Vec<String> = trees
+        .iter()
+        .map(|(path, branch)| format!("{path} ({branch})"))
+        .collect();
+    format!(
+        "{} worktree{} of its runs stay on disk, with their branches, because the run history that names them is removed: {}. Remove them with git when you no longer need them.",
+        trees.len(),
+        if trees.len() == 1 { "" } else { "s" },
+        list.join("; ")
+    )
 }
 
 fn export<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {

@@ -619,36 +619,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         use monocode_core::files::is_equal_or_inside;
-        if self
-            .terminals
-            .values()
-            .flatten()
-            .any(|t| is_equal_or_inside(&t.read(cx).cwd, &path))
-        {
-            self.finish_worktree_action(
-                &path,
-                Err("Close the terminals using this worktree first.".into()),
-                cx,
-            );
-            return;
-        }
-        let ids = self
-            .session_summaries
-            .keys()
-            .filter(|id| is_equal_or_inside(self.session_working_copy(**id, cx), &path))
-            .copied()
-            .collect::<Vec<_>>();
-        if ids
-            .iter()
-            .any(|id| self.sessions.get(id).is_some_and(|v| v.read(cx).busy))
-        {
-            self.finish_worktree_action(
-                &path,
-                Err("Stop the running sessions using this worktree first.".into()),
-                cx,
-            );
-            return;
-        }
+        let ids = match self.worktree_users(&path, cx) {
+            Ok(ids) => ids,
+            Err(error) => {
+                self.finish_worktree_action(&path, Err(error), cx);
+                return;
+            }
+        };
         let check_cwd = cwd.clone();
         let check_path = path.clone();
         let work = cx.background_executor().spawn(async move {
@@ -672,7 +649,7 @@ impl Shell {
                 monocode_core::worktree_management::remove(Path::new(&main.path),Path::new(&worker_path))?;
                 locked(&store)?.detach_worktree(&worker_path,&main.path)
             });let result=work.await;
-            let _=this.update(cx,|this,cx|{let result=result.map(|detached|{for(summary,settings)in detached{this.session_summaries.insert(summary.id, summary.clone());this.session_worktrees.insert(summary.id,settings.worktree_cwd.clone());if let Some(view)=this.sessions.get(&summary.id){view.update(cx,|v,cx|v.worktree_deleted(summary,settings,cx));}}this.worktree_focus.retain(|_,focus|!is_equal_or_inside(&focus.path,&path));});this.finish_worktree_action(&path,result,cx);});
+            let _=this.update(cx,|this,cx|{let result=result.map(|detached|this.worktree_detached(detached,&path,cx));this.finish_worktree_action(&path,result,cx);});
         }).detach();
         let _ = window;
     }

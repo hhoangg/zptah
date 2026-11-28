@@ -347,6 +347,17 @@ pub(super) fn remove(host: &mut impl WorkflowHost, id: &str) -> Option<String> {
     notice
 }
 
+/// Cancels every run that waits, then removes the workflow (the user agreed to both).
+pub(super) fn remove_cancelling_queue(host: &mut impl WorkflowHost, id: &str) -> Option<String> {
+    let runs = host.runs(id).unwrap_or_default();
+    for run in monocode_core::mono::workflows::queue::queued_fifo(&runs) {
+        if let Err(error) = host.cancel_queued(id, &run.id) {
+            return Some(error);
+        }
+    }
+    remove(host, id)
+}
+
 /// The cloud instances the interrupted runs of the workflow left running, named for the user
 /// before removing the workflow forgets them. Read only: nothing is stopped or deleted.
 pub(super) fn left_instances(host: &mut impl WorkflowHost, id: &str) -> Option<String> {

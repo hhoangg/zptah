@@ -4,8 +4,8 @@ use super::condition::condition_syntax_problem;
 use super::model::{
     is_node_id, Checkout, Cwd, Handle, Node, NodeId, NodeKind, Requirement, RequirementKind,
     SessionMode, SessionSurface, SessionTarget, TargetInstance, Workflow, WorkspaceMode,
-    CONCURRENCY_LIMIT, MAX_PARALLEL_LIMIT, MAX_ROUNDS_LIMIT, MAX_TIMEOUT_MINUTES, SWITCH_DEFAULT,
-    TEMPLATABLE_TARGET_OPTIONS, TRIGGERS_MAX,
+    CONCURRENCY_LIMIT, DEFAULT_MAX_PARALLEL, MAX_PARALLEL_LIMIT, MAX_ROUNDS_LIMIT,
+    MAX_TIMEOUT_MINUTES, SWITCH_DEFAULT, TEMPLATABLE_TARGET_OPTIONS, TRIGGERS_MAX,
 };
 use super::output::{is_builtin_name, session_builtins, COMMAND_BUILTINS};
 use super::parse::{is_ai_decide, is_map_key, is_name};
@@ -702,6 +702,30 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// The folder a step's `project` names: a path as written, or the value of the project input
+    /// it names. `None` when it names an input that has no value yet.
+    fn resolved_project(&self, project: &str) -> Option<String> {
+        let project = js_trim(project);
+        match project_ref(project) {
+            Some(name) => match self.w.input_values.get(name) {
+                Some(super::model::InputValue::String(path)) if !js_trim(path).is_empty() => {
+                    Some(js_trim(path).trim_end_matches('/').to_string())
+                }
+                _ => None,
+            },
+            None => Some(project.trim_end_matches('/').to_string()),
+        }
+    }
+
+    /// Whether two `project` texts name the same folder: the same text, or texts that resolve
+    /// (through the input values) to the same path.
+    fn same_project(&self, a: &str, b: &str) -> bool {
+        if js_trim(a) == js_trim(b) {
+            return true;
+        }
+        matches!((self.resolved_project(a), self.resolved_project(b)), (Some(a), Some(b)) if a == b)
+    }
+
     /// `workspace` and `concurrency`.
     fn check_workspace(&mut self) {
         let workspace = &self.w.workspace;
@@ -711,6 +735,17 @@ impl<'a> Checker<'a> {
             {
                 self.add(problem, None);
             }
+        }
+        // A worktree is made with the Git of this computer, in a folder next to the project.
+        if workspace.mode == WorkspaceMode::PerRun
+            && self
+                .resolved_project(&workspace.project)
+                .is_some_and(|path| path.starts_with("remote://"))
+        {
+            self.add(
+                "workspace.project is on a remote machine, and a run worktree is made on this computer only: use a local project, or workspace mode none",
+                None,
+            );
         }
         if let Some(branch) = &workspace.base_branch {
             let bad = js_trim(branch).is_empty()
@@ -745,7 +780,7 @@ impl<'a> Checker<'a> {
                 let workspace = &self.w.workspace;
                 let another = workspace.per_run()
                     && !js_trim(project).is_empty()
-                    && js_trim(project) != js_trim(&workspace.project);
+                    && !self.same_project(project, &workspace.project);
                 if another {
                     self.add(
                         format!(
@@ -1876,6 +1911,56 @@ fn exclusive(g: &Graph, w: &Workflow, a: &str, b: &str) -> bool {
     false
 }
 
+/// The steps and the workspace that name a project the app does not have (D3: projects resolve
+/// against the app's projects only). A project that is `{{inputs.<name>}}` is judged by the value
+/// the input holds, when it has one; empty means the workspace project. `projects` are the app's
+/// project paths.
+pub fn unknown_project_issues(w: &Workflow, projects: &[String]) -> Vec<WorkflowIssue> {
+    let known = |text: &str| -> Option<bool> {
+        let text = js_trim(text);
+        if text.is_empty() {
+            return None;
+        }
+        let path = match project_ref(text) {
+            Some(name) => match w.input_values.get(name) {
+                Some(super::model::InputValue::String(path)) if !js_trim(path).is_empty() => {
+                    path.clone()
+                }
+                _ => return None,
+            },
+            None if text.contains("{{") => return None,
+            None => text.to_string(),
+        };
+        Some(crate::mono::resolve_project(projects, &path).is_ok())
+    };
+    let mut out = Vec::new();
+    if known(&w.workspace.project) == Some(false) {
+        out.push(WorkflowIssue {
+            node_id: None,
+            message: format!(
+                "workspace.project \"{}\" is not one of the app's projects: add it to the app or pick another",
+                js_trim(&w.workspace.project)
+            ),
+        });
+    }
+    for node in &w.nodes {
+        let project = match &node.kind {
+            NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => project,
+            _ => continue,
+        };
+        if known(project) == Some(false) {
+            out.push(WorkflowIssue {
+                node_id: Some(node.id.clone()),
+                message: format!(
+                    "project \"{}\" is not one of the app's projects: add it to the app or pick another",
+                    js_trim(project)
+                ),
+            });
+        }
+    }
+    out
+}
+
 /// Advice about a definition that never blocks a save or a run: a risk the user may accept.
 /// Today it covers steps that can run at the same time in one worktree (D25 included).
 pub fn workflow_warnings(w: &Workflow) -> Vec<WorkflowIssue> {
@@ -1914,6 +1999,36 @@ pub fn workflow_warnings(w: &Workflow) -> Vec<WorkflowIssue> {
                 message: format!(
                     "Steps \"{}\" and \"{}\" can run at the same time and both write into {place}: connect one after the other, or give one a checkout of its own (newWorktree)",
                     a.id, b.id
+                ),
+            });
+        }
+    }
+    // The items of a For each go in parallel: a step that writes into a folder shared by every
+    // item (the project folder or a named one) races with itself.
+    for (node, key) in &writers {
+        if !(key.starts_with("root:") || key.starts_with("path:")) {
+            continue;
+        }
+        let parallel = std::iter::successors(node.parent.as_deref(), |id| {
+            g.by_id.get(id).and_then(|n| n.parent.as_deref())
+        })
+        .filter_map(|id| g.by_id.get(id))
+        .find_map(|n| match &n.kind {
+            NodeKind::ForEach { max_parallel, .. } => {
+                Some(max_parallel.unwrap_or(f64::from(DEFAULT_MAX_PARALLEL)))
+            }
+            _ => None,
+        });
+        if parallel.is_some_and(|p| p > 1.0) {
+            let place = match key.strip_prefix("root:") {
+                Some(project) => format!("the project folder {project}"),
+                None => format!("the folder {}", key.trim_start_matches("path:")),
+            };
+            out.push(WorkflowIssue {
+                node_id: Some(node.id.clone()),
+                message: format!(
+                    "Step \"{}\" runs for several items at the same time and every item writes into {place}: lower maxParallel to 1, or give each item a worktree of its own (checkout run with a perRun workspace, or newWorktree)",
+                    node.id
                 ),
             });
         }

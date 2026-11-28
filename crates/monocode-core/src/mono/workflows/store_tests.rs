@@ -319,6 +319,89 @@ fn the_runs_kept_for_their_instances_are_bounded() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+fn with_tree(id: &str, status: RunStatus, removed: Option<u64>) -> WorkflowRun {
+    let mut r = run(id);
+    r.status = status;
+    r.worktree = Some(RunWorktree {
+        path: format!("/code/app-worktrees/{id}"),
+        branch: format!("wf/{id}"),
+        base: "abc".into(),
+        removed_at: removed,
+    });
+    r
+}
+
+#[test]
+fn a_run_whose_worktree_is_still_on_disk_is_kept_past_the_newest_20() {
+    let root = temp_root();
+    let disk = dir(&root);
+    let mut all: Vec<WorkflowRun> = (0..20).map(|i| run(&format!("new{i}"))).collect();
+    // Older: one that still has its folder, one whose folder was removed, one with a branch's.
+    all.push(with_tree("old-kept", RunStatus::Done, None));
+    all.push(with_tree("old-removed", RunStatus::Done, Some(9)));
+    let mut branch = run("old-branch");
+    branch.branch_worktrees.insert(
+        "each#0".into(),
+        RunWorktree {
+            path: "/code/app-worktrees/b".into(),
+            branch: "wf/b".into(),
+            base: "abc".into(),
+            removed_at: None,
+        },
+    );
+    all.push(branch);
+    update_runs(&disk, ID, |_| Ok((all.clone(), ()))).unwrap();
+    let kept = ids(&text(&disk, RUNS));
+    assert_eq!(kept.len(), 22);
+    assert!(kept.contains(&"old-kept".to_string()));
+    assert!(kept.contains(&"old-branch".to_string()));
+    assert!(!kept.contains(&"old-removed".to_string()));
+    // The record still names the worktree.
+    let loaded = load_runs(&disk, ID).unwrap();
+    assert_eq!(loaded[20].worktree.as_ref().unwrap().branch, "wf/old-kept");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn the_runs_kept_for_their_worktrees_are_bounded() {
+    let root = temp_root();
+    let disk = dir(&root);
+    let mut all: Vec<WorkflowRun> = (0..20).map(|i| run(&format!("new{i}"))).collect();
+    all.extend(
+        (0..WORKTREE_RUNS_KEPT + 5).map(|i| with_tree(&format!("t{i}"), RunStatus::Done, None)),
+    );
+    update_runs(&disk, ID, |_| Ok((all.clone(), ()))).unwrap();
+    let kept = ids(&text(&disk, RUNS));
+    assert_eq!(kept.len(), 20 + WORKTREE_RUNS_KEPT);
+    assert_eq!(
+        kept.last().unwrap(),
+        &format!("t{}", WORKTREE_RUNS_KEPT - 1)
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn running_and_queued_runs_are_never_trimmed_with_the_history() {
+    let root = temp_root();
+    let disk = dir(&root);
+    let mut all: Vec<WorkflowRun> = (0..25).map(|i| run(&format!("new{i}"))).collect();
+    all.push({
+        let mut r = run("old-running");
+        r.status = RunStatus::Running;
+        r
+    });
+    all.push({
+        let mut r = run("old-queued");
+        r.status = RunStatus::Queued;
+        r
+    });
+    update_runs(&disk, ID, |_| Ok((all.clone(), ()))).unwrap();
+    let kept = ids(&text(&disk, RUNS));
+    assert!(kept.contains(&"old-running".to_string()), "{kept:?}");
+    assert!(kept.contains(&"old-queued".to_string()), "{kept:?}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn under_the_size_budget_ordinary_runs_go_before_one_that_names_instances() {
     let root = temp_root();
