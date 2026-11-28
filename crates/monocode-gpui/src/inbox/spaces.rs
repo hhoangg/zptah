@@ -35,3 +35,32 @@ pub(crate) fn list_spaces(database: &Database) -> Result<Vec<(String, String)>, 
         .map(|space| (space.id, space.name))
         .collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spaces() -> Vec<(String, String)> {
+        vec![("901".into(), "Engineering".into())]
+    }
+
+    #[test]
+    fn space_options_keep_a_saved_id_that_is_not_listed() {
+        let options = space_options(&spaces(), "901");
+        assert_eq!(
+            options,
+            [
+                ("".to_string(), "Any space".to_string()),
+                ("901".to_string(), "Engineering".to_string())
+            ]
+        );
+        let options = space_options(&spaces(), " 77 ");
+        assert_eq!(
+            options.last(),
+            Some(&("77".to_string(), "Space 77".to_string()))
+        );
+        assert_eq!(space_label(&spaces(), "901"), "Engineering");
+        assert_eq!(space_label(&spaces(), ""), "Any space");
+        assert_eq!(space_label(&spaces(), "77"), "Space 77");
+    }
+}

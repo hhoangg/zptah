@@ -48,9 +48,11 @@ For each hit, decide:
 Automations were removed in favor of Workflows. When a merge reports a modify/delete conflict
 on a removed Automations path, keep the deletion, as for the Tauri paths below. The removed
 paths are `crates/monocode-core/src/automations.rs`, `crates/monocode-gpui/src/automations.rs`,
-`crates/monocode-gpui/src/automations/`, `crates/monocode-gpui/src/shell/automation_runs.rs` and
-`crates/monocode-gpui/src/shell/automation_runs/`. New upstream call sites of the removed APIs
-(`automation_state`, `automation_surface`, `AppView::Automations`) must be ported to Workflows or
+`crates/monocode-gpui/src/automations/`, `crates/monocode-gpui/src/shell/automation_runs.rs`,
+`crates/monocode-gpui/src/shell/automation_runs/` and `crates/monocode-core/src/store/managed_sessions.rs`.
+New upstream call sites of the removed APIs, such as `automation_state`, `automation_surface`,
+`AppView::Automations`, `set_automation_id`, `automation_session_ids`, `monocode_core::automations`
+and `open_automations`, must be ported to Workflows or
 dropped. The legacy TS `src/features/automations/` stays (`monoHabits.ts` imports it) and so does
 the `sessions.automation_id` column (shared schema).
 

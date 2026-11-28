@@ -5215,7 +5215,7 @@ impl Shell {
         cx.notify();
     }
     fn ensure_project_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.workspace.active.is_some() || self.mono_active(cx) {
+        if self.workspace.active.is_some() || self.mono_active(cx) || self.app_view_open() {
             return;
         }
         if let Some(id) = self.order.iter().copied().find(|id| {

@@ -69,10 +69,10 @@ the CLI process.
   on Windows or for remote and cloud projects; otherwise choose the chat
   surface. In a terminal the prompt is passed to the CLI as its first prompt,
   and every run opens a new terminal session, so session reuse is unavailable.
-  A per-run workflow worktree is created before the CLI starts. The step is
-  recorded as succeeded once the CLI stays up for a few seconds, and as failed
-  if it exits or cannot start in that time. Step success still means the CLI
-  took the prompt, not that its turn finished.
+  A per-run workflow worktree is created before the CLI starts. The step
+  finishes when Claude's turn ends: the app sees busy become true and then
+  false from the hooks below. If the CLI exits before the turn starts or during
+  it, the step fails.
 - A Claude terminal session shows as busy while a turn runs. The app learns this
   from Claude Code hooks it adds to the launch with `--settings`: a submitted
   prompt marks it busy, and `Stop`, `StopFailure`, `SessionEnd` or the CLI
