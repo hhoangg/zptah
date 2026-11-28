@@ -26,7 +26,7 @@ against the newest 100 workspace tasks. Your own tasks older than that window do
 not appear under that filter. The API is paged up to 500 tasks per refresh. Long
 comment threads show the latest 50 comments.
 
-Workflows offer a **ClickUp issue created** event trigger after connecting. A workflow
+Workflows offer a **ClickUp → Task appeared** event trigger after connecting. A workflow
 runs in its workspace project when a ClickUp task first appears in the
 polled inbox, after its initial snapshot, once per workflow and task. The optional **Space**
 filter lists spaces by name but stores the space id, so renaming a space in

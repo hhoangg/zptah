@@ -16,7 +16,7 @@ The inbox loads up to 40 open issues or 100 issues when including closed history
 ordered by last update. An unfiltered all-status query covers the last year of
 activity. Long comment threads show the latest 50 comments, with a link to Jira.
 
-Workflows offer a **Jira issue created** event trigger after connecting. A workflow
+Workflows offer a **Jira → Issue appeared** event trigger after connecting. A workflow
 runs in its workspace project when a Jira issue first appears in the polled
 inbox, after its initial snapshot. The project-key filter uses values such as
 `ENG`. This is polling, not a webhook for every issue created on the site.
