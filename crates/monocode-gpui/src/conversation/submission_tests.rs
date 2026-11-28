@@ -4,7 +4,10 @@ use monocode_core::{store::Store, transcript::attachments};
 use std::sync::Mutex;
 
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    conversation_on(cx, Store::open(Path::new(":memory:")).unwrap())
+}
+
+fn conversation_on(cx: &mut TestAppContext, store: Store) -> WindowHandle<Conversation> {
     // Fail after saving the turn, without ever launching a real provider.
     let mut summary = store
         .create("codex", "/missing/optimistic-send-project")
@@ -341,18 +344,20 @@ fn mono_with_workflow(cx: &mut TestAppContext) -> (WindowHandle<Conversation>, s
     use monocode_core::mono::workflows::{model::Workflow, store::update_workflows};
     let root = std::env::temp_dir().join(format!("mono-popup-{}", monocode_core::mono::new_id()));
     std::fs::create_dir_all(&root).unwrap();
-    update_workflows(
-        &monocode_core::mono::workflows::store::MonoDir::new(&root, "mono-a"),
-        |mut list| {
-            list.push(Workflow::new("wf-popup", "Nightly Deploy"));
-            Ok((list, ()))
-        },
-    )
-    .unwrap();
     cx.update(crate::composer_completion::bind);
-    let window = conversation(cx);
+    // A store on disk, so the global workflows folder sits in `root` next to its database.
+    let window = conversation_on(cx, Store::open(&root.join("zptah.db")).unwrap());
     window
         .update(cx, |view, window, cx| {
+            // Workflows are global: the composer reads them from the store's workflows folder.
+            let dir = monocode_core::mono::workflows::global::WorkflowsDir::for_store(
+                &crate::runtime::locked(&view.store).unwrap(),
+            );
+            update_workflows(&dir, |mut list| {
+                list.push(Workflow::new("wf-popup", "Nightly Deploy"));
+                Ok((list, ()))
+            })
+            .unwrap();
             let mono = monocode_core::mono::Mono {
                 id: "mono-a".into(),
                 ..Default::default()
