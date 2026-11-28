@@ -22,48 +22,74 @@ const SESSION_BRANCH: &str = "mc/native-";
 /// worktree's path key and the value the run's id.
 const WORKFLOW_WORKTREE: &str = "workflow-worktree:";
 
-fn workflow_worktree_key(path: &str) -> String {
+fn mark_key(path: &str) -> String {
     format!("{WORKFLOW_WORKTREE}{}", path_key(path))
+}
+
+/// `path` without the Windows verbatim prefix `canonicalize` adds: `\\?\D:\x` is `D:\x` and
+/// `\\?\UNC\host\share` is `\\host\share`. Any other text is returned as it is. A pure string
+/// function, so it behaves the same on every OS.
+pub fn strip_verbatim_prefix(path: &str) -> String {
+    for prefix in [r"\\?\UNC\", "//?/UNC/"] {
+        if let Some(rest) = path.strip_prefix(prefix) {
+            return format!(r"\\{rest}");
+        }
+    }
+    for prefix in [r"\\?\", "//?/"] {
+        if let Some(rest) = path.strip_prefix(prefix) {
+            return rest.to_string();
+        }
+    }
+    path.to_string()
+}
+
+/// The keys a worktree's mark may be under: the path as written, and its real path (verbatim
+/// prefix stripped) when it exists. The real one first: it is what a mark is written under, so
+/// two spellings of one folder meet. The written one stays, so a folder that is gone still
+/// matches the mark it had.
+fn workflow_worktree_keys(path: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    if let Ok(real) = Path::new(path).canonicalize() {
+        keys.push(mark_key(&strip_verbatim_prefix(&real.to_string_lossy())));
+    }
+    let raw = mark_key(path);
+    if !keys.contains(&raw) {
+        keys.push(raw);
+    }
+    keys
 }
 
 /// Records that `path` belongs to a workflow run, so no session removal ever takes it. Only the
 /// run's page removes it.
 pub fn mark_workflow_worktree(store: &Store, path: &str, run_id: &str) -> Result<(), String> {
-    store.save_setting(&workflow_worktree_key(path), run_id)
+    store.save_setting(&workflow_worktree_keys(path)[0], run_id)
 }
 
 /// The id of the run that owns `path`, if a workflow run does.
 pub fn workflow_worktree_owner(store: &Store, path: &str) -> Option<String> {
-    let owner = |key: String| {
+    workflow_worktree_keys(path).into_iter().find_map(|key| {
         store
             .setting(&key)
             .ok()
             .flatten()
             .filter(|id| !id.is_empty())
-    };
-    owner(workflow_worktree_key(path)).or_else(|| {
-        Path::new(path)
-            .canonicalize()
-            .ok()
-            .and_then(|real| owner(workflow_worktree_key(&real.to_string_lossy())))
     })
 }
 
-/// Forgets the mark of a worktree the user removed.
+/// Forgets the mark of a worktree the user removed, under every spelling it may have.
 pub fn unmark_workflow_worktree(store: &Store, path: &str) -> Result<(), String> {
-    store.delete_setting(&workflow_worktree_key(path))
+    for key in workflow_worktree_keys(path) {
+        store.delete_setting(&key)?;
+    }
+    Ok(())
 }
 
 /// Whether `path` belongs to a workflow run (as recorded, or as its real path). A lookup that
 /// fails counts as owned: nothing is removed on a guess.
 pub fn is_workflow_worktree(store: &Store, path: &str) -> bool {
-    let owned = |key: String| !matches!(store.setting(&key), Ok(None));
-    if owned(workflow_worktree_key(path)) {
-        return true;
-    }
-    Path::new(path)
-        .canonicalize()
-        .is_ok_and(|real| owned(workflow_worktree_key(&real.to_string_lossy())))
+    workflow_worktree_keys(path)
+        .into_iter()
+        .any(|key| !matches!(store.setting(&key), Ok(None)))
 }
 
 /// The worktree path to report for a session, or `None` when it works in the

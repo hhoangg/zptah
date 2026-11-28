@@ -419,3 +419,23 @@ fn the_mark_holds_for_the_real_path_and_for_another_spelling_of_it() {
     assert!(is_workflow_worktree(&f.store, &spelled));
     assert!(!is_workflow_worktree(&f.store, &f.repo.to_string_lossy()));
 }
+
+#[test]
+fn the_windows_verbatim_prefix_is_stripped_on_every_os() {
+    assert_eq!(strip_verbatim_prefix(r"\\?\D:\work\app"), r"D:\work\app");
+    assert_eq!(strip_verbatim_prefix("//?/D:/work/app"), "D:/work/app");
+    assert_eq!(
+        strip_verbatim_prefix(r"\\?\UNC\host\share\app"),
+        r"\\host\share\app"
+    );
+    assert_eq!(strip_verbatim_prefix("//?/UNC/host/share"), r"\\host/share");
+    // Anything else is left alone.
+    for plain in [r"D:\work", "/home/me/app", r"\\host\share", ""] {
+        assert_eq!(strip_verbatim_prefix(plain), plain);
+    }
+    // And it meets the plain spelling in a key.
+    assert_eq!(
+        crate::files::path_key(&strip_verbatim_prefix(r"\\?\D:\Work\App")),
+        crate::files::path_key(r"d:\work\app")
+    );
+}
