@@ -250,7 +250,7 @@ impl Monos {
             let spaces = self.wf.events.spaces.clone();
             let label = crate::inbox::spaces::space_label(&spaces, &saved);
             self.pick_row(
-                "Spaces",
+                "Space",
                 BoardPick::EventSpace(id.clone()),
                 &label,
                 crate::inbox::spaces::space_options(&spaces, &saved),
