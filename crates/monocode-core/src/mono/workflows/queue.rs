@@ -6,16 +6,16 @@
 //! A queued record holds who asked (`caller`, with the event item), the values asked for the run
 //! (`runValues` of a stub definition) and its number. The definition the run executes is taken
 //! when it starts, not when it was queued (D22).
-use super::model::{
-    RunCaller, RunStatus, Workflow, WorkflowRun, QUEUED_RUNS_MAX,
-};
+use super::model::{RunCaller, RunStatus, Workflow, WorkflowRun, QUEUED_RUNS_MAX};
 use super::store::{update_runs, MonoFiles};
 
 /// The runs of `runs` that wait, the one to start first at the front.
 pub fn queued_fifo(runs: &[WorkflowRun]) -> Vec<&WorkflowRun> {
     // The file lists newest first, so the oldest queued run is the last one.
-    let mut waiting: Vec<&WorkflowRun> =
-        runs.iter().filter(|r| r.status == RunStatus::Queued).collect();
+    let mut waiting: Vec<&WorkflowRun> = runs
+        .iter()
+        .filter(|r| r.status == RunStatus::Queued)
+        .collect();
     waiting.reverse();
     // Runs queued at the same moment keep file order; otherwise the earlier queue time goes first.
     waiting.sort_by_key(|r| r.queued_at.unwrap_or(r.started_at));
@@ -24,7 +24,9 @@ pub fn queued_fifo(runs: &[WorkflowRun]) -> Vec<&WorkflowRun> {
 
 /// How many runs wait.
 pub fn queued_count(runs: &[WorkflowRun]) -> usize {
-    runs.iter().filter(|r| r.status == RunStatus::Queued).count()
+    runs.iter()
+        .filter(|r| r.status == RunStatus::Queued)
+        .count()
 }
 
 /// The place of a queued run in the queue, 1 for the next to start. `None` when it is not queued.

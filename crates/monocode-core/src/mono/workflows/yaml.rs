@@ -161,7 +161,11 @@ fn export_node(node: &Node) -> Doc {
             target,
             account,
         } => {
-            put(&mut out, "project", (!project.is_empty()).then(|| text(project)));
+            put(
+                &mut out,
+                "project",
+                (!project.is_empty()).then(|| text(project)),
+            );
             put(&mut out, "harness", harness.as_deref().map(text));
             put(&mut out, "model", model.as_deref().map(text));
             put(&mut out, "effort", effort.as_deref().map(text));
@@ -195,7 +199,11 @@ fn export_node(node: &Node) -> Doc {
             timeout_minutes,
             on_failure,
         } => {
-            put(&mut out, "project", (!project.is_empty()).then(|| text(project)));
+            put(
+                &mut out,
+                "project",
+                (!project.is_empty()).then(|| text(project)),
+            );
             put(&mut out, "onFailure", on_failure.as_deref().map(text));
             put(
                 &mut out,
@@ -902,7 +910,9 @@ pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPrevie
         Some(_) => return fail("summaryTemplate must be text"),
     };
     let Some(workspace) = parse_workspace(file.get("workspace")) else {
-        return fail("workspace needs a mode of perRun or none, and optionally a project and a baseBranch");
+        return fail(
+            "workspace needs a mode of perRun or none, and optionally a project and a baseBranch",
+        );
     };
     let Some(concurrency) = parse_concurrency(file.get("concurrency")) else {
         return fail("concurrency needs a max, a number from 1 to 10");

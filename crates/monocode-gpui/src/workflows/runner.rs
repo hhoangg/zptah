@@ -1400,7 +1400,11 @@ impl Exec {
         // exit code (killed by a signal) reads as -1.
         output.insert(
             "exitCode",
-            Json::Number(f64::from(result.exit_code.unwrap_or(if carry_on { -1 } else { 0 }))),
+            Json::Number(f64::from(result.exit_code.unwrap_or(if carry_on {
+                -1
+            } else {
+                0
+            }))),
         );
         output.insert("stdout", Json::String(result.stdout));
         output.insert("stderr", Json::String(result.stderr));

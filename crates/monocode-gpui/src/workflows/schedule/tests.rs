@@ -267,21 +267,31 @@ fn the_clock_looks_every_minute(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_second_run_of_a_workflow_waits_for_the_first(cx: &mut TestAppContext) {
+fn a_second_run_of_a_workflow_with_one_slot_waits_in_the_queue_for_the_first(
+    cx: &mut TestAppContext,
+) {
     let s = setup(cx);
-    put(&s, vec![waiting(&s, A, json!({"runRequested": true}))]);
+    put(
+        &s,
+        vec![waiting(
+            &s,
+            A,
+            json!({"runRequested": true, "concurrency": {"max": 1}}),
+        )],
+    );
     look(&s, cx);
     assert!(running(&s, A, cx));
     assert_eq!(runs(&s, A).len(), 1);
-    // Asked again while it goes: the request waits, nothing else starts.
+    // Asked again while it goes: the request waits in the queue, nothing else starts.
     update_workflows(&dir(&s), |mut list| {
         list[0].run_requested = true;
         Ok((list, ()))
     })
     .unwrap();
     look(&s, cx);
-    assert_eq!(runs(&s, A).len(), 1);
-    assert!(saved(&s)[0].run_requested);
+    assert_eq!(runs(&s, A).len(), 2);
+    assert_eq!(runs(&s, A)[0].status, RunStatus::Queued);
+    assert!(!saved(&s)[0].run_requested);
     // Another workflow goes side by side.
     put(
         &s,
@@ -290,11 +300,12 @@ fn a_second_run_of_a_workflow_waits_for_the_first(cx: &mut TestAppContext) {
     look(&s, cx);
     assert_eq!(runs(&s, B)[0].status, RunStatus::Done);
     assert!(running(&s, A, cx));
-    // Once the first ends the waiting request runs.
+    assert_eq!(runs(&s, A)[0].status, RunStatus::Queued);
+    // Once the first ends the queued run starts by itself.
     stop(&s, A, cx);
     cx.run_until_parked();
-    assert_eq!(runs(&s, A)[0].status, RunStatus::Stopped);
-    look(&s, cx);
+    assert_eq!(runs(&s, A)[0].status, RunStatus::Running);
+    assert_eq!(runs(&s, A)[1].status, RunStatus::Stopped);
     assert_eq!(runs(&s, A).len(), 2);
 }
 
@@ -620,15 +631,11 @@ fn a_workflow_claimed_but_not_started_yet_counts_as_running(cx: &mut TestAppCont
             .try_recv()
             .unwrap()
     };
-    // It cannot be removed from under the run, run twice, or called not running.
+    // It cannot be removed from under the run, or called not running. Another run is a free
+    // slot of the three, so it is not refused.
     assert_eq!(
         ask("rm-1", "workflows.remove", cx).unwrap_err(),
         "Stop the workflow before removing it"
-    );
-    assert!(
-        ask("run-1", "workflows.run", cx)
-            .unwrap_err()
-            .contains("already running")
     );
     ask("stop-1", "workflows.stop", cx).unwrap();
     // The look in progress ends: the run starts, and the stop asked for meanwhile follows it.
@@ -656,4 +663,193 @@ fn a_claim_that_is_not_started_gives_the_mark_back(cx: &mut TestAppContext) {
     cx.update(|cx| workflows.update(cx, |w, cx| w.workflows_looked(looked, cx)));
     assert!(!signals.is_running(A));
     assert!(runs(&s, A).is_empty());
+}
+
+// --- concurrency and the queue ---------------------------------------------------------------
+
+fn request_run(s: &Setup, workflow: &str) {
+    update_workflows(&dir(s), |list| {
+        let list = list
+            .into_iter()
+            .map(|mut w| {
+                if w.id == workflow {
+                    w.run_requested = true;
+                }
+                w
+            })
+            .collect();
+        Ok((list, ()))
+    })
+    .unwrap();
+}
+
+fn live_ids(s: &Setup, cx: &mut TestAppContext) -> Vec<String> {
+    let workflows = workflows_of(s, cx);
+    let mut ids: Vec<String> = cx
+        .update(|cx| workflows.read(cx).running_workflows())
+        .into_iter()
+        .map(|(run, _)| run)
+        .collect();
+    ids.sort();
+    ids
+}
+
+#[gpui::test]
+fn a_workflow_goes_up_to_its_concurrency_and_the_next_start_waits_in_the_queue(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    put(
+        &s,
+        vec![waiting(
+            &s,
+            A,
+            json!({"enabled": true, "concurrency": {"max": 2}}),
+        )],
+    );
+    for _ in 0..3 {
+        request_run(&s, A);
+        look(&s, cx);
+    }
+    let history = runs(&s, A);
+    assert_eq!(history.len(), 3);
+    // Newest first: the third start found both slots taken and waits.
+    assert_eq!(history[0].status, RunStatus::Queued);
+    assert_eq!(history[0].number, Some(3));
+    assert_eq!(history[1].status, RunStatus::Running);
+    assert_eq!(history[2].status, RunStatus::Running);
+    assert_eq!((history[1].number, history[2].number), (Some(2), Some(1)));
+    assert_eq!(live_ids(&s, cx).len(), 2);
+    let signals = cx.update(|cx| s.manager.read(cx).workflow_signals.clone());
+    assert_eq!(signals.live_runs(A), 2);
+}
+
+#[gpui::test]
+fn a_queued_run_starts_by_itself_when_a_run_ahead_of_it_ends(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    put(
+        &s,
+        vec![waiting(
+            &s,
+            A,
+            json!({"enabled": true, "concurrency": {"max": 1}}),
+        )],
+    );
+    request_run(&s, A);
+    look(&s, cx);
+    request_run(&s, A);
+    look(&s, cx);
+    let queued = runs(&s, A)[0].id.clone();
+    assert_eq!(runs(&s, A)[0].status, RunStatus::Queued);
+    assert!(!live_ids(&s, cx).contains(&queued));
+    // The run that goes is stopped; the free slot rings the waker and the queued run starts.
+    assert!(stop(&s, A, cx));
+    cx.run_until_parked();
+    let after = runs(&s, A);
+    let stopped = after
+        .iter()
+        .filter(|r| r.status == RunStatus::Stopped)
+        .count();
+    assert_eq!(stopped, 1);
+    let started = after.iter().find(|r| r.id == queued).unwrap();
+    assert_eq!(started.status, RunStatus::Running);
+    assert_eq!(live_ids(&s, cx), vec![queued]);
+}
+
+#[gpui::test]
+fn queued_runs_stay_queued_over_a_restart_and_start_by_themselves(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let w = waiting(&s, A, json!({"enabled": true, "lastRunId": "earlier"}));
+    put(&s, vec![w.clone()]);
+    // What the last session left: a run that was going and two that waited.
+    let going = start_run(
+        &w,
+        RunCaller::new(CallerKind::Manual, "start"),
+        1_000,
+        "was-going",
+    );
+    let caller = RunCaller::new(CallerKind::Manual, "start");
+    let mut q2 = monocode_core::mono::workflows::queue::queued_run(&w, caller.clone(), 2, "q2", 20);
+    q2.workflow_id = A.into();
+    let mut q1 = monocode_core::mono::workflows::queue::queued_run(&w, caller, 1, "q1", 10);
+    q1.workflow_id = A.into();
+    put_runs(&s, A, vec![q2, q1, going]);
+    forget_startup(&s, cx);
+    look(&s, cx);
+    let by_id = |id: &str| runs(&s, A).into_iter().find(|r| r.id == id).unwrap().status;
+    // The run that was going is interrupted, not resumed; the queue starts, oldest first.
+    assert_eq!(by_id("was-going"), RunStatus::Interrupted);
+    assert_eq!(by_id("q1"), RunStatus::Running);
+    assert_eq!(by_id("q2"), RunStatus::Running);
+    let mut live = live_ids(&s, cx);
+    live.sort();
+    assert_eq!(live, ["q1", "q2"]);
+}
+
+#[gpui::test]
+fn a_stop_by_run_id_in_the_file_stops_only_that_run(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    put(&s, vec![waiting(&s, A, json!({"enabled": true}))]);
+    for _ in 0..2 {
+        request_run(&s, A);
+        look(&s, cx);
+    }
+    let history = runs(&s, A);
+    let (newer, older) = (history[0].id.clone(), history[1].id.clone());
+    assert_eq!(live_ids(&s, cx).len(), 2);
+    update_workflows(&dir(&s), |list| {
+        let list = list
+            .into_iter()
+            .map(|mut w| {
+                w.stop_run_ids = vec![older.clone()];
+                w
+            })
+            .collect();
+        Ok((list, ()))
+    })
+    .unwrap();
+    look(&s, cx);
+    let after = runs(&s, A);
+    let status = |id: &str| after.iter().find(|r| r.id == id).unwrap().status;
+    assert_eq!(status(&older), RunStatus::Stopped);
+    assert_eq!(status(&newer), RunStatus::Running);
+    assert_eq!(live_ids(&s, cx), vec![newer]);
+    assert!(saved(&s)[0].stop_run_ids.is_empty());
+}
+
+#[gpui::test]
+fn a_stop_by_run_id_cancels_a_run_that_still_waits(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    put(
+        &s,
+        vec![waiting(
+            &s,
+            A,
+            json!({"enabled": true, "concurrency": {"max": 1}}),
+        )],
+    );
+    for _ in 0..2 {
+        request_run(&s, A);
+        look(&s, cx);
+    }
+    let queued = runs(&s, A)[0].id.clone();
+    assert_eq!(runs(&s, A)[0].status, RunStatus::Queued);
+    update_workflows(&dir(&s), |list| {
+        let list = list
+            .into_iter()
+            .map(|mut w| {
+                w.stop_run_ids = vec![queued.clone()];
+                w
+            })
+            .collect();
+        Ok((list, ()))
+    })
+    .unwrap();
+    look(&s, cx);
+    let after = runs(&s, A);
+    assert_eq!(after[0].status, RunStatus::Stopped);
+    assert!(after[0].ended_at.is_some());
+    // The run that goes was not touched, and the cancelled one never started.
+    assert_eq!(after[1].status, RunStatus::Running);
+    assert_eq!(live_ids(&s, cx), vec![after[1].id.clone()]);
 }

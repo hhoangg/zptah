@@ -331,6 +331,15 @@ pub(super) fn remove(host: &mut impl WorkflowHost, id: &str) -> Option<String> {
     if host.is_running(id) {
         return Some(STOP_FIRST.into());
     }
+    // A run that waits would start on a workflow that is gone.
+    let waiting =
+        monocode_core::mono::workflows::queue::queued_count(&host.runs(id).unwrap_or_default());
+    if waiting > 0 {
+        return Some(format!(
+            "Cancel its {waiting} queued run{} before removing it.",
+            if waiting == 1 { "" } else { "s" }
+        ));
+    }
     let notice = change(host, id, |_, _| Ok((None, None)));
     if notice.is_none() {
         host.clear_runs(id);

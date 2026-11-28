@@ -616,7 +616,7 @@ impl Monos {
                     ("root", "Project folder"),
                     ("newWorktree", "New worktree"),
                 ]);
-                if let Checkout::Existing(path) = checkout {
+                if let monocode_core::mono::workflows::model::Checkout::Existing(path) = checkout {
                     worktrees.push((format!("existing:{path}"), format!("Folder {path}")));
                 }
                 worktrees.extend(others.iter().map(|s| {

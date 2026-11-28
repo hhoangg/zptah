@@ -4,6 +4,7 @@
 use super::engine::{mark_interrupted, start_run};
 use super::model::*;
 use super::models::Probe;
+use super::ordered::OrderedMap;
 use super::preflight::{Preflight, RequirementStatus};
 use super::store::*;
 use super::tick::*;
@@ -407,29 +408,39 @@ fn a_workflow_waiting_for_review_does_not_start() {
 }
 
 #[test]
-fn a_tick_while_the_previous_run_is_going_moves_the_schedule_and_starts_nothing() {
+fn a_tick_while_every_slot_is_taken_moves_the_schedule_and_queues_instead_of_starting() {
     let root = temp_root();
     let disk = dir(&root);
-    save(&disk, &[workflow(json!({}))]);
+    save(&disk, &[workflow(json!({"concurrency": {"max": 1}}))]);
     let found = look(&disk, &|id| id == ID);
     assert!(found.starts.is_empty());
     let after = stored_one(&disk);
     assert!(after.next_run_at.unwrap() > now());
-    assert_eq!(after.last_run_id, None);
+    // The occurrence waits in the queue instead of being dropped.
+    assert!(after.last_run_id.is_some());
+    assert_eq!(load_runs(&disk, ID).unwrap()[0].status, RunStatus::Queued);
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn a_requested_run_waits_for_the_current_one_instead_of_being_dropped() {
+fn a_requested_run_waits_in_the_queue_for_the_current_one_instead_of_being_dropped() {
     let root = temp_root();
     let disk = dir(&root);
-    save(&disk, &[workflow(json!({"runRequested": true}))]);
+    save(
+        &disk,
+        &[workflow(
+            json!({"runRequested": true, "concurrency": {"max": 1}}),
+        )],
+    );
     let found = look(&disk, &|id| id == ID);
     assert!(found.starts.is_empty());
-    assert!(stored_one(&disk).run_requested);
-    // Once it ends the request runs.
+    assert!(!stored_one(&disk).run_requested);
+    assert_eq!(load_runs(&disk, ID).unwrap()[0].status, RunStatus::Queued);
+    // Once the current run ends the queued one starts, as the same run.
+    let queued_id = load_runs(&disk, ID).unwrap()[0].id.clone();
     let found = look(&disk, &idle);
     assert_eq!(runs_of(&found).len(), 1);
+    assert_eq!(runs_of(&found)[0].0.id, queued_id);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -673,14 +684,14 @@ fn a_resume_for_a_run_that_is_not_interrupted_is_answered_and_ignored() {
 }
 
 #[test]
-fn a_resume_is_refused_while_the_workflow_is_running() {
+fn a_resume_is_refused_while_the_workflow_has_no_free_slot() {
     let root = temp_root();
     let disk = dir(&root);
     put_runs(&disk, ID, vec![interrupted("run-old")]);
     save(
         &disk,
         &[workflow(
-            json!({"enabled": false, "resumeRunId": "run-old"}),
+            json!({"enabled": false, "resumeRunId": "run-old", "concurrency": {"max": 1}}),
         )],
     );
     assert!(look(&disk, &|id| id == ID).starts.is_empty());
@@ -698,8 +709,13 @@ fn a_resume_keeps_the_workflow_from_also_starting_a_scheduled_run() {
     let root = temp_root();
     let disk = dir(&root);
     put_runs(&disk, ID, vec![interrupted("run-old")]);
-    // Due, and a resume is asked for: only the resume goes.
-    save(&disk, &[workflow(json!({"resumeRunId": "run-old"}))]);
+    // Due, and a resume is asked for: the resume takes the only slot, so the occurrence waits.
+    save(
+        &disk,
+        &[workflow(
+            json!({"resumeRunId": "run-old", "concurrency": {"max": 1}}),
+        )],
+    );
     let found = look(&disk, &idle);
     assert_eq!(resumes_of(&found).len(), 1);
     assert!(runs_of(&found).is_empty());
@@ -1205,5 +1221,453 @@ fn a_resume_of_a_run_that_requires_nothing_is_not_preflighted() {
     let found = look_pf(&disk, &idle, &counting);
     assert_eq!(resumes_of(&found).len(), 1);
     assert_eq!(asked.get(), 0);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+// --- concurrency and the queue ---------------------------------------------------------------
+
+use super::queue::{enqueue, queued_count, queued_run};
+
+/// A look where `live(id)` runs of a workflow are going.
+fn look_live(files: &impl MonoFiles, live: &dyn Fn(&str) -> usize) -> Found {
+    check(
+        files,
+        &Tick {
+            now: now(),
+            live_runs: live,
+            probe: probe_nothing,
+            on_claim: &|_, _| {},
+            preflight: &|_| Preflight::default(),
+        },
+    )
+    .unwrap()
+}
+
+/// A workflow that is not due and has run before, so only the queue has something to do.
+fn quiet(extra: Value) -> Workflow {
+    let mut spec = json!({"lastRunId": "earlier", "nextRunAt": now() + 3_600_000});
+    for (k, x) in extra.as_object().unwrap() {
+        spec[k] = x.clone();
+    }
+    workflow(spec)
+}
+
+fn waiting(id: &str, n: u64) -> WorkflowRun {
+    queued_run(
+        &workflow(json!({})),
+        RunCaller::new(CallerKind::Manual, "start"),
+        n,
+        id,
+        n * 10,
+    )
+}
+
+fn queue_of(dir: &MonoDir) -> Vec<(String, RunStatus)> {
+    let mut runs = statuses(dir, ID);
+    runs.reverse();
+    runs
+}
+
+#[test]
+fn a_workflow_goes_up_to_its_concurrency_and_queues_the_start_over_it() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(
+        &disk,
+        &[workflow(
+            json!({"concurrency": {"max": 2}, "runRequested": true}),
+        )],
+    );
+    // One of the two slots is free: the request starts, as run number 1.
+    let found = look_live(&disk, &|_| 1);
+    let runs = runs_of(&found);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].0.number, Some(1));
+    // Both are taken: the next request waits as a queued run, number 2, and nothing starts.
+    let mut again = stored_one(&disk);
+    again.run_requested = true;
+    save(&disk, &[again]);
+    let found = look_live(&disk, &|_| 2);
+    assert!(found.starts.is_empty());
+    let stored = load_runs(&disk, ID).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].status, RunStatus::Queued);
+    assert_eq!(stored[0].number, Some(2));
+    assert_eq!(stored[0].queued_at, Some(now()));
+    assert_eq!(stored[0].caller.kind, CallerKind::Manual);
+    assert_eq!(stored_one(&disk).run_counter, 2);
+    assert!(!stored_one(&disk).run_requested);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn the_default_concurrency_is_three() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(&disk, &[workflow(json!({"runRequested": true}))]);
+    assert_eq!(runs_of(&look_live(&disk, &|_| 2)).len(), 1);
+    let mut again = stored_one(&disk);
+    again.run_requested = true;
+    save(&disk, &[again]);
+    let found = look_live(&disk, &|_| 3);
+    assert!(found.starts.is_empty());
+    assert_eq!(queued_count(&load_runs(&disk, ID).unwrap()), 1);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn queued_runs_start_first_in_first_out_as_slots_free_up() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(&disk, &[quiet(json!({"concurrency": {"max": 2}}))]);
+    put_runs(
+        &disk,
+        ID,
+        vec![waiting("q3", 3), waiting("q2", 2), waiting("q1", 1)],
+    );
+    let claimed = RefCell::new(Vec::new());
+    let on_claim = |_: &str, run: &str| claimed.borrow_mut().push(run.to_string());
+    let found = check(
+        &disk,
+        &Tick {
+            now: now(),
+            live_runs: &|_| 0,
+            probe: probe_nothing,
+            on_claim: &on_claim,
+            preflight: &|_| Preflight::default(),
+        },
+    )
+    .unwrap();
+    // The two oldest start, oldest first, with the number, queue time and caller they had.
+    let started: Vec<(&str, Option<u64>, Option<u64>)> = runs_of(&found)
+        .iter()
+        .map(|(r, _)| (r.id.as_str(), r.number, r.queued_at))
+        .collect();
+    assert_eq!(
+        started,
+        vec![("q1", Some(1), Some(10)), ("q2", Some(2), Some(20))]
+    );
+    assert_eq!(*claimed.borrow(), vec!["q1".to_string(), "q2".to_string()]);
+    assert_eq!(
+        queue_of(&disk),
+        vec![
+            ("q1".into(), RunStatus::Running),
+            ("q2".into(), RunStatus::Running),
+            ("q3".into(), RunStatus::Queued)
+        ]
+    );
+    // One run ends and a slot frees up: the third goes, and no run is started twice.
+    update_runs(&disk, ID, |runs| {
+        let list = runs
+            .into_iter()
+            .map(|mut r| {
+                if r.id == "q1" {
+                    r.status = RunStatus::Done;
+                }
+                r
+            })
+            .collect();
+        Ok((list, ()))
+    })
+    .unwrap();
+    let found = look_live(&disk, &|_| 1);
+    assert_eq!(
+        runs_of(&found)
+            .iter()
+            .map(|(r, _)| r.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["q3"]
+    );
+    assert!(look_live(&disk, &|_| 0).starts.is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_full_workflow_starts_nothing_from_its_queue() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(&disk, &[quiet(json!({"concurrency": {"max": 2}}))]);
+    put_runs(&disk, ID, vec![waiting("q2", 2), waiting("q1", 1)]);
+    assert!(look_live(&disk, &|_| 2).starts.is_empty());
+    assert_eq!(queued_count(&load_runs(&disk, ID).unwrap()), 2);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_queued_run_starts_on_the_definition_of_that_moment_with_its_own_values() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(&disk, &[quiet(json!({"name": "Renamed since"}))]);
+    let mut asked = workflow(json!({}));
+    let mut values = OrderedMap::new();
+    values.insert("repo".to_string(), InputValue::String("/code/lib".into()));
+    asked.run_values = Some(values);
+    put_runs(
+        &disk,
+        ID,
+        vec![queued_run(
+            &asked,
+            RunCaller::new(CallerKind::Manual, "start"),
+            1,
+            "q1",
+            10,
+        )],
+    );
+    let found = look_live(&disk, &|_| 0);
+    let runs = runs_of(&found);
+    assert_eq!(runs.len(), 1);
+    let run = runs[0].0;
+    // The stored workflow is as it is now; the values are the ones asked for this run.
+    assert_eq!(run.definition.name, "Renamed since");
+    assert_eq!(
+        run.definition.input_values.get("repo"),
+        Some(&InputValue::String("/code/lib".into()))
+    );
+    assert!(run.definition.run_values.is_none());
+    assert_eq!(
+        stored_one(&disk).input_values.get("repo"),
+        Some(&InputValue::String("/code/app".into()))
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_workflow_waiting_for_review_keeps_its_queue_and_a_paused_one_keeps_its_scheduled_runs() {
+    let root = temp_root();
+    let disk = dir(&root);
+    // Waiting for a review: nothing queued starts, whoever asked.
+    save(&disk, &[quiet(json!({"needsReview": true}))]);
+    put_runs(&disk, ID, vec![waiting("q1", 1)]);
+    assert!(look_live(&disk, &|_| 0).starts.is_empty());
+    assert_eq!(queued_count(&load_runs(&disk, ID).unwrap()), 1);
+    // Paused: a run a trigger asked for waits, a run asked for by hand goes.
+    save(&disk, &[quiet(json!({"enabled": false}))]);
+    let mut scheduled = waiting("q2", 2);
+    scheduled.caller = RunCaller::new(CallerKind::Schedule, "start");
+    put_runs(&disk, ID, vec![scheduled, waiting("q1", 1)]);
+    let found = look_live(&disk, &|_| 0);
+    assert_eq!(
+        runs_of(&found)
+            .iter()
+            .map(|(r, _)| r.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["q1"]
+    );
+    assert_eq!(queue_of(&disk)[1], ("q2".to_string(), RunStatus::Queued));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn queued_runs_stay_queued_over_a_restart_and_start_by_themselves_as_capacity_allows() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(&disk, &[quiet(json!({"concurrency": {"max": 1}}))]);
+    // The last session left one run going and one waiting.
+    put_runs(&disk, ID, vec![waiting("q1", 2), running("was-going")]);
+    // Until the sweep, the file still says a run goes, so the queue waits.
+    assert!(look_live(&disk, &|_| 0).starts.is_empty());
+    sweep_interrupted(&disk, &[]).unwrap();
+    assert_eq!(
+        statuses(&disk, ID),
+        vec![
+            ("q1".to_string(), RunStatus::Queued),
+            ("was-going".to_string(), RunStatus::Interrupted)
+        ]
+    );
+    // The sweep leaves the queued run alone, and the next look starts it. The interrupted one is
+    // not resumed on its own.
+    let found = look_live(&disk, &|_| 0);
+    assert_eq!(
+        runs_of(&found)
+            .iter()
+            .map(|(r, _)| r.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["q1"]
+    );
+    assert!(resumes_of(&found).is_empty());
+    assert_eq!(
+        statuses(&disk, ID),
+        vec![
+            ("q1".to_string(), RunStatus::Running),
+            ("was-going".to_string(), RunStatus::Interrupted)
+        ]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Lets a rival look start the queued run just before the save of the runs file, so the save
+/// meets a changed file.
+struct Rival {
+    disk: MonoDir,
+    armed: Cell<bool>,
+}
+
+impl MonoFiles for Rival {
+    fn read(&self, relative: &str) -> Result<AgentFile, String> {
+        self.disk.read(relative)
+    }
+    fn save(&self, relative: &str, text: &str, expected: Option<&str>) -> Result<String, String> {
+        if relative.contains("wf-abcd1234") && self.armed.replace(false) {
+            update_runs(&self.disk, ID, |runs| {
+                let list = runs
+                    .into_iter()
+                    .map(|r| {
+                        if r.id == "q1" {
+                            let mut started = running("q1");
+                            started.number = r.number;
+                            started
+                        } else {
+                            r
+                        }
+                    })
+                    .collect();
+                Ok((list, ()))
+            })
+            .unwrap();
+        }
+        self.disk.save(relative, text, expected)
+    }
+}
+
+#[test]
+fn a_queued_run_is_never_started_twice_when_another_look_got_there_first() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(&disk, &[quiet(json!({"concurrency": {"max": 1}}))]);
+    put_runs(&disk, ID, vec![waiting("q1", 1)]);
+    let rival = Rival {
+        disk: disk.clone(),
+        armed: Cell::new(true),
+    };
+    let claimed = Cell::new(0);
+    let on_claim = |_: &str, _: &str| claimed.set(claimed.get() + 1);
+    let found = check(
+        &rival,
+        &Tick {
+            now: now(),
+            live_runs: &|_| 0,
+            probe: probe_nothing,
+            on_claim: &on_claim,
+            preflight: &|_| Preflight::default(),
+        },
+    )
+    .unwrap();
+    // The rival started it; this look saw the newest file, found it going and started nothing.
+    assert!(found.starts.is_empty());
+    assert_eq!(claimed.get(), 0);
+    assert_eq!(
+        statuses(&disk, ID),
+        vec![("q1".to_string(), RunStatus::Running)]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_schedule_that_comes_due_while_one_run_waits_is_skipped_and_moves_on() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(&disk, &[workflow(json!({"concurrency": {"max": 1}}))]);
+    put_runs(&disk, ID, vec![waiting("q1", 1)]);
+    let found = look_live(&disk, &|_| 1);
+    assert!(found.starts.is_empty());
+    // Still the one that was waiting; nothing was added for the occurrence.
+    assert_eq!(queue_of(&disk), vec![("q1".to_string(), RunStatus::Queued)]);
+    assert!(stored_one(&disk).next_run_at.unwrap() > now());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_schedule_that_comes_due_with_every_slot_taken_waits_in_the_queue_once() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(&disk, &[workflow(json!({"concurrency": {"max": 1}}))]);
+    assert!(look_live(&disk, &|_| 1).starts.is_empty());
+    let stored = load_runs(&disk, ID).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].status, RunStatus::Queued);
+    assert_eq!(stored[0].caller.kind, CallerKind::Schedule);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_manual_start_over_the_cap_is_recorded_as_skipped_not_queued() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(
+        &disk,
+        &[workflow(
+            json!({"concurrency": {"max": 1}, "runRequested": true}),
+        )],
+    );
+    for n in 0..QUEUED_RUNS_MAX {
+        enqueue(&disk, waiting(&format!("q{n}"), n as u64 + 1)).unwrap();
+    }
+    assert!(look_live(&disk, &|_| 1).starts.is_empty());
+    let runs = load_runs(&disk, ID).unwrap();
+    assert_eq!(queued_count(&runs), QUEUED_RUNS_MAX);
+    let skipped: Vec<&WorkflowRun> = runs
+        .iter()
+        .filter(|r| r.status == RunStatus::Skipped)
+        .collect();
+    assert_eq!(skipped.len(), 1);
+    assert!(skipped[0]
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("queue is full"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_stop_asked_for_a_queued_run_cancels_it_and_one_for_a_going_run_is_handed_over() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(
+        &disk,
+        &[quiet(
+            json!({"stopRunIds": ["q1", "going"], "concurrency": {"max": 1}}),
+        )],
+    );
+    put_runs(&disk, ID, vec![waiting("q2", 2), waiting("q1", 1)]);
+    let found = look_live(&disk, &|_| 1);
+    assert_eq!(
+        found.stop_runs,
+        vec![
+            (ID.to_string(), "q1".to_string()),
+            (ID.to_string(), "going".to_string())
+        ]
+    );
+    assert_eq!(
+        queue_of(&disk),
+        vec![
+            ("q1".to_string(), RunStatus::Stopped),
+            ("q2".to_string(), RunStatus::Queued)
+        ]
+    );
+    // Taken: the request does not come back.
+    assert!(stored_one(&disk).stop_run_ids.is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_resume_waits_for_nothing_but_needs_a_free_slot() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(
+        &disk,
+        &[quiet(
+            json!({"concurrency": {"max": 2}, "resumeRunId": "run-old"}),
+        )],
+    );
+    put_runs(&disk, ID, vec![interrupted("run-old")]);
+    // One of two slots is taken: the resume goes next to the run that is going.
+    let found = look_live(&disk, &|_| 1);
+    assert_eq!(resumes_of(&found).len(), 1);
+    // With both taken a resume is not started over them.
+    let mut again = stored_one(&disk);
+    again.resume_run_id = Some("run-old".into());
+    save(&disk, &[again]);
+    let found = look_live(&disk, &|_| 2);
+    assert!(resumes_of(&found).is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }

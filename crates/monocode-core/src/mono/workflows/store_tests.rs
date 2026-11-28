@@ -979,3 +979,83 @@ fn a_run_file_whose_definition_uses_the_old_output_key_still_loads() {
     assert_eq!(output.keys().cloned().collect::<Vec<_>>(), ["verdict"]);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+fn waiting(id: &str, at: u64) -> WorkflowRun {
+    super::queue::queued_run(
+        &workflow(),
+        RunCaller::new(CallerKind::Manual, "start"),
+        at,
+        id,
+        at,
+    )
+}
+
+#[test]
+fn queued_runs_are_pinned_outside_the_twenty_run_history() {
+    let root = temp_root();
+    let disk = dir(&root);
+    // 30 ordinary runs, with queued ones among the oldest and the newest.
+    let mut all: Vec<WorkflowRun> = vec![waiting("q-new", 9)];
+    all.extend((0..30).map(|i| run(&format!("done{i}"))));
+    all.push(waiting("q-old", 1));
+    update_runs(&disk, ID, |_| Ok((all.clone(), ()))).unwrap();
+    let kept = ids(&text(&disk, RUNS));
+    // The 20 newest ordinary runs, and both queued runs, wherever they sit.
+    assert_eq!(kept.len(), 22);
+    assert_eq!(kept[0], "q-new");
+    assert!(kept.contains(&"q-old".to_string()));
+    assert!(kept.contains(&"done19".to_string()));
+    assert!(!kept.contains(&"done20".to_string()));
+    let loaded = load_runs(&disk, ID).unwrap();
+    assert_eq!(
+        loaded
+            .iter()
+            .filter(|r| r.status == RunStatus::Queued)
+            .count(),
+        2
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn queued_runs_are_never_dropped_for_the_size_budget() {
+    let root = temp_root();
+    let disk = dir(&root);
+    let mut all: Vec<WorkflowRun> = (0..5).map(|i| waiting(&format!("q{i}"), i + 1)).collect();
+    // Ordinary runs that together overflow the budget.
+    all.extend((0..6).map(|i| fat(&format!("fat{i}"), 900_000)));
+    update_runs(&disk, ID, |_| Ok((all.clone(), ()))).unwrap();
+    let written = text(&disk, RUNS);
+    assert!(written.len() <= RUNS_FILE_BUDGET, "{}", written.len());
+    let kept = ids(&written);
+    for i in 0..5 {
+        assert!(
+            kept.contains(&format!("q{i}")),
+            "q{i} was trimmed: {kept:?}"
+        );
+    }
+    assert!(kept.len() < 11, "the ordinary runs went first");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_take_requests_hands_over_a_stop_by_run_id_and_clears_it() {
+    let root = temp_root();
+    let disk = dir(&root);
+    let mut w = workflow();
+    w.stop_run_ids = vec!["run-a".into(), "run-b".into()];
+    update_workflows(&disk, |_| Ok((vec![w.clone()], ()))).unwrap();
+    // A stop by id is handed over whether or not anything is going: the run may still be queued.
+    let taken = take_requests(&disk, |_| false).unwrap();
+    assert_eq!(
+        taken.stop_runs,
+        vec![
+            (ID.to_string(), "run-a".to_string()),
+            (ID.to_string(), "run-b".to_string())
+        ]
+    );
+    assert!(load_workflows(&disk).unwrap().workflows[0]
+        .stop_run_ids
+        .is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}

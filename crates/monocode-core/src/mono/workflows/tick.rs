@@ -17,12 +17,12 @@ use std::collections::{HashMap, HashSet};
 
 use super::engine::{mark_interrupted, start_run};
 use super::model::{with_run_values, CallerKind, RunCaller, RunStatus, Workflow, WorkflowRun};
+use super::models::{harnesses_used, workflow_issues, ModelCatalog, Probe};
+use super::preflight::{union_requires, Preflight};
 use super::queue::{
     cancel_queued, enqueue, queue_full_reason, queue_len, queued_fifo, queued_run, skipped_run,
     Enqueued,
 };
-use super::models::{harnesses_used, workflow_issues, ModelCatalog, Probe};
-use super::preflight::{union_requires, Preflight};
 use super::schedule::{after_claim, due_schedule_trigger, due_workflows};
 use super::store::{
     load_runs, load_workflows, take_requests, update_runs, update_workflows, MonoFiles,
@@ -248,8 +248,10 @@ fn promote(
     started: &mut Started,
     found: &mut Found,
 ) {
-    // A paused workflow or one waiting for a review keeps its queue.
-    if !workflow.enabled || workflow.needs_review || workflow.last_run_id.is_none() {
+    // A workflow waiting for a review keeps its queue: what it would run is not approved. A
+    // paused one keeps the runs its triggers asked for; a run the user or a Mono asked for by
+    // hand still goes.
+    if workflow.needs_review || workflow.last_run_id.is_none() {
         return;
     }
     let max = workflow.concurrency.limit();
@@ -263,6 +265,9 @@ fn promote(
     };
     let candidates: Vec<(String, Start)> = queued_fifo(&runs)
         .into_iter()
+        .filter(|queued| {
+            workflow.enabled || matches!(queued.caller.kind, CallerKind::Manual | CallerKind::Mono)
+        })
         .take(max - going)
         .map(|queued| {
             let mut asked = workflow.clone();
@@ -357,7 +362,9 @@ pub fn check(files: &impl MonoFiles, tick: &Tick) -> Result<Found, String> {
                                 if run.status == RunStatus::Interrupted {
                                     (tick.on_claim)(&request.workflow_id, &run.id);
                                     *started.entry(request.workflow_id.clone()).or_default() += 1;
-                                    found.starts.push(resume_or_refuse(run, live_workflow, tick));
+                                    found
+                                        .starts
+                                        .push(resume_or_refuse(run, live_workflow, tick));
                                 }
                             }
                         }
@@ -417,8 +424,7 @@ pub fn check(files: &impl MonoFiles, tick: &Tick) -> Result<Found, String> {
                     number: claimed.run_counter + 1,
                     queued_at: None,
                 };
-                let free = live(tick, &started, &id) < claimed.concurrency.limit()
-                    && !waiting(&id);
+                let free = live(tick, &started, &id) < claimed.concurrency.limit() && !waiting(&id);
                 if free {
                     (tick.on_claim)(&id, &run_id);
                     *started.entry(id.clone()).or_default() += 1;
@@ -426,16 +432,26 @@ pub fn check(files: &impl MonoFiles, tick: &Tick) -> Result<Found, String> {
                     continue;
                 }
                 // No slot, or runs ahead in the queue: this one waits its turn.
-                let record = queued_run(&claimed, origin.caller.clone(), origin.number, &run_id, tick.now);
+                let record = queued_run(
+                    &claimed,
+                    origin.caller.clone(),
+                    origin.number,
+                    &run_id,
+                    tick.now,
+                );
                 match enqueue(files, record) {
                     Ok(Enqueued::Queued(_)) => {}
                     Ok(Enqueued::Full) => {
                         let reason = queue_full_reason();
-                        let skipped = skipped_run(&claimed, origin.caller, &run_id, tick.now, &reason);
+                        let skipped =
+                            skipped_run(&claimed, origin.caller, &run_id, tick.now, &reason);
                         if let Err(error) = update_runs(files, &id, |runs| {
                             Ok((std::iter::once(skipped.clone()).chain(runs).collect(), ()))
                         }) {
-                            warn(&format!("Workflow {id} could not record a skipped run"), &error);
+                            warn(
+                                &format!("Workflow {id} could not record a skipped run"),
+                                &error,
+                            );
                         }
                     }
                     Err(error) => warn(&format!("Workflow {id} could not queue a run"), &error),

@@ -308,6 +308,7 @@ impl Monos {
         // The open page also shows the workflow's recent runs.
         // A run the runner holds is shown from there, not from its file.
         let wanted = match &self.wf.route {
+            Some(WfRoute::Run(_, run)) if self.workflows.with_run_id(run, |_| ()).is_some() => None,
             Some(WfRoute::Workflow(id) | WfRoute::Board(id) | WfRoute::Run(id, _)) => {
                 Some(id.clone())
             }

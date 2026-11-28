@@ -706,7 +706,8 @@ impl<'a> Checker<'a> {
     fn check_workspace(&mut self) {
         let workspace = &self.w.workspace;
         if !js_trim(&workspace.project).is_empty() {
-            if let Some(problem) = self.project_text_problem("workspace.project", &workspace.project)
+            if let Some(problem) =
+                self.project_text_problem("workspace.project", &workspace.project)
             {
                 self.add(problem, None);
             }
@@ -756,10 +757,8 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
-            Checkout::Existing(path) => {
-                if js_trim(path).is_empty() {
-                    self.add("checkout existing needs a folder", at);
-                }
+            Checkout::Existing(path) if js_trim(path).is_empty() => {
+                self.add("checkout existing needs a folder", at);
             }
             _ => {}
         }
@@ -1160,7 +1159,10 @@ impl<'a> Checker<'a> {
                 on_failure,
             } => {
                 self.check_project(node, project);
-                if let Some(value) = on_failure.as_deref().filter(|v| !matches!(*v, "fail" | "continue")) {
+                if let Some(value) = on_failure
+                    .as_deref()
+                    .filter(|v| !matches!(*v, "fail" | "continue"))
+                {
                     self.add(
                         format!("onFailure \"{value}\" is not valid: use fail or continue"),
                         Some(&node.id),
@@ -1917,22 +1919,18 @@ pub fn workflow_warnings(w: &Workflow) -> Vec<WorkflowIssue> {
         }
     }
     // Without a worktree per run, runs that go at once write into the same project folder.
-    let shared_root = |key: &str| key.starts_with("root:") || (key.starts_with("run:") && !w.workspace.per_run());
+    let shared_root =
+        |key: &str| key.starts_with("root:") || (key.starts_with("run:") && !w.workspace.per_run());
     let concurrent = w.concurrency.limit() > 1;
     if concurrent
-        && (w.workspace.mode == WorkspaceMode::None || !w.workspace.per_run())
+        && w.workspace.mode == WorkspaceMode::None
         && writers.iter().any(|(_, key)| shared_root(key))
     {
         out.push(WorkflowIssue {
             node_id: None,
             message: format!(
-                "Up to {} runs of this workflow can go at the same time and its steps write into the project folder itself{}: set concurrency.max to 1, or let each run work in its own worktree (workspace mode perRun with a project)",
-                w.concurrency.limit(),
-                if w.workspace.mode == WorkspaceMode::None {
-                    " (workspace mode is none)"
-                } else {
-                    ""
-                }
+                "Up to {} runs of this workflow can go at the same time and, with workspace mode none, its steps write into the project folder itself: set concurrency.max to 1, or let each run work in its own worktree (workspace mode perRun with a project)",
+                w.concurrency.limit()
             ),
         });
     }

@@ -54,8 +54,11 @@ pub fn branch_key(group: &str, index: usize) -> String {
 }
 
 fn head_of(cwd: &Path) -> Result<String, String> {
-    git::git(cwd, &["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"])
-        .map(|sha| sha.trim().to_string())
+    git::git(
+        cwd,
+        &["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
+    )
+    .map(|sha| sha.trim().to_string())
 }
 
 /// The commit of `base_branch` in `project`: the local branch, else the one of the same name on
@@ -161,7 +164,8 @@ pub struct AtRisk {
     pub uncommitted: Vec<String>,
     /// How many files there are beyond the listed ones.
     pub more_files: usize,
-    /// Commits on no remote branch (`<short sha> <subject>`), at most `LISTED`.
+    /// Commits no remote branch and no other local branch has (`<short sha> <subject>`), at
+    /// most `LISTED`.
     pub unpushed: Vec<String>,
     /// How many commits there are beyond the listed ones.
     pub more_commits: usize,
@@ -193,10 +197,18 @@ pub fn at_risk(path: &Path) -> AtRisk {
         }
         Err(_) => risk.unknown = true,
     }
-    match git::git(
-        path,
-        &["log", "--format=%h %s", "HEAD", "--not", "--remotes"],
-    ) {
+    // Work counts as unpushed when no remote branch has it and no other local branch has it
+    // either: the history the run started from is on its base branch, not at risk.
+    let branch = git::git(path, &["branch", "--show-current"])
+        .map(|b| b.trim().to_string())
+        .unwrap_or_default();
+    let exclude = format!("--exclude={branch}");
+    let mut args = vec!["log", "--format=%h %s", "HEAD", "--not", "--remotes"];
+    if !branch.is_empty() {
+        args.push(&exclude);
+    }
+    args.push("--branches");
+    match git::git(path, &args) {
         Ok(out) => {
             let lines: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
             risk.more_commits = lines.len().saturating_sub(LISTED);

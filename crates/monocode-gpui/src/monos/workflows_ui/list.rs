@@ -231,7 +231,8 @@ impl Monos {
         let running = self.workflow_running(&w.id);
         let glance = self.workflow_glance(&w.id);
         let slots = self.workflow_slots(&w.id);
-        let subtitle = slots_subtitle(slots).unwrap_or_else(|| workflow_subtitle(w, glance, running, now_ms()));
+        let subtitle = slots_subtitle(slots)
+            .unwrap_or_else(|| workflow_subtitle(w, glance, running, now_ms()));
         let starting = !running && w.run_requested;
         let lit = w.enabled || running;
         div()

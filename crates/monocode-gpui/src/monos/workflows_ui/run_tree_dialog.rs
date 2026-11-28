@@ -57,7 +57,10 @@ pub(super) fn can_remove(run: &WorkflowRun) -> bool {
 pub(super) fn risk_lines(risk: &AtRisk) -> Vec<String> {
     let mut lines = Vec::new();
     if risk.unknown {
-        lines.push("Could not tell what this worktree holds (the folder is gone or Git did not answer).".to_string());
+        lines.push(
+            "Could not tell what this worktree holds (the folder is gone or Git did not answer)."
+                .to_string(),
+        );
     }
     if !risk.uncommitted.is_empty() {
         lines.push(format!(
@@ -297,11 +300,16 @@ impl Monos {
                                         .justify_end()
                                         .gap_2()
                                         .child(
-                                            crate::modal::ghost_button("wf-run-tree-cancel", "Cancel")
-                                                .debug_selector(|| "wf-run-tree-cancel".into())
-                                                .on_click(cx.listener(|this, _, _, cx| {
+                                            crate::modal::ghost_button(
+                                                "wf-run-tree-cancel",
+                                                "Cancel",
+                                            )
+                                            .debug_selector(|| "wf-run-tree-cancel".into())
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
                                                     this.run_tree_close(cx)
-                                                })),
+                                                }),
+                                            ),
                                         )
                                         .child(
                                             crate::modal::disabled(
@@ -316,9 +324,11 @@ impl Monos {
                                                 .debug_selector(|| "wf-run-tree-remove".into()),
                                                 removing || checking,
                                             )
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.run_tree_confirm(cx)
-                                            })),
+                                            .on_click(
+                                                cx.listener(move |this, _, _, cx| {
+                                                    this.run_tree_confirm(cx)
+                                                }),
+                                            ),
                                         ),
                                 ),
                         ),

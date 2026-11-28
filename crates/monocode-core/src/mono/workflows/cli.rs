@@ -16,9 +16,9 @@ use super::global::WorkflowsDir;
 use super::guide::workflow_guide;
 use super::model::{
     definition_fingerprint, interrupted_instances, left_instances_text, new_workflow_id,
-    with_run_values, Edge, InputValue, Node, NodeKind, ReportTo, RequirementKind,
-    RunCaller, RunInstance, RunStatus, Workflow, WorkflowRun, QUEUED_RUNS_MAX,
-    WORKFLOWS_MAX, WORKFLOW_DEFINITION_MAX_BYTES, WORKFLOW_DESCRIPTION_MAX, WORKFLOW_NAME_MAX,
+    with_run_values, Edge, InputValue, Node, NodeKind, ReportTo, RequirementKind, RunCaller,
+    RunInstance, RunStatus, Workflow, WorkflowRun, QUEUED_RUNS_MAX, WORKFLOWS_MAX,
+    WORKFLOW_DEFINITION_MAX_BYTES, WORKFLOW_DESCRIPTION_MAX, WORKFLOW_NAME_MAX,
 };
 use super::models::{harnesses_used, native_probe, workflow_issues, ModelCatalog, Probe};
 use super::ordered::{js_number_text, Json, OrderedMap};
@@ -26,8 +26,8 @@ use super::parse::{
     drop_stray_handles, parse_concurrency, parse_decision_model, parse_edge, parse_inputs,
     parse_node, parse_report_to, parse_workspace, read_requires,
 };
-use super::queue::{cancel_queued, queue_position, queued_count, queued_fifo};
 use super::preflight::{likely_clis, native_preflight, union_requires, Preflight};
+use super::queue::{cancel_queued, queue_position, queued_count, queued_fifo};
 use super::store::{
     clear_runs, load_runs, load_workflows, to_json, update_workflows, workflow_json,
 };
@@ -346,8 +346,6 @@ impl WorkflowHost for StoreHost {
 
 /// The fields of a workflow definition the CLI accepts; the app owns everything else.
 const DEFINITION_FIELDS: [&str; 12] = [
-    "workspace",
-    "concurrency",
     "name",
     "description",
     "inputs",
@@ -358,6 +356,8 @@ const DEFINITION_FIELDS: [&str; 12] = [
     "inputValues",
     "nodes",
     "edges",
+    "workspace",
+    "concurrency",
 ];
 const NOT_ENABLED: &str = "Resume the workflow before running it.";
 const NEEDS_REVIEW: &str = "This workflow came from a file or from a Mono and the user has not reviewed it yet. Ask the user to review it and enable it in Workflows.";
@@ -729,9 +729,7 @@ fn used_as_project(w: &Workflow, name: &str) -> bool {
     };
     names(&w.workspace.project)
         || w.nodes.iter().any(|node| match &node.kind {
-            NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => {
-                names(project)
-            }
+            NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => names(project),
             _ => false,
         })
 }
@@ -1282,10 +1280,7 @@ fn all_warnings(w: &Workflow) -> Json {
         .iter()
         .map(|warning| {
             obj([
-                (
-                    "nodeId",
-                    warning.node_id.as_deref().map_or(Json::Null, st),
-                ),
+                ("nodeId", warning.node_id.as_deref().map_or(Json::Null, st)),
                 ("message", st(&warning.message)),
             ])
         })
@@ -1583,7 +1578,9 @@ fn run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         return Err(NEEDS_REVIEW.into());
     }
     if current.run_requested {
-        return Err("A run of that workflow is already waiting to start; ask again in a moment".into());
+        return Err(
+            "A run of that workflow is already waiting to start; ask again in a moment".into(),
+        );
     }
     // A workflow starts up to concurrency.max runs at once and queues the rest.
     let waiting = queued_count(&host.runs(&current.id)?);
@@ -1686,7 +1683,10 @@ fn stop<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
                 return Ok(obj([
                     ("id", st(&current.id)),
                     ("runId", st(run_id)),
-                    ("note", st("The queued run was cancelled; it never started.")),
+                    (
+                        "note",
+                        st("The queued run was cancelled; it never started."),
+                    ),
                 ]));
             }
             RunStatus::Running if host.is_running(&current.id) => {}

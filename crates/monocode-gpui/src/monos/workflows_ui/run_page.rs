@@ -251,17 +251,17 @@ impl Monos {
         let Some((workflow, run_id)) = self.wf.run.key.clone() else {
             return;
         };
-        let live = self
-            .workflows
-            .with_run(&workflow, |r| (r.id == run_id).then(|| r.clone()))
-            .flatten();
+        let live = self.workflows.with_run_id(&run_id, |r| r.clone());
         let (next, loaded) = match (live, self.workflow_runs_of(&workflow)) {
             (Some(run), _) => (Some(run), true),
             (None, Some(runs)) => (runs.iter().find(|r| r.id == run_id).cloned(), true),
             (None, None) => (None, false),
         };
         let changed = match (&next, self.global_workflow(&workflow)) {
-            (Some(run), Some(current)) => definition_changed(run, current),
+            // A run that waits has only a stub of the definition: it takes the live one at start.
+            (Some(run), Some(current)) => {
+                run.status != RunStatus::Queued && definition_changed(run, current)
+            }
             _ => false,
         };
         let page = &mut self.wf.run;

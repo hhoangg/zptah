@@ -483,7 +483,10 @@ impl WorkflowHost for FakeHost {
         group: String,
         index: usize,
     ) -> Fut<Result<RunWorktree, String>> {
-        self.0.borrow_mut().branch_trees.push((group.clone(), index));
+        self.0
+            .borrow_mut()
+            .branch_trees
+            .push((group.clone(), index));
         let tree = RunWorktree {
             path: format!("{}-{group}-{index}", run.path),
             branch: format!("{}-{group}-{index}", run.branch),

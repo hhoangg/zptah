@@ -342,15 +342,16 @@ mod tests {
         }
 
         #[test]
-        fn runs_a_requested_workflow_when_idle_and_waits_while_busy() {
+        fn a_requested_workflow_is_always_claimed_even_with_a_run_queued() {
+            // The claim decides between a slot and the queue; a request is never held back here.
             let mut w = workflow();
             w.run_requested = true;
             w.enabled = false;
             w.next_run_at = None;
             let list = [w];
             assert_eq!(due_workflows(&list, now(), never).run.len(), 1);
-            let busy = due_workflows(&list, now(), |_| true);
-            assert!(busy.run.is_empty() && busy.advance.is_empty());
+            let queued = due_workflows(&list, now(), |_| true);
+            assert_eq!(queued.run.len(), 1);
         }
 
         #[test]

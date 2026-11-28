@@ -59,8 +59,14 @@ impl Workflows {
             // What was removed is forgotten even when a later one failed.
             update_runs(&dir, &workflow_id, |mut runs| {
                 for stored in runs.iter_mut().filter(|r| r.id == run_id) {
-                    stored.branch_worktrees.retain(|_, tree| !gone.contains(&tree.path));
-                    if stored.worktree.as_ref().is_some_and(|t| gone.contains(&t.path)) {
+                    stored
+                        .branch_worktrees
+                        .retain(|_, tree| !gone.contains(&tree.path));
+                    if stored
+                        .worktree
+                        .as_ref()
+                        .is_some_and(|t| gone.contains(&t.path))
+                    {
                         stored.worktree = None;
                     }
                 }

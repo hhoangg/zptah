@@ -1084,7 +1084,7 @@ fn accepts_run_round_run_id_and_run_started_at_anywhere() {
     let bad = patch_node(&example(), "fetch", r#"{"prompt":"{{run.nope}}"}"#);
     assert!(flags(&bad, "{{run.nope}}"));
     assert!(messages(&bad).contains(
-        &"{{run.nope}} is not a run variable (use run.round, run.id, run.startedAt)".to_string()
+        &"{{run.nope}} is not a run variable (use run.round, run.id, run.startedAt, run.worktree, run.branch)".to_string()
     ));
 }
 
@@ -1274,19 +1274,26 @@ fn accepts_every_operator_of_the_condition_grammar() {
 }
 
 #[test]
-fn flags_absolute_project_path_users_x_repo() {
-    let w = patch_node(&example(), "fetch", r#"{"project":"/Users/x/repo"}"#);
-    assert!(flags(&w, "absolute path"));
-    assert!(messages(&w).contains(
-        &"project is an absolute path; it must be {{inputs.<name>}} naming a project input"
-            .to_string()
-    ));
+fn accepts_a_project_path_and_a_project_name_as_a_step_project() {
+    // A step may name its project by path (or by name) instead of an input.
+    for project in ["/Users/x/repo", "repo", "~/code/repo"] {
+        let w = patch_node(
+            &example(),
+            "fetch",
+            &format!(r#"{{"project":"{project}"}}"#),
+        );
+        assert!(
+            !messages(&w).iter().any(|m| m.contains("project")),
+            "{project}: {:?}",
+            messages(&w)
+        );
+    }
 }
 
 #[test]
 fn flags_a_project_that_is_not_a_project_input() {
     assert!(flags(
-        &patch_node(&example(), "fetch", r#"{"project":"repo"}"#),
+        &patch_node(&example(), "fetch", r#"{"project":"{{inputs.repo}}/sub"}"#),
         "{{inputs."
     ));
     assert!(flags(
@@ -1311,7 +1318,8 @@ fn flags_a_project_that_is_not_a_project_input() {
         let w = patch_node(&example(), "fetch", &json!({"project": odd}).to_string());
         assert!(
             messages(&w).contains(
-                &"project must be exactly {{inputs.<name>}} naming a project input".to_string()
+                &"project must be a project path or exactly {{inputs.<name>}} naming a project input"
+                    .to_string()
             ),
             "{odd:?}"
         );

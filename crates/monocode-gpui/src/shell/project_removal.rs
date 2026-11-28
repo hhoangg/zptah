@@ -438,9 +438,9 @@ impl Shell {
                             !monocode_core::session_worktree::is_workflow_worktree(&db, path)
                         })
                         && {
-                        let path = Path::new(path);
-                        monocode_core::worktree_management::check(path, path).is_ok()
-                    }
+                            let path = Path::new(path);
+                            monocode_core::worktree_management::check(path, path).is_ok()
+                        }
                 })
                 .collect::<Vec<_>>()
         });
@@ -1288,6 +1288,53 @@ mod tests {
             })
             .unwrap();
         assert!(!repo.exists());
+        repo.git(&["show-ref", "--verify", "refs/heads/session-wt"]);
+    }
+
+    #[gpui::test]
+    fn a_worktree_a_workflow_run_owns_is_never_offered_or_removed_with_a_session(
+        cx: &mut TestAppContext,
+    ) {
+        cx.executor().allow_parking();
+        let (window, a, _, _) = setup(cx);
+        let repo = Repo::new();
+        window
+            .update(cx, |shell, w, cx| {
+                monocode_core::session_worktree::mark_workflow_worktree(
+                    &locked(&shell.store).unwrap(),
+                    &repo.tree,
+                    "run-1",
+                )
+                .unwrap();
+                shell.session_worktrees.insert(a, Some(repo.tree.clone()));
+                shell.request_delete_sessions(vec![a], w, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, w, cx| {
+                let dialog = shell
+                    .delete_dialog
+                    .as_ref()
+                    .expect("opened after the check");
+                // The run owns it: the dialog has no worktree to offer.
+                assert!(dialog.worktrees.is_empty(), "{:?}", dialog.worktrees);
+                // Whatever asked, the direct removal refuses it too.
+                let refused = remove_unused_worktree(&shell.store, &repo.tree).unwrap_err();
+                assert!(refused.contains("workflow run"), "{refused}");
+                shell.confirm_delete_dialog(w, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(
+                    !shell.session_summaries.contains_key(&a),
+                    "the session went"
+                );
+            })
+            .unwrap();
+        assert!(repo.exists(), "the run's worktree stays");
         repo.git(&["show-ref", "--verify", "refs/heads/session-wt"]);
     }
 

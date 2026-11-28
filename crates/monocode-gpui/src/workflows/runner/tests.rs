@@ -19,6 +19,7 @@ mod cloud;
 mod data;
 mod fake;
 mod real;
+mod workspace;
 use fake::*;
 
 // --- pure helpers ---------------------------------------------------------------------------
