@@ -193,6 +193,17 @@ fn workflow_json(w: &Workflow, facts: &MentionFacts) -> Json {
                 ("type", st("schedule")),
                 ("schedule", st(schedule.label())),
             ]),
+            NodeKind::Event(event) => {
+                let mut fields = vec![
+                    ("type", st("event")),
+                    ("source", st(&event.source)),
+                    ("event", st(&event.event)),
+                ];
+                if !event.repos.is_empty() {
+                    fields.push(("repos", Json::Array(event.repos.iter().map(st).collect())));
+                }
+                obj(fields)
+            }
             _ => obj(vec![("type", st("manual"))]),
         })
         .collect();

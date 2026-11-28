@@ -3,6 +3,7 @@
 //! checked against the validator by a test, so the guide cannot drift from the rules.
 //!
 //! The text is the React app's `workflowGuide.ts`, word for word.
+use super::event::EVENTS;
 use super::model::{
     DEFAULT_COMMAND_TIMEOUT_MINUTES, DEFAULT_MAX_PARALLEL, DEFAULT_SESSION_TIMEOUT_MINUTES,
     MAX_PARALLEL_LIMIT, MAX_ROUNDS_LIMIT, MAX_TIMEOUT_MINUTES, TEMPLATABLE_TARGET_OPTIONS,
@@ -513,6 +514,11 @@ fn option_lists() -> String {
 /// The authoring guide, as Markdown.
 pub fn workflow_guide() -> String {
     let definition_kib = WORKFLOW_DEFINITION_MAX_BYTES / 1024;
+    let event_pairs = EVENTS
+        .iter()
+        .map(|(source, event, _)| format!("`{source}`/`{event}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
     let mut sections: Vec<String> = Vec::new();
     add(
         &mut sections,
@@ -583,13 +589,21 @@ pub fn workflow_guide() -> String {
             "",
             r##"`manual` (trigger)"##,
             r##"- No fields. It runs only when started with `workflows.run` or from the board.
-- A workflow has 1 to 5 triggers, in any mix of `schedule` and `manual` (several `schedule` triggers are fine). Every trigger must lead to the same first step. Any one of them starts a run, and only that trigger runs: the others are skipped. A trigger exposes no output of its own; read what started the run from `{{trigger.node}}` (the trigger that fired), `{{trigger.kind}}` (`manual`, `schedule`, `event` or `mono`) and `{{trigger.item}}` (only an event run has one), and the start time from `{{run.startedAt}}`. A habit can start a workflow with `workflows.run` (with `values` if it declares inputs); the habit run only starts it and finishes, and the summary goes to this chat. A workflow that should simply run on a schedule is better with a `schedule` trigger than with a habit."##,
+- A workflow has 1 to 5 triggers, in any mix of `schedule`, `manual` and `event` (several of one kind are fine). Every trigger must lead to the same first step. Any one of them starts a run, and only that trigger runs: the others are skipped. A trigger exposes no output of its own; read what started the run from `{{trigger.node}}` (the trigger that fired), `{{trigger.kind}}` (`manual`, `schedule`, `event` or `mono`) and `{{trigger.item}}` (only an event run has one), and the start time from `{{run.startedAt}}`. A habit can start a workflow with `workflows.run` (with `values` if it declares inputs); the habit run only starts it and finishes, and the summary goes to this chat. A workflow that should simply run on a schedule is better with a `schedule` trigger than with a habit."##,
+            "",
+            r##"`event` (trigger)"##,
+            format!(r##"- `source` and `event` (both required) are one of these pairs: {event_pairs}. `project` (optional: a project path or `{{{{inputs.<name>}}}}`; `workspace.project` when left out) limits the trigger to one project, and `repos` (optional list) limits it to those repositories (GitHub, GitLab, Azure DevOps) or ClickUp space ids; an empty list means any. An item from Linear, Jira or ClickUp that carries no project matches any project. There is no branch or author filter."##).as_str(),
+            r##"- The run starts for an item that shows up in the user's Inbox after the trigger was enabled; items that were already there never fire, and a workflow gets at most one run per item even with several event triggers. The trigger finishes with the item as its output: read it as `{{trigger.item.source}}`, `{{trigger.item.kind}}`, `{{trigger.item.ref}}`, `{{trigger.item.title}}`, `{{trigger.item.url}}` and `{{trigger.item.repo}}`. The app checks the Inbox every 2 to 5 minutes and only while the app is open, so a run starts a few minutes after the item appears, and not at all while the app is closed."##,
+            r##"- Untrusted input: the title and text of an issue or pull request come from people outside the team and go straight into a prompt. A session after an event trigger runs with `access: "auto-accept-edits"` unless it says otherwise; choosing `"full-access"` there is allowed but `workflows.validate` returns a warning. Keep such prompts narrow and never pass the item text to a command step."##,
             "",
             r##"`session`"##,
             r##"- `project` (optional; `workspace.project` when left out), `prompt` (required, a template), `checkout` (optional, default `"run"`): `"run"` (the run worktree), `"root"` (the project's own checkout), `"newWorktree"` (a fresh worktree), `{"worktreeOf": "<session node id>"}` (continue in the worktree of an earlier session of the same branch; that node must be a session) or `{"existing": "<folder>"}` (a worktree of the step's project that already exists)."##,
             r##"- `outputs`: the fields the session reports back (see Passing data between steps below). May be `{}`; a file that says `output` is read too."##,
             r##"- `surface` (optional): `"chat"` (default) or `"terminal"` (the provider's own CLI in a terminal pane, so slash commands such as `/ship` work). A terminal step needs Claude, a local project and not Windows; it has no `reply`, and `reuseSession` is ignored (each round opens a new terminal)."##,
             r##"- `mode` (optional): `"auto"` (default: the step ends when the session's first turn ends) or `"waitForMe"` (the first turn ends, then the user chats on in the session and presses Continue or Fail step on the banner; waiting more than 12 hours fails the step)."##,
+            r##"- `access` (optional): `"supervised"`, `"auto-accept-edits"` (default), `"auto"` or `"full-access"`: how much the agent may do without asking. Full access is opt-in, and after an event trigger it gets a warning."##,
+            r##"- `folder` (optional): the id of a session folder to file the session in. It overrides the workflow's own folder, and the workflow's folder is used when this one was deleted. Local steps only."##,
+            r##"- `linkWorkItem` (optional boolean): link the session, on this computer only, to the work item of the item that started the run, so it shows on that issue or pull request. Needs an event trigger before the step; nothing is written to the provider."##,
             r##"- `harness`, `model`, `effort` (optional): see Models."##,
             r##"- `target` (optional): run this step in a cloud instance (a GitHub codespace or a Docker sandbox) instead of on this computer: `{"kind": "codespace" | "sandbox", "instance"?: "new" | {"sameAs": "<session node id>"}, ...options}`. `account` (optional, only with a `target`): the Claude account a new instance runs with. See Cloud steps."##,
             format!(r##"- `reuseSession` (default true): in a loop, later rounds continue in the same session instead of starting a new one. `nestUnder` (optional): the id of another session node; this session is shown under it in the sidebar. `timeoutMinutes` (default {DEFAULT_SESSION_TIMEOUT_MINUTES}, above 0, at most {MAX_TIMEOUT_MINUTES})."##).as_str(),

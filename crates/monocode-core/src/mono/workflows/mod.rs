@@ -23,6 +23,11 @@ pub mod engine;
 mod engine_tests;
 pub mod event;
 #[cfg(test)]
+mod event_node_tests;
+pub mod event_run;
+#[cfg(test)]
+mod event_run_tests;
+#[cfg(test)]
 mod event_tests;
 #[cfg(test)]
 mod fixtures;

@@ -97,7 +97,7 @@ impl Workflows {
         let mut input = json!({
             "project": project,
             "prompt": req.prompt,
-            "runtimeMode": "full-access",
+            "runtimeMode": req.access,
             "notifyOnComplete": false,
             "draft": draft,
         });
@@ -201,6 +201,9 @@ impl Workflows {
                     nest_under: None,
                     timeout_minutes: None,
                     account: None,
+                    access: None,
+                    folder: None,
+                    link_work_item: None,
                     // Which cloud kind or instance does not matter to the model check; that it is
                     // a cloud step does (Claude runs in the instance, not here).
                     target: req.target.as_ref().map(|cloud| SessionTarget {
@@ -217,6 +220,8 @@ impl Workflows {
         let effort = req.effort.clone();
         let request_id = mono::new_id();
         let terminal = req.terminal;
+        let access = req.access.clone();
+        let work_item = req.work_item.clone();
         let make = {
             let project = project.clone();
             let input = input.clone();
@@ -296,7 +301,7 @@ impl Workflows {
                     if let Some(effort) = &effort {
                         settings.effort = Some(effort.clone());
                     }
-                    settings.access = AccessMode::FullAccess;
+                    settings.access = AccessMode::from_id(&access);
                     settings.revision = 0;
                     // A cloud session has no local checkout to prepare.
                     if startup.is_none() {
@@ -304,6 +309,11 @@ impl Workflows {
                     }
                     if worktree {
                         made = settings.worktree_cwd.as_ref().map(std::path::PathBuf::from);
+                    }
+                    // The item of the event that started the run, linked on this computer only.
+                    if let Some(item) = &work_item {
+                        db.set_work_item(summary.id, Some(item))?;
+                        summary.work_item = Some(item.clone());
                     }
                     summary.title = prompt.chars().take(160).collect();
                     db.title(summary.id, &summary.title)?;
@@ -357,12 +367,20 @@ impl Workflows {
         };
         let work = cx.background_executor().spawn(async move { make() });
         let folder = req.folder_name.clone();
+        let folder_id = req.folder_id.clone();
         let terminal_prompt = terminal.then(|| req.prompt.clone());
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 let started = result.and_then(|made| {
-                    this.install_started(made, &project, folder, draft, terminal_prompt, cx)
+                    this.install_started(
+                        made,
+                        &project,
+                        (folder, folder_id),
+                        draft,
+                        terminal_prompt,
+                        cx,
+                    )
                 });
                 let _ = reply.try_send(started);
             });
@@ -376,7 +394,7 @@ impl Workflows {
         &mut self,
         made: Made,
         project: &str,
-        folder: Option<String>,
+        folder: (Option<String>, Option<String>),
         draft: bool,
         terminal_prompt: Option<String>,
         cx: &mut Context<Self>,
@@ -411,9 +429,9 @@ impl Workflows {
                 self.live.tui.remove(&local);
                 return Err("The terminal session could not be opened.".into());
             }
-            if let Some(name) = folder {
-                self.file_in_folder(project, local, &name, cx);
-            }
+            // The node's own folder wins; the workflow's folder is the fallback (D31).
+            let (name, id) = folder;
+            self.file_in_folder(project, local, name.as_deref(), id.as_deref(), cx);
         }
         self.live.ids.insert(persisted.clone(), local);
         // A terminal turn is told by the pane's events, which wake the wait as they come; the CLI
@@ -446,19 +464,34 @@ impl Workflows {
         })
     }
 
-    /// Files `session` in the workflow's folder of `project`: the folder with its name when there
-    /// is one (every run uses it), else a new one.
+    /// Files `session` in a folder of `project`: the folder `id` when the node chose one and it
+    /// still exists, else the workflow's folder with its name when there is one (every run uses
+    /// it), else a new one. Nothing is filed without either.
     pub(in crate::workflows) fn file_in_folder(
         &mut self,
         project: &str,
         session: i64,
-        name: &str,
+        name: Option<&str>,
+        id: Option<&str>,
         cx: &mut Context<Self>,
     ) {
         let Some(shell) = self.shell.upgrade() else {
             return;
         };
         let mut groups: Groups = shell.read(cx).mono_groups(project);
+        let chosen = id
+            .and_then(|id| groups.folders.iter().find(|f| f.id == id))
+            .map(|f| f.id.clone());
+        if let Some(chosen) = chosen {
+            groups.add_to_folder(&chosen, session);
+            let _ = shell.update(cx, |shell, cx| {
+                shell.mono_apply_groups(project.to_owned(), groups, cx)
+            });
+            return;
+        }
+        let Some(name) = name else {
+            return;
+        };
         match groups
             .folders
             .iter()

@@ -235,47 +235,8 @@ impl Workflows {
                         });
                     }
                 }
-                Start::Run { mut run, failure } => {
-                    // A run that never starts would otherwise only show in the run history.
-                    let failed = failure.is_some();
-                    if let Some(failure) = failure {
-                        // Delivered here, so the runner must not deliver a second summary for the
-                        // run it only writes.
-                        run.report_posted_at = Some(run.ended_at.unwrap_or(run.started_at));
-                        run.summary = Some(RunSummary {
-                            title: failure.title.clone(),
-                            text: failure.text.clone(),
-                        });
-                        self.deliver(
-                            Summary {
-                                run: run.clone(),
-                                title: failure.title,
-                                text: failure.text,
-                                launches: Vec::new(),
-                            },
-                            cx,
-                        );
-                    }
-                    // The runner writes every run it takes. When it refuses one that already failed
-                    // (and was announced above), the record is written here so it is not lost.
-                    let kept = failed.then(|| run.clone());
-                    // A promoted run is `running` in the file already: when the runner refuses
-                    // it (the app is quitting, or the slot went), it goes back to the queue.
-                    let promoted = (!failed && run.queued_at.is_some()).then(|| run.clone());
-                    if !self.start_run(run, cx) {
-                        if let Some(run) = kept {
-                            let save = self.workflow_host(cx).save_run(run);
-                            cx.spawn(async move |_, _| {
-                                if let Err(error) = save.await {
-                                    eprintln!("Could not save a failed workflow run: {error}");
-                                }
-                            })
-                            .detach();
-                        }
-                        if let Some(run) = promoted {
-                            self.requeue_refused(run, cx);
-                        }
-                    }
+                Start::Run { run, failure } => {
+                    self.start_found_run(run, failure, cx);
                 }
             }
         }
@@ -283,6 +244,60 @@ impl Workflows {
 }
 
 impl Workflows {
+    /// Starts a run a look (or an event start) made: a run that failed before it began is announced
+    /// and written, any other goes to the runner. True when the run is known to the files or the
+    /// runner afterwards (taken, or a failed one that was written); false when the runner refused a
+    /// run that had to go back (a promoted one is requeued, so the caller may release its claim).
+    pub(super) fn start_found_run(
+        &mut self,
+        mut run: WorkflowRun,
+        failure: Option<tick::Failure>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // A run that never starts would otherwise only show in the run history.
+        let failed = failure.is_some();
+        if let Some(failure) = failure {
+            // Delivered here, so the runner must not deliver a second summary for the
+            // run it only writes.
+            run.report_posted_at = Some(run.ended_at.unwrap_or(run.started_at));
+            run.summary = Some(RunSummary {
+                title: failure.title.clone(),
+                text: failure.text.clone(),
+            });
+            self.deliver(
+                Summary {
+                    run: run.clone(),
+                    title: failure.title,
+                    text: failure.text,
+                    launches: Vec::new(),
+                },
+                cx,
+            );
+        }
+        // The runner writes every run it takes. When it refuses one that already failed
+        // (and was announced above), the record is written here so it is not lost.
+        let kept = failed.then(|| run.clone());
+        // A promoted run is `running` in the file already: when the runner refuses
+        // it (the app is quitting, or the slot went), it goes back to the queue.
+        let promoted = (!failed && run.queued_at.is_some()).then(|| run.clone());
+        let taken = self.start_run(run, cx);
+        if !taken {
+            if let Some(run) = kept {
+                let save = self.workflow_host(cx).save_run(run);
+                cx.spawn(async move |_, _| {
+                    if let Err(error) = save.await {
+                        eprintln!("Could not save a failed workflow run: {error}");
+                    }
+                })
+                .detach();
+            }
+            if let Some(run) = promoted {
+                self.requeue_refused(run, cx);
+            }
+        }
+        taken || failed
+    }
+
     /// Puts a promoted run the runner refused back in the queue (see `queue::requeue`).
     pub(crate) fn requeue_refused(&mut self, run: WorkflowRun, cx: &mut Context<Self>) {
         let dir = self.dir.clone();

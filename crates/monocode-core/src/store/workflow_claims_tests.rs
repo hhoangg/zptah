@@ -87,7 +87,9 @@ fn read_only_open_does_not_create_the_table() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("monocode.db");
     // An existing database from before this table.
-    drop(Store::open_monocode(&path).unwrap());
+    let store = Store::open_monocode(&path).unwrap();
+    assert!(store.claim_workflow_event("w0", "t0", "k").unwrap());
+    drop(store);
     Connection::open(&path)
         .unwrap()
         .execute_batch("DROP TABLE workflow_event_claims;")

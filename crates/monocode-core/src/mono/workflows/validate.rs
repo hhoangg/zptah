@@ -1,15 +1,18 @@
 //! Full validation of a workflow definition. Issue messages are copied verbatim from the React
 //! app: the Mono and the workflow guide read them.
 use super::condition::condition_syntax_problem;
+use super::event::{check_event, EventTrigger};
 use super::model::{
     is_node_id, Checkout, Cwd, Handle, Node, NodeId, NodeKind, Requirement, RequirementKind,
     SessionMode, SessionSurface, SessionTarget, TargetInstance, Workflow, WorkspaceMode,
-    CONCURRENCY_LIMIT, DEFAULT_MAX_PARALLEL, MAX_PARALLEL_LIMIT, MAX_ROUNDS_LIMIT,
-    MAX_TIMEOUT_MINUTES, SWITCH_DEFAULT, TEMPLATABLE_TARGET_OPTIONS, TRIGGERS_MAX,
+    CONCURRENCY_LIMIT, DEFAULT_MAX_PARALLEL, FULL_ACCESS, MAX_PARALLEL_LIMIT, MAX_ROUNDS_LIMIT,
+    MAX_TIMEOUT_MINUTES, SESSION_ACCESS_IDS, SWITCH_DEFAULT, TEMPLATABLE_TARGET_OPTIONS,
+    TRIGGERS_MAX,
 };
 use super::output::{is_builtin_name, session_builtins, COMMAND_BUILTINS};
 use super::parse::{is_ai_decide, is_map_key, is_name};
 use super::template::{js_space, js_trim, shell_template_problems, template_vars};
+use crate::inbox::is_tracker;
 use crate::mono::habits::Schedule;
 use serde_json::json;
 use std::cell::RefCell;
@@ -589,7 +592,7 @@ impl<'a> Checker<'a> {
                     fields.push(("schedule.intervalFrom".into(), from, false));
                 }
             }
-            NodeKind::Manual => {}
+            NodeKind::Manual | NodeKind::Event(_) => {}
             NodeKind::Session {
                 prompt,
                 checkout,
@@ -662,6 +665,71 @@ impl<'a> Checker<'a> {
         for (label, text, strict) in fields {
             self.check_text_in(Some(&node.id), &label, text, strict);
         }
+    }
+
+    /// An event trigger: a known source and event, and a project that is a path or a project
+    /// input. Items from a code host belong to a project, so such a trigger needs one (its own or
+    /// the workflow's); a tracker item that carries no project matches any.
+    fn check_event_trigger(&mut self, node: &Node, event: &EventTrigger) {
+        let at = Some(node.id.as_str());
+        if let Err(problem) = check_event(&event.source, &event.event) {
+            self.add(problem, at);
+            return;
+        }
+        let project = event.project.as_deref().map(js_trim).unwrap_or_default();
+        if !project.is_empty() {
+            if let Some(problem) = self.project_text_problem("project", project) {
+                self.add(problem, at);
+            }
+        } else if !is_tracker(&event.source) && js_trim(&self.w.workspace.project).is_empty() {
+            self.add(
+                "project is not set: give the trigger a project or the workflow a workspace.project",
+                at,
+            );
+        }
+    }
+
+    /// A session's `access`, `folder` and `linkWorkItem`.
+    fn check_session_access_and_links(
+        &mut self,
+        node: &Node,
+        access: Option<&str>,
+        folder: Option<&str>,
+        link_work_item: Option<bool>,
+        cloud: bool,
+    ) {
+        let at = Some(node.id.as_str());
+        if let Some(access) = access.filter(|a| !SESSION_ACCESS_IDS.contains(a)) {
+            self.add(
+                format!(
+                    "access \"{access}\" is not valid: use {}",
+                    SESSION_ACCESS_IDS.join(", ")
+                ),
+                at,
+            );
+        }
+        if folder.is_some() && cloud {
+            self.add(
+                "folder only applies to a local step: a cloud session is filed by its instance",
+                at,
+            );
+        }
+        if link_work_item == Some(true) && !self.has_event_ancestor(&node.id) {
+            self.add(
+                "linkWorkItem needs an event trigger before this step: only a run started by an event has an item to link",
+                at,
+            );
+        }
+    }
+
+    /// Whether an event trigger leads to `id`.
+    fn has_event_ancestor(&self, id: &str) -> bool {
+        self.ancestors(id).iter().any(|a| {
+            self.g
+                .by_id
+                .get(a)
+                .is_some_and(|n| matches!(n.kind, NodeKind::Event(_)))
+        })
     }
 
     /// A step's `project`: empty (the workflow's `workspace.project`), a project path, or exactly
@@ -1117,6 +1185,7 @@ impl<'a> Checker<'a> {
                 }
             }
             NodeKind::Manual => {}
+            NodeKind::Event(event) => self.check_event_trigger(node, event),
             NodeKind::Session {
                 project,
                 prompt,
@@ -1128,9 +1197,19 @@ impl<'a> Checker<'a> {
                 timeout_minutes,
                 target,
                 account,
+                access,
+                folder,
+                link_work_item,
                 ..
             } => {
                 self.check_project(node, project);
+                self.check_session_access_and_links(
+                    node,
+                    access.as_deref(),
+                    folder.as_deref(),
+                    *link_work_item,
+                    target.is_some(),
+                );
                 if target.is_none() {
                     self.check_checkout(node, project, checkout);
                 }
@@ -1946,6 +2025,10 @@ pub fn unknown_project_issues(w: &Workflow, projects: &[String]) -> Vec<Workflow
     for node in &w.nodes {
         let project = match &node.kind {
             NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => project,
+            NodeKind::Event(EventTrigger {
+                project: Some(project),
+                ..
+            }) => project,
             _ => continue,
         };
         if known(project) == Some(false) {
@@ -2028,6 +2111,25 @@ pub fn workflow_warnings(w: &Workflow) -> Vec<WorkflowIssue> {
                 node_id: Some(node.id.clone()),
                 message: format!(
                     "Step \"{}\" runs for several items at the same time and every item writes into {place}: lower maxParallel to 1, or give each item a worktree of its own (checkout run with a perRun workspace, or newWorktree)",
+                    node.id
+                ),
+            });
+        }
+    }
+    // Issue and PR text from outside people goes straight into the prompt of a step downstream
+    // of an event trigger, so full access there lets a stranger steer an unattended agent.
+    for node in &w.nodes {
+        if node.kind.session_access() == FULL_ACCESS
+            && reach(node.id.as_str(), &g.prev).iter().any(|a| {
+                g.by_id
+                    .get(a)
+                    .is_some_and(|n| matches!(n.kind, NodeKind::Event(_)))
+            })
+        {
+            out.push(WorkflowIssue {
+                node_id: Some(node.id.clone()),
+                message: format!(
+                    "Step \"{}\" has full access and runs after an event trigger: text from an issue or pull request, which anyone may write, reaches its prompt and the agent could run commands unattended. Use auto-accept-edits or auto instead",
                     node.id
                 ),
             });

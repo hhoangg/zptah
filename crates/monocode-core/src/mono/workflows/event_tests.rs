@@ -55,7 +55,7 @@ fn keys_are_stable_and_distinct() {
     let mut other_repo = a.clone();
     other_repo.repo = "acme/other".into();
     let issue = item("github", "issue");
-    let keys = [&a, &other_number, &other_repo, &issue].map(|i| event_key(i));
+    let keys = [&a, &other_number, &other_repo, &issue].map(event_key);
     for (i, x) in keys.iter().enumerate() {
         for y in &keys[i + 1..] {
             assert_ne!(x, y);

@@ -78,10 +78,8 @@ enum When {
 }
 
 /// Whether the workflow can start from an event (`trigger.item.*` exists only then).
-/// Hook: the event trigger node kind does not exist yet. When it is added, match it here and
-/// nothing else in this file changes.
-fn has_event_trigger(_w: &Workflow) -> bool {
-    false
+fn has_event_trigger(w: &Workflow) -> bool {
+    w.nodes.iter().any(|n| matches!(n.kind, NodeKind::Event(_)))
 }
 
 impl When {
@@ -149,9 +147,44 @@ const SCOPE_VARS: &[(&str, &str, &str, VariableKind, When)] = &[
     // Event items: the validator takes any path under `trigger.item`.
     (
         "item",
-        "trigger.item",
-        "The item the event brought",
-        VariableKind::Object,
+        "trigger.item.source",
+        "The service the item comes from (github, linear, ...)",
+        VariableKind::Text,
+        When::Event,
+    ),
+    (
+        "item",
+        "trigger.item.kind",
+        "What the item is (issue, pull request, ...)",
+        VariableKind::Text,
+        When::Event,
+    ),
+    (
+        "item",
+        "trigger.item.ref",
+        "Its reference, such as #42 or ENG-12",
+        VariableKind::Text,
+        When::Event,
+    ),
+    (
+        "item",
+        "trigger.item.title",
+        "Its title (text anyone may write)",
+        VariableKind::Text,
+        When::Event,
+    ),
+    (
+        "item",
+        "trigger.item.url",
+        "Its link",
+        VariableKind::Text,
+        When::Event,
+    ),
+    (
+        "item",
+        "trigger.item.repo",
+        "Its repository or space",
+        VariableKind::Text,
         When::Event,
     ),
 ];

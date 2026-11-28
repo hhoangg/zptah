@@ -963,6 +963,15 @@ fn pass(d: &mut Draft) -> bool {
                 finish_node(d, i, Some(OrderedMap::new()));
                 changed = true;
             }
+            // An event trigger finishes with the item that fired it as its output.
+            NodeKind::Event(_) => {
+                let output = match &d.run.caller.item {
+                    Some(Json::Object(item)) => item.clone(),
+                    _ => OrderedMap::new(),
+                };
+                finish_node(d, i, Some(output));
+                changed = true;
+            }
             NodeKind::ForEach { list, .. } => {
                 if node.parent.is_some() {
                     fail_node(d, i, "Nested For each is not supported".into());
@@ -1085,6 +1094,7 @@ fn firing_trigger<'a>(def: &'a Workflow, caller: &RunCaller) -> Option<&'a Node>
                     (&n.kind, caller.kind),
                     (NodeKind::Schedule { .. }, CallerKind::Schedule)
                         | (NodeKind::Manual, CallerKind::Manual | CallerKind::Mono)
+                        | (NodeKind::Event(_), CallerKind::Event)
                 )
             })
         })

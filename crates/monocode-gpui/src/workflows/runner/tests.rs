@@ -17,6 +17,7 @@ use std::collections::VecDeque;
 
 mod cloud;
 mod data;
+mod event;
 mod fake;
 mod real;
 mod workspace;

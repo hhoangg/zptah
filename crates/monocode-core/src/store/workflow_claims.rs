@@ -32,6 +32,22 @@ fn sql<T>(result: rusqlite::Result<T>) -> Result<T, String> {
 }
 
 impl Store {
+    /// Creates the table on the first write that needs it, so opening an existing database never
+    /// changes it.
+    fn ensure_claims(&self) -> Result<(), String> {
+        sql(ensure_workflow_claims_table(&self.conn))
+    }
+
+    fn has_claims_table(&self) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workflow_event_claims'",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok()
+    }
+
     /// Claim `event_key` for one trigger node. True only when this call inserted
     /// the row. Does not look at other trigger nodes of the workflow.
     pub fn claim_workflow_event(
@@ -61,6 +77,7 @@ impl Store {
         event_key: &str,
         per_workflow: bool,
     ) -> Result<bool, String> {
+        self.ensure_claims()?;
         let tx = sql(rusqlite::Transaction::new_unchecked(
             &self.conn,
             TransactionBehavior::Immediate,
@@ -95,6 +112,7 @@ impl Store {
         event_key: &str,
         run_id: &str,
     ) -> Result<(), String> {
+        self.ensure_claims()?;
         sql(self.conn.execute(
             "UPDATE workflow_event_claims SET run_id = ?4
              WHERE workflow_id = ?1 AND trigger_node = ?2 AND event_key = ?3",
@@ -111,6 +129,9 @@ impl Store {
         trigger_node: &str,
         event_key: &str,
     ) -> Result<(), String> {
+        if !self.has_claims_table() {
+            return Ok(());
+        }
         sql(self.conn.execute(
             "DELETE FROM workflow_event_claims
              WHERE workflow_id = ?1 AND trigger_node = ?2 AND event_key = ?3
@@ -122,6 +143,9 @@ impl Store {
 
     /// Claims with no run, oldest first. For the startup check.
     pub fn unclaimed_workflow_claims(&self) -> Result<Vec<WorkflowClaim>, String> {
+        if !self.has_claims_table() {
+            return Ok(Vec::new());
+        }
         let mut statement = sql(self.conn.prepare(
             "SELECT workflow_id, trigger_node, event_key, created_at
              FROM workflow_event_claims WHERE run_id IS NULL
@@ -141,6 +165,9 @@ impl Store {
 
     /// Drop every claim of a deleted workflow.
     pub fn forget_workflow_claims(&self, workflow_id: &str) -> Result<(), String> {
+        if !self.has_claims_table() {
+            return Ok(());
+        }
         sql(self.conn.execute(
             "DELETE FROM workflow_event_claims WHERE workflow_id = ?1",
             [workflow_id],

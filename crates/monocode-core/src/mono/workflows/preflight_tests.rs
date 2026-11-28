@@ -129,6 +129,9 @@ fn session_node(id: &str) -> Node {
             timeout_minutes: None,
             target: None,
             account: None,
+            access: None,
+            folder: None,
+            link_work_item: None,
         },
     )
 }

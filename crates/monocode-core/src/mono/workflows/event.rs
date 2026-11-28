@@ -13,8 +13,10 @@ pub struct EventTrigger {
     pub event: String,
     /// The project this trigger is limited to. The caller resolves it (a path, or
     /// the workflow's own project) and passes the result to [`matches`].
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// Repositories (GitHub, GitLab, Azure DevOps) or ClickUp space ids. Empty means any.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub repos: Vec<String>,
 }
 
@@ -43,6 +45,25 @@ pub fn events_for(source: &str) -> Vec<(&'static str, &'static str)> {
         .filter(|(s, _, _)| *s == source)
         .map(|(_, id, label)| (*id, *label))
         .collect()
+}
+
+/// The label of one event: "Pull request opened". The raw id when the pair is unknown.
+pub fn event_label<'a>(source: &str, event: &'a str) -> &'a str {
+    EVENTS
+        .iter()
+        .find(|(s, e, _)| *s == source && *e == event)
+        .map_or(event, |(_, _, label)| label)
+}
+
+impl EventTrigger {
+    /// One line for the board and the Mono tools: "GitHub: Pull request opened".
+    pub fn summary(&self) -> String {
+        format!(
+            "{}: {}",
+            provider_label(&self.source),
+            event_label(&self.source, &self.event)
+        )
+    }
 }
 
 /// Reject a source and event pair outside [`EVENTS`].
@@ -196,5 +217,60 @@ pub fn trigger_item(item: &Item) -> Value {
         "title": title,
         "url": item.url.trim(),
         "repo": item.repo.trim(),
+        // What a session links to when its node sets `linkWorkItem` (the Inbox's own work item).
+        "workItem": item.work_item(),
+        // The claim's key, so a crash between making a run and recording it is repaired at startup.
+        "eventKey": event_key(item),
+    })
+}
+
+/// The work item a run's `trigger.item` carries, for a session that links it.
+pub fn work_item_of(item: &serde_json::Value) -> Option<crate::session_groups::WorkItem> {
+    serde_json::from_value(item.get("workItem")?.clone()).ok()
+}
+
+/// The project text an event trigger is limited to: its own `project`, else the workflow's
+/// `workspace.project`. `{{inputs.X}}` is read from the stored input values (D29). Empty when
+/// neither names one, or the input has no value.
+pub fn trigger_project(w: &super::model::Workflow, trigger: &EventTrigger) -> String {
+    let text = trigger
+        .project
+        .as_deref()
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or(&w.workspace.project)
+        .trim();
+    let named = text
+        .strip_prefix("{{")
+        .and_then(|rest| rest.strip_suffix("}}"))
+        .map(str::trim)
+        .and_then(|reference| reference.strip_prefix("inputs."));
+    match named {
+        Some(name) => match w.input_values.get(name) {
+            Some(super::model::InputValue::String(path)) => path.trim().to_string(),
+            _ => String::new(),
+        },
+        None if text.contains("{{") => String::new(),
+        None => text.to_string(),
+    }
+}
+
+/// The first trigger of `w` (in definition order) that fires for `item`: one run per workflow
+/// per item, so the first match wins (D28). `projects` are the app's project paths; a project
+/// text naming one by folder name is resolved to its path.
+pub fn matching_trigger<'a>(
+    w: &'a super::model::Workflow,
+    item: &Item,
+    projects: &[String],
+) -> Option<&'a super::model::Node> {
+    w.nodes.iter().find(|node| {
+        let super::model::NodeKind::Event(trigger) = &node.kind else {
+            return false;
+        };
+        if node.parent.is_some() {
+            return false;
+        }
+        let text = trigger_project(w, trigger);
+        let path = crate::mono::resolve_project(projects, &text).unwrap_or(text);
+        matches(trigger, item, &path)
     })
 }

@@ -584,6 +584,19 @@ impl Monos {
                     "Starts when you use Run now, or when a Mono runs it. Values it needs are set in the Settings mode.",
                 )
                 .into_any_element(),
+            // The event inspector (source, event and filters) is the next step; until then the
+            // node shows what it listens for.
+            NodeKind::Event(event) => div()
+                .px_4()
+                .py_3()
+                .text_size(px(12.))
+                .line_height(px(20.))
+                .text_color(content(0.55))
+                .child(format!(
+                    "Starts a run for each new matching item in your Inbox: {}. It checks every few minutes, and only while zptah is open.",
+                    event.summary()
+                ))
+                .into_any_element(),
             NodeKind::Session {
                 prompt,
                 checkout,

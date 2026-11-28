@@ -58,6 +58,7 @@ fn add_id(ty: NodeType) -> &'static str {
     match ty {
         NodeType::Schedule => "wf-add-schedule",
         NodeType::Manual => "wf-add-manual",
+        NodeType::Event => "wf-add-event",
         NodeType::Session => "wf-add-session",
         NodeType::Command => "wf-add-command",
         NodeType::If => "wf-add-if",

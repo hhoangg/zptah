@@ -252,6 +252,7 @@ pub fn picker_groups() -> &'static [PickerGroup] {
             items: &[
                 (NodeType::Schedule, "Runs on a schedule"),
                 (NodeType::Manual, "Runs when you start it"),
+                (NodeType::Event, "Runs for a new pull request or issue"),
             ],
         },
         PickerGroup {
@@ -275,7 +276,9 @@ pub fn picker_groups() -> &'static [PickerGroup] {
 /// Why a type cannot be added now, if it cannot.
 pub fn picker_unavailable(ty: NodeType, trigger_count: usize) -> Option<&'static str> {
     match ty {
-        NodeType::Schedule | NodeType::Manual if trigger_count >= TRIGGERS_MAX => {
+        NodeType::Schedule | NodeType::Manual | NodeType::Event
+            if trigger_count >= TRIGGERS_MAX =>
+        {
             Some("A workflow has at most 5 triggers")
         }
         _ => None,
@@ -287,6 +290,7 @@ pub fn type_label(ty: NodeType) -> &'static str {
     match ty {
         NodeType::Schedule => "Schedule",
         NodeType::Manual => "Manual",
+        NodeType::Event => "Event",
         NodeType::Session => "Session",
         NodeType::Command => "Command",
         NodeType::If => "If",
@@ -356,7 +360,7 @@ pub fn select(flow: &Flow, node: Option<&str>, edge: Option<&str>) -> Flow {
 
 fn is_trigger_type(ty: NodeType) -> bool {
     match ty {
-        NodeType::Schedule | NodeType::Manual => true,
+        NodeType::Schedule | NodeType::Manual | NodeType::Event => true,
         NodeType::Session
         | NodeType::Command
         | NodeType::If
