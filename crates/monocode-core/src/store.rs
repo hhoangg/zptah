@@ -10,7 +10,7 @@ pub use location::{
 };
 mod cloud_rows;
 pub use cloud_rows::{AppendOutcome, RowAnchor};
-mod managed_sessions;
+mod automation_cleanup;
 mod monocode_import;
 pub mod monoptah_import;
 mod monos;
@@ -133,6 +133,7 @@ pub struct Store {
     conn: Connection,
     path: std::path::PathBuf,
     shared: Option<shared::Shared>,
+    cleanup_notes: std::cell::RefCell<Vec<String>>,
 }
 impl Store {
     pub fn reset_provider_id_if(&self, id: i64, expected: Option<&str>) -> Result<(), String> {
@@ -271,11 +272,14 @@ impl Store {
             }
         }
         restrict_database_files(path);
-        Ok(Self {
+        let store = Self {
             conn,
             path: path.into(),
             shared: None,
-        })
+            cleanup_notes: Default::default(),
+        };
+        store.drop_automation_data(false);
+        Ok(store)
     }
     /// The selected desktop or isolated-development database.
     pub fn database_path(&self) -> &Path {
@@ -866,6 +870,7 @@ impl Store {
             conn,
             path: self.path.clone(),
             shared: None,
+            cleanup_notes: Default::default(),
         }))
     }
     /// Stream saved message bodies without loading conversations into the UI.
@@ -1461,7 +1466,7 @@ impl Store {
         tx.execute("DELETE FROM native_reminders WHERE session_id=?1", [id])
             .map_err(|e| e.to_string())?;
         tx.execute(
-            "DELETE FROM native_settings WHERE key IN (?1,?2,?3,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21) OR key LIKE ?4",
+            "DELETE FROM native_settings WHERE key IN (?1,?2,?3,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20) OR key LIKE ?4",
             params![
                 format!("agent:{id}"),
                 format!("context:{id}"),
@@ -1470,7 +1475,6 @@ impl Store {
                 format!("started-by:{id}"),
                 format!("orchestration:{id}"),
                 format!("inbox-ask:{id}"),
-                format!("automation:{id}"),
                 format!("mono-retired:{id}"),
                 format!("archive-times:{id}"),
                 format!("codespace-origin:{id}"),

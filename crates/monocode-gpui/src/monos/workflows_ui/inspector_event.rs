@@ -258,11 +258,12 @@ impl Monos {
                 cx,
             )
         } else {
+            let (label, placeholder) = repos_labels(&trigger.source);
             self.text_row(
-                "Repos",
+                label,
                 BoardField::EventRepos(id.clone()),
                 &trigger.repos.join(", "),
-                "Any (owner/name, comma separated)",
+                placeholder,
                 window,
                 cx,
             )
@@ -574,5 +575,30 @@ impl Monos {
             },
             cx,
         );
+    }
+}
+
+/// The label and placeholder of the filter that narrows an event trigger: Jira narrows by project
+/// key, a code host by repository.
+pub(super) fn repos_labels(source: &str) -> (&'static str, &'static str) {
+    match source {
+        "jira" => ("Project keys", "Any (such as ABC, OPS)"),
+        _ if !monocode_core::inbox::is_tracker(source) => {
+            ("Repos (owner/name)", "Any (owner/name, comma separated)")
+        }
+        _ => ("Repos", "Any (comma separated)"),
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::repos_labels;
+
+    #[test]
+    fn the_filter_is_named_for_what_each_source_filters_by() {
+        assert_eq!(repos_labels("jira").0, "Project keys");
+        assert!(repos_labels("jira").1.contains("ABC, OPS"));
+        assert_eq!(repos_labels("github").0, "Repos (owner/name)");
+        assert_eq!(repos_labels("gitlab").0, "Repos (owner/name)");
     }
 }

@@ -34,7 +34,7 @@ Install and sign in to at least one supported agent first. See [provider setup](
 
 - GitHub, GitLab, Linear, Jira, ClickUp and Azure DevOps sources, connected in Settings > Inbox. See [Jira](docs/jira.md) and [ClickUp](docs/clickup.md).
 - Browse issues and tasks with comments, ask an agent about a ticket, or start work on it in a local project.
-- Automations that run an agent on a schedule or when an inbox item appears.
+- Workflows that run on a schedule, by hand or when an inbox item appears (a new PR, issue or ticket).
 - Ticket Contributors with AI ticket scoring for ClickUp.
 
 ### Monos

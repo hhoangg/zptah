@@ -634,7 +634,6 @@ impl Shell {
                     ("Inbox", "inbox"),
                     ("Notes", "file"),
                     ("Workflows", "zap"),
-                    ("Automations", "refresh-cw"),
                     ("Contributors", "chart-square"),
                 ]
                 .into_iter()
@@ -644,7 +643,7 @@ impl Shell {
                     "Notes" => {
                         self.workspace.preferences.notes && self.workspace.sidebar_notes_visible
                     }
-                    "Automations" => self.workspace.sidebar_automations_visible,
+                    "Workflows" => self.workspace.sidebar_workflows_visible,
                     "Contributors" => self.workspace.sidebar_contributors_visible,
                     _ => true,
                 })
@@ -707,7 +706,6 @@ impl Shell {
                             "Today" => this.open_today(w, cx),
                             "Inbox" => this.open_inbox(w, cx),
                             "Notes" => this.open_notes(w, cx),
-                            "Automations" => this.open_automations(w, cx),
                             "Workflows" => this.open_workflows(w, cx),
                             "Contributors" => this.open_contributors(None, None, w, cx),
                             _ => (),
@@ -889,10 +887,9 @@ impl Shell {
                         workspace::AppView::Notes,
                         self.workspace.preferences.notes && self.workspace.sidebar_notes_visible,
                     ),
-                    (workspace::AppView::Workflows, true),
                     (
-                        workspace::AppView::Automations,
-                        self.workspace.sidebar_automations_visible,
+                        workspace::AppView::Workflows,
+                        self.workspace.sidebar_workflows_visible,
                     ),
                     (
                         workspace::AppView::Contributors,
@@ -912,7 +909,6 @@ impl Shell {
                         workspace::AppView::Today => "rail-today",
                         workspace::AppView::Inbox => "rail-inbox",
                         workspace::AppView::Notes => "rail-notes",
-                        workspace::AppView::Automations => "rail-automations",
                         workspace::AppView::Workflows => "rail-workflows",
                         workspace::AppView::Contributors => "rail-contributors",
                     };
@@ -940,7 +936,6 @@ impl Shell {
                                     workspace::AppView::Today => this.open_today(w, cx),
                                     workspace::AppView::Inbox => this.open_inbox(w, cx),
                                     workspace::AppView::Notes => this.open_notes(w, cx),
-                                    workspace::AppView::Automations => this.open_automations(w, cx),
                                     workspace::AppView::Workflows => this.open_workflows(w, cx),
                                     workspace::AppView::Contributors => {
                                         this.open_contributors(None, None, w, cx)

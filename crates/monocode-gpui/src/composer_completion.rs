@@ -294,11 +294,6 @@ impl Completion {
         self.loaded = None;
         self.sync(cx);
     }
-    /// Growing document fields anchor suggestions beside the visible caret.
-    pub(crate) fn inline_field(mut self) -> Self {
-        self.inline_field = true;
-        self
-    }
     /// Keep composer suggestions inside the conversation, below its tabs.
     pub(crate) fn container_probe(&self) -> impl IntoElement {
         self.container_anchor.layout_probe()

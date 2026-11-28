@@ -35,7 +35,7 @@ remain outstanding.
 Production source, lockfiles and release workflows were checked against `main`;
 the native dependency graph remains separate. Live provider requests used the
 development database and a temporary project. The release GUI used a disposable
-production snapshot with background agents and automations disabled; only the
+production snapshot with background agents and workflows disabled; only the
 read-only data check opened the live production database. Notification delivery
 used a separate test bundle identity. Notification sounds, Dock badges and
 completion/approval alerts were not manually checked.

@@ -1,4 +1,4 @@
-//! The card and marks the template galleries share (Automations examples, workflow templates).
+//! The card and marks the template galleries share (workflow templates).
 use crate::theme::*;
 use gpui::{AnyElement, Role, SharedString, Stateful, div, prelude::*, px, rgb};
 

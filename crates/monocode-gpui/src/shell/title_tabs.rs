@@ -192,7 +192,6 @@ impl Shell {
                 app_views::AppView::Today => self.open_today(window, cx),
                 app_views::AppView::Inbox => self.open_inbox(window, cx),
                 app_views::AppView::Notes => self.open_notes(window, cx),
-                app_views::AppView::Automations => self.open_automations(window, cx),
                 app_views::AppView::Workflows => self.open_workflows(window, cx),
                 app_views::AppView::Contributors => self.open_contributors(None, None, window, cx),
             },
@@ -433,6 +432,7 @@ impl Shell {
 mod tests {
     use super::*;
     use crate::shell::tests::window;
+    use crate::workspace::AppView;
     use gpui::{TestAppContext, WindowHandle};
 
     fn add_session(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -> i64 {
@@ -690,6 +690,42 @@ mod tests {
                     ]
                 );
                 assert_eq!(shell.active_title_tab(cx), Some(mono));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_saved_app_tab_is_restored_and_the_project_session_does_not_close_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, _, _) = window(cx);
+        let (store, summaries, saved) = window
+            .update(cx, |shell, _, _| {
+                let scope = shell.tab_scope();
+                shell
+                    .workspace
+                    .scope_focus
+                    .insert(scope, TitleTab::App(AppView::Workflows));
+                // No open session: the startup then makes the project's blank one.
+                shell.workspace.active = None;
+                let db = locked(&shell.store).unwrap();
+                (
+                    shell.store.clone(),
+                    db.sessions().unwrap(),
+                    serde_json::to_string(&shell.workspace).unwrap(),
+                )
+            })
+            .unwrap();
+        let restored = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| Shell::new(store, summaries, "/work/monocode".into(), Some(saved), cx))
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        restored
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.active_app_view, Some(AppView::Workflows));
             })
             .unwrap();
     }

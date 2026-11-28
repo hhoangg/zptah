@@ -173,3 +173,17 @@ fn trigger_serializes_camel_case() {
     assert_eq!(t.project, None);
     assert_eq!(t.repos, vec!["a/b"]);
 }
+
+#[test]
+fn every_source_names_its_events_the_way_the_app_shows_them() {
+    assert_eq!(event_label("clickup", "issue_created"), "Task appeared");
+    assert_eq!(event_label("jira", "issue_created"), "Issue appeared");
+    assert_eq!(event_label("linear", "issue_created"), "Issue created");
+    assert_eq!(event_label("github", "draft_opened"), "Draft opened");
+    assert_eq!(
+        event_label("azuredevops", "work_item_appeared"),
+        "Work item appeared"
+    );
+    assert_eq!(events_for("clickup"), [("issue_created", "Task appeared")]);
+    assert_eq!(event_label("github", "unknown"), "unknown");
+}

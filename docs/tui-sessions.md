@@ -65,14 +65,14 @@ the CLI process.
 - No chat features: no composer, queued messages, plans, second opinion or
   handoff. Anything the app opens with a prepared message (Add to chat, notes,
   handoffs, Inbox Ask, Monos, remote sessions) always opens as chat.
-- An automation follows the provider's surface when its CLI can take a first
-  prompt (Claude); otherwise it opens as chat. In a terminal the prompt is
-  passed to the CLI as its first prompt, and every run opens a new terminal
-  session, so the Conversation setting (continue the last run) is unavailable.
-  A "new worktree" automation creates its worktree before the CLI starts. The
-  run is recorded as succeeded once the CLI stays up for a few seconds, and as
-  failed if it exits or cannot start in that time. Run success still means the
-  CLI took the prompt, not that its turn finished.
+- A workflow session step can use the terminal surface only with Claude, and not
+  on Windows or for remote and cloud projects; otherwise choose the chat
+  surface. In a terminal the prompt is passed to the CLI as its first prompt,
+  and every run opens a new terminal session, so session reuse is unavailable.
+  A per-run workflow worktree is created before the CLI starts. The step
+  finishes when Claude's turn ends: the app sees busy become true and then
+  false from the hooks below. If the CLI exits before the turn starts or during
+  it, the step fails.
 - A Claude terminal session shows as busy while a turn runs. The app learns this
   from Claude Code hooks it adds to the launch with `--settings`: a submitted
   prompt marks it busy, and `Stop`, `StopFailure`, `SessionEnd` or the CLI

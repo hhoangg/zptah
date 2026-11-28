@@ -784,35 +784,6 @@ fn a_background_exit_of_a_lone_tab_leaves_the_app_view_open(cx: &mut TestAppCont
         .unwrap();
 }
 
-#[gpui::test]
-fn an_automation_never_continues_a_terminal_session(cx: &mut TestAppContext) {
-    let (window, ids) = fixture(cx, "claude", Some("conv-1"), |ids| vec![ids.chat]);
-    let automation = |harness: &str| -> monocode_core::automations::Automation {
-        serde_json::from_value(serde_json::json!({
-            "id": "a", "name": "n", "prompt": "p", "harness": harness, "model": "",
-            "cwd": PROJECT, "workspaceMode": "current", "reuseSession": true,
-            "runtimeMode": "x", "scheduleKind": "daily", "minute": 0, "time": "09:00",
-            "dayOfWeek": 0, "missedRunGraceMinutes": 0, "enabled": true, "nextRunAt": 0,
-            "createdAt": 0, "updatedAt": 0
-        }))
-        .unwrap()
-    };
-    window
-        .update(cx, |shell, _, cx| {
-            // A chat of the same provider and project may be continued...
-            let chat = shell.store.clone();
-            let mut sibling = locked(&chat).unwrap().create("claude", PROJECT).unwrap();
-            sibling.has_messages = true;
-            let id = sibling.id;
-            shell.session_summaries.insert(id, sibling);
-            assert!(shell.automation_can_continue(id, &automation("claude"), cx));
-            // ...a terminal session of the same provider and project may not.
-            assert_eq!(shell.session_summaries[&ids.tui].provider, "claude");
-            assert!(!shell.automation_can_continue(ids.tui, &automation("claude"), cx));
-        })
-        .unwrap();
-}
-
 // The hook busy watcher (`shell/tui_busy.rs`). Events are spool files written the
 // way the `tui-hook` subcommand writes them.
 mod busy_watcher {

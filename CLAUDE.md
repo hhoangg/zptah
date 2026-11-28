@@ -45,6 +45,17 @@ For each hit, decide:
 - **A test asserting old copy** → update the assertion. A test that still passes only
   because it asserts "MonoCode" is a failure, not coverage.
 
+Automations were removed in favor of Workflows. When a merge reports a modify/delete conflict
+on a removed Automations path, keep the deletion, as for the Tauri paths below. The removed
+paths are `crates/monocode-core/src/automations.rs`, `crates/monocode-gpui/src/automations.rs`,
+`crates/monocode-gpui/src/automations/`, `crates/monocode-gpui/src/shell/automation_runs.rs`,
+`crates/monocode-gpui/src/shell/automation_runs/` and `crates/monocode-core/src/store/managed_sessions.rs`.
+New upstream call sites of the removed APIs, such as `automation_state`, `automation_surface`,
+`AppView::Automations`, `set_automation_id`, `automation_session_ids`, `monocode_core::automations`
+and `open_automations`, must be ported to Workflows or
+dropped. The legacy TS `src/features/automations/` stays (`monoHabits.ts` imports it) and so does
+the `sessions.automation_id` column (shared schema).
+
 The Tauri app (`src-tauri/`, most of `src/`, `mobile/`, root `index.html`, `vite.config.ts`
 and the Tauri workflows) was removed from this fork. When a merge reports a modify/delete
 conflict on one of those paths, keep the deletion. `src/` was pruned to what `host/`, the

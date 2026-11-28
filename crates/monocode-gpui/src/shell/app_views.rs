@@ -1,6 +1,6 @@
 //! The three application destinations share one navigation and focus boundary.
 use super::*;
-use crate::{automations, inbox, notes, today};
+use crate::{inbox, notes, today};
 
 pub(super) use crate::workspace::AppView;
 
@@ -14,7 +14,6 @@ impl Shell {
             AppView::Today => "Today",
             AppView::Inbox => "Inbox",
             AppView::Notes => "Notes",
-            AppView::Automations => "Automations",
             AppView::Workflows => "Workflows",
             AppView::Contributors => "Contributors",
         })
@@ -248,7 +247,6 @@ impl Shell {
             AppView::Notes => self.notes.clone().map(IntoElement::into_any_element),
             AppView::Today => self.today.clone().map(IntoElement::into_any_element),
             AppView::Inbox => self.inbox.clone().map(IntoElement::into_any_element),
-            AppView::Automations => self.automations.clone().map(IntoElement::into_any_element),
             AppView::Workflows => self
                 .workflows_page
                 .clone()
@@ -262,9 +260,6 @@ impl Shell {
             Some(AppView::Notes) => self.notes.as_ref().map(|view| view.focus_handle(cx)),
             Some(AppView::Today) => self.today.as_ref().map(|view| view.focus_handle(cx)),
             Some(AppView::Inbox) => self.inbox.as_ref().map(|view| view.focus_handle(cx)),
-            Some(AppView::Automations) => {
-                self.automations.as_ref().map(|view| view.focus_handle(cx))
-            }
             Some(AppView::Workflows) => self
                 .workflows_page
                 .as_ref()
@@ -430,27 +425,15 @@ impl Shell {
                     }
                     inbox::Event::ItemsChanged(items) => {
                         this.inbox_workflow_events(items.clone(), cx);
-                        this.inbox_automation_events(items.clone(), cx)
                     }
                 },
             ));
-            self.app_view_events
-                .push(cx.observe(&view, |this, inbox, cx| {
-                    if let Some(automations) = &this.automations {
-                        let connections = inbox
-                            .read(cx)
-                            .connection_statuses()
-                            .into_iter()
-                            .map(|(provider, (connected, _))| (provider, connected))
-                            .collect();
-                        automations
-                            .update(cx, |view, cx| view.set_trigger_connections(connections, cx));
-                    }
-                    this.push_workflow_event_sources(cx);
-                    this.invalidate_chrome(cx);
-                    this.sync_settings(cx);
-                    cx.notify();
-                }));
+            self.app_view_events.push(cx.observe(&view, |this, _, cx| {
+                this.push_workflow_event_sources(cx);
+                this.invalidate_chrome(cx);
+                this.sync_settings(cx);
+                cx.notify();
+            }));
             self.inbox = Some(view);
         }
         if let Some(inbox) = &self.inbox {
@@ -465,59 +448,27 @@ impl Shell {
         }
     }
 
-    pub(super) fn open_automations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(service) = self.automation_state.service.clone() else {
-            self.automation_state.open_requested = Some(self.navigation_revision);
-            self.initialize_automations(cx);
-            return;
-        };
-        self.prepare_app_view(window, cx);
-        if self.automations.is_none() {
-            let cwd = self.workspace.project.clone();
-            let projects = self.workspace.projects.clone();
-            let view = cx.new(|cx| automations::Automations::new(service, cwd, projects, cx));
-            view.update(cx, |view, cx| view.set_database(self.store.clone(), cx));
-            self.app_view_events.push(cx.subscribe_in(
-                &view,
-                window,
-                |this, _, event: &automations::Event, window, cx| match event {
-                    automations::Event::Close => this.close_app_view(window, cx),
-                    automations::Event::Launch(run) => {
-                        this.launch_automation(run.as_ref().clone(), true, cx)
+    /// At startup: runs the background Inbox (the sidebar's unread count) and Today, then
+    /// reopens the saved app tab when nothing else has been opened meanwhile.
+    pub(super) fn start_background_apps(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| {
+                if !cfg!(test) {
+                    this.ensure_background_inbox(window, cx);
+                    this.ensure_background_today(window, cx);
+                }
+                if this.navigation_revision == 0
+                    && this.active_app_view.is_none()
+                    && this.settings.is_none()
+                {
+                    let saved = this.workspace.scope_focus.get(&this.tab_scope()).cloned();
+                    if let Some(tab @ TitleTab::App(_)) = saved {
+                        this.open_title_tab(&tab, window, cx);
                     }
-                    automations::Event::OpenSession(id) => {
-                        let native = locked(&this.store)
-                            .ok()
-                            .and_then(|store| store.resolve_existing_session_id(id));
-                        if let Some(id) = native {
-                            this.open(id, window, cx);
-                        }
-                    }
-                },
-            ));
-            self.automations = Some(view);
-        }
-        if let Some(view) = &self.automations {
-            let cwd = self.workspace.project.clone();
-            let projects = self.workspace.projects.clone();
-            let surface_supported = self.surface_supported;
-            view.update(cx, |view, cx| {
-                view.set_appearances(self.workspace.project_appearance.clone(), cx);
-                let connections = self
-                    .inbox
-                    .as_ref()
-                    .map(|inbox| inbox.read(cx).connection_statuses())
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(provider, (connected, _))| (provider, connected))
-                    .collect();
-                view.set_trigger_connections(connections, cx);
-                view.set_terminal_sessions(surface_supported, cx);
-                view.set_context(cwd, projects, cx);
-                view.refresh(cx);
+                }
             });
-        }
-        self.show_app_view(AppView::Automations, window, cx);
+        })
+        .detach();
     }
 
     pub(crate) fn open_workflows(&mut self, window: &mut Window, cx: &mut Context<Self>) {

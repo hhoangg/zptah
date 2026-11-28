@@ -26,10 +26,9 @@ impl WorkflowDefaults {
 }
 
 impl Shell {
-    /// Whether a session wears the zap badge: an automation or a workflow started it.
+    /// Whether a session wears the zap badge: a workflow started it.
     pub(crate) fn session_zap(&self, id: i64) -> bool {
-        self.automation_state.session_automations.contains_key(&id)
-            || self.workflow_sessions.contains(&id)
+        self.workflow_sessions.contains(&id)
     }
 
     /// A workflow started session `id`: it gets the zap badge.

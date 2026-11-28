@@ -383,6 +383,7 @@ impl Store {
         let store = Self {
             conn,
             path: path.into(),
+            cleanup_notes: Default::default(),
             shared: Some(Shared {
                 columns,
                 ids: RefCell::new(HashMap::new()),
@@ -409,6 +410,9 @@ impl Store {
             store.shared_register(&sql(id)?)?;
         }
         drop(query);
+        if !read_only {
+            store.drop_automation_data(true);
+        }
         Ok(store)
     }
     pub fn uses_monocode_schema(&self) -> bool {

@@ -11,7 +11,6 @@ mod app_menu;
 mod arcade;
 mod assets;
 mod attachment_tray;
-mod automations;
 mod changes;
 mod cli_auth;
 mod cloud_actions;
@@ -493,6 +492,14 @@ fn main() {
     // Elsewhere there is no watchdog log; keep upstream's file logger.
     #[cfg(not(target_os = "macos"))]
     app_log::init();
+    // The cleanup of the retired Automations data ran during the open, before any logger existed.
+    for note in db
+        .lock()
+        .map(|store| store.take_cleanup_notes())
+        .unwrap_or_default()
+    {
+        log::warn!("{note}");
+    }
     // Kills login CLIs an earlier crashed run left behind and starts recording new ones.
     monocode_core::process::guard::init(&database.with_file_name("orphan-guard"));
     // The browser link layer: hashes this executable before anything can connect, then listens for

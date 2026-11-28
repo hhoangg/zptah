@@ -208,8 +208,6 @@ impl Shell {
             return;
         };
         tui.update(cx, |tui, cx| tui.kill(cx));
-        // A run waiting on this pane can never hear from it again.
-        self.automation_tui_gone(id, cx);
         if let Some(workflows) = self.workflows.clone() {
             workflows.update(cx, |w, cx| w.tui_gone(id, cx));
         }
@@ -234,7 +232,6 @@ impl Shell {
     }
 
     fn tui_event(&mut self, id: i64, event: &TuiEvent, cx: &mut Context<Self>) {
-        self.automation_tui_event(id, event, cx);
         if let Some(workflows) = self.workflows.clone() {
             workflows.update(cx, |w, cx| w.tui_event(id, event, cx));
         }

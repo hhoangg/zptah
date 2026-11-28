@@ -380,14 +380,12 @@ fn only_the_user_facing_paths_may_create_a_terminal_session() {
     // chat). Every non-test site that calls it is listed with the reason it may;
     // a new one anywhere in the crate fails here until it is added on purpose,
     // after deciding the app's own paths stay chats.
-    let allowed: [(&str, usize); 3] = [
+    let allowed: [(&str, usize); 2] = [
         // NewSessionDefaults::create, shared by create_session_target (New
         // session, tab, folder row) and split_session.
         ("shell/session_loading.rs", 1),
         // Inbox "Start work", kept a terminal only when the CLI takes a first prompt.
         ("shell/app_views.rs", 1),
-        // An automation run follows the provider's surface when the CLI takes a first prompt.
-        ("shell/automation_runs.rs", 1),
     ];
     let sources = crate_sources();
     assert!(sources.len() > 50, "the scan found the crate's sources");

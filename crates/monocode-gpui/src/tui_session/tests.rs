@@ -716,7 +716,7 @@ fn a_clean_exit_well_after_launch_closes_the_pane_after_reporting_it(cx: &mut Te
     let close = events.iter().position(|e| *e == TuiEvent::Close).unwrap();
     assert!(
         exited < close,
-        "an automation run settles before the pane goes"
+        "a workflow run settles before the pane goes"
     );
 }
 

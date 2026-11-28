@@ -1,5 +1,5 @@
 //! The Contributors database: its own pair of connections on the shared
-//! `monocode.db` file, like `automations::Service`. The tables are
+//! `monocode.db` file, like the session store. The tables are
 //! `CREATE TABLE IF NOT EXISTS`, the same DDL the Tauri app runs, and the shell
 //! store's lock is never taken: sync batches wait on this write connection only.
 

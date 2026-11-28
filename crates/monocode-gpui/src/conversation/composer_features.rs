@@ -384,22 +384,6 @@ impl Conversation {
             || self.editing_last_turn.pending()
             || self.mono_external_pending()
     }
-    /// An evicted history can be restored for a managed run; a user's draft
-    /// or an already accepted message must keep ownership of this composer.
-    pub(crate) fn available_for_managed_run(&self, cx: &gpui::App) -> bool {
-        !self.busy
-            && !self.stopping
-            && !self.preparing_worktree
-            && !self.attaching
-            && !self.account_switching
-            && !self.editing_last_turn.pending()
-            && !self.mono_external_pending()
-            && self.input.read(cx).content.is_empty()
-            && self.attachments.is_empty()
-            && self.follow_ups.state.messages.is_empty()
-            && self.follow_ups.state.draft.is_none()
-            && !self.settings.worktree_removed
-    }
     pub(crate) fn send_coordinator_report(&mut self, prompt: String, cx: &mut Context<Self>) {
         if !self.history_ready() || self.stopping {
             self.defer_history_action(move |this, cx| this.send_coordinator_report(prompt, cx), cx);

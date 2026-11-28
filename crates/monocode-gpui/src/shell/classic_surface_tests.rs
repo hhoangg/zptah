@@ -8,7 +8,7 @@ enum Surface {
     Today,
     Inbox,
     Notes,
-    Automations,
+    Workflows,
     Search,
     Mono,
 }
@@ -19,15 +19,7 @@ impl Surface {
             Self::Today => shell.open_today(window, cx),
             Self::Inbox => shell.open_inbox(window, cx),
             Self::Notes => shell.open_notes(window, cx),
-            Self::Automations => {
-                // An empty in-memory service keeps this navigation test
-                // independent of asynchronous service initialization.
-                shell.automation_state.service = Some(Arc::new(Mutex::new(
-                    monocode_core::automations::Service::open(std::path::Path::new(":memory:"))
-                        .unwrap(),
-                )));
-                shell.open_automations(window, cx);
-            }
+            Self::Workflows => shell.open_workflows(window, cx),
             Self::Search => shell.open_app_search(window, cx),
             Self::Mono => {
                 let project = shell.workspace.project.clone();
@@ -45,7 +37,7 @@ impl Surface {
 
     fn close(self, shell: &mut Shell, session: i64, window: &mut Window, cx: &mut Context<Shell>) {
         match self {
-            Self::Today | Self::Inbox | Self::Notes | Self::Automations => {
+            Self::Today | Self::Inbox | Self::Notes | Self::Workflows => {
                 shell.close_app_view(window, cx)
             }
             Self::Search => shell.close_app_search(window, cx),
@@ -440,10 +432,8 @@ fn original_app_surfaces_notes_uses_own_header_and_restores_sessions(cx: &mut Te
 }
 
 #[gpui::test]
-fn original_app_surfaces_automations_uses_own_header_and_restores_sessions(
-    cx: &mut TestAppContext,
-) {
-    assert_original_surface(Surface::Automations, cx);
+fn original_app_surfaces_workflows_uses_own_header_and_restores_sessions(cx: &mut TestAppContext) {
+    assert_original_surface(Surface::Workflows, cx);
 }
 
 #[gpui::test]
@@ -858,7 +848,7 @@ fn original_app_surfaces_keep_icon_rail_and_remember_closed_sessions(cx: &mut Te
     for surface in [
         Surface::Inbox,
         Surface::Notes,
-        Surface::Automations,
+        Surface::Workflows,
         Surface::Search,
         Surface::Mono,
     ] {
@@ -982,7 +972,7 @@ fn original_app_surfaces_leave_both_new_layout_styles_tabbed(cx: &mut TestAppCon
         for surface in [
             Surface::Inbox,
             Surface::Notes,
-            Surface::Automations,
+            Surface::Workflows,
             Surface::Search,
             Surface::Mono,
         ] {
@@ -1002,7 +992,7 @@ fn original_app_surfaces_leave_both_new_layout_styles_tabbed(cx: &mut TestAppCon
             let app = match surface {
                 Surface::Inbox => Some(app_views::AppView::Inbox),
                 Surface::Notes => Some(app_views::AppView::Notes),
-                Surface::Automations => Some(app_views::AppView::Automations),
+                Surface::Workflows => Some(app_views::AppView::Workflows),
                 _ => None,
             };
             if let Some(app) = app {
@@ -1044,7 +1034,7 @@ fn new_layout_app_tabs_survive_frame_changes_and_close_like_session_tabs(cx: &mu
     for boxy in [false, true] {
         let (window, session) = setup(cx, false, boxy);
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
-        for surface in [Surface::Inbox, Surface::Notes, Surface::Automations] {
+        for surface in [Surface::Inbox, Surface::Notes, Surface::Workflows] {
             window
                 .update(visual, |shell, window, cx| surface.open(shell, window, cx))
                 .unwrap();
@@ -1055,7 +1045,7 @@ fn new_layout_app_tabs_survive_frame_changes_and_close_like_session_tabs(cx: &mu
                 for app in [
                     app_views::AppView::Inbox,
                     app_views::AppView::Notes,
-                    app_views::AppView::Automations,
+                    app_views::AppView::Workflows,
                 ] {
                     assert_eq!(
                         shell
@@ -1078,7 +1068,7 @@ fn new_layout_app_tabs_survive_frame_changes_and_close_like_session_tabs(cx: &mu
         for app in [
             app_views::AppView::Inbox,
             app_views::AppView::Notes,
-            app_views::AppView::Automations,
+            app_views::AppView::Workflows,
         ] {
             let selector = Box::leak(format!("app-title-tab-{}", app.label()).into_boxed_str());
             let tab = visual.debug_bounds(selector).unwrap();

@@ -310,7 +310,7 @@ the error line says so and that the workspace is still running; it is shown once
 stop works, and every failure is also written to the log. A notice says what happened ("Stopped
 Docker sandbox NAME after 10 min idle; send a message to resume."). A stop is asked for once; a
 stopped workspace is not stopped again, and a refused or failed stop waits for a whole new window.
-Background work (a Mono, an automation, the app API) never resumes a stopped workspace; only your own
+Background work (a Mono, a workflow, the app API) never resumes a stopped workspace; only your own
 send or the Resume button does.
 
 Not covered: a workspace with **no** Monoptah session (an orphan, for example from a failed start)

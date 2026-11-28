@@ -1,6 +1,6 @@
 //! Event trigger matching: which Inbox items a workflow's event trigger reacts to,
 //! the stable dedup key of an item, and the item recorded in the run scope.
-//! Ported from `automations.rs`; the actor and branch filters are dropped.
+//! Ported from the former Automations; the actor and branch filters are dropped.
 use crate::inbox::{is_tracker, provider_label, Item};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

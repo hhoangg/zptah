@@ -591,9 +591,9 @@ impl Shell {
                 .toggle(self.workspace.sidebar_notes_visible)
                 .disabled(!self.workspace.preferences.notes)
                 .into(),
-            MenuAction::new("sidebar-automations", "Automations")
-                .icon("refresh-cw")
-                .toggle(self.workspace.sidebar_automations_visible)
+            MenuAction::new("sidebar-workflows", "Workflows")
+                .icon("zap")
+                .toggle(self.workspace.sidebar_workflows_visible)
                 .into(),
             MenuAction::new("sidebar-inbox", "Inbox")
                 .icon("inbox")
@@ -625,7 +625,7 @@ impl Shell {
             "sidebar-today" => &mut self.workspace.sidebar_today_visible,
             "sidebar-search" => &mut self.workspace.sidebar_search_visible,
             "sidebar-notes" => &mut self.workspace.sidebar_notes_visible,
-            "sidebar-automations" => &mut self.workspace.sidebar_automations_visible,
+            "sidebar-workflows" => &mut self.workspace.sidebar_workflows_visible,
             "sidebar-inbox" => &mut self.workspace.sidebar_inbox_visible,
             "sidebar-contributors" => &mut self.workspace.sidebar_contributors_visible,
             "sidebar-monos" => &mut self.workspace.preferences.monos,
@@ -741,7 +741,6 @@ impl Shell {
                     ("Inbox", "inbox"),
                     ("Notes", "note"),
                     ("Workflows", "zap"),
-                    ("Automations", "refresh-cw"),
                     ("Contributors", "chart-square"),
                 ]
                 .into_iter()
@@ -752,7 +751,7 @@ impl Shell {
                     "Notes" => {
                         self.workspace.preferences.notes && self.workspace.sidebar_notes_visible
                     }
-                    "Automations" => self.workspace.sidebar_automations_visible,
+                    "Workflows" => self.workspace.sidebar_workflows_visible,
                     "Contributors" => self.workspace.sidebar_contributors_visible,
                     "Inbox" => self.workspace.sidebar_inbox_visible,
                     _ => true,
@@ -860,7 +859,6 @@ impl Shell {
                             "Today" => this.open_today(window, cx),
                             "Inbox" => this.open_inbox(window, cx),
                             "Notes" => this.open_notes(window, cx),
-                            "Automations" => this.open_automations(window, cx),
                             "Workflows" => this.open_workflows(window, cx),
                             "Contributors" => this.open_contributors(None, None, window, cx),
                             _ => (),
@@ -1155,8 +1153,8 @@ mod tests {
         let search = visual.debug_bounds("menu-action-sidebar-search").unwrap();
         let notes = visual.debug_bounds("menu-action-sidebar-notes").unwrap();
         assert!(search.bottom() <= notes.top());
-        let automations = visual
-            .debug_bounds("menu-action-sidebar-automations")
+        let workflows = visual
+            .debug_bounds("menu-action-sidebar-workflows")
             .unwrap();
         let inbox = visual.debug_bounds("menu-action-sidebar-inbox").unwrap();
         let monos = visual.debug_bounds("menu-action-sidebar-monos").unwrap();
@@ -1164,7 +1162,7 @@ mod tests {
         let compact = visual
             .debug_bounds("menu-action-compact-session-cards")
             .unwrap();
-        assert!(notes.bottom() <= automations.top() && automations.bottom() <= inbox.top());
+        assert!(notes.bottom() <= workflows.top() && workflows.bottom() <= inbox.top());
         assert!(inbox.bottom() <= monos.top() && monos.bottom() <= activity.top());
         assert!(
             activity.bottom() < compact.top(),
@@ -1174,8 +1172,8 @@ mod tests {
             ("menu-action-sidebar-search", "sidebar-search-button"),
             ("menu-action-sidebar-notes", "sidebar-navigation-Notes"),
             (
-                "menu-action-sidebar-automations",
-                "sidebar-navigation-Automations",
+                "menu-action-sidebar-workflows",
+                "sidebar-navigation-Workflows",
             ),
             ("menu-action-sidebar-inbox", "sidebar-navigation-Inbox"),
             ("menu-action-sidebar-monos", "new-mono"),
@@ -1203,7 +1201,7 @@ mod tests {
                 for id in [
                     "sidebar-search",
                     "sidebar-notes",
-                    "sidebar-automations",
+                    "sidebar-workflows",
                     "sidebar-inbox",
                     "sidebar-monos",
                 ] {
@@ -1214,7 +1212,7 @@ mod tests {
                 let restored = Workspace::restore(Some(&saved), &[], "/work/monocode");
                 assert!(!restored.sidebar_search_visible);
                 assert!(!restored.sidebar_notes_visible);
-                assert!(!restored.sidebar_automations_visible);
+                assert!(!restored.sidebar_workflows_visible);
                 assert!(!restored.sidebar_inbox_visible);
                 assert!(!restored.preferences.monos);
             })
@@ -1223,8 +1221,8 @@ mod tests {
             ("menu-action-sidebar-search", "sidebar-search-button"),
             ("menu-action-sidebar-notes", "sidebar-navigation-Notes"),
             (
-                "menu-action-sidebar-automations",
-                "sidebar-navigation-Automations",
+                "menu-action-sidebar-workflows",
+                "sidebar-navigation-Workflows",
             ),
             ("menu-action-sidebar-inbox", "sidebar-navigation-Inbox"),
             ("menu-action-sidebar-monos", "new-mono"),

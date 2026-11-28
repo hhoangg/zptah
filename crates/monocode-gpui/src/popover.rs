@@ -956,11 +956,6 @@ impl MenuAction {
         self.icon = Some(path);
         self
     }
-    pub(crate) fn icon_artwork(mut self, path: &'static str) -> Self {
-        self.icon = None;
-        self.icon_artwork = Some(path);
-        self
-    }
     pub(crate) fn image(mut self, provider: &'static str) -> Self {
         self.image = Some(provider);
         self
@@ -1188,6 +1183,7 @@ impl Menu {
         self
     }
     /// Override row and icon sizes for menus whose source uses taller rows.
+    #[cfg(test)]
     pub(crate) fn row_metrics(mut self, height: f32, icon_size: f32) -> Self {
         self.row_metrics = Some((height, icon_size));
         self
@@ -1205,10 +1201,6 @@ impl Menu {
         self.search_navigation = back.is_some();
         self.back = back;
         self.scroll = gpui::ScrollHandle::new();
-    }
-    pub(crate) fn submenu_width(mut self, width: f32) -> Self {
-        self.submenu_width = Some(width);
-        self
     }
     pub(crate) fn content_focus(&self) -> FocusHandle {
         self.items

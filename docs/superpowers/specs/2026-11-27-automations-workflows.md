@@ -1,7 +1,7 @@
 # Workflows replace Automations - design
 
-Status: direction approved by the owner on 2026-11-27. Not implemented. Each phase below ships
-as its own PR after explicit approval.
+Status: direction approved by the owner on 2026-11-27. Implemented on the integration branch
+(lands on main as one PR).
 
 ## Why
 
@@ -416,3 +416,25 @@ Core tests to add:
 - extraction fallback parsing
 - `decide: "ai"` model resolution
 - that old per-Mono files are ignored
+
+## Implementation decisions
+
+Answers from the owner:
+
+- U1: the event trigger branch filter is dropped (like the actor filter). Filters are project and repos/spaces only.
+- U2: with no `folder` on a node, all runs of a workflow share one sidebar folder named after the workflow.
+- U3: queued runs start automatically after a restart (FIFO, up to `concurrency.max`). Running runs become `interrupted` and are never auto-resumed.
+- U4: a Mono that changes a workflow's definition (anything in the definition fingerprint) via update or import sets needs review and pauses it until the user approves. Input values and enabled/paused do not. The user's own board edits never do.
+
+Orchestrator decisions that change behavior:
+
+- Approvals of workflow sessions appear in the session itself plus the existing desktop/phone notices.
+- A session node with no harness or model uses the app default harness and its default model, resolved at run time. `decisionModel` may be harness-only (that harness default model).
+- `decide: "ai"` also applies to loop edges. Import reads `"mono"` as an alias of `"ai"`.
+- Every mutating Mono action (add, update, run, pause, resume, stop, remove) is limited to workflows whose projects are all that Mono's own. `reportTo.mono` set by a Mono may only name itself.
+- Queued runs: the whole queue is held while a workflow needs review; while paused, only queued trigger runs (schedule, event) are held.
+- `perRun` workspaces need a local project (use mode `none` for remote ones). Removing a run worktree keeps the branch name on the run record; resuming such a run re-creates the worktree from the kept branch, or is refused if the branch is gone. "Remove worktree" always asks, listing uncommitted and unpushed work.
+- Removing a workflow always asks, listing what goes (definition, run history) and what stays (worktrees, sessions).
+- Terminal steps are refused on Windows, for non-Claude harnesses and for remote or cloud projects.
+- Mobile and web: devices narrowed to some projects never see a workflow with an unresolved project (fail closed).
+- The 2 old automations and their tables are dropped on upgrade. Their rows are first exported to `<app data>/backups/automations-<timestamp>.json`.
