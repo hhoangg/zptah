@@ -531,24 +531,6 @@ fn an_input_value_is_checked_against_its_type() {
 }
 
 #[test]
-fn a_saved_input_value_lands_in_the_file_and_the_real_reason_comes_back_on_failure() {
-    let (_, w) = limit_input();
-    let mut d = disk(vec![w]);
-    actions::save_input(&mut d.host, A, "limit", &InputValue::Number(7.)).unwrap();
-    assert_eq!(
-        d.first().input_values.get("limit"),
-        Some(&InputValue::Number(7.))
-    );
-    let huge = InputValue::String("x".repeat(9 * 1024 * 1024));
-    let error = actions::save_input(&mut d.host, A, "repo", &huge).unwrap_err();
-    assert!(error.contains("too large to save"), "{error}");
-    assert_eq!(
-        d.first().input_values.get("limit"),
-        Some(&InputValue::Number(7.))
-    );
-}
-
-#[test]
 fn numbers_are_read_the_way_javascript_reads_them() {
     for (typed, want) in [
         ("7", 7.),
@@ -1122,6 +1104,18 @@ fn the_page_lists_recent_runs_newest_first_and_opens_one(cx: &mut TestAppContext
     );
 }
 
+/// Picks `item` of the page's More menu, as its answer does: the menu closes, then it is acted on.
+fn more_menu(s: &Setup, visual: &mut VisualTestContext, item: &str) {
+    click(visual, "wf-board-more");
+    assert!(s.manager.read_with(visual, |m, _| m.picker.is_some()));
+    let item = item.to_string();
+    s.manager.update(visual, |m, cx| {
+        m.picker = None;
+        m.board_menu_picked("Workflow menu", item, cx)
+    });
+    visual.run_until_parked();
+}
+
 #[gpui::test]
 fn export_refuses_on_a_path_problem_and_never_asks_for_a_file(cx: &mut TestAppContext) {
     let s = setup(cx);
@@ -1133,7 +1127,7 @@ fn export_refuses_on_a_path_problem_and_never_asks_for_a_file(cx: &mut TestAppCo
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     open_page(&s, visual);
-    click(visual, "mono-workflow-export");
+    more_menu(&s, visual, "export");
     assert!(!visual.did_prompt_for_new_path());
     assert!(page_notice(&s, visual).unwrap().contains("Can't export"));
 }
@@ -1147,7 +1141,7 @@ fn export_writes_the_definition_where_the_user_picks(cx: &mut TestAppContext) {
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     open_page(&s, visual);
-    click(visual, "mono-workflow-export");
+    more_menu(&s, visual, "export");
     assert!(visual.did_prompt_for_new_path());
     let target =
         std::env::temp_dir().join(format!("wf-export-{}.yaml", monocode_core::mono::new_id()));
@@ -1159,84 +1153,10 @@ fn export_writes_the_definition_where_the_user_picks(cx: &mut TestAppContext) {
     assert_eq!(text, export_workflow(&w));
     assert_eq!(page_notice(&s, visual), None);
     // A cancelled dialog writes nothing.
-    click(visual, "mono-workflow-export");
+    more_menu(&s, visual, "export");
     visual.simulate_new_path_selection(|_| None);
     visual.run_until_parked();
     assert_eq!(page_notice(&s, visual), None);
-}
-
-#[gpui::test]
-fn an_input_value_is_saved_after_its_type_is_checked(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    let (_, w) = limit_input();
-    put(&s, vec![w]);
-    open_tab(&s, cx);
-    let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
-    visual.run_until_parked();
-    open_page(&s, visual);
-    let key = format!("wf-input:{A}:limit");
-    let type_in = |visual: &mut VisualTestContext, text: &str| {
-        s.manager.update(visual, |m, cx| {
-            m.fields[&key].update(cx, |f, cx| f.set_text(text.into(), cx));
-            m.workflow_commit_input(A, "limit", cx);
-        });
-        visual.run_until_parked();
-    };
-    type_in(visual, "not a number");
-    assert_eq!(
-        saved(&s)[0].input_values.get("limit"),
-        Some(&InputValue::Number(3.))
-    );
-    assert!(
-        page_notice(&s, visual)
-            .unwrap()
-            .contains("\"limit\" must be a number")
-    );
-    type_in(visual, "7");
-    assert_eq!(
-        saved(&s)[0].input_values.get("limit"),
-        Some(&InputValue::Number(7.))
-    );
-    assert_eq!(page_notice(&s, visual), None);
-    // A project is chosen from the Mono's own.
-    s.manager.update(visual, |m, cx| {
-        m.workflow_choose_input(A, "repo", &s.project, cx)
-    });
-    visual.run_until_parked();
-    assert_eq!(
-        saved(&s)[0].input_values.get("repo"),
-        Some(&InputValue::String(s.project.clone()))
-    );
-}
-
-#[gpui::test]
-fn the_real_reason_an_input_could_not_be_saved_is_shown(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    put(
-        &s,
-        vec![workflow(
-            json!({"inputs": {"note": {"type": "string"}}, "inputValues": {"note": "a"}}),
-        )],
-    );
-    open_tab(&s, cx);
-    let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
-    visual.run_until_parked();
-    open_page(&s, visual);
-    let key = format!("wf-input:{A}:note");
-    s.manager.update(visual, |m, cx| {
-        m.fields[&key].update(cx, |f, cx| f.set_text("x".repeat(9 * 1024 * 1024), cx));
-        m.workflow_commit_input(A, "note", cx);
-    });
-    visual.run_until_parked();
-    assert!(
-        page_notice(&s, visual)
-            .unwrap()
-            .contains("too large to save")
-    );
-    assert_eq!(
-        saved(&s)[0].input_values.get("note"),
-        Some(&InputValue::String("a".into()))
-    );
 }
 
 #[gpui::test]
@@ -1249,7 +1169,7 @@ fn remove_on_the_page_closes_it_and_is_refused_while_a_run_is_going(cx: &mut Tes
     open_page(&s, visual);
     s.manager
         .read_with(visual, |m, _| m.workflow_signals.set_running(A, true));
-    click(visual, "mono-workflow-delete");
+    more_menu(&s, visual, "remove");
     assert!(
         page_notice(&s, visual)
             .unwrap()
@@ -1259,7 +1179,7 @@ fn remove_on_the_page_closes_it_and_is_refused_while_a_run_is_going(cx: &mut Tes
     assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
     s.manager
         .read_with(visual, |m, _| m.workflow_signals.set_running(A, false));
-    click(visual, "mono-workflow-delete");
+    more_menu(&s, visual, "remove");
     assert!(saved(&s).is_empty());
     assert_eq!(route(&s, visual), None);
 }
@@ -1289,7 +1209,7 @@ fn a_page_shows_the_needs_review_badge_only_when_needed_and_sends_run_and_resume
     // Back from the review returns to the page it came from.
     click(visual, "mono-page-back");
     assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
-    click(visual, "mono-workflow-toggle");
+    click(visual, "wf-enabled-toggle");
     assert_eq!(
         route(&s, visual),
         Some(WfRoute::Review(A.into(), ReviewIntent::Enable))
@@ -1384,7 +1304,7 @@ fn a_notice_goes_with_the_view_and_the_page_it_was_shown_on(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-fn the_board_and_run_pages_go_back_to_the_workflow(cx: &mut TestAppContext) {
+fn the_pages_of_a_workflow_go_back_to_the_list(cx: &mut TestAppContext) {
     let s = setup(cx);
     put(&s, vec![workflow(json!({}))]);
     open_tab(&s, cx);
@@ -1392,6 +1312,7 @@ fn the_board_and_run_pages_go_back_to_the_workflow(cx: &mut TestAppContext) {
     visual.run_until_parked();
     for page in [
         WfRoute::Board(A.into()),
+        WfRoute::Workflow(A.into()),
         WfRoute::Run(A.into(), "run-1".into()),
     ] {
         s.manager
@@ -1399,10 +1320,6 @@ fn the_board_and_run_pages_go_back_to_the_workflow(cx: &mut TestAppContext) {
         visual.run_until_parked();
         settle(&s, visual);
         click(visual, "mono-page-back");
-        assert_eq!(
-            route(&s, visual),
-            Some(WfRoute::Workflow(A.into())),
-            "{page:?}"
-        );
+        assert_eq!(route(&s, visual), None, "{page:?}");
     }
 }

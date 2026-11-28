@@ -79,7 +79,7 @@ mod to_flow_from_flow {
         assert_eq!(back.edges, w.edges);
         let dev = back.nodes.iter().find(|n| n.id == "dev").unwrap();
         assert_eq!(dev.parent.as_deref(), Some("each"));
-        assert_eq!(dev.ui, Some(Ui { x: 16.0, y: 40.0 }));
+        assert_eq!(dev.ui, Some(Ui { x: 16.0, y: 32.0 }));
     }
 
     #[test]
@@ -141,22 +141,192 @@ mod to_flow_from_flow {
     }
 
     #[test]
-    fn lays_out_nodes_that_have_no_position_top_to_bottom_without_overlap() {
+    fn lays_out_nodes_that_have_no_position_left_to_right_without_overlap() {
         let mut w = ticket_workflow();
         for node in &mut w.nodes {
             node.ui = None;
         }
         let flow = to_flow(&w);
         let at = |id: &str| find(&flow.nodes, id).position;
-        assert!(at("fetch").y >= at("start").y + NODE_H);
-        assert!(at("each").y >= at("fetch").y + NODE_H);
-        assert!(at("review").y >= at("dev").y + NODE_H);
-        // The report sits below the whole group.
+        // One layer after the node that leads to it.
+        assert!(at("fetch").x >= at("start").x + NODE_W + GAP_X);
+        assert!(at("each").x >= at("fetch").x + NODE_W + GAP_X);
+        assert!(at("review").x >= at("dev").x + NODE_W + GAP_X);
+        // The report sits after the whole group.
         let group = find(&flow.nodes, "each");
-        assert!(at("report").y >= at("each").y + group.height);
+        assert!(at("report").x >= at("each").x + group.width + GAP_X);
         // Children are inside the group.
-        assert!(at("dev").x >= 0.0);
-        assert!(at("dev").y >= 0.0);
+        assert!(at("dev").x >= GROUP_PAD);
+        assert!(at("dev").y >= GROUP_HEADER);
+    }
+
+    #[test]
+    fn the_fixture_positions_are_what_the_layout_makes_of_the_workflow() {
+        let marked = ticket_workflow();
+        let mut bare = marked.clone();
+        bare.ui = None;
+        for node in &mut bare.nodes {
+            node.ui = None;
+        }
+        let places = |w: &Workflow| -> Vec<(String, Point)> {
+            to_flow(w)
+                .nodes
+                .iter()
+                .map(|n| (n.id.clone(), n.position))
+                .collect()
+        };
+        assert_eq!(places(&marked), places(&bare));
+    }
+
+    #[test]
+    fn centres_a_layer_on_the_tallest_one() {
+        let mut w = workflow();
+        w.nodes = vec![
+            manual(),
+            n(json!({"id": "check", "type": "if", "condition": "{{inputs.x}} == 1"})),
+            report(),
+            n(json!({"id": "other", "type": "command", "project": "x", "command": "ls"})),
+        ];
+        w.edges = vec![
+            edge(r#"{"from": "start", "to": "check"}"#),
+            edge(r#"{"from": "check", "to": "report", "handle": "true"}"#),
+            edge(r#"{"from": "check", "to": "other", "handle": "false"}"#),
+        ];
+        w.ui = None;
+        let flow = to_flow(&w);
+        let at = |id: &str| find(&flow.nodes, id).position;
+        // The two branches share a column, one above the other, and the If sits level with the
+        // middle of them.
+        assert_eq!(at("report").x, at("other").x);
+        assert!(at("report").y != at("other").y);
+        let (top, bottom) = (
+            at("report").y.min(at("other").y),
+            at("report").y.max(at("other").y),
+        );
+        assert_eq!(bottom - top, NODE_H + GAP_Y);
+        assert_eq!(at("check").y, (top + bottom) / 2.0);
+    }
+
+    #[test]
+    fn a_loop_edge_does_not_change_the_layers() {
+        let looped = to_flow(&ticket_workflow());
+        let mut w = ticket_workflow();
+        w.edges.retain(|e| e.loop_spec.is_none());
+        let plain = to_flow(&w);
+        for node in &looped.nodes {
+            assert_eq!(
+                node.position,
+                find(&plain.nodes, &node.id).position,
+                "{}",
+                node.id
+            );
+        }
+    }
+
+    #[test]
+    fn triggers_sit_in_one_column_in_one_frame_whatever_was_saved() {
+        let mut w = ticket_workflow();
+        w.nodes.insert(
+            1,
+            n(json!({"id": "second", "type": "manual", "ui": {"x": 900, "y": 900}})),
+        );
+        w.edges.push(edge(r#"{"from": "second", "to": "fetch"}"#));
+        let flow = to_flow(&w);
+        let at = |id: &str| find(&flow.nodes, id).position;
+        assert_eq!(at("start").x, at("second").x);
+        assert_eq!(at("second").y, at("start").y + NODE_H + TRIGGER_GAP);
+        let (frame, size) = trigger_frame(&flow.nodes).unwrap();
+        assert_eq!(frame.x + GROUP_PAD, at("start").x);
+        assert_eq!(frame.y + GROUP_HEADER, at("start").y);
+        assert_eq!(size, trigger_frame_size(2));
+        // Everything else starts after the frame.
+        assert!(at("fetch").x >= frame.x + size.width + GAP_X);
+    }
+
+    #[test]
+    fn the_trigger_frame_is_a_pure_function_of_the_triggers() {
+        assert_eq!(trigger_frame(&[]), None);
+        let flow = to_flow(&ticket_workflow());
+        assert_eq!(trigger_frame(&flow.nodes), trigger_frame(&flow.nodes));
+        let one = trigger_frame_size(1);
+        assert_eq!(one.width, NODE_W + GROUP_PAD * 2.0);
+        assert_eq!(one.height, GROUP_HEADER + NODE_H + GROUP_PAD);
+        assert_eq!(
+            trigger_frame_size(3).height,
+            GROUP_HEADER + 3.0 * NODE_H + 2.0 * TRIGGER_GAP + GROUP_PAD
+        );
+    }
+
+    #[test]
+    fn old_top_to_bottom_positions_are_laid_out_again_once() {
+        // Saved with no marker: positions run down the page.
+        let mut old = ticket_workflow();
+        old.ui = None;
+        for (i, node) in old.nodes.iter_mut().enumerate() {
+            if node.parent.is_none() {
+                node.ui = Some(Ui {
+                    x: 0.0,
+                    y: 100.0 * i as f64,
+                });
+            }
+        }
+        let laid = to_flow(&old);
+        let places = |nodes: &[FlowNode]| -> Vec<(String, Point)> {
+            nodes.iter().map(|n| (n.id.clone(), n.position)).collect()
+        };
+        assert_eq!(
+            places(&laid.nodes),
+            places(&to_flow(&ticket_workflow()).nodes)
+        );
+        // Saving writes the positions and the marker; opening that keeps them.
+        let saved = from_flow(&old, &laid.nodes, &laid.edges);
+        assert!(saved.is_lr());
+        assert_eq!(places(&to_flow(&saved).nodes), places(&laid.nodes));
+        // A user's move after that sticks.
+        let shifted = moved(&laid.nodes, "fetch", 400.0, 300.0);
+        let kept = from_flow(&saved, &shifted, &laid.edges);
+        assert_eq!(
+            find(&to_flow(&kept).nodes, "fetch").position,
+            Point { x: 400.0, y: 300.0 }
+        );
+    }
+
+    #[test]
+    fn the_marker_round_trips_through_json_and_yaml() {
+        let w = from_flow(&ticket_workflow(), &to_flow(&ticket_workflow()).nodes, &[]);
+        assert!(w.is_lr());
+        let json = serde_json::to_string(&w).unwrap();
+        assert!(json.contains(r#""ui":{"direction":"lr"}"#));
+        let back = super::super::parse::parse_workflows(&format!("[{json}]"));
+        assert!(back[0].is_lr());
+        let mut plain = w.clone();
+        plain.ui = None;
+        assert!(!serde_json::to_string(&plain)
+            .unwrap()
+            .contains(r#""direction""#));
+        let text = super::super::yaml::export_workflow(&w);
+        assert!(text.contains("direction: lr"), "{text}");
+        let preview = super::super::yaml::preview_import(
+            &text,
+            &super::super::models::ModelCatalog::unprobed(),
+        )
+        .unwrap();
+        assert_eq!(preview.workflow.ui, Some(WorkflowUi::lr()));
+        let again = super::super::yaml::export_workflow(&plain);
+        assert!(!again.contains("direction"));
+    }
+
+    #[test]
+    fn the_marker_is_not_part_of_the_definition() {
+        let mut marked = ticket_workflow();
+        let mut bare = marked.clone();
+        bare.ui = None;
+        marked.ui = Some(WorkflowUi::lr());
+        assert_eq!(
+            definition_fingerprint(&marked),
+            definition_fingerprint(&bare)
+        );
+        assert_eq!(definition_key(&marked), definition_key(&bare));
     }
 
     #[test]
@@ -422,18 +592,22 @@ mod auto_place_rules {
     use super::*;
 
     #[test]
-    fn puts_a_node_below_the_lowest_one_at_the_same_x() {
-        let place = auto_place(&ticket_workflow(), None);
-        // Top-level nodes: trigger 0, fetch 90, each 190 (a group), report 480.
-        assert_eq!(place.x, 0.0);
-        assert!(place.y >= 480.0 + NODE_H);
+    fn puts_a_node_after_the_rightmost_one_level_with_it() {
+        let w = ticket_workflow();
+        let place = auto_place(&w, None);
+        // Top-level nodes left to right: triggers, fetch, each (a group), report.
+        let flow = to_flow(&w);
+        let report = find(&flow.nodes, "report");
+        assert_eq!(place.x, report.position.x + NODE_W + GAP_X);
+        assert_eq!(place.y, report.position.y);
     }
 
     #[test]
     fn works_inside_a_group_relative_to_it() {
         let place = auto_place(&ticket_workflow(), Some("each"));
-        assert_eq!(place.x, 16.0);
-        assert!(place.y >= 130.0 + NODE_H);
+        // After review (x 320), level with it.
+        assert_eq!(place.x, 320.0 + NODE_W + GAP_X);
+        assert_eq!(place.y, 32.0);
     }
 
     #[test]
@@ -442,6 +616,18 @@ mod auto_place_rules {
         w.nodes.clear();
         w.edges.clear();
         assert_eq!(auto_place(&w, None), Point { x: 0.0, y: 0.0 });
+    }
+
+    #[test]
+    fn goes_after_the_trigger_frame_when_only_triggers_are_there() {
+        let mut w = workflow();
+        w.nodes = vec![manual()];
+        w.edges.clear();
+        let flow = to_flow(&w);
+        let (frame, size) = trigger_frame(&flow.nodes).unwrap();
+        let place = auto_place(&w, None);
+        assert_eq!(place.x, frame.x + size.width + GAP_X);
+        assert_eq!(place.y, frame.y + (size.height - NODE_H) / 2.0);
     }
 
     #[test]
@@ -461,6 +647,52 @@ mod auto_place_rules {
 
 mod groups {
     use super::*;
+
+    #[test]
+    fn a_loop_line_leaves_room_before_the_card_stacked_below_in_its_column() {
+        let mut w = workflow();
+        w.nodes = vec![
+            manual(),
+            n(json!({"id": "dev", "type": "command", "project": "x", "command": "ls"})),
+            n(json!({"id": "other", "type": "command", "project": "x", "command": "ls"})),
+            n(json!({"id": "review", "type": "command", "project": "x", "command": "ls"})),
+        ];
+        w.edges = vec![
+            edge(r#"{"from": "start", "to": "dev"}"#),
+            edge(r#"{"from": "start", "to": "other"}"#),
+            edge(r#"{"from": "dev", "to": "review"}"#),
+            edge(r#"{"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}}"#),
+        ];
+        let flow = to_flow(&w);
+        let (dev, other) = (find(&flow.nodes, "dev"), find(&flow.nodes, "other"));
+        assert_eq!(dev.position.x, other.position.x);
+        assert!(other.position.y > dev.position.y);
+        assert!(other.position.y - (dev.position.y + dev.height) >= LOOP_ROOM);
+    }
+
+    #[test]
+    fn a_tall_switch_inside_a_group_stays_inside_its_frame() {
+        let mut w = workflow();
+        w.nodes
+            .push(n(json!({"id": "each", "type": "forEach", "in": ""})));
+        w.nodes.push(n(
+            json!({"id": "route", "type": "switch", "value": "{{inputs.x}}", "parent": "each",
+            "cases": ["a", "b", "c", "d", "e", "f", "g", "h"]}),
+        ));
+        let tall = node_height(&w.nodes[3]);
+        assert!(tall > NODE_H * 2.0);
+        for nodes in [to_flow(&w).nodes.clone(), fit_groups(&to_flow(&w).nodes)] {
+            let group = find(&nodes, "each");
+            let route = find(&nodes, "route");
+            assert_eq!(route.height, tall);
+            assert!(
+                route.position.y + tall <= group.height,
+                "{} + {tall} vs {}",
+                route.position.y,
+                group.height
+            );
+        }
+    }
 
     #[test]
     fn fit_groups_wraps_the_children_with_room_to_add_another() {
@@ -531,28 +763,66 @@ mod groups {
     }
 
     #[test]
-    fn push_below_moves_what_is_under_a_group_that_grew() {
+    fn push_right_moves_what_follows_a_group_that_grew_wider() {
         let flow = to_flow(&ticket_workflow());
+        let wider: Vec<FlowNode> = flow
+            .nodes
+            .iter()
+            .map(|n| {
+                let mut n = n.clone();
+                if n.id == "each" {
+                    n.width += 60.0;
+                }
+                n
+            })
+            .collect();
+        let out = push_right(&flow.nodes, &wider);
+        let report = find(&flow.nodes, "report").position;
+        assert_eq!(find(&out, "report").position.x, report.x + 60.0);
+        assert_eq!(find(&out, "report").position.y, report.y);
+        // Children, nodes before the group and the triggers stay put; a group that did not
+        // grow moves nothing.
+        for id in ["dev", "fetch", "start"] {
+            assert_eq!(
+                find(&out, id).position,
+                find(&flow.nodes, id).position,
+                "{id}"
+            );
+        }
+        assert_eq!(push_right(&flow.nodes, &flow.nodes), flow.nodes);
+    }
+
+    #[test]
+    fn push_right_moves_what_sits_under_a_group_that_grew_taller() {
+        let mut flow = to_flow(&ticket_workflow());
+        let group = find(&flow.nodes, "each").clone();
+        let mut below = find(&flow.nodes, "report").clone();
+        below.id = "below".into();
+        below.position = Point {
+            x: group.position.x,
+            y: group.position.y + group.height + 10.0,
+        };
+        flow.nodes.push(below);
         let taller: Vec<FlowNode> = flow
             .nodes
             .iter()
             .map(|n| {
                 let mut n = n.clone();
                 if n.id == "each" {
-                    n.height += 60.0;
+                    n.height += 40.0;
                 }
                 n
             })
             .collect();
-        let out = push_below(&flow.nodes, &taller);
-        assert_eq!(find(&out, "report").position.y, 480.0 + 60.0);
-        // Children, and nodes above the group, stay put; a group that did not grow moves nothing.
+        let out = push_right(&flow.nodes, &taller);
         assert_eq!(
-            find(&out, "dev").position,
-            find(&flow.nodes, "dev").position
+            find(&out, "below").position.y,
+            group.position.y + group.height + 10.0 + 40.0
         );
-        assert_eq!(find(&out, "fetch").position.y, 90.0);
-        assert_eq!(push_below(&flow.nodes, &flow.nodes), flow.nodes);
+        assert_eq!(
+            find(&out, "report").position,
+            find(&flow.nodes, "report").position
+        );
     }
 
     #[test]
@@ -591,7 +861,7 @@ mod groups {
             dev.position,
             Point {
                 x: group.x + 16.0,
-                y: group.y + 40.0
+                y: group.y + 32.0
             }
         );
         assert!(!out
@@ -937,11 +1207,11 @@ mod whole_workflows {
     fn the_constants_are_the_ones_layout_counts_on() {
         assert_eq!(
             (NODE_W, NODE_H, GAP_Y, GAP_X, GROUP_PAD, GROUP_HEADER),
-            (232.0, 48.0, 36.0, 28.0, 16.0, 32.0)
+            (232.0, 48.0, 24.0, 72.0, 16.0, 32.0)
         );
         assert_eq!(
-            (GROUP_RIGHT, GROUP_SLACK, EMPTY_GROUP_H),
-            (52.0, 44.0, 140.0)
+            (GROUP_SLACK, GROUP_LOOP, EMPTY_GROUP_W, EMPTY_GROUP_H),
+            (44.0, 36.0, 308.0, 132.0)
         );
     }
 
@@ -952,7 +1222,7 @@ mod whole_workflows {
             .insert(1, n(json!({"id": "each", "type": "forEach", "in": ""})));
         let flow = to_flow(&w);
         let group = find(&flow.nodes, "each");
-        assert_eq!(group.width, NODE_W + GROUP_PAD + GROUP_RIGHT);
+        assert_eq!(group.width, EMPTY_GROUP_W);
         assert_eq!(group.height, EMPTY_GROUP_H);
     }
 

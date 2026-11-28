@@ -870,6 +870,7 @@ fn definition_from(raw: Option<&Json>, now: u64, allowed: &[&str]) -> Result<Par
             requires,
             decision_model,
             summary_template,
+            ui: None,
             nodes,
             edges,
         },
@@ -949,6 +950,7 @@ fn new_workflow_from(
     draft.input_values = values;
     draft.nodes = definition.nodes;
     draft.edges = definition.edges;
+    draft.ui = definition.ui;
     draft.created_at = now;
     // Only the user may enable what came from a file or from a Mono.
     draft.needs_review = from_yaml || caller.is_some();

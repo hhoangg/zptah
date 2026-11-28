@@ -416,7 +416,7 @@ pub fn decision_model_problem(w: &Workflow, catalog: &ModelCatalog) -> Option<St
     let model = w.decision_model.as_ref()?;
     let message = named_model_problem(
         &Some(model.harness.clone()),
-        &Some(model.model.clone()),
+        &model.model,
         &model.effort,
         false,
         catalog,
@@ -978,19 +978,19 @@ mod tests {
         assert_eq!(decision_model_problem(&w, &catalog), None);
         w.decision_model = Some(super::super::model::DecisionModel {
             harness: "claude".into(),
-            model: "claude:sonnet-5".into(),
+            model: Some("claude:sonnet-5".into()),
             effort: Some("low".into()),
         });
         assert_eq!(decision_model_problem(&w, &catalog), None);
         assert!(workflow_issues(&w, &catalog).is_empty());
-        w.decision_model.as_mut().unwrap().model = "claude:nope".into();
+        w.decision_model.as_mut().unwrap().model = Some("claude:nope".into());
         let problem = decision_model_problem(&w, &catalog).unwrap();
         assert_eq!(
             problem,
             format!("decisionModel: {}", unavailable("claude:nope"))
         );
         assert_eq!(workflow_issues(&w, &catalog)[0].node_id, None);
-        w.decision_model.as_mut().unwrap().model = "claude:sonnet-5".into();
+        w.decision_model.as_mut().unwrap().model = Some("claude:sonnet-5".into());
         w.decision_model.as_mut().unwrap().effort = Some("max".into());
         assert!(decision_model_problem(&w, &catalog)
             .unwrap()
@@ -1004,7 +1004,7 @@ mod tests {
         let mut pinned = plain();
         pinned.decision_model = Some(super::super::model::DecisionModel {
             harness: "codex".into(),
-            model: "codex:gpt-5".into(),
+            model: Some("codex:gpt-5".into()),
             effort: None,
         });
         assert_eq!(harnesses_used(&pinned), vec![Kind::Codex]);

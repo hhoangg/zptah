@@ -3,7 +3,8 @@
 use super::model::{
     CallerKind, Checkout, Cwd, Decide, DecisionModel, Edge, Handle, InputType, InputValue,
     LoopSpec, Node, NodeKind, OutputField, OutputFieldType, ReportTo, Requirement, RequirementKind,
-    RunCaller, SessionTarget, TargetInstance, Ui, Workflow, WorkflowInput, DECIDE_AI, NODE_TYPES,
+    RunCaller, SessionTarget, TargetInstance, Ui, Workflow, WorkflowInput, WorkflowUi, DECIDE_AI,
+    DIRECTION_LR, NODE_TYPES,
 };
 use super::ordered::{Json, OrderedMap};
 use crate::mono::habits::Schedule;
@@ -404,9 +405,16 @@ pub(crate) fn parse_decision_model(raw: Option<&Json>) -> Option<Option<Decision
         Some(Json::String(effort)) => Some(effort.clone()),
         Some(_) => return None,
     };
+    // Absent, null or empty: the harness's default model, resolved when the run starts. A value
+    // that is not text is unreadable, not "no model".
+    let model = match raw.get("model") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(model)) => Some(model.clone()).filter(|m| !m.is_empty()),
+        Some(_) => return None,
+    };
     Some(Some(DecisionModel {
         harness: str_of(raw, "harness").filter(|h| !h.is_empty())?,
-        model: str_of(raw, "model").filter(|m| !m.is_empty())?,
+        model,
         effort,
     }))
 }
@@ -447,6 +455,12 @@ pub fn parse_caller(raw: &Json) -> Option<RunCaller> {
     })
 }
 
+/// The workflow-level `ui` object; only a direction of "lr" is kept.
+pub fn parse_workflow_ui(raw: Option<&Json>) -> Option<WorkflowUi> {
+    let direction = raw?.get("direction")?.as_str()?;
+    (direction == DIRECTION_LR).then(WorkflowUi::lr)
+}
+
 pub fn parse_workflow(raw: &Json) -> Option<Workflow> {
     if !is_rec(raw) {
         return None;
@@ -481,6 +495,7 @@ pub fn parse_workflow(raw: &Json) -> Option<Workflow> {
             .map(|v| parse_input_values(Some(v))),
         nodes,
         edges,
+        ui: parse_workflow_ui(raw.get("ui")),
         // An entry that says nothing about being enabled stays paused.
         enabled: flag("enabled"),
         created_at: num_of(raw, "createdAt").unwrap_or(0.0) as u64,

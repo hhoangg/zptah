@@ -5,8 +5,10 @@ use monocode_core::mono::workflows::board_model::{Point, Size};
 
 pub(in crate::monos) const MIN_ZOOM: f32 = 0.3;
 pub(in crate::monos) const MAX_ZOOM: f32 = 1.5;
-/// `fitView({ padding: 0.12, maxZoom: 1 })`.
+/// `fitView({ padding: 0.12, maxZoom: 1 })`, but never below 70%: a big graph is cut off at
+/// the edges and centred on the picked node instead of shrunk until the cards cannot be read.
 pub(in crate::monos) const FIT_PADDING: f32 = 0.12;
+pub(in crate::monos) const FIT_MIN_ZOOM: f32 = 0.7;
 pub(in crate::monos) const FIT_MAX_ZOOM: f32 = 1.0;
 /// One press of a zoom button.
 const ZOOM_STEP: f32 = 1.2;
@@ -92,12 +94,15 @@ pub(in crate::monos) fn clamp_zoom(zoom: f32) -> f32 {
 }
 
 /// The view that shows all of `content` in a view of `size`, `padding` (a share of the content)
-/// around it, never zoomed in past `max_zoom` nor out past the minimum zoom.
+/// around it, never zoomed in past `max_zoom` nor out past `min_zoom`. When the content does not
+/// fit even at `min_zoom` the view is centred on `focus` (the picked card), else on the content.
 pub(in crate::monos) fn fit_view(
     content: Rect,
     size: Size,
     padding: f32,
+    min_zoom: f32,
     max_zoom: f32,
+    focus: Option<Rect>,
 ) -> Viewport {
     let across = |view: f32, content: f32| {
         if content > 0. {
@@ -106,25 +111,37 @@ pub(in crate::monos) fn fit_view(
             f32::INFINITY
         }
     };
-    let zoom = across(size.width, content.w)
-        .min(across(size.height, content.h))
-        .clamp(MIN_ZOOM, max_zoom);
+    let wanted = across(size.width, content.w).min(across(size.height, content.h));
+    let zoom = wanted.clamp(min_zoom.max(MIN_ZOOM), max_zoom);
     let zoom = if zoom.is_finite() { zoom } else { max_zoom };
+    // Cut off at the floor: show the part around the picked card.
+    let around = if wanted < min_zoom { focus } else { None }.unwrap_or(content);
     Viewport {
-        x: size.width / 2. - (content.x + content.w / 2.) * zoom,
-        y: size.height / 2. - (content.y + content.h / 2.) * zoom,
+        x: size.width / 2. - (around.x + around.w / 2.) * zoom,
+        y: size.height / 2. - (around.y + around.h / 2.) * zoom,
         zoom,
     }
 }
 
 /// The view that shows a scene: None while there is no room to show it in (a canvas that has not
 /// been laid out has no size), so the view is not fitted to nothing.
-pub(in crate::monos) fn fit_scene(content: Option<Rect>, size: Size) -> Option<Viewport> {
+pub(in crate::monos) fn fit_scene(
+    content: Option<Rect>,
+    size: Size,
+    focus: Option<Rect>,
+) -> Option<Viewport> {
     if !(size.width > 0. && size.height > 0.) {
         return None;
     }
     Some(match content {
-        Some(content) => fit_view(content, size, FIT_PADDING, FIT_MAX_ZOOM),
+        Some(content) => fit_view(
+            content,
+            size,
+            FIT_PADDING,
+            FIT_MIN_ZOOM,
+            FIT_MAX_ZOOM,
+            focus,
+        ),
         None => Viewport::default(),
     })
 }
@@ -151,25 +168,26 @@ pub(in crate::monos) fn zoom_out(zoom: f32) -> f32 {
 
 // --- edges ------------------------------------------------------------------------------------
 
-/// The side of a card a line leaves or enters by (the left side is never used).
+/// The side of a card a line leaves or enters by: lines leave by the right and enter by the left,
+/// and a loop leaves and enters by the bottom (the top is never used).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::monos) enum Side {
+    Left,
     Right,
-    Top,
     Bottom,
 }
 
 impl Side {
     fn dir(self) -> (f32, f32) {
         match self {
+            Side::Left => (-1., 0.),
             Side::Right => (1., 0.),
-            Side::Top => (0., -1.),
             Side::Bottom => (0., 1.),
         }
     }
 
     fn horizontal(self) -> bool {
-        matches!(self, Side::Right)
+        matches!(self, Side::Left | Side::Right)
     }
 }
 
@@ -179,8 +197,8 @@ pub(in crate::monos) struct StepPath {
     pub points: Vec<Point>,
     /// Half way between the two ends (xyflow's label position).
     pub label: Point,
-    /// Where the long run is: its x for a route out and back in by the Right, its y for one that
-    /// steps in the middle or runs beside the top or bottom.
+    /// Where the long run is: its x for a route that steps in the middle (or runs beside the
+    /// left or right), its y for one that runs under the bottom or above the top.
     pub line: f32,
 }
 
@@ -216,42 +234,30 @@ pub(in crate::monos) fn step_points(
     if from == to {
         // Out and back in on the same side: one long run beside the cards, clear of the farther.
         let (corner_s, corner_t) = match from {
-            Side::Right => {
-                let x = source.x.max(target.x) + offset;
+            Side::Right | Side::Left => {
+                let x = if from == Side::Right {
+                    source.x.max(target.x) + offset
+                } else {
+                    source.x.min(target.x) - offset
+                };
                 line = x;
                 (Point { x, y: source.y }, Point { x, y: target.y })
             }
-            Side::Bottom | Side::Top => {
-                let y = if from == Side::Bottom {
-                    source.y.max(target.y) + offset
-                } else {
-                    source.y.min(target.y) - offset
-                };
+            Side::Bottom => {
+                let y = source.y.max(target.y) + offset;
                 line = y;
                 (Point { x: source.x, y }, Point { x: target.x, y })
             }
         };
         points.push(corner_s);
         points.push(corner_t);
-    } else if from.horizontal() == to.horizontal() {
-        // Opposite sides, top to bottom or the other way: a step in the middle.
-        let heading = if sg.y < tg.y { 1. } else { -1. };
+    } else if from.horizontal() && to.horizontal() {
+        // Opposite sides, left to right or the other way: a step in the middle.
+        let heading = if sg.x < tg.x { 1. } else { -1. };
         let centre_x = (sg.x + tg.x) / 2.;
         let centre_y = (sg.y + tg.y) / 2.;
-        let split = if from.dir().1 == heading {
-            // On the way: across half way down.
-            [
-                Point {
-                    x: sg.x,
-                    y: centre_y,
-                },
-                Point {
-                    x: tg.x,
-                    y: centre_y,
-                },
-            ]
-        } else {
-            // Against the way: round through the middle column.
+        let split = if from.dir().0 == heading {
+            // On the way: down or up half way across.
             [
                 Point {
                     x: centre_x,
@@ -262,8 +268,20 @@ pub(in crate::monos) fn step_points(
                     y: tg.y,
                 },
             ]
+        } else {
+            // Against the way: round through the middle row.
+            [
+                Point {
+                    x: sg.x,
+                    y: centre_y,
+                },
+                Point {
+                    x: tg.x,
+                    y: centre_y,
+                },
+            ]
         };
-        line = centre_y;
+        line = centre_x;
         points.extend(split);
     } else {
         // Sideways out, up or down in (or the other way round): one corner.

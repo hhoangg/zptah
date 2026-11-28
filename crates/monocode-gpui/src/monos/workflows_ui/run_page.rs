@@ -1,5 +1,6 @@
-//! One run up close (`WorkflowRunPage.tsx`): the workflow as it ran, node by node, drawn read-only
-//! on the graph canvas, and what the picked node did (`run_details.rs`).
+//! The Runs mode of a workflow's page (`WorkflowRunPage.tsx`): the list of its runs, the picked run
+//! drawn node by node on the graph canvas (read-only), and what the picked node did in the docked
+//! inspector (`run_details.rs`).
 //!
 //! The run comes from the runner while it is live and from the runs file otherwise (read off the
 //! UI thread by `refresh_workflows`); `run_page_sync` takes whichever is fresher whenever either
@@ -11,7 +12,7 @@ use super::actions;
 use super::graph::{GraphCanvas, GraphEvent};
 use super::page::run_status;
 use super::run_model::*;
-use super::view::{alert, notice_line};
+use super::view::alert;
 use gpui::Div;
 use monocode_core::mono::workflows::{
     model::{CallerKind, RunStatus, WorkflowRun},
@@ -56,7 +57,6 @@ pub(super) struct RunPage {
     /// The node whose details show.
     pub(super) selection: Option<String>,
     pub(super) details: Option<Details>,
-    pub(super) details_closed: bool,
     /// Outputs shown whole, by `<node key>:<name>`.
     pub(super) show_all: HashSet<String>,
     pub(super) canvas: Option<Entity<GraphCanvas>>,
@@ -94,6 +94,79 @@ pub(super) fn caller_text(run: &WorkflowRun, mono: Option<&str>) -> String {
             None => "Mono".into(),
         },
     }
+}
+
+/// One run in the runs list: how it ended, when it started and how long it took.
+fn run_row(
+    run: &WorkflowRun,
+    workflow: &str,
+    picked: bool,
+    color: u32,
+    now: u64,
+    cx: &mut Context<Monos>,
+) -> AnyElement {
+    let (label, dot) = run_status(run.status, color);
+    let took = match run.ended_at {
+        Some(ended) => duration(ended.saturating_sub(run.started_at)),
+        None if run.status == RunStatus::Running => duration(now.saturating_sub(run.started_at)),
+        None => "-".into(),
+    };
+    let (workflow, id) = (workflow.to_string(), run.id.clone());
+    div()
+        .id(SharedString::from(format!("mono-workflow-run-{}", run.id)))
+        .debug_selector({
+            let id = run.id.clone();
+            move || format!("mono-workflow-run-{id}")
+        })
+        .role(Role::Button)
+        .aria_label(label)
+        .aria_selected(picked)
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .px_2()
+        .py_1p5()
+        .rounded_md()
+        .flex()
+        .items_center()
+        .gap_2()
+        .text_size(px(12.))
+        .cursor_pointer()
+        .when(picked, |d| d.bg(content(0.08)))
+        .when(!picked, |d| d.hover(|s| s.bg(content(0.05))))
+        .child(if run.status == RunStatus::Running {
+            super::view::running_dot(
+                SharedString::from(format!("mono-workflow-pulse-{}", run.id)),
+                color,
+                8.,
+            )
+        } else {
+            div()
+                .size(px(8.))
+                .flex_shrink_0()
+                .rounded_full()
+                .bg(dot)
+                .into_any_element()
+        })
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(div().truncate().text_color(content(0.85)).child(label))
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(content(0.4))
+                        .child(format!("{} \u{b7} {took}", when(run.started_at, now))),
+                ),
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.open_workflow_route(WfRoute::Run(workflow.clone(), id.clone()), cx)
+        }))
+        .into_any_element()
 }
 
 fn meta(label: &'static str, value: impl IntoElement) -> Div {
@@ -303,150 +376,240 @@ impl Monos {
         }
     }
 
-    pub(in crate::monos) fn workflow_run_page(
+    /// The Runs mode: the runs list, the picked run on the canvas and its details beside it.
+    pub(super) fn runs_mode(&mut self, scope: &Scope, cx: &mut Context<Self>) -> AnyElement {
+        let Some(workflow) = self.wf.board.as_ref().map(|b| b.base.id.clone()) else {
+            return div().into_any_element();
+        };
+        let picked = match &self.wf.route {
+            Some(WfRoute::Run(w, run)) if *w == workflow => Some(run.clone()),
+            _ => None,
+        };
+        if let Some(run) = &picked {
+            self.run_page_open(scope, &workflow, run, cx);
+        }
+        let focus = self.wf.focus_canvas;
+        let list = (!focus).then(|| self.runs_list(scope, &workflow, picked.as_deref(), cx));
+        let center = self.run_center(scope, &workflow, picked.is_some(), cx);
+        let inspector = (!focus).then(|| self.run_inspector(picked.is_some(), scope.color, cx));
+        div()
+            .id("mono-workflow-run-page")
+            .debug_selector(|| "mono-workflow-run-page".into())
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .flex()
+            .children(list)
+            .child(center)
+            .children(inspector)
+            .into_any_element()
+    }
+
+    /// The 240px list of the workflow's runs, newest first; the picked one is lit.
+    fn runs_list(
         &mut self,
         scope: &Scope,
         workflow: &str,
-        run_id: &str,
-        window: &mut Window,
+        picked: Option<&str>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.ensure_workflows(cx);
-        // A page sliding away while another run opens must not take the state back from it.
-        let current =
-            matches!(&self.wf.route, Some(WfRoute::Run(w, r)) if w == workflow && r == run_id);
-        let shown = self.wf.run.key.as_ref() == Some(&(workflow.to_string(), run_id.to_string()));
-        if !current && !shown {
-            return div().size_full().into_any_element();
-        }
-        self.run_page_open(scope, workflow, run_id, cx);
-        let name = self
-            .wf
-            .run
-            .run
-            .as_ref()
-            .map_or_else(|| "Run".to_string(), |r| r.definition.name.clone());
-        let mut header =
-            self.workflow_header(&name, Some(WfRoute::Workflow(workflow.to_string())), cx);
-        let run = self.wf.run.run.clone();
-        if let Some(run) = &run {
-            if has_for_each(run) {
-                let lanes = self.wf.run.view() == Some(RunView::Lanes);
-                header = header.child(
-                    icon_button(
-                        "wf-run-view",
-                        if lanes {
-                            "Show one item at a time"
-                        } else {
-                            "Show items side by side"
-                        },
-                        if lanes { "layers" } else { "columns-3" },
-                    )
-                    .debug_selector(|| "wf-run-view".into())
-                    .on_click(cx.listener(|this, _, _, cx| this.run_toggle_view(cx))),
-                );
-            }
-            if run.status == RunStatus::Running {
-                let stop = workflow.to_string();
-                header = header.child(
-                    icon_button("wf-run-stop", "Stop run", "square")
-                        .debug_selector(|| "wf-run-stop".into())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.stop_workflow_run(&stop);
-                            cx.notify();
-                        })),
-                );
-            }
-            if run.status == RunStatus::Interrupted {
-                header = header.child(
-                    icon_button("wf-run-resume", "Resume", "play")
-                        .debug_selector(|| "wf-run-resume".into())
-                        .on_click(cx.listener(|this, _, _, cx| this.run_resume(cx))),
-                );
-            }
-        }
-        let body = div()
-            .id("mono-workflow-run-page")
-            .debug_selector(|| "mono-workflow-run-page".into())
+        let now = now_ms();
+        let mut rows = div()
+            .id("wf-runs-list-rows")
             .w_full()
-            .min_w_0()
-            .flex_1()
             .min_h_0()
+            .flex_1()
             .overflow_y_scroll()
+            .p_1()
             .flex()
             .flex_col()
-            .children(notice_line(
-                "mono-workflow-notice",
-                self.wf.page_notice.as_deref(),
-            ));
-        let body = match &run {
-            Some(run) => body
-                .child(self.run_meta(run, scope.color))
-                .children(self.run_summary(run))
-                .when(self.wf.run.changed, |d| {
-                    d.child(
-                        div()
-                            .debug_selector(|| "wf-run-changed".into())
-                            .flex_shrink_0()
-                            .px_4()
-                            .pb_3()
-                            .text_size(px(11.))
-                            .line_height(px(16.))
-                            .text_color(content(0.45))
-                            .child("The workflow changed since this run started."),
-                    )
-                })
-                .children(run.error.as_ref().map(|error| {
-                    alert(error.clone())
-                        .id("wf-run-error")
-                        .debug_selector(|| "wf-run-error".into())
-                        .flex_shrink_0()
-                        .px_4()
-                        .pt_0()
-                        .pb_3()
-                }))
-                // An interrupted run that is never resumed would otherwise forget the cloud
-                // instances it left running. Only named here: nothing is stopped or deleted.
-                .children(run.left_instances_warning().map(|warning| {
-                    alert(warning)
-                        .id("wf-run-instances")
-                        .debug_selector(|| "wf-run-instances".into())
-                        .flex_shrink_0()
-                        .px_4()
-                        .pt_0()
-                        .pb_3()
-                }))
+            .gap_0p5();
+        match self.workflow_runs_of(workflow).cloned() {
+            Some(runs) if runs.is_empty() => {
+                rows = rows.child(
+                    div()
+                        .px_2()
+                        .py_3()
+                        .text_size(px(12.))
+                        .text_color(content(0.4))
+                        .child("It hasn't run yet."),
+                );
+            }
+            Some(runs) => {
+                for run in &runs {
+                    rows = rows.child(run_row(
+                        run,
+                        workflow,
+                        picked == Some(run.id.as_str()),
+                        scope.color,
+                        now,
+                        cx,
+                    ));
+                }
+            }
+            None => {}
+        }
+        div()
+            .id("wf-runs-list")
+            .debug_selector(|| "wf-runs-list".into())
+            .w(px(super::layout::RUNS_W))
+            .flex_shrink_0()
+            .h_full()
+            .border_r_1()
+            .border_color(content(0.1))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px_3()
+                    .pt_2()
+                    .pb_1()
+                    .text_size(px(11.))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(content(0.4))
+                    .child("Runs"),
+            )
+            .child(rows)
+            .into_any_element()
+    }
+
+    /// The middle of the Runs mode: how the run went, and the canvas it is drawn on. What sits
+    /// over the canvas scrolls inside its own box, so it never pushes the canvas away.
+    fn run_center(
+        &mut self,
+        scope: &Scope,
+        workflow: &str,
+        has_pick: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let frame = div().flex_1().min_w_0().min_h_0().flex().flex_col();
+        let run = self.wf.run.run.clone();
+        let Some(run) = run.filter(|_| has_pick) else {
+            let text = if has_pick && self.wf.run.loaded {
+                "This run is no longer kept."
+            } else if has_pick {
+                ""
+            } else if self.workflow_runs_of(workflow).is_some_and(Vec::is_empty) {
+                "It hasn't run yet."
+            } else {
+                "Pick a run to see how it went."
+            };
+            let gone = has_pick && self.wf.run.loaded;
+            return frame
                 .child(
                     div()
-                        .relative()
-                        .flex_1()
-                        .min_h(px(320.))
-                        .children(self.wf.run.canvas.clone()),
+                        .id("wf-run-empty")
+                        .debug_selector(move || {
+                            if gone { "wf-run-gone" } else { "wf-run-empty" }.into()
+                        })
+                        .px_4()
+                        .py_6()
+                        .text_center()
+                        .text_size(px(12.))
+                        .text_color(content(0.45))
+                        .child(text),
                 )
-                .child(self.run_details(window, scope.color, cx)),
-            None if self.wf.run.loaded => body.child(
-                div()
-                    .debug_selector(|| "wf-run-gone".into())
-                    .px_4()
-                    .py_6()
-                    .text_center()
-                    .text_size(px(12.))
-                    .text_color(content(0.45))
-                    .child("This run is no longer kept."),
-            ),
-            None => body,
+                .into_any_element();
         };
-        let gate = self.run_gate_dialog(scope, window, cx);
-        div()
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .overflow_hidden()
-            .flex()
-            .flex_col()
-            .child(header)
-            .child(body)
-            .children(gate)
+        let lanes = has_for_each(&run).then(|| self.wf.run.view() == Some(RunView::Lanes));
+        let stopping = workflow.to_string();
+        let top = div()
+            .id("wf-run-top")
+            .debug_selector(|| "wf-run-top".into())
+            .flex_shrink_0()
+            .max_h(px(240.))
+            .overflow_y_scroll()
+            .border_b_1()
+            .border_color(content(0.1))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(self.run_meta(&run, scope.color)),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .pr_2()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .children(lanes.map(|lanes| {
+                                icon_button(
+                                    "wf-run-view",
+                                    if lanes {
+                                        "Show one item at a time"
+                                    } else {
+                                        "Show all items stacked"
+                                    },
+                                    if lanes { "layers" } else { "columns-3" },
+                                )
+                                .debug_selector(|| "wf-run-view".into())
+                                .on_click(cx.listener(|this, _, _, cx| this.run_toggle_view(cx)))
+                            }))
+                            .children((run.status == RunStatus::Running).then(|| {
+                                icon_button("wf-run-stop", "Stop run", "square")
+                                    .debug_selector(|| "wf-run-stop".into())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.stop_workflow_run(&stopping);
+                                        cx.notify();
+                                    }))
+                            }))
+                            .children((run.status == RunStatus::Interrupted).then(|| {
+                                icon_button("wf-run-resume", "Resume", "play")
+                                    .debug_selector(|| "wf-run-resume".into())
+                                    .on_click(cx.listener(|this, _, _, cx| this.run_resume(cx)))
+                            })),
+                    ),
+            )
+            .children(self.run_summary(&run))
+            .when(self.wf.run.changed, |d| {
+                d.child(
+                    div()
+                        .debug_selector(|| "wf-run-changed".into())
+                        .flex_shrink_0()
+                        .px_4()
+                        .pb_3()
+                        .text_size(px(11.))
+                        .line_height(px(16.))
+                        .text_color(content(0.45))
+                        .child("The workflow changed since this run started."),
+                )
+            })
+            .children(run.error.as_ref().map(|error| {
+                alert(error.clone())
+                    .id("wf-run-error")
+                    .debug_selector(|| "wf-run-error".into())
+                    .flex_shrink_0()
+                    .px_4()
+                    .pt_0()
+                    .pb_3()
+            }))
+            // An interrupted run that is never resumed would otherwise forget the cloud
+            // instances it left running. Only named here: nothing is stopped or deleted.
+            .children(run.left_instances_warning().map(|warning| {
+                alert(warning)
+                    .id("wf-run-instances")
+                    .debug_selector(|| "wf-run-instances".into())
+                    .flex_shrink_0()
+                    .px_4()
+                    .pt_0()
+                    .pb_3()
+            }));
+        frame
+            .child(top)
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .children(self.wf.run.canvas.clone()),
+            )
             .into_any_element()
     }
 
@@ -552,6 +715,9 @@ impl Monos {
                 .id("wf-run-summary")
                 .debug_selector(|| "wf-run-summary".into())
                 .flex_shrink_0()
+                // The text can be long: it scrolls here instead of pushing the canvas away.
+                .max_h(px(140.))
+                .overflow_y_scroll()
                 .px_4()
                 .pb_3()
                 .flex()

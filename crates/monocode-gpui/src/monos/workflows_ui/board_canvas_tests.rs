@@ -206,7 +206,7 @@ fn dragging_a_node_over_a_for_each_reparents_it_and_out_of_it_unparents_it(
 }
 
 #[gpui::test]
-fn delete_removes_the_selected_node_but_not_while_the_inspector_is_open(cx: &mut TestAppContext) {
+fn delete_removes_the_selected_node_and_closes_its_form(cx: &mut TestAppContext) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
@@ -219,15 +219,14 @@ fn delete_removes_the_selected_node_but_not_while_the_inspector_is_open(cx: &mut
             cx,
         )
     });
-    // Selected by the drag; the inspector is open: Delete does nothing.
+    // Selected by the drag, with its form open beside the canvas: Delete from the canvas takes
+    // the node, and the form closes with it.
     do_with(&s, visual, |m, cx| {
-        m.board_view(Some(InspectorView::Settings), cx)
+        m.board_view(Some(InspectorView::Node("fetch".into())), cx)
     });
     event(&s, visual, GraphEvent::Delete);
-    assert!(node_ids(&s, visual).contains(&"fetch".to_string()));
-    do_with(&s, visual, |m, cx| m.board_view(None, cx));
-    event(&s, visual, GraphEvent::Delete);
     assert!(!node_ids(&s, visual).contains(&"fetch".to_string()));
+    assert_eq!(on_board(&s, visual, |b| b.view.clone()), None);
     assert!(
         !edges_of(&s, visual)
             .iter()

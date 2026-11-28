@@ -210,25 +210,24 @@ fn tabs_scroll_horizontally_and_picking_one_shows_its_item(cx: &mut TestAppConte
 }
 
 #[gpui::test]
-fn lanes_draw_compact_cards_and_single_does_not(cx: &mut TestAppContext) {
+fn lanes_and_single_both_draw_the_boards_own_cards(cx: &mut TestAppContext) {
     let s = setup(cx);
     saved_run(&s, &each_workflow(), &each_run(4), cx);
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     open_run(&s, visual);
-    let compact = |s: &Setup, visual: &mut VisualTestContext| {
+    let cards = |s: &Setup, visual: &mut VisualTestContext| {
         canvas(s, visual).read_with(visual, |c, _| {
             c.scene()
                 .nodes
                 .iter()
                 .filter(|n| n.flow.id.contains('@'))
-                .map(|n| n.flow.data.compact)
-                .collect::<Vec<_>>()
+                .count()
         })
     };
-    assert!(compact(&s, visual).iter().all(|c| *c));
+    assert_eq!(cards(&s, visual), 8);
     click(visual, "wf-run-view");
-    assert!(compact(&s, visual).iter().all(|c| !*c));
+    assert_eq!(cards(&s, visual), 2);
 }
 
 #[gpui::test]
@@ -395,7 +394,7 @@ fn long_output_is_cut_until_show_more(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_details_collapse_and_open_again(cx: &mut TestAppContext) {
+fn the_details_are_docked_beside_the_canvas_with_no_toggle(cx: &mut TestAppContext) {
     let s = setup(cx);
     let run = run_of(
         &linear(),
@@ -408,10 +407,11 @@ fn the_details_collapse_and_open_again(cx: &mut TestAppContext) {
     visual.run_until_parked();
     open_run(&s, visual);
     assert!(visual.debug_bounds("wf-details-body").is_some());
-    click(visual, "wf-details-toggle");
-    assert!(visual.debug_bounds("wf-details-body").is_none());
-    click(visual, "wf-details-toggle");
-    assert!(visual.debug_bounds("wf-details-body").is_some());
+    let details = visual.debug_bounds("wf-details").unwrap();
+    let graph = visual.debug_bounds("wf-graph").unwrap();
+    assert!(graph.right() <= details.left() + px(1.));
+    // It is always open: there is nothing to collapse.
+    assert!(visual.debug_bounds("wf-details-toggle").is_none());
 }
 
 #[gpui::test]
@@ -772,7 +772,7 @@ fn the_lane_titles_tabs_and_rounds_are_strips_of_the_scene(cx: &mut TestAppConte
 }
 
 #[gpui::test]
-fn the_loop_edge_has_its_label_in_the_single_view_and_none_in_lanes(cx: &mut TestAppContext) {
+fn the_loop_edge_has_its_label_in_the_single_view_and_in_every_lane(cx: &mut TestAppContext) {
     let s = setup(cx);
     let w = wf(
         json!([
@@ -809,17 +809,30 @@ fn the_loop_edge_has_its_label_in_the_single_view_and_none_in_lanes(cx: &mut Tes
             c.scene()
                 .edges
                 .iter()
-                .filter_map(|e| e.label.as_ref().map(|l| (e.id.clone(), l.text.clone())))
+                .filter_map(|e| {
+                    e.label
+                        .as_ref()
+                        .map(|l| (e.id.clone(), l.text.clone(), l.full.clone()))
+                })
                 .collect::<Vec<_>>()
         })
     };
-    // Side by side the lanes are narrow and the loop edge hugs them without a label.
-    assert!(labels(&s, visual).is_empty());
+    // Stacked, every lane's row has its own loop edge, each with its label.
+    let stacked = labels(&s, visual);
+    assert_eq!(stacked.len(), 2, "{stacked:?}");
+    // The pill says how many rounds; its tooltip names who decides.
+    assert!(
+        stacked
+            .iter()
+            .all(|l| l.1 == "\u{2264} 3 rounds" && l.2 == "AI decides \u{b7} max 3"),
+        "{stacked:?}"
+    );
     click(visual, "wf-run-view");
     visual.refresh().unwrap();
     let found = labels(&s, visual);
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].1, "AI decides \u{b7} max 3");
+    assert_eq!(found[0].1, "\u{2264} 3 rounds");
+    assert_eq!(found[0].2, "AI decides \u{b7} max 3");
     let selector: &'static str =
         Box::leak(format!("wf-loop-label-{}", found[0].0).into_boxed_str());
     assert!(visual.debug_bounds(selector).is_some());
@@ -832,7 +845,12 @@ fn opening_a_run_again_starts_with_nothing_picked(cx: &mut TestAppContext) {
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     open_run(&s, visual);
-    click(visual, "wf-node-report");
+    // The canvas is as wide as the room beside the list and the details, and the page fits the
+    // whole graph there, so a card is picked through the canvas.
+    canvas(&s, visual).update(visual, |_, cx| {
+        cx.emit(GraphEvent::Select("report|".into()))
+    });
+    visual.run_until_parked();
     let picked = |s: &Setup, visual: &mut VisualTestContext| {
         s.manager.read_with(visual, |m, _| m.wf.run.picked.clone())
     };

@@ -1,5 +1,6 @@
-//! The page that slides over the board: one node's setup, or the workflow's own settings
-//! (`NodeInspector.tsx`, `LoopForm`, `ProjectPicker`, the model picker).
+//! The inspector docked beside the board canvas: one form for the picked node, its fields in
+//! sections that are easy to extend (`NodeInspector.tsx`, `LoopForm`, `ProjectPicker`, the model
+//! picker). The workflow's own settings are the Settings mode of the page, not an inspector.
 use super::super::scheduler::{habit_field, habit_icon_button};
 use super::super::*;
 use super::Pick;
@@ -11,7 +12,8 @@ use gpui::{Div, FontWeight};
 use monocode_core::mono::workflows::{
     board_edit::*,
     model::{
-        InputType, InputValue, LoopSpec, Node, NodeKind, OutputFieldType, RequirementKind, Workflow,
+        InputType, InputValue, LoopSpec, Node, NodeKind, OutputFieldType, ReportTo,
+        RequirementKind, Workflow,
     },
     models::stored_model_id,
     ordered::js_number_text,
@@ -115,83 +117,72 @@ impl Monos {
         }
     }
 
+    /// The docked inspector: the form of the picked node, or a line saying to pick one.
     pub(super) fn board_inspector(
         &mut self,
         scope: &Scope,
-        view: InspectorView,
+        view: Option<InspectorView>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(b) = self.wf.board.as_ref() else {
-            return div().into_any_element();
+        let node = match (&view, self.wf.board.as_ref()) {
+            (Some(InspectorView::Node(id)), Some(b)) => {
+                b.current().node(id).cloned().map(|n| (b.current(), n))
+            }
+            _ => None,
         };
-        let w = b.current();
-        let (title, node) = match &view {
-            InspectorView::Settings => ("Workflow settings".to_string(), None),
-            InspectorView::Node(id) => match w.node(id) {
-                Some(n) => (node_label(&n.kind).to_string(), Some(n.clone())),
-                None => return div().into_any_element(),
-            },
-        };
+        let title = node.as_ref().map_or("Inspector".to_string(), |(_, n)| {
+            node_label(&n.kind).to_string()
+        });
         let mut header = div()
             .h(px(40.))
             .flex_shrink_0()
             .border_b_1()
             .border_color(content(0.1))
-            .pl_1p5()
-            .pr_3()
+            .pl_4()
+            .pr_2()
             .flex()
             .items_center()
             .gap_1()
             .child(
                 div()
-                    .id("wf-inspector-back")
-                    .debug_selector(|| "wf-inspector-back".into())
-                    .role(Role::Button)
-                    .aria_label("Back to board")
-                    .cursor_pointer()
-                    .h(px(24.))
-                    .pl_1()
-                    .pr_2()
-                    .rounded_md()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .text_size(px(12.))
-                    .text_color(content(0.6))
-                    .hover(|s| s.bg(content(0.05)).text_color(content(1.)))
-                    .child(icon("chevron-left", 14.))
-                    .child("Back to board")
-                    .on_click(cx.listener(|this, _, _, cx| this.board_view(None, cx))),
-            )
-            .child(
-                div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_right()
-                    .text_size(px(11.))
-                    .text_color(content(0.4))
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(content(0.7))
                     .child(title),
             );
-        let body = match &node {
-            None => self.board_settings(scope, &w, window, cx),
-            Some(n) => {
+        let body = match node {
+            None => div()
+                .id("wf-inspector-empty")
+                .debug_selector(|| "wf-inspector-empty".into())
+                .px_4()
+                .py_4()
+                .text_size(px(12.))
+                .line_height(px(18.))
+                .text_color(content(0.45))
+                .child("Pick a node on the canvas to set it up.")
+                .into_any_element(),
+            Some((w, n)) => {
                 let id = n.id.clone();
                 header = header.child(
                     icon_button("wf-inspector-delete", "Delete node", "trash")
                         .debug_selector(|| "wf-inspector-delete".into())
                         .on_click(cx.listener(move |this, _, _, cx| this.board_remove(&id, cx))),
                 );
-                self.board_node_body(scope, &w, n, window, cx)
+                self.board_node_body(scope, &w, &n, window, cx)
             }
         };
         div()
             .id("wf-inspector")
             .debug_selector(|| "wf-inspector".into())
-            .absolute()
-            .inset_0()
-            .occlude()
+            .w(px(super::layout::INSPECTOR_W))
+            .flex_shrink_0()
+            .h_full()
+            .border_l_1()
+            .border_color(content(0.1))
             .bg(floating_fill())
             .flex()
             .flex_col()
@@ -590,7 +581,7 @@ impl Monos {
                 .line_height(px(20.))
                 .text_color(content(0.55))
                 .child(
-                    "Starts when you use Run now, or when a Mono runs it. Values it needs are set under Workflow settings.",
+                    "Starts when you use Run now, or when a Mono runs it. Values it needs are set in the Settings mode.",
                 )
                 .into_any_element(),
             NodeKind::Session {
@@ -678,6 +669,7 @@ impl Monos {
                     cx,
                 );
                 let outputs = self.board_outputs(&id, output, window, cx);
+                let how = self.board_session_how(w, node, cx);
                 div()
                     .flex()
                     .flex_col()
@@ -691,6 +683,7 @@ impl Monos {
                             .child(nest_row)
                             .child(limit),
                     )
+                    .child(how)
                     .children(reuse.map(|r| div().px_2().child(r)))
                     .child(prompt_section)
                     .child(outputs)
@@ -1088,6 +1081,22 @@ impl Monos {
                     cx,
                 );
             }
+            BoardPick::DecisionEffort => self.board_meta_edit(
+                |m| {
+                    if let Some(model) = m.decision_model.as_mut() {
+                        model.effort = Some(v.clone());
+                    }
+                },
+                cx,
+            ),
+            BoardPick::ReportTo => self.board_meta_edit(
+                |m| {
+                    m.report_to = (!v.is_empty()).then(|| ReportTo {
+                        mono: Some(v.clone()),
+                    })
+                },
+                cx,
+            ),
             BoardPick::NewInputType => {
                 if let Some(b) = self.wf.board.as_mut() {
                     b.new_input_type = v;

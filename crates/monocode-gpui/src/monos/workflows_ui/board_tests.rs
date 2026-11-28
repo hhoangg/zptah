@@ -17,6 +17,7 @@ pub(super) fn ticket(extra: Value) -> Workflow {
         "name": "ClickUp -> Dev -> Review",
         "inputs": {"project": {"type": "project"}, "clickupList": {"type": "string"}},
         "inputValues": {"project": "/work/api", "clickupList": "Sprint"},
+        "ui": {"direction": "lr"},
     });
     for (key, value) in extra.as_object().unwrap() {
         if value.is_null() {
@@ -28,20 +29,20 @@ pub(super) fn ticket(extra: Value) -> Workflow {
     build(
         all,
         json!([
-            {"id": "start", "type": "schedule", "title": "Weekdays", "ui": {"x": 0, "y": 0},
+            {"id": "start", "type": "schedule", "title": "Weekdays", "ui": {"x": 16, "y": 50},
              "schedule": {"scheduleKind": "weekdays", "time": "09:00", "minute": 0, "dayOfWeek": 1}},
             {"id": "fetch", "type": "session", "title": "Fetch tickets", "project": "{{inputs.project}}",
              "model": "claude:sonnet-5", "checkout": "root", "output": {"tickets": {"type": "list"}},
-             "prompt": "List open tickets assigned to me in {{inputs.clickupList}}.", "ui": {"x": 0, "y": 90}},
+             "prompt": "List open tickets assigned to me in {{inputs.clickupList}}.", "ui": {"x": 336, "y": 42}},
             {"id": "each", "type": "forEach", "title": "Each ticket", "in": "{{fetch.tickets}}",
-             "as": "item", "maxParallel": 3, "ui": {"x": -16, "y": 190}},
+             "as": "item", "maxParallel": 3, "ui": {"x": 640, "y": 0}},
             {"id": "dev", "type": "session", "title": "Dev", "parent": "each", "project": "{{inputs.project}}",
-             "model": "claude:sonnet-5", "checkout": "newWorktree", "ui": {"x": 16, "y": 40},
+             "model": "claude:sonnet-5", "checkout": "newWorktree", "ui": {"x": 16, "y": 32},
              "prompt": "Implement {{item.title}}", "output": {"pr_url": {"type": "string"}, "count": {"type": "number"}}},
             {"id": "review", "type": "session", "title": "Review", "parent": "each", "project": "{{inputs.project}}",
-             "checkout": {"worktreeOf": "dev"}, "nestUnder": "dev", "ui": {"x": 16, "y": 130},
+             "checkout": {"worktreeOf": "dev"}, "nestUnder": "dev", "ui": {"x": 320, "y": 32},
              "prompt": "Review {{dev.pr_url}}.", "output": {"verdict": {"type": "string"}}},
-            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "title": "Report to Mono", "ui": {"x": 0, "y": 480}},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "title": "Report to Mono", "ui": {"x": 1324, "y": 42}},
         ]),
         json!([
             {"from": "start", "to": "fetch"}, {"from": "fetch", "to": "each"},
@@ -96,8 +97,17 @@ pub(super) fn type_in(s: &Setup, visual: &mut VisualTestContext, spec: BoardFiel
     });
 }
 
+/// Renames the workflow in its Settings mode (where the name field is), then goes back to the
+/// mode the page was in.
 pub(super) fn rename(s: &Setup, visual: &mut VisualTestContext, name: &str) {
+    let before = s.manager.read_with(visual, |m, _| m.wf_mode());
+    do_with(s, visual, |m, cx| {
+        m.wf_set_mode(super::layout::WfMode::Settings, cx)
+    });
+    settle(s, visual);
     type_in(s, visual, BoardField::Name, name);
+    do_with(s, visual, |m, cx| m.wf_set_mode(before, cx));
+    settle(s, visual);
 }
 
 pub(super) fn node_ids(s: &Setup, visual: &mut VisualTestContext) -> Vec<String> {
@@ -158,8 +168,8 @@ fn renders_one_card_per_workflow_node(cx: &mut TestAppContext) {
     ] {
         assert!(visual.debug_bounds(selector).is_some(), "{selector}");
     }
-    assert!(visual.debug_bounds("wf-board-name").is_some());
-    assert!(visual.debug_bounds("wf-board-add").is_some());
+    assert!(visual.debug_bounds("wf-switcher").is_some());
+    assert!(visual.debug_bounds("wf-add-session").is_some());
     assert!(visual.debug_bounds("wf-board-more").is_some());
 }
 
@@ -335,7 +345,7 @@ fn run_now_and_resume_in_the_menu_open_the_review_of_a_flagged_workflow(cx: &mut
         cx,
     );
     let visual = &mut visual;
-    do_with(&s, visual, |m, cx| m.board_run_now(cx));
+    click(visual, "mono-workflow-run");
     assert!(matches!(
         route(&s, visual),
         Some(WfRoute::Review(_, super::ReviewIntent::Run))
@@ -362,7 +372,7 @@ fn run_now_asks_for_a_run_of_a_saved_board_and_is_off_while_unsaved(cx: &mut Tes
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
-    do_with(&s, visual, |m, cx| m.board_run_now(cx));
+    click(visual, "mono-workflow-run");
     visual.run_until_parked();
     // The board has inputs, so the Run dialog confirms them first.
     assert!(s.manager.read_with(visual, |m, _| m.wf.gate.is_some()));
@@ -374,10 +384,16 @@ fn run_now_asks_for_a_run_of_a_saved_board_and_is_off_while_unsaved(cx: &mut Tes
         || !super::tests::history(&s, A).is_empty()
         || s.manager.read_with(visual, |m, _| m.workflow_running(A));
     assert!(asked);
-    // Once there is an edit, the menu says to save first.
+    // Once there is an edit, Run says to save first and starts nothing.
+    s.manager.update(visual, |m, cx| m.run_gate_close(cx));
     rename(&s, visual, "Edited");
-    click(visual, "wf-board-more");
-    assert!(s.manager.read_with(visual, |m, _| m.picker.is_some()));
+    click(visual, "mono-workflow-run");
+    assert!(s.manager.read_with(visual, |m, _| m.wf.gate.is_none()));
+    assert!(
+        page_notice(&s, visual)
+            .unwrap()
+            .contains("Save your changes")
+    );
 }
 
 #[gpui::test]
@@ -387,7 +403,7 @@ fn leaving_with_unsaved_changes_asks_to_save_or_discard(cx: &mut TestAppContext)
     let visual = &mut visual;
     // Nothing changed: Back just goes.
     click(visual, "mono-page-back");
-    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
+    assert_eq!(route(&s, visual), None);
     s.manager.update(visual, |m, cx| {
         m.open_workflow_route(WfRoute::Board(A.into()), cx)
     });
@@ -400,7 +416,7 @@ fn leaving_with_unsaved_changes_asks_to_save_or_discard(cx: &mut TestAppContext)
     assert!(visual.debug_bounds("wf-board-leave").is_none());
     click(visual, "mono-page-back");
     click(visual, "wf-board-discard");
-    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
+    assert_eq!(route(&s, visual), None);
     assert_eq!(stored_first(&s).name, "ClickUp -> Dev -> Review");
     assert!(s.manager.read_with(visual, |m, _| m.wf.board.is_none()));
 }
@@ -415,7 +431,7 @@ fn save_in_the_leave_dialog_saves_then_leaves(cx: &mut TestAppContext) {
     click(visual, "wf-board-leave-save");
     visual.run_until_parked();
     assert_eq!(stored_first(&s).name, "Changed");
-    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
+    assert_eq!(route(&s, visual), None);
 }
 
 #[gpui::test]
@@ -511,26 +527,27 @@ fn clicking_a_card_opens_the_inspector_and_back_to_board_closes_it(cx: &mut Test
         "Fetch everything",
     );
     assert!(can_save(&s, visual));
-    click(visual, "wf-inspector-back");
-    assert!(visual.debug_bounds("wf-inspector").is_none());
+    // The inspector is docked: a click on the empty canvas leaves it with nothing to show.
+    event(&s, visual, GraphEvent::PaneClick);
+    settle(&s, visual);
+    assert!(visual.debug_bounds("wf-inspector").is_some());
+    assert!(visual.debug_bounds("wf-inspector-empty").is_some());
 }
 
 #[gpui::test]
-fn the_add_menu_adds_a_node_and_opens_it(cx: &mut TestAppContext) {
+fn the_rail_adds_a_node_and_opens_it(cx: &mut TestAppContext) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
-    click(visual, "wf-board-add");
-    assert!(s.manager.read_with(visual, |m, _| m.picker.is_some()));
-    do_with(&s, visual, |m, cx| {
-        m.board_menu_picked("Add node", "command".into(), cx)
-    });
+    click(visual, "wf-add-command");
     assert_eq!(node_ids(&s, visual).len(), 7);
     assert!(can_save(&s, visual));
     assert!(matches!(
         on_board(&s, visual, |b| b.view.clone()),
         Some(InspectorView::Node(id)) if id.starts_with("command")
     ));
+    settle(&s, visual);
+    assert!(visual.debug_bounds("wf-inspector-title").is_some());
 }
 
 #[gpui::test]
@@ -682,7 +699,7 @@ fn saving_an_interval_schedule_anchors_it_and_leaves_the_board_clean(cx: &mut Te
     assert!(!can_save(&s, visual));
     click(visual, "mono-page-back");
     assert!(visual.debug_bounds("wf-board-leave").is_none());
-    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
+    assert_eq!(route(&s, visual), None);
 }
 
 #[gpui::test]

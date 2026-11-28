@@ -1459,7 +1459,7 @@ fn decision_model_and_summary_template_round_trip_through_the_file() {
     let mut w = example();
     w.decision_model = Some(DecisionModel {
         harness: "claude".into(),
-        model: "claude:opus-5".into(),
+        model: Some("claude:opus-5".into()),
         effort: Some("high".into()),
     });
     w.summary_template = Some("Done: {{fetch.tickets}}\nSecond line".into());
@@ -1484,6 +1484,22 @@ fn decision_model_and_summary_template_round_trip_through_the_file() {
 }
 
 #[test]
+fn a_harness_only_decision_model_round_trips_without_a_model_line() {
+    let mut w = example();
+    w.decision_model = Some(DecisionModel {
+        harness: "claude".into(),
+        model: None,
+        effort: None,
+    });
+    let yaml = export_workflow(&w);
+    assert!(
+        yaml.contains("decisionModel:\n  harness: claude\nnodes:"),
+        "{yaml}"
+    );
+    assert_eq!(ok(&yaml).workflow.decision_model, w.decision_model);
+}
+
+#[test]
 fn report_to_names_a_mono_of_this_computer_so_it_is_not_exported() {
     let mut w = example();
     w.report_to = Some(ReportTo {
@@ -1501,8 +1517,8 @@ fn a_decision_model_without_a_harness_or_model_is_an_import_error_and_so_is_a_no
     };
     for bad in [
         "decisionModel: claude\n",
-        "decisionModel:\n  harness: claude\n",
         "decisionModel:\n  model: x\n",
+        "decisionModel:\n  harness: claude\n  model: 3\n",
         "decisionModel:\n  harness: claude\n  model: x\n  effort: 3\n",
     ] {
         assert!(error(&file(bad)).contains("decisionModel"), "{bad}");

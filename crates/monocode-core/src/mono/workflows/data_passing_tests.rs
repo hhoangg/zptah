@@ -458,3 +458,24 @@ fn a_workflow_written_with_the_old_output_key_still_parses_and_is_written_as_out
     assert!(written["nodes"][1].get("outputs").is_some(), "{written}");
     assert!(written["nodes"][1].get("output").is_none(), "{written}");
 }
+
+#[test]
+fn terminal_problems_lists_every_reason_a_terminal_step_cannot_run() {
+    use super::validate::terminal_problems;
+    assert_eq!(
+        terminal_problems(Some("/work/app"), None, None, false, false),
+        Vec::<String>::new()
+    );
+    let all = terminal_problems(
+        Some("remote://env/workspaces/app"),
+        Some("codex"),
+        None,
+        true,
+        true,
+    );
+    assert_eq!(all.len(), 4, "{all:?}");
+    assert!(all[0].contains("cloud target"));
+    assert!(all[1].contains("another machine"));
+    assert!(all[2].contains("Windows"));
+    assert!(all[3].contains("runs Claude only"));
+}

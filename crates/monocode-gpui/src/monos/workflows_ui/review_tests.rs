@@ -4,7 +4,11 @@ use super::tests::*;
 use super::*;
 use crate::monos::tests::{Setup, setup};
 use gpui::{TestAppContext, VisualTestContext};
-use monocode_core::mono::workflows::model::{NodeKind, Workflow};
+use monocode_core::mono::workflows::{
+    model::{NodeKind, Workflow},
+    ordered::Json,
+    parse::parse_node,
+};
 use serde_json::{Value, json};
 
 // ---- WorkflowReviewPage.test.ts -----------------------------------------------------------
@@ -531,11 +535,34 @@ fn the_review_lists_the_decision_model_and_where_the_summary_goes(cx: &mut TestA
     );
     let preview = review_preview(&s, visual).unwrap();
     assert!(preview.prompts.iter().any(|p| p.text == "Done: {{run.id}}"));
+    // No step of this workflow asks the AI to decide: the model line is left out.
     let (decisions, to) = super::review::summary_and_decisions_text(&w, Some("Ada"));
-    assert_eq!(decisions, "claude claude-opus-5 (high)");
-    assert_eq!(to, "The run page and Mono Ada");
+    assert_eq!(decisions, None);
+    assert_eq!(
+        to,
+        "The run page, a notification, Mono Ada and the Mono that starts the run"
+    );
     let plain = flagged(json!({}));
     let (decisions, to) = super::review::summary_and_decisions_text(&plain, None);
-    assert_eq!(decisions, "The model of the step before it");
-    assert_eq!(to, "The run page");
+    assert_eq!(decisions, None);
+    assert_eq!(
+        to,
+        "The run page, a notification and the Mono that starts the run"
+    );
+    // With an AI decision the model line is there: the named model, else the step before it.
+    let mut deciding = w.clone();
+    deciding.nodes.push(
+        parse_node(&Json::from(
+            &json!({"id": "ask", "type": "if", "decide": "ai", "question": "Is it fine?"}),
+        ))
+        .unwrap(),
+    );
+    let (decisions, _) = super::review::summary_and_decisions_text(&deciding, None);
+    assert_eq!(decisions.as_deref(), Some("claude claude-opus-5 (high)"));
+    deciding.decision_model = None;
+    let (decisions, _) = super::review::summary_and_decisions_text(&deciding, None);
+    assert_eq!(
+        decisions.as_deref(),
+        Some("The model of the step before it")
+    );
 }

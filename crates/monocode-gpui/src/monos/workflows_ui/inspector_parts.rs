@@ -8,20 +8,167 @@ use super::page::{basename, value_text};
 use super::view::{hint, property, section};
 use crate::pickers::{ModelList, ModelPicked, cached_model_name};
 use crate::popover::Align;
-use gpui::Div;
+use gpui::{Div, Stateful};
 use monocode_core::mono::workflows::{
     board_edit::*,
     model::{
-        InputType, InputValue, Node, NodeKind, OutputField, OutputFieldType, Workflow,
-        WorkflowInput,
+        DecisionModel, InputType, InputValue, Node, NodeKind, OutputField, OutputFieldType,
+        SessionMode, Workflow, WorkflowInput,
     },
     models::{model_efforts, session_node_problem, stored_model_id},
+    output::session_builtins,
     report::field_in_report,
+    validate::terminal_problems,
 };
+use monocode_core::provider::Kind;
+use monocode_core::store::native_model;
 
 use super::inspector::*;
 
 impl Monos {
+    // ---- how a session step runs ------------------------------------------------------------------
+
+    /// The `surface` (chat or terminal) and `mode` (auto or wait for me) of a session step, and
+    /// the built-in outputs it gets. Terminal is dimmed, with the reason under the control, when
+    /// the step cannot run in the provider's own CLI.
+    pub(super) fn board_session_how(
+        &mut self,
+        w: &Workflow,
+        node: &Node,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let id = node.id.clone();
+        let NodeKind::Session {
+            harness,
+            model,
+            target,
+            ..
+        } = &node.kind
+        else {
+            return div();
+        };
+        let surface = node.kind.session_surface();
+        let mode = node.kind.session_mode();
+        let cloud = target.is_some();
+        let project = project_path(w, node);
+        let mut problems = terminal_problems(
+            project.as_deref(),
+            harness.as_deref(),
+            model.as_deref(),
+            cloud,
+            cfg!(windows),
+        );
+        // The harness the model rows show counts too: a step that names none runs on it.
+        let shown = self.board_model_state(node, cx).kind;
+        if harness.as_deref().is_none_or(str::is_empty)
+            && model.as_deref().is_none_or(str::is_empty)
+            && shown != Kind::Claude
+        {
+            problems.push(format!(
+                "A terminal step runs Claude only, but this step uses {}",
+                shown.label()
+            ));
+        }
+        let reason = problems.into_iter().next();
+        let blocked: &[&str] = if reason.is_some() { &["terminal"] } else { &[] };
+        let surface_id = id.clone();
+        let surface_control = crate::segmented::segmented_with(
+            "segmented",
+            "wf-surface",
+            "How the step runs",
+            if surface.is_terminal() {
+                "terminal"
+            } else {
+                "chat"
+            },
+            &[("chat", "Chat"), ("terminal", "Terminal")],
+            blocked,
+            cx,
+            move |this: &mut Self, picked, cx| {
+                this.board_node_edit(
+                    &surface_id,
+                    |n| {
+                        if let NodeKind::Session { surface, .. } = &mut n.kind {
+                            *surface = (picked == "terminal").then(|| "terminal".to_string());
+                        }
+                    },
+                    cx,
+                )
+            },
+        );
+        let mode_id = id.clone();
+        let mode_control = crate::segmented::segmented(
+            "segmented",
+            "wf-mode-of-step",
+            "When the step ends",
+            if mode == SessionMode::WaitForMe {
+                "waitForMe"
+            } else {
+                "auto"
+            },
+            &[("auto", "Auto"), ("waitForMe", "Wait for me")],
+            cx,
+            move |this: &mut Self, picked, cx| {
+                this.board_node_edit(
+                    &mode_id,
+                    |n| {
+                        if let NodeKind::Session { mode, .. } = &mut n.kind {
+                            *mode = (picked == "waitForMe").then(|| "waitForMe".to_string());
+                        }
+                    },
+                    cx,
+                )
+            },
+        );
+        let builtins = session_builtins(surface, cloud).join(", ");
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .px_4()
+                    .pt_3()
+                    .flex()
+                    .flex_col()
+                    .gap_1p5()
+                    .child(property("Opens as", surface_control))
+                    .when_some(reason, |d, reason| {
+                        d.child(
+                            div()
+                                .id("wf-surface-reason")
+                                .debug_selector(|| "wf-surface-reason".into())
+                                .text_size(px(11.))
+                                .line_height(px(16.))
+                                .text_color(content(0.45))
+                                .child(format!("Terminal is not available: {reason}")),
+                        )
+                    })
+                    .child(property("Ends", mode_control))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .text_color(content(0.35))
+                            .child(if mode == SessionMode::WaitForMe {
+                                "After the first turn you chat on in the session, then press Continue or Fail step."
+                            } else {
+                                "The step ends when the first turn ends."
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .id("wf-builtin-outputs")
+                    .debug_selector(|| "wf-builtin-outputs".into())
+                    .px_4()
+                    .pt_2()
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(content(0.35))
+                    .child(format!("Built-in outputs: {builtins}")),
+            )
+    }
+
     // ---- the model ------------------------------------------------------------------------------
 
     pub(super) fn board_model_rows(
@@ -197,15 +344,40 @@ impl Monos {
             return;
         };
         let state = self.board_model_state(&step, cx);
-        let project = self.wf.scope.project.clone();
-        let list = cx.new(|cx| {
-            ModelList::new_for(state.kind, state.native, &project, Default::default(), cx)
-        });
-        let focus = list.read(cx).search_focus(cx);
         let id = node.to_string();
-        let picked = cx.subscribe(&list, move |this, _, picked: &ModelPicked, cx| {
+        let anchor = self
+            .wf
+            .board
+            .as_ref()
+            .map(|b| b.model_anchor.clone())
+            .unwrap_or_default();
+        self.open_model_list(
+            state.kind,
+            state.native,
+            anchor,
+            move |this, kind, native, cx| this.board_model_picked(&id, kind, native, cx),
+            window,
+            cx,
+        );
+    }
+
+    /// The model list as a flyout under `anchor`; `picked` hears the harness and model chosen.
+    pub(super) fn open_model_list(
+        &mut self,
+        kind: monocode_core::provider::Kind,
+        native: Option<String>,
+        anchor: AnchorSlot,
+        picked: impl Fn(&mut Self, monocode_core::provider::Kind, Option<String>, &mut Context<Self>)
+        + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let project = self.wf.scope.project.clone();
+        let list = cx.new(|cx| ModelList::new_for(kind, native, &project, Default::default(), cx));
+        let focus = list.read(cx).search_focus(cx);
+        let chosen = cx.subscribe(&list, move |this, _, event: &ModelPicked, cx| {
             this.picker = None;
-            this.board_model_picked(&id, picked.0, picked.1.clone(), cx);
+            picked(this, event.0, event.1.clone(), cx);
         });
         let menu = cx.new(|cx| {
             Menu::new(
@@ -220,18 +392,12 @@ impl Monos {
             this.picker = None;
             cx.notify();
         });
-        let anchor = self
-            .wf
-            .board
-            .as_ref()
-            .map(|b| b.model_anchor.clone())
-            .unwrap_or_default();
         self.picker = Some(OpenPicker {
             menu,
             anchor: Anchor::Slot(anchor),
             width: 400.,
             align: Align::Start,
-            _events: vec![picked, closed],
+            _events: vec![chosen, closed],
         });
         cx.notify();
     }
@@ -555,6 +721,8 @@ impl Monos {
 
     // ---- the settings -----------------------------------------------------------------------------
 
+    /// The Settings mode: name, description, inputs, requirements, and how AI decisions and the
+    /// run summary work.
     pub(super) fn board_settings(
         &mut self,
         scope: &Scope,
@@ -562,14 +730,22 @@ impl Monos {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let enabled = w.enabled;
-        let switch = self.switch_row(
-            "wf-settings-enabled",
-            "Enabled",
-            "Runs on its trigger. Every problem has to be fixed first",
-            enabled,
-            move |this, cx| this.board_meta_edit(|m| m.enabled = !enabled, cx),
+        let name_field = self.board_field(
+            BoardField::Name,
+            "Workflow name",
+            "Name",
+            &w.name,
+            false,
+            Some(80),
+            window,
             cx,
+        );
+        let name = section("Name", None).child(
+            habit_field(name_field)
+                .id("wf-board-name")
+                .debug_selector(|| "wf-board-name".into())
+                .h(px(28.))
+                .bg(content(0.1)),
         );
         let description = self.long_text(
             "What it does",
@@ -632,14 +808,240 @@ impl Monos {
         }
         inputs = inputs.child(self.board_add_input_row(w, window, cx));
         let requires = self.board_requires_section(w, window, cx);
+        let decisions = self.board_decisions_section(w, cx);
+        let summary = self.board_summary_section(w, window, cx);
         div()
             .flex()
             .flex_col()
-            .child(div().px_2().pt_1().child(switch))
+            .child(name)
             .child(description)
             .child(inputs)
             .child(requires)
+            .child(decisions)
+            .child(summary)
             .into_any_element()
+    }
+
+    /// The model that answers the workflow's AI decisions (an If, a Switch or a loop the AI
+    /// decides). Without one the decision uses the model of the step before it.
+    fn board_decisions_section(&mut self, w: &Workflow, cx: &mut Context<Self>) -> Stateful<Div> {
+        let mono_kind = self.board_mono_kind(cx);
+        let Some(b) = self.wf.board.as_ref() else {
+            return section("AI decisions", None).id("wf-decisions");
+        };
+        let anchor = b.decision_anchor.clone();
+        let model = w.decision_model.clone();
+        let kind = model
+            .as_ref()
+            .and_then(|m| Kind::parse(&m.harness))
+            .or(mono_kind)
+            .unwrap_or(Kind::Claude);
+        let native = model
+            .as_ref()
+            .and_then(|m| native_model(m.model.as_deref()?, kind.id()));
+        let efforts = model
+            .as_ref()
+            .and_then(|m| model_efforts(&b.catalog, kind.id(), m.model.as_deref()?))
+            .unwrap_or_default();
+        let label = match &model {
+            Some(_) => cached_model_name(kind, native.as_deref()),
+            None => "The model of the step before it".into(),
+        };
+        let picker = div()
+            .id("wf-decision-model")
+            .debug_selector(|| "wf-decision-model".into())
+            .role(Role::Button)
+            .aria_label(format!("Decision model: {label}"))
+            .relative()
+            .cursor_pointer()
+            .h(px(28.))
+            .max_w_full()
+            .px_2()
+            .rounded_md()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .text_size(px(12.))
+            .hover(|s| s.bg(content(0.08)))
+            .child(div().absolute().size_full().child(anchor.probe()))
+            .when(model.is_some(), |d| d.child(provider_icon(kind.id(), 14.)))
+            .child(div().min_w_0().truncate().child(label))
+            .child(icon("chevron-down", 12.))
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.board_open_decision_picker(window, cx)),
+            );
+        let under = if model.is_none() {
+            div()
+                .pb_0p5()
+                .text_size(px(11.))
+                .text_color(content(0.35))
+                .child("Used when an AI decides")
+                .into_any_element()
+        } else {
+            div()
+                .id("wf-decision-default")
+                .debug_selector(|| "wf-decision-default".into())
+                .role(Role::Button)
+                .aria_label("Use the model of the step before it")
+                .cursor_pointer()
+                .rounded_sm()
+                .px_1p5()
+                .py_0p5()
+                .text_size(px(11.))
+                .text_color(content(0.55))
+                .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                .child("Use the model of the step before it")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.board_meta_edit(|m| m.decision_model = None, cx)
+                }))
+                .into_any_element()
+        };
+        let mut block = section("AI decisions", None)
+            .id("wf-decisions")
+            .debug_selector(|| "wf-decisions".into())
+            .child(
+                div().px_2().flex().flex_col().gap_0p5().child(property(
+                    "Model",
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_start()
+                        .child(picker)
+                        .child(under),
+                )),
+            );
+        if let Some(model) = &model
+            && !efforts.is_empty()
+        {
+            let current = model.effort.clone().unwrap_or_default();
+            let options: Vec<(String, String)> = efforts
+                .iter()
+                .map(|e| (e.clone(), effort_name(e)))
+                .collect();
+            let selected = if current.is_empty() {
+                "Default".to_string()
+            } else {
+                effort_name(&current)
+            };
+            block = block.child(div().px_2().child(self.pick_row(
+                "Effort",
+                BoardPick::DecisionEffort,
+                &selected,
+                options,
+                &current,
+                cx,
+            )));
+        }
+        block
+    }
+
+    /// The decision model picker answered: the workflow names its harness and model, as the file
+    /// stores them. A new model has its own effort levels, so the old choice does not carry over.
+    pub(super) fn board_decision_picked(
+        &mut self,
+        kind: Kind,
+        native: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        // A harness's own default has no id to store: the file keeps only the harness, and the
+        // run asks that harness's default model.
+        let model = stored_model_id(kind, native.as_deref());
+        self.board_meta_edit(
+            |m| {
+                m.decision_model = Some(DecisionModel {
+                    harness: kind.id().to_string(),
+                    model,
+                    effort: None,
+                })
+            },
+            cx,
+        );
+    }
+
+    fn board_open_decision_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(b) = self.wf.board.as_ref() else {
+            return;
+        };
+        let anchor = b.decision_anchor.clone();
+        let model = b.meta.decision_model.clone();
+        let kind = model
+            .as_ref()
+            .and_then(|m| Kind::parse(&m.harness))
+            .or(self.board_mono_kind(cx))
+            .unwrap_or(Kind::Claude);
+        let native = model
+            .as_ref()
+            .and_then(|m| native_model(m.model.as_deref()?, kind.id()));
+        self.open_model_list(
+            kind,
+            native,
+            anchor,
+            |this, kind, native, cx| this.board_decision_picked(kind, native, cx),
+            window,
+            cx,
+        );
+    }
+
+    /// Who is told when a run ends, and what the summary says: the Mono it is sent to besides
+    /// the run page, and a template for its text.
+    fn board_summary_section(
+        &mut self,
+        w: &Workflow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let current = w
+            .report_to
+            .as_ref()
+            .and_then(|r| r.mono.clone())
+            .unwrap_or_default();
+        let mut options: Vec<(String, String)> = vec![(String::new(), "No one".into())];
+        options.extend(
+            self.roster
+                .monos
+                .iter()
+                .map(|mono| (mono.id.clone(), mono.label())),
+        );
+        // A Mono that is gone stays choosable, so the value is not hidden.
+        if !current.is_empty() && !options.iter().any(|(id, _)| *id == current) {
+            options.push((current.clone(), current.clone()));
+        }
+        let report = self.choice_row("Send to", BoardPick::ReportTo, options, &current, cx);
+        let template = self.long_text(
+            "Summary template",
+            BoardField::SummaryTemplate,
+            w.summary_template.as_deref().unwrap_or(""),
+            "Leave empty for the usual summary. Use {{run.status}}, {{run.name}} and {{<step>.<field>}}.",
+            window,
+            cx,
+        );
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                section("Run summary", None)
+                    .id("wf-summary")
+                    .debug_selector(|| "wf-summary".into())
+                    .child(
+                        div()
+                            .px_2()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .pb_1()
+                                    .text_size(px(11.))
+                                    .line_height(px(16.))
+                                    .text_color(content(0.35))
+                                    .child(
+                                        "Every run ends with a summary on its page and in a notification. It also goes to the Mono that started the run.",
+                                    ),
+                            )
+                            .child(report),
+                    ),
+            )
+            .child(template)
     }
 
     /// What the workflow needs on a machine before it can run: commands, environment variables and

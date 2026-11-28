@@ -2797,8 +2797,8 @@ fn add_and_update_take_a_decision_model_and_a_summary_template_and_keep_them_whe
     assert!(list(&created, "issues").is_empty(), "{}", joined(&created));
     let stored = f.stored()[0].clone();
     assert_eq!(
-        stored.decision_model.as_ref().unwrap().model,
-        "claude:sonnet-5"
+        stored.decision_model.as_ref().unwrap().model.as_deref(),
+        Some("claude:sonnet-5")
     );
     assert_eq!(
         stored.summary_template.as_deref(),
@@ -2819,10 +2819,15 @@ fn add_and_update_take_a_decision_model_and_a_summary_template_and_keep_them_whe
     );
     assert_eq!(f.stored()[0].summary_template.as_deref(), Some("New"));
     assert_eq!(f.stored()[0].decision_model, stored.decision_model);
-    // A decision model needs a harness and a model; a summary a non-blank text.
+    // A decision model needs a harness; a summary a non-blank text.
     let e = f.err(
         "workflows.add",
-        json!({"workflow": definition(json!({"decisionModel": {"harness": "claude"}}))}),
+        json!({"workflow": definition(json!({"decisionModel": {"model": "claude:sonnet-5"}}))}),
+    );
+    assert!(e.contains("workflow.decisionModel must be"), "{e}");
+    let e = f.err(
+        "workflows.add",
+        json!({"workflow": definition(json!({"decisionModel": {"harness": "claude", "model": 3}}))}),
     );
     assert!(e.contains("workflow.decisionModel must be"), "{e}");
     let e = f.err(

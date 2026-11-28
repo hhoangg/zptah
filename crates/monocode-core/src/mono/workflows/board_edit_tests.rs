@@ -37,11 +37,119 @@ fn selected(flow: &Flow, id: &str) -> Flow {
     select(flow, Some(id), None)
 }
 
+mod trigger_edges {
+    use super::*;
+
+    #[test]
+    fn selecting_the_edge_from_the_trigger_frame_selects_every_trigger_edge_to_the_step() {
+        let (flow, current) = board(&workflow());
+        let (flow, id) = add_node(&flow, &current, NodeType::Schedule);
+        assert!(has_edge(&flow, "start", "report"));
+        assert!(has_edge(&flow, &id, "report"));
+        let edge = flow
+            .edges
+            .iter()
+            .find(|e| e.source == "start" && e.target == "report")
+            .unwrap()
+            .id
+            .clone();
+        let picked = select(&flow, None, Some(&edge));
+        let chosen: Vec<&FlowEdge> = picked.edges.iter().filter(|e| e.selected).collect();
+        assert_eq!(chosen.len(), 2);
+        assert!(chosen.iter().all(|e| e.target == "report"));
+        // Deleting takes both, and nothing else.
+        let after = delete_selected(&picked);
+        assert!(!has_edge(&after, "start", "report"));
+        assert!(!has_edge(&after, &id, "report"));
+        assert_eq!(after.nodes.len(), flow.nodes.len());
+    }
+
+    #[test]
+    fn an_edge_only_some_triggers_share_is_selected_alone_and_the_helper_agrees() {
+        let (flow, current) = board(&workflow());
+        let (flow, id) = add_node(&flow, &current, NodeType::Schedule);
+        // Only the new trigger leads to "extra"; "start" does not.
+        let mut flow = flow;
+        let source_edge = flow
+            .edges
+            .iter()
+            .find(|e| e.source == id && e.target == "report")
+            .unwrap()
+            .clone();
+        let mut own = source_edge.clone();
+        own.id = "own-edge".into();
+        own.target = "start".into();
+        flow.edges.push(own);
+        assert!(shared_by_all_triggers(&flow.nodes, &flow.edges, "report"));
+        assert!(!shared_by_all_triggers(&flow.nodes, &flow.edges, "start"));
+        let picked = select(&flow, None, Some("own-edge"));
+        let chosen: Vec<&str> = picked
+            .edges
+            .iter()
+            .filter(|e| e.selected)
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(chosen, ["own-edge"]);
+    }
+
+    #[test]
+    fn an_edge_that_does_not_leave_a_trigger_is_selected_alone() {
+        let (flow, _) = board(&ticket_workflow());
+        let inner = flow
+            .edges
+            .iter()
+            .find(|e| e.source == "fetch")
+            .unwrap()
+            .id
+            .clone();
+        let picked = select(&flow, None, Some(&inner));
+        assert_eq!(picked.edges.iter().filter(|e| e.selected).count(), 1);
+    }
+}
+
+mod tidy_action {
+    use super::*;
+
+    #[test]
+    fn lays_the_whole_board_out_again_and_keeps_the_selection() {
+        let (flow, current) = board(&ticket_workflow());
+        // The user dragged things about.
+        let mut messy = flow.clone();
+        for n in &mut messy.nodes {
+            if n.id == "fetch" {
+                n.position = Point { x: 50.0, y: 700.0 };
+                n.selected = true;
+            }
+            if n.id == "report" {
+                n.position = Point { x: 3.0, y: 9.0 };
+            }
+        }
+        let out = tidy(&messy, &current);
+        let neat = to_flow(&ticket_workflow());
+        for n in &neat.nodes {
+            assert_eq!(node(&out, &n.id).position, n.position, "{}", n.id);
+        }
+        assert!(node(&out, "fetch").selected);
+        assert!(!node(&out, "report").selected);
+        assert_eq!(out.edges.len(), flow.edges.len());
+        // A second tidy changes nothing.
+        assert_eq!(tidy(&out, &current).nodes, out.nodes);
+    }
+
+    #[test]
+    fn what_it_makes_saves_as_a_left_to_right_workflow() {
+        let (flow, current) = board(&ticket_workflow());
+        let out = tidy(&flow, &current);
+        let saved = from_flow(&current, &out.nodes, &out.edges);
+        assert!(saved.is_lr());
+    }
+}
+
 mod add {
     use super::*;
 
     #[test]
-    fn a_command_goes_under_the_lowest_node_and_is_wired_after_it() {
+    fn a_command_goes_after_the_rightmost_node_and_is_wired_after_it() {
         let mut w = ticket_workflow();
         w.nodes
             .retain(|n| !matches!(n.id.as_str(), "each" | "dev" | "review"));
@@ -52,21 +160,29 @@ mod add {
         let (flow, current) = board(&w);
         let (out, id) = add_node(&flow, &current, NodeType::Command);
         assert_eq!(id, "command");
-        // `report` hangs lowest and leads nowhere, so the command follows it.
+        // `report` sits furthest right and leads nowhere, so the command follows it.
         assert!(has_edge(&out, "report", "command"));
         assert!(!has_edge(&out, "fetch", "command"));
-        assert!(node(&out, "command").position.y > node(&out, "report").position.y);
+        let report = node(&out, "report").position;
+        assert_eq!(
+            node(&out, "command").position,
+            Point {
+                x: report.x + NODE_W + GAP_X,
+                y: report.y
+            }
+        );
         assert!(node(&out, "command").selected);
     }
 
     #[test]
-    fn a_for_each_goes_below_the_last_node_with_room_for_its_frame() {
+    fn a_for_each_goes_after_the_last_node_with_room_for_its_frame() {
         let (flow, current) = board(&workflow());
         let (out, id) = add_node(&flow, &current, NodeType::ForEach);
         let each = node(&out, &id);
         assert_eq!(each.kind, FlowKind::Group);
         assert_eq!(each.height, EMPTY_GROUP_H);
-        assert!(each.position.y >= node(&out, "report").position.y + NODE_H);
+        assert_eq!(each.width, EMPTY_GROUP_W);
+        assert!(each.position.x >= node(&out, "report").position.x + NODE_W + GAP_X);
         assert!(has_edge(&out, "report", &id));
     }
 
@@ -100,14 +216,64 @@ mod add {
     }
 
     #[test]
-    fn a_trigger_goes_above_everything() {
+    fn a_trigger_added_to_nodes_at_x_zero_sits_clear_of_the_first_column() {
+        let mut w = workflow();
+        w.ui = Some(WorkflowUi::lr());
+        w.nodes.retain(|n| !n.is_trigger());
+        w.edges.clear();
+        w.nodes.push(n(
+            json!({"id": "first", "type": "command", "project": "x", "command": "ls", "ui": {"x": 0, "y": 0}}),
+        ));
+        w.nodes
+            .iter_mut()
+            .for_each(|n| n.ui = Some(Ui { x: 0.0, y: 0.0 }));
+        let (flow, current) = board(&w);
+        let (out, id) = add_node(&flow, &current, NodeType::Manual);
+        let (frame, size) = trigger_frame(&out.nodes).expect("a frame");
+        let first = node(&out, "first").position;
+        assert!(
+            frame.x + size.width + GAP_X <= first.x + 0.01,
+            "{frame:?} {first:?}"
+        );
+        assert!(node(&out, &id).position.x + NODE_W < first.x);
+    }
+
+    #[test]
+    fn a_trigger_joins_the_trigger_column_under_the_others() {
+        let (flow, current) = board(&workflow());
+        let (out, id) = add_node(&flow, &current, NodeType::Schedule);
+        let first = node(&out, "start").position;
+        assert_eq!(
+            node(&out, &id).position,
+            Point {
+                x: first.x,
+                y: first.y + NODE_H + TRIGGER_GAP
+            }
+        );
+        // The frame grew to hold both, and nothing else moved.
+        let (_, size) = trigger_frame(&out.nodes).unwrap();
+        assert_eq!(size, trigger_frame_size(2));
+        assert_eq!(
+            node(&out, "report").position,
+            node(&flow, "report").position
+        );
+    }
+
+    #[test]
+    fn a_trigger_added_to_a_board_with_none_goes_before_everything() {
         let mut w = workflow();
         w.nodes.retain(|n| n.id != "start");
         w.edges.clear();
         let (flow, current) = board(&w);
-        let top = flow.nodes.iter().map(|n| n.position.y).fold(0., f32::min);
+        let left = flow
+            .nodes
+            .iter()
+            .map(|n| n.position.x)
+            .fold(f32::MAX, f32::min);
         let (out, id) = add_node(&flow, &current, NodeType::Schedule);
-        assert!(node(&out, &id).position.y < top);
+        let (frame, size) = trigger_frame(&out.nodes).unwrap();
+        assert!(frame.x + size.width + GAP_X <= left);
+        assert_eq!(node(&out, &id).position.x, frame.x + GROUP_PAD);
     }
 
     #[test]
@@ -381,6 +547,20 @@ mod dragging {
         let out = drag_stop(&flow, "fetch");
         assert_eq!(out.edges, flow.edges);
         assert_eq!(node(&out, "fetch").parent_id, None);
+    }
+
+    #[test]
+    fn a_trigger_dragged_away_goes_back_to_its_slot() {
+        let mut w = ticket_workflow();
+        w.nodes.insert(
+            1,
+            n(json!({"id": "second", "type": "manual", "ui": {"x": 900, "y": 900}})),
+        );
+        let (flow, _) = board(&w);
+        let home = node(&flow, "second").position;
+        let out = drag_stop(&moved(&flow, "second", 700., 500.), "second");
+        assert_eq!(node(&out, "second").position, home);
+        assert_eq!(node(&out, "start").position, node(&flow, "start").position);
     }
 
     #[test]
@@ -1181,6 +1361,45 @@ mod switch {
         assert!(
             matches!(&by_value.kind, NodeKind::Switch { cases, .. } if cases == &["bug", "feature"])
         );
+    }
+
+    #[test]
+    fn a_switch_card_grows_with_its_cases_so_its_outs_keep_an_ifs_spacing() {
+        // An If puts its two outs 44% of a card apart.
+        let if_gap = NODE_H * (0.72 - 0.28);
+        let (mut flow, _) = board(&routed());
+        let mut last = node(&flow, "route").height;
+        // Two cases and the default are three outs: more than an If's two need.
+        assert!(last > NODE_H, "{last}");
+        for k in 0..6 {
+            flow = add_switch_case(&flow, "route", &format!("extra{k}"));
+            let height = node(&flow, "route").height;
+            assert!(height >= last, "{height} < {last}");
+            let outs = out_handles(&node(&flow, "route").data.node).len() as f32;
+            // The first and last outs sit 12% and 88% of the way down, the rest between.
+            let spacing = (0.88 - 0.12) * height / (outs - 1.0);
+            assert!(
+                spacing + 0.01 >= if_gap,
+                "{outs} outs: {spacing} < {if_gap}"
+            );
+            last = height;
+        }
+        // A Switch with one case has two outs, like an If, and keeps the plain card.
+        let one = remove_switch_case(
+            &remove_switch_case(&flow, "route", "bug"),
+            "route",
+            "feature",
+        );
+        let mut small = one.clone();
+        for k in 0..5 {
+            small = remove_switch_case(&small, "route", &format!("extra{k}"));
+        }
+        assert_eq!(node(&small, "route").height, NODE_H);
+        // Removing a case makes the card shorter again, and a fresh layout agrees.
+        let fewer = remove_switch_case(&flow, "route", "extra5");
+        assert!(node(&fewer, "route").height < last);
+        let w = from_flow(&routed(), &flow.nodes, &flow.edges);
+        assert_eq!(node(&to_flow(&w), "route").height, last);
     }
 
     #[test]

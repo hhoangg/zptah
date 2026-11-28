@@ -436,7 +436,7 @@ fn the_workflow_page_lists_each_missing_requirement_with_its_hint(cx: &mut TestA
 
 fn settings(s: &Setup, visual: &mut VisualTestContext) {
     do_with(s, visual, |m, cx| {
-        m.board_view(Some(super::board::InspectorView::Settings), cx)
+        m.wf_set_mode(super::layout::WfMode::Settings, cx)
     });
     settle(s, visual);
 }

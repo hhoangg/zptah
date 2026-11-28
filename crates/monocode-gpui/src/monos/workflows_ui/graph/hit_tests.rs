@@ -4,7 +4,7 @@ use super::geometry::{Rect, Seg};
 use super::hit::*;
 use super::scene::{RoutedEdge, Scene, SceneNode};
 use monocode_core::mono::workflows::{
-    board_model::{GROUP_HEADER, GROUP_PAD, NODE_H, NODE_W, Point, to_flow},
+    board_model::{GROUP_HEADER, NODE_H, NODE_W, Point, to_flow},
     model::Workflow,
     ordered::Json,
     parse::parse_workflow,
@@ -15,25 +15,26 @@ fn workflow(nodes: Value, edges: Value) -> Workflow {
     parse_workflow(&Json::from(&json!({
         "id": "wf-aaaaaaaa", "name": "Nightly checks", "inputs": {}, "inputValues": {},
         "nodes": nodes, "edges": edges, "enabled": true, "createdAt": 1,
+        "ui": {"direction": "lr"},
     })))
     .expect("a workflow")
 }
 
-fn session(id: &str, y: f64) -> Value {
+fn session(id: &str, x: f64, y: f64) -> Value {
     json!({"id": id, "type": "session", "project": "{{inputs.project}}", "prompt": "Do it",
-           "checkout": "root", "output": {}, "ui": {"x": 0, "y": y}})
+           "checkout": "root", "output": {}, "ui": {"x": x, "y": y}})
 }
 
 fn scene() -> Scene {
     let w = workflow(
         json!([
-            {"id": "start", "type": "manual", "ui": {"x": 0, "y": 0}},
-            session("a", 100.),
-            {"id": "check", "type": "if", "decide": "ai", "ui": {"x": 0, "y": 200}},
-            {"id": "each", "type": "forEach", "in": "{{a.list}}", "ui": {"x": 400, "y": 0}},
-            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "ui": {"x": 0, "y": 300}},
+            {"id": "start", "type": "manual"},
+            session("a", 336., 100.),
+            {"id": "check", "type": "if", "decide": "ai", "ui": {"x": 736, "y": 100}},
+            {"id": "each", "type": "forEach", "in": "{{a.list}}", "ui": {"x": 336, "y": 400}},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "ui": {"x": 1100, "y": 100}},
             {"id": "route", "type": "switch", "value": "{{a.kind}}",
-             "cases": ["bug", "feature", "chore"], "ui": {"x": 800, "y": 0}},
+             "cases": ["bug", "feature", "chore"], "ui": {"x": 736, "y": 400}},
         ]),
         json!([
             {"from": "start", "to": "a"}, {"from": "a", "to": "check"},
@@ -81,22 +82,32 @@ fn an_if_leaves_by_true_and_false_and_cannot_start_a_loop() {
 }
 
 #[test]
-fn a_switch_leaves_by_each_case_and_default_spread_across_its_width() {
+fn a_switch_leaves_by_each_case_and_default_spread_down_its_right_side() {
     let scene = scene();
     let outs: Vec<(Option<String>, f32)> = handles_of(node(&scene, "route"))
         .into_iter()
         .filter_map(|h| match h.kind {
-            HandleKind::Out(name) => Some((name, h.at.x - node(&scene, "route").rect.x)),
+            HandleKind::Out(name) => Some((name, h.at.y - node(&scene, "route").rect.y)),
             _ => None,
         })
         .collect();
     let names: Vec<_> = outs.iter().map(|(n, _)| n.as_deref().unwrap()).collect();
     assert_eq!(names, vec!["bug", "feature", "chore", "default"]);
-    // In order from left to right, apart, and all inside the card.
+    // In order from top to bottom, apart, and all inside the card's height, on its right side.
     for pair in outs.windows(2) {
         assert!(pair[1].1 - pair[0].1 > 20., "{outs:?}");
     }
-    assert!(outs[0].1 > 0. && outs[3].1 < NODE_W, "{outs:?}");
+    assert!(
+        outs[0].1 > 0. && outs[3].1 < node(&scene, "route").rect.h,
+        "{outs:?}"
+    );
+    let route = node(&scene, "route").rect;
+    assert!(
+        handles_of(node(&scene, "route"))
+            .iter()
+            .filter(|h| matches!(h.kind, HandleKind::Out(_)))
+            .all(|h| h.at.x == route.right())
+    );
     let kinds = kinds(&scene, "route");
     assert!(!kinds.contains(&HandleKind::Out(None)));
     assert!(!kinds.contains(&HandleKind::LoopOut));
@@ -134,22 +145,22 @@ fn a_command_takes_and_gives_lines_and_loops_like_a_session() {
 }
 
 #[test]
-fn a_for_each_takes_and_gives_over_the_column_of_its_cards() {
+fn a_for_each_takes_on_its_left_and_gives_on_its_right_at_the_middle() {
     let scene = scene();
     let group = node(&scene, "each");
     let handles = handles_of(group);
-    let x = group.rect.x + GROUP_PAD + NODE_W / 2.;
-    let top = handles.iter().find(|h| h.kind == HandleKind::In).unwrap();
-    let bottom = handles
+    let y = group.rect.y + group.rect.h / 2.;
+    let left = handles.iter().find(|h| h.kind == HandleKind::In).unwrap();
+    let right = handles
         .iter()
         .find(|h| h.kind == HandleKind::Out(None))
         .unwrap();
-    assert_eq!(top.at, Point { x, y: group.rect.y });
+    assert_eq!(left.at, Point { x: group.rect.x, y });
     assert_eq!(
-        bottom.at,
+        right.at,
         Point {
-            x,
-            y: group.rect.bottom()
+            x: group.rect.right(),
+            y
         }
     );
     assert!(!handles.iter().any(|h| h.kind == HandleKind::LoopOut));
@@ -169,29 +180,29 @@ fn the_handles_sit_where_the_edges_leave_and_arrive() {
     assert_eq!(
         at(HandleKind::In),
         Point {
-            x: a.rect.x + NODE_W / 2.,
-            y: a.rect.y
+            x: a.rect.x,
+            y: a.rect.y + NODE_H / 2.
         }
     );
     assert_eq!(
         at(HandleKind::Out(None)),
         Point {
-            x: a.rect.x + NODE_W / 2.,
-            y: a.rect.bottom()
+            x: a.rect.right(),
+            y: a.rect.y + NODE_H / 2.
         }
     );
     assert_eq!(
         at(HandleKind::LoopOut),
         Point {
-            x: a.rect.right(),
-            y: a.rect.y + NODE_H * 0.7
+            x: a.rect.x + NODE_W * 0.7,
+            y: a.rect.bottom()
         }
     );
     assert_eq!(
         at(HandleKind::LoopIn),
         Point {
-            x: a.rect.right(),
-            y: a.rect.y + NODE_H * 0.3
+            x: a.rect.x + NODE_W * 0.3,
+            y: a.rect.bottom()
         }
     );
     // The edge from a to the If starts exactly on the out handle.
@@ -301,8 +312,8 @@ fn a_for_each_is_a_target_by_its_header_not_by_its_empty_inside() {
 fn a_card_wins_over_the_frame_it_sits_in() {
     let w = workflow(
         json!([
-            {"id": "start", "type": "manual", "ui": {"x": -400, "y": 0}},
-            {"id": "each", "type": "forEach", "in": "x", "ui": {"x": 0, "y": 0}},
+            {"id": "start", "type": "manual"},
+            {"id": "each", "type": "forEach", "in": "x", "ui": {"x": 400, "y": 0}},
             {"id": "dev", "type": "command", "project": "p", "command": "ls", "parent": "each",
              "ui": {"x": 16, "y": 40}},
         ]),

@@ -1,8 +1,8 @@
 //! `NodeInspector.test.ts` and the fields of the inspector.
-use super::board::{BoardField, BoardPick};
+use super::board::{BoardField, BoardPick, BoardState};
 use super::board_tests::*;
 use super::graph::GraphEvent;
-use super::tests::{click, listing};
+use super::tests::{click, listing, settle};
 use crate::monos::tests::{Setup, setup};
 use gpui::{Focusable, TestAppContext, VisualTestContext};
 use monocode_core::mono::workflows::{
@@ -537,6 +537,121 @@ fn a_new_output_field_can_be_renamed_and_removed(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_session_step_edits_its_surface_and_mode_and_lists_its_built_in_outputs(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    event(&s, visual, GraphEvent::Click("fetch".into()));
+    let shown =
+        |visual: &mut VisualTestContext, id: &'static str| visual.debug_bounds(id).is_some();
+    assert!(shown(visual, "segmented-wf-surface-chat"));
+    assert!(shown(visual, "segmented-wf-mode-of-step-waitForMe"));
+    assert!(!shown(visual, "wf-surface-reason"));
+    let NodeKind::Session { surface, mode, .. } = node_of(&s, visual, "fetch").kind else {
+        panic!()
+    };
+    assert_eq!((surface, mode), (None, None));
+    // Chat steps list the reply and the git facts as built-ins.
+    assert!(shown(visual, "wf-builtin-outputs"));
+    click(visual, "segmented-wf-mode-of-step-waitForMe");
+    click(visual, "segmented-wf-surface-terminal");
+    let NodeKind::Session { surface, mode, .. } = node_of(&s, visual, "fetch").kind else {
+        panic!()
+    };
+    assert_eq!(surface.as_deref(), Some("terminal"));
+    assert_eq!(mode.as_deref(), Some("waitForMe"));
+    // The built-ins of a terminal step have no reply.
+    use monocode_core::mono::workflows::{model::SessionSurface, output::session_builtins};
+    assert!(!session_builtins(SessionSurface::Terminal, false).contains(&"reply"));
+    assert_eq!(
+        session_builtins(SessionSurface::Chat, true),
+        ["reply", "sessionId"]
+    );
+    // Back to the defaults: nothing is written for them.
+    click(visual, "segmented-wf-mode-of-step-auto");
+    click(visual, "segmented-wf-surface-chat");
+    let NodeKind::Session { surface, mode, .. } = node_of(&s, visual, "fetch").kind else {
+        panic!()
+    };
+    assert_eq!((surface, mode), (None, None));
+}
+
+#[gpui::test]
+fn terminal_is_disabled_with_the_reason_when_the_step_cannot_run_in_a_terminal(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    do_with(&s, visual, |m, cx| {
+        m.board_node_edit(
+            "fetch",
+            |n| {
+                if let NodeKind::Session { harness, model, .. } = &mut n.kind {
+                    *harness = Some("codex".into());
+                    *model = None;
+                }
+            },
+            cx,
+        )
+    });
+    event(&s, visual, GraphEvent::Click("fetch".into()));
+    assert!(visual.debug_bounds("wf-surface-reason").is_some());
+    // Pressing it changes nothing.
+    click(visual, "segmented-wf-surface-terminal");
+    let NodeKind::Session { surface, .. } = node_of(&s, visual, "fetch").kind else {
+        panic!()
+    };
+    assert_eq!(surface, None);
+    // A step that already is a terminal one can still be put back to chat.
+    do_with(&s, visual, |m, cx| {
+        m.board_node_edit(
+            "fetch",
+            |n| {
+                if let NodeKind::Session { surface, .. } = &mut n.kind {
+                    *surface = Some("terminal".into());
+                }
+            },
+            cx,
+        )
+    });
+    click(visual, "segmented-wf-surface-chat");
+    let NodeKind::Session { surface, .. } = node_of(&s, visual, "fetch").kind else {
+        panic!()
+    };
+    assert_eq!(surface, None);
+}
+
+#[gpui::test]
+fn an_output_field_named_like_a_built_in_is_flagged_on_the_step(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    event(&s, visual, GraphEvent::Click("fetch".into()));
+    click(visual, "wf-output-add");
+    type_in(
+        &s,
+        visual,
+        BoardField::OutputName("fetch".into(), "field".into()),
+        "reply",
+    );
+    commit(
+        &s,
+        visual,
+        BoardField::OutputName("fetch".into(), "field".into()),
+    );
+    let issues = on_board(&s, visual, |b| b.issues.clone());
+    assert!(
+        issues.iter().any(|i| i.node_id.as_deref() == Some("fetch")
+            && i.message.contains("\"reply\" is a built-in output")),
+        "{issues:?}"
+    );
+    assert!(visual.debug_bounds("wf-inspector-issues").is_some());
+}
+
+#[gpui::test]
 fn a_project_chosen_for_a_step_is_held_by_an_input(cx: &mut TestAppContext) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
@@ -562,10 +677,8 @@ fn the_settings_edit_the_description_and_the_inputs(cx: &mut TestAppContext) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
-    do_with(&s, visual, |m, cx| {
-        m.board_menu_picked("Workflow menu", "settings".into(), cx)
-    });
-    assert!(visual.debug_bounds("wf-inspector").is_some());
+    open_settings(&s, visual);
+    assert!(visual.debug_bounds("wf-settings-page").is_some());
     type_in(&s, visual, BoardField::Description, "What it is for.");
     assert_eq!(
         on_board(&s, visual, |b| b.meta.description.clone()).as_deref(),
@@ -616,16 +729,85 @@ fn the_settings_edit_the_description_and_the_inputs(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_enabled_switch_and_pause_change_the_draft_only_until_saved(cx: &mut TestAppContext) {
+fn the_enabled_switch_saves_at_once_when_nothing_else_is_unsaved(cx: &mut TestAppContext) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
+    assert!(stored_first(&s).enabled);
+    do_with(&s, visual, |m, cx| m.board_toggle_enabled(cx));
+    assert!(!on_board(&s, visual, |b| b.meta.enabled));
+    assert!(!stored_first(&s).enabled);
+    assert!(!on_board(&s, visual, BoardState::changed));
+}
+
+#[gpui::test]
+fn the_enabled_switch_stays_a_draft_edit_beside_other_unsaved_edits(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    rename(&s, visual, "Renamed");
     do_with(&s, visual, |m, cx| m.board_toggle_enabled(cx));
     assert!(!on_board(&s, visual, |b| b.meta.enabled));
     assert!(stored_first(&s).enabled);
     click(visual, "wf-board-save");
     visual.run_until_parked();
     assert!(!stored_first(&s).enabled);
+}
+
+#[gpui::test]
+fn the_header_shows_save_in_runs_mode_once_the_draft_changed(cx: &mut TestAppContext) {
+    use super::layout::WfMode;
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    rename(&s, visual, "Renamed");
+    do_with(&s, visual, |m, cx| m.wf_set_mode(WfMode::Runs, cx));
+    settle(&s, visual);
+    assert!(visual.debug_bounds("wf-board-save").is_some());
+    click(visual, "wf-board-save");
+    visual.run_until_parked();
+    assert_eq!(stored_first(&s).name, "Renamed");
+    settle(&s, visual);
+    assert!(visual.debug_bounds("wf-board-save").is_none());
+}
+
+#[gpui::test]
+fn a_default_decision_model_pick_never_stores_an_invalid_model(cx: &mut TestAppContext) {
+    use monocode_core::provider::Kind;
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    do_with(&s, visual, |m, cx| {
+        m.board_decision_picked(Kind::Claude, Some("claude-sonnet-5".into()), cx)
+    });
+    let model = on_board(&s, visual, |b| b.meta.decision_model.clone()).unwrap();
+    assert_eq!(
+        (model.harness.as_str(), model.model.as_deref()),
+        ("claude", Some("claude:sonnet-5"))
+    );
+    // A harness with no bundled default has no id to store: only the harness is kept, and the
+    // run asks that harness's default model (D44).
+    do_with(&s, visual, |m, cx| {
+        m.board_decision_picked(Kind::Claude, None, cx)
+    });
+    let model = on_board(&s, visual, |b| b.meta.decision_model.clone()).unwrap();
+    assert_eq!(
+        (
+            model.harness.as_str(),
+            model.model.clone(),
+            model.effort.clone()
+        ),
+        ("claude", None, None)
+    );
+    // And the saved file keeps it as `{harness}` with no model key.
+    let saved = serde_json::to_value(&model).unwrap();
+    assert_eq!(saved, json!({"harness": "claude"}));
+    // Pi has one, and the file stores it.
+    do_with(&s, visual, |m, cx| {
+        m.board_decision_picked(Kind::Pi, None, cx)
+    });
+    let model = on_board(&s, visual, |b| b.meta.decision_model.clone()).unwrap();
+    assert_eq!(model.model.as_deref(), Some("pi:default"));
 }
 
 #[gpui::test]
@@ -683,7 +865,7 @@ fn focus_field(s: &Setup, visual: &mut VisualTestContext, spec: BoardField) {
 
 fn open_settings(s: &Setup, visual: &mut VisualTestContext) {
     do_with(s, visual, |m, cx| {
-        m.board_menu_picked("Workflow menu", "settings".into(), cx)
+        m.wf_set_mode(super::layout::WfMode::Settings, cx)
     });
     visual.refresh().unwrap();
 }
@@ -713,7 +895,10 @@ fn a_new_input_is_declared_by_enter_or_plus_and_never_by_leaving_the_field(
     assert_eq!(declared(&s, visual, "retries"), None);
     assert!(!on_board(&s, visual, |b| b.changed()));
     // Leaving the page does not declare it either.
-    click(visual, "wf-inspector-back");
+    do_with(&s, visual, |m, cx| {
+        m.wf_set_mode(super::layout::WfMode::Edit, cx)
+    });
+    visual.refresh().unwrap();
     assert_eq!(declared(&s, visual, "retries"), None);
     open_settings(&s, visual);
     // Enter does, with the type chosen.
@@ -757,4 +942,45 @@ fn leaving_an_input_value_as_it_was_shown_changes_nothing(cx: &mut TestAppContex
         Some(InputValue::String("hello".into()))
     );
     assert!(on_board(&s, visual, |b| b.changed()));
+}
+
+#[gpui::test]
+fn text_that_is_not_a_number_shows_the_problem_and_leaves_the_draft(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    do_with(&s, visual, |m, cx| {
+        m.board_add_input("retries", "number", cx)
+    });
+    open_settings(&s, visual);
+    let before = on_board(&s, visual, |b| (b.meta.input_values.clone(), b.current()));
+    type_in(
+        &s,
+        visual,
+        BoardField::InputValue("retries".into()),
+        "not a number",
+    );
+    focus_field(&s, visual, BoardField::InputValue("retries".into()));
+    click(visual, "wf-board-name");
+    assert!(on_board(&s, visual, |b| b.input_problem.is_some()));
+    let after = on_board(&s, visual, |b| (b.meta.input_values.clone(), b.current()));
+    assert_eq!(before.0, after.0);
+    assert!(!after.0.contains_key("retries"));
+    assert_eq!(before.1, after.1);
+}
+
+#[gpui::test]
+fn backspace_and_delete_in_an_inspector_field_do_not_delete_the_selected_node(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    event(&s, visual, GraphEvent::Click("dev".into()));
+    let ids = node_ids(&s, visual);
+    focus_field(&s, visual, BoardField::Prompt("dev".into()));
+    visual.simulate_keystrokes("backspace");
+    visual.simulate_keystrokes("delete");
+    assert_eq!(node_ids(&s, visual), ids);
+    assert!(ids.contains(&"dev".to_string()));
 }

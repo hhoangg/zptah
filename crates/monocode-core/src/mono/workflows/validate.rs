@@ -236,6 +236,46 @@ impl<'a> Graph<'a> {
     }
 }
 
+/// Why a terminal step cannot run: it is the provider's own CLI, so it needs Claude (the only
+/// harness that takes a first prompt there), this computer (no cloud target, no remote project)
+/// and, off Windows, the hooks that tell when a turn ended. Empty when it can. `project` is the
+/// path the step's project resolves to; `windows` is a parameter so the rule is tested everywhere.
+pub fn terminal_problems(
+    project: Option<&str>,
+    harness: Option<&str>,
+    model: Option<&str>,
+    cloud: bool,
+    windows: bool,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if cloud {
+        out.push(
+            "A terminal step runs on this computer: it cannot have a cloud target".to_string(),
+        );
+    }
+    // A project on another machine has no local terminal to run the CLI in.
+    if project.is_some_and(crate::surface::is_remote) {
+        out.push(
+            "A terminal step runs on this computer: its project is on another machine, so use a chat step"
+                .to_string(),
+        );
+    }
+    if windows {
+        out.push("A terminal step is not available on Windows: use a chat step".to_string());
+    }
+    if let Some(h) = harness.filter(|h| !h.is_empty() && *h != "claude") {
+        out.push(format!("harness \"{h}\": a terminal step runs Claude only"));
+    } else if let Some(owner) = model
+        .and_then(super::models::id_harness)
+        .filter(|h| *h != "claude")
+    {
+        out.push(format!(
+            "model: a terminal step runs Claude only, but the model belongs to \"{owner}\""
+        ));
+    }
+    out
+}
+
 struct Checker<'a> {
     w: &'a Workflow,
     /// Whether the app runs on Windows, where a terminal session has no hooks to tell when its
@@ -913,40 +953,11 @@ impl<'a> Checker<'a> {
                 at,
             ),
             Some(SessionSurface::Terminal) => {
-                if cloud {
-                    self.add(
-                        "A terminal step runs on this computer: it cannot have a cloud target",
-                        at,
-                    );
-                }
-                // A project on another machine has no local terminal to run the CLI in.
-                if super::board_edit::project_path(self.w, node)
-                    .is_some_and(|path| crate::surface::is_remote(&path))
+                let project = super::board_edit::project_path(self.w, node);
+                for problem in
+                    terminal_problems(project.as_deref(), harness, model, cloud, self.windows)
                 {
-                    self.add(
-                        "A terminal step runs on this computer: its project is on another machine, so use a chat step",
-                        at,
-                    );
-                }
-                if self.windows {
-                    self.add(
-                        "A terminal step is not available on Windows: use a chat step",
-                        at,
-                    );
-                }
-                if let Some(h) = harness.filter(|h| !h.is_empty() && *h != "claude") {
-                    self.add(
-                        format!("harness \"{h}\": a terminal step runs Claude only"),
-                        at,
-                    );
-                } else if let Some(owner) = model
-                    .and_then(super::models::id_harness)
-                    .filter(|h| *h != "claude")
-                {
-                    self.add(
-                        format!("model: a terminal step runs Claude only, but the model belongs to \"{owner}\""),
-                        at,
-                    );
+                    self.add(problem, at);
                 }
             }
             Some(SessionSurface::Chat) => {}
@@ -1687,7 +1698,7 @@ pub fn decision_model_for(w: &Workflow, node_id: &str) -> Option<ResolvedDecisio
         return Some(ResolvedDecisionModel {
             source: DecisionModelSource::Workflow,
             harness: Some(model.harness.clone()),
-            model: Some(model.model.clone()),
+            model: model.model.clone(),
             effort: model.effort.clone(),
         });
     }

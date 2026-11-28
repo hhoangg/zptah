@@ -143,23 +143,60 @@ fn trigger_label(preview: &ImportPreview) -> String {
     }
 }
 
-/// The two lines of the review that the fingerprint covers beyond the steps: the model for AI
-/// decisions and where the run summary goes. `mono` is the name of the Mono in `reportTo`.
-pub(super) fn summary_and_decisions_text(w: &Workflow, mono: Option<&str>) -> (String, String) {
-    let decisions = match &w.decision_model {
+/// Whether something in the workflow asks the AI to decide: an If or a Switch that is not given
+/// a condition or a value, or a loop the AI decides. Only then does `decisionModel` matter.
+pub(super) fn has_ai_decision(w: &Workflow) -> bool {
+    use monocode_core::mono::workflows::{model::Decide, parse::is_ai_decide};
+    w.nodes.iter().any(|n| {
+        matches!(
+            &n.kind,
+            NodeKind::If {
+                decide: Some(Decide::Ai),
+                ..
+            } | NodeKind::Switch {
+                decide: Some(Decide::Ai),
+                ..
+            }
+        )
+    }) || w.edges.iter().any(|e| {
+        e.loop_spec
+            .as_ref()
+            .is_some_and(|l| is_ai_decide(&l.decide))
+    })
+}
+
+/// The lines of the review that the fingerprint covers beyond the steps: the model for AI
+/// decisions (only when the workflow has an AI decision) and where the run summary goes. `mono`
+/// is the name of the Mono in `reportTo`.
+pub(super) fn summary_and_decisions_text(
+    w: &Workflow,
+    mono: Option<&str>,
+) -> (Option<String>, String) {
+    let decisions = has_ai_decision(w).then(|| match &w.decision_model {
         Some(model) => {
-            let mut text = format!("{} {}", visible(&model.harness), visible(&model.model));
+            let mut text = match model.model.as_deref() {
+                Some(id) => format!("{} {}", visible(&model.harness), visible(id)),
+                None => format!("{} (its default model)", visible(&model.harness)),
+            };
             if let Some(effort) = model.effort.as_deref().filter(|e| !e.is_empty()) {
                 text.push_str(&format!(" ({})", visible(effort)));
             }
             text
         }
         None => "The model of the step before it".to_string(),
-    };
-    let summary_to = match mono {
-        Some(name) => format!("The run page and Mono {}", visible(name)),
-        None => "The run page".to_string(),
-    };
+    });
+    // Every run ends with a summary: on its page, in a notification, to the Mono named in
+    // `reportTo` and to the Mono that started the run.
+    let mut to = vec!["the run page".to_string(), "a notification".to_string()];
+    if let Some(name) = mono {
+        to.push(format!("Mono {}", visible(name)));
+    }
+    to.push("the Mono that starts the run".to_string());
+    let last = to.pop().unwrap_or_default();
+    let mut summary_to = format!("{} and {last}", to.join(", "));
+    if let Some(first) = summary_to.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
     (decisions, summary_to)
 }
 
@@ -457,7 +494,7 @@ impl Monos {
                     .flex()
                     .flex_col()
                     .gap_0p5()
-                    .child(property("AI decisions use", decisions))
+                    .children(decisions.map(|d| property("AI decisions use", d)))
                     .child(property("Run summary goes to", summary_to)),
             )
             .into_any_element()
@@ -489,6 +526,19 @@ impl Monos {
         });
         self.wf.route = Some(WfRoute::Review(id.to_string(), intent));
         self.review_preview(cx);
+        cx.notify();
+    }
+
+    /// Whether a review is on screen.
+    pub(crate) fn wf_review_open(&self) -> bool {
+        self.wf.open && matches!(self.wf.route, Some(WfRoute::Review(..)))
+    }
+
+    /// Cancels the review: back to where it was opened from (the board keeps its edits).
+    pub(crate) fn wf_review_cancel(&mut self, cx: &mut Context<Self>) {
+        let back = self.wf.review.take().and_then(|r| r.back);
+        self.wf.route = back;
+        self.refresh_workflows(cx);
         cx.notify();
     }
 
@@ -628,7 +678,6 @@ impl Monos {
             }
             None => Vec::new(),
         };
-        let go_back = back.clone();
         div()
             .size_full()
             .min_w_0()
@@ -640,12 +689,7 @@ impl Monos {
                 self.workflow_header("Review workflow", back, cx)
                     .child(
                         header_button("mono-workflow-review-cancel", "Cancel", false, true)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.wf.review = None;
-                                this.wf.route = go_back.clone();
-                                this.refresh_workflows(cx);
-                                cx.notify();
-                            })),
+                            .on_click(cx.listener(|this, _, _, cx| this.wf_review_cancel(cx))),
                     )
                     .child(
                         header_button(

@@ -4,7 +4,7 @@ use super::cards::{port_label, port_label_width};
 use super::geometry::{Rect, Seg};
 use super::scene::*;
 use monocode_core::mono::workflows::{
-    board_model::{GROUP_PAD, NODE_H, NODE_W, Point, to_flow},
+    board_model::{GAP_X, NODE_H, NODE_W, Point, to_flow},
     model::{LoopSpec, Workflow},
     ordered::Json,
     parse::parse_workflow,
@@ -67,7 +67,7 @@ fn the_outs_of_a_switch_leave_in_order_by_case_then_default() {
             .iter()
             .find(|e| e.id.ends_with(&format!("->{target}")))
             .unwrap();
-        first_and_last(edge).0.x - rect.x
+        first_and_last(edge).0.y - rect.y
     };
     let (bug, feature, default) = (start("one"), start("two"), start("three"));
     assert!(
@@ -75,8 +75,46 @@ fn the_outs_of_a_switch_leave_in_order_by_case_then_default() {
         "{bug} {feature} {default}"
     );
     for (got, index) in [(bug, 0), (feature, 1), (default, 2)] {
-        assert!((got - NODE_W * out_at(index, 3)).abs() < 0.01, "{got}");
+        assert!((got - rect.h * out_at(index, 3)).abs() < 0.01, "{got}");
     }
+}
+
+#[test]
+fn a_switch_card_is_as_tall_as_its_cases_need_to_keep_an_ifs_spacing() {
+    let spacing_of = |w: &Workflow, id: &str| {
+        let scene = scene_of(w);
+        let rect = node(&scene, id).rect;
+        let outs = monocode_core::mono::workflows::board_model::out_handles(
+            &node(&scene, id).flow.data.node,
+        )
+        .len();
+        (rect.h, rect.h * (out_at(1, outs) - out_at(0, outs)))
+    };
+    let if_w = workflow(
+        json!([{"id": "gate", "type": "if", "condition": "{{a.b}}"}]),
+        json!([]),
+    );
+    let (if_h, if_gap) = spacing_of(&if_w, "gate");
+    assert_eq!(if_h, NODE_H);
+    let mut last = if_h;
+    for cases in [2usize, 3, 4, 6, 9] {
+        let names: Vec<String> = (0..cases).map(|i| format!("case{i}")).collect();
+        let w = workflow(
+            json!([{"id": "route", "type": "switch", "value": "{{a.kind}}", "cases": names}]),
+            json!([]),
+        );
+        let (height, gap) = spacing_of(&w, "route");
+        assert!(gap + 0.01 >= if_gap, "{cases} cases: {gap} < {if_gap}");
+        assert!(height >= last, "{cases} cases: {height} < {last}");
+        last = height;
+    }
+    assert!(last > 2. * NODE_H);
+    // One case is two outs, an If's: the same card.
+    let one = workflow(
+        json!([{"id": "route", "type": "switch", "value": "{{a.kind}}", "cases": ["only"]}]),
+        json!([]),
+    );
+    assert_eq!(spacing_of(&one, "route").0, NODE_H);
 }
 
 #[test]
@@ -91,61 +129,138 @@ fn out_at_keeps_the_places_of_an_if_and_spreads_more_outs_evenly() {
 }
 
 #[test]
-fn a_port_label_is_cut_to_fit_under_its_out() {
+fn a_port_label_is_cut_to_fit_beside_its_out() {
     assert_eq!(port_label("bug", 40.), "bug");
     let cut = port_label("a very long case name", 40.);
     assert!(
         cut.chars().count() <= 6 && cut.ends_with('\u{2026}'),
         "{cut}"
     );
-    // The room per label shrinks as outs are added.
-    assert!(port_label_width(NODE_W, 0, 6) < port_label_width(NODE_W, 0, 3));
-    // A label never reaches the next out, and the last one stays inside the card.
-    for count in [2, 3, 6] {
-        for index in 0..count {
-            let start = NODE_W * out_at(index, count) + 9.;
-            let end = start + port_label_width(NODE_W, index, count);
-            let limit = if index + 1 < count {
-                NODE_W * out_at(index + 1, count)
-            } else {
-                NODE_W
-            };
-            assert!(end <= limit + 0.01, "{index}/{count}: {end} > {limit}");
-        }
-    }
+    // A label sits in the gap between its card and the next column, never over either.
+    assert!(port_label_width() > 0.);
+    assert!(port_label_width() <= GAP_X - 9.);
 }
 
 #[test]
-fn an_edge_runs_from_the_bottom_of_a_card_to_the_top_of_the_next() {
+fn an_edge_runs_from_the_right_of_a_card_to_the_left_of_the_next() {
     let w = workflow(
         json!([{"id": "start", "type": "manual"}, session("dev"), {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
         json!([{"from": "start", "to": "dev"}, {"from": "dev", "to": "report"}]),
     );
     let scene = scene_of(&w);
+    // The trigger's edge leaves its frame; the frame is one edge, not one per trigger.
     assert_eq!(scene.edges.len(), 2);
-    let (a, b) = (&node(&scene, "start").rect, &node(&scene, "dev").rect);
-    let (start, end) = first_and_last(&scene.edges[0]);
+    let (a, b) = (&node(&scene, "dev").rect, &node(&scene, "report").rect);
+    let edge = scene
+        .edges
+        .iter()
+        .find(|e| e.id.starts_with("dev"))
+        .unwrap();
+    let (start, end) = first_and_last(edge);
     assert_eq!(
         start,
         Point {
-            x: a.x + NODE_W / 2.,
-            y: a.y + NODE_H
+            x: a.right(),
+            y: a.y + NODE_H / 2.
         }
     );
     assert_eq!(
         end,
         Point {
-            x: b.x + NODE_W / 2.,
-            y: b.y
+            x: b.x,
+            y: b.y + NODE_H / 2.
         }
     );
     // The arrowhead's tip is where the line ends.
-    assert_eq!(scene.edges[0].arrow.unwrap()[0], end);
-    assert!(scene.edges[0].label.is_none());
+    assert_eq!(edge.arrow.unwrap()[0], end);
+    assert!(edge.label.is_none());
 }
 
 #[test]
-fn the_two_outs_of_an_if_leave_from_28_and_72_percent_of_its_width() {
+fn one_edge_leaves_the_trigger_frame_for_the_first_node() {
+    let w = workflow(
+        json!([
+            {"id": "start", "type": "manual"},
+            {"id": "other", "type": "manual"},
+            session("dev"),
+        ]),
+        json!([{"from": "start", "to": "dev"}, {"from": "other", "to": "dev"}]),
+    );
+    let scene = scene_of(&w);
+    let frame = scene.trigger_frame.expect("a frame behind the triggers");
+    assert_eq!(scene.edges.len(), 1);
+    let (start, end) = first_and_last(&scene.edges[0]);
+    let dev = node(&scene, "dev").rect;
+    assert_eq!(
+        start,
+        Point {
+            x: frame.right(),
+            y: frame.y + frame.h / 2.
+        }
+    );
+    assert_eq!(
+        end,
+        Point {
+            x: dev.x,
+            y: dev.y + dev.h / 2.
+        }
+    );
+    // Both triggers sit inside the frame, and the frame is in the bounds.
+    for id in ["start", "other"] {
+        let r = node(&scene, id).rect;
+        assert!(r.x >= frame.x && r.right() <= frame.right(), "{id}");
+        assert!(r.y >= frame.y && r.bottom() <= frame.bottom(), "{id}");
+    }
+    assert!(scene.bounds().unwrap().x <= frame.x);
+    // The edge stands for the first of the edges it replaces.
+    assert!(scene.edges[0].id.starts_with("start"));
+}
+
+#[test]
+fn a_target_only_some_triggers_lead_to_is_drawn_from_its_own_trigger() {
+    let w = workflow(
+        json!([
+            {"id": "start", "type": "manual"},
+            {"id": "other", "type": "manual"},
+            session("dev"),
+            session("extra"),
+        ]),
+        json!([
+            {"from": "start", "to": "dev"},
+            {"from": "other", "to": "dev"},
+            {"from": "other", "to": "extra"},
+        ]),
+    );
+    let scene = scene_of(&w);
+    let frame = scene.trigger_frame.expect("a frame behind the triggers");
+    // One merged edge for dev, and one from the trigger that leads to extra.
+    assert_eq!(scene.edges.len(), 2, "{:?}", scene.edges);
+    let to = |target: &str| {
+        scene
+            .edges
+            .iter()
+            .find(|e| e.id.ends_with(&format!("->{target}")))
+            .unwrap_or_else(|| panic!("no edge to {target}"))
+    };
+    let other = node(&scene, "other").rect;
+    assert_eq!(
+        first_and_last(to("extra")).0,
+        Point {
+            x: other.right(),
+            y: other.y + other.h / 2.
+        }
+    );
+    assert_eq!(first_and_last(to("dev")).0.x, frame.right());
+}
+
+#[test]
+fn a_workflow_without_triggers_has_no_frame() {
+    let w = workflow(json!([session("dev")]), json!([]));
+    assert!(scene_of(&w).trigger_frame.is_none());
+}
+
+#[test]
+fn the_two_outs_of_an_if_leave_from_28_and_72_percent_of_its_height() {
     let w = workflow(
         json!([
             {"id": "start", "type": "manual"},
@@ -163,22 +278,22 @@ fn the_two_outs_of_an_if_leave_from_28_and_72_percent_of_its_width() {
     let starts: Vec<f32> = scene
         .edges
         .iter()
-        .filter(|e| !e.id.starts_with("start"))
-        .map(|e| first_and_last(e).0.x - rect.x)
+        .filter(|e| e.id.starts_with("check"))
+        .map(|e| first_and_last(e).0.y - rect.y)
         .collect();
     assert_eq!(starts.len(), 2);
     assert!(
-        starts.iter().any(|x| (x - NODE_W * 0.28).abs() < 0.01),
+        starts.iter().any(|y| (y - NODE_H * 0.28).abs() < 0.01),
         "{starts:?}"
     );
     assert!(
-        starts.iter().any(|x| (x - NODE_W * 0.72).abs() < 0.01),
+        starts.iter().any(|y| (y - NODE_H * 0.72).abs() < 0.01),
         "{starts:?}"
     );
 }
 
 #[test]
-fn a_loop_edge_leaves_the_right_of_the_later_card_and_comes_back_into_the_earlier() {
+fn a_loop_edge_leaves_the_bottom_of_the_later_card_and_comes_back_into_the_earlier() {
     let w = workflow(
         json!([{"id": "start", "type": "manual"}, session("dev"), session("review")]),
         json!([
@@ -198,82 +313,59 @@ fn a_loop_edge_leaves_the_right_of_the_later_card_and_comes_back_into_the_earlie
     assert_eq!(
         start,
         Point {
-            x: review.right(),
-            y: review.y + NODE_H * 0.7
+            x: review.x + NODE_W * 0.7,
+            y: review.bottom()
         }
     );
     assert_eq!(
         end,
         Point {
-            x: dev.right(),
-            y: dev.y + NODE_H * 0.3
+            x: dev.x + NODE_W * 0.3,
+            y: dev.bottom()
         }
     );
     let label = edge.label.as_ref().expect("a label");
-    assert_eq!(label.text, "AI decides \u{b7} max 3");
-    // Right of the run beside the cards (never over a card it passes), half way between the
-    // two ends.
-    assert!(label.at.x > review.right() + 26., "{:?}", label.at);
-    assert!(label.at.x - (review.right() + 26.) <= 12.);
-    assert!((label.at.y - (start.y + end.y) / 2.).abs() < 0.01);
+    assert_eq!(label.text, "\u{2264} 3 rounds");
+    assert_eq!(label.full, "AI decides \u{b7} max 3");
+    // Centred half way along the run under the cards, 26 pixels below them.
+    let run_y = review.bottom() + 26.;
+    assert!((label.at.y - run_y).abs() < 0.01, "{:?}", label.at);
+    assert!((label.at.x + label.width / 2. - (start.x + end.x) / 2.).abs() < 0.01);
+    assert!(edge.is_loop);
 }
 
 #[test]
-fn a_compact_loop_edge_hugs_the_cards_and_has_no_label() {
-    let w = workflow(
-        json!([{"id": "start", "type": "manual"}, session("dev"), session("review")]),
-        json!([
-            {"from": "start", "to": "dev"},
-            {"from": "dev", "to": "review"},
-            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
-        ]),
-    );
-    let flow = to_flow(&w);
-    let mut edges = flow.edges.clone();
-    for e in &mut edges {
-        e.compact = true;
-    }
-    let scene = Scene::build(&flow.nodes, &edges, Vec::new(), "fit".into());
-    let edge = scene.edges.iter().find(|e| e.is_loop).unwrap();
-    let review = node(&scene, "review").rect;
-    let (start, _) = first_and_last(edge);
-    assert!(edge.label.is_none());
-    let Some(Seg::Line(p)) = edge.segs.get(1) else {
-        panic!("{:?}", edge.segs)
-    };
-    // The corner is 14 pixels out and rounds by half of that, the most the short run allows.
-    assert!(
-        (p.x - (review.right() + 7.)).abs() < 0.01,
-        "{p:?} {start:?}"
-    );
-}
-
-#[test]
-fn the_loop_label_names_the_decider_and_cuts_a_long_condition() {
+fn the_loop_pill_says_how_many_rounds_and_the_tooltip_who_decides() {
     let mono = LoopSpec {
         max_rounds: 3.,
         decide: "ai".into(),
     };
-    assert_eq!(loop_label(&mono, false), "AI decides \u{b7} max 3");
+    assert_eq!(loop_label(&mono, false), "\u{2264} 3 rounds");
+    assert_eq!(loop_label(&mono, true), "AI decides \u{b7} max 3");
+    let once = LoopSpec {
+        max_rounds: 1.,
+        decide: "ai".into(),
+    };
+    assert_eq!(loop_label(&once, false), "\u{2264} 1 round");
     let short = LoopSpec {
         max_rounds: 2.,
         decide: "  {{r.v}} != \"ok\" ".into(),
     };
+    assert_eq!(loop_label(&short, false), "\u{2264} 2 rounds");
     assert_eq!(
-        loop_label(&short, false),
+        loop_label(&short, true),
         "If {{r.v}} != \"ok\" \u{b7} max 2"
     );
     let long = LoopSpec {
         max_rounds: 10.,
         decide: "{{review.verdict}} != \"approve\" and more".into(),
     };
-    let cut = loop_label(&long, false);
-    assert_eq!(cut, "If {{review.verdict}} != \"appr\u{2026} \u{b7} max 10");
+    assert_eq!(loop_label(&long, false), "\u{2264} 10 rounds");
     assert!(loop_label(&long, true).contains("and more"));
 }
 
 #[test]
-fn a_for_each_takes_and_gives_its_lines_over_the_column_of_the_cards_inside() {
+fn a_for_each_takes_and_gives_its_lines_at_the_middle_of_its_frame() {
     let w = workflow(
         json!([
             {"id": "start", "type": "manual"},
@@ -291,7 +383,13 @@ fn a_for_each_takes_and_gives_its_lines_over_the_column_of_the_cards_inside() {
         .iter()
         .find(|e| e.id.contains("each") && e.id.contains("start"))
         .unwrap();
-    assert_eq!(first_and_last(into).1.x, frame.x + GROUP_PAD + NODE_W / 2.);
+    assert_eq!(
+        first_and_last(into).1,
+        Point {
+            x: frame.x,
+            y: frame.y + frame.h / 2.
+        }
+    );
     let out = scene
         .edges
         .iter()
@@ -301,8 +399,8 @@ fn a_for_each_takes_and_gives_its_lines_over_the_column_of_the_cards_inside() {
     assert_eq!(
         start,
         Point {
-            x: frame.x + GROUP_PAD + NODE_W / 2.,
-            y: frame.bottom()
+            x: frame.right(),
+            y: frame.y + frame.h / 2.
         }
     );
     // A card inside the frame is placed by the frame's corner, and the frames are drawn first.
@@ -336,6 +434,7 @@ fn the_bounds_cover_the_cards_the_bars_and_the_loop_label() {
     assert!(all.x <= -40. && all.y <= -60.);
     let label = scene.edges.iter().find_map(|e| e.label.as_ref()).unwrap();
     assert!(all.right() >= label.at.x + label.width);
+    assert!(all.bottom() >= label.at.y + LABEL_H / 2.);
     assert!(
         Scene::build(&[], &[], Vec::new(), String::new())
             .bounds()
@@ -375,7 +474,7 @@ fn an_edge_to_a_node_that_is_not_drawn_is_left_out() {
 
 #[test]
 fn the_loop_label_never_covers_a_card_the_loop_passes() {
-    // A loop from the third card back to the first runs past the second.
+    // A loop from the third card back to the first runs under the second.
     let w = workflow(
         json!([{"id": "start", "type": "manual"}, session("a"), session("b"), session("c")]),
         json!([
@@ -387,10 +486,13 @@ fn the_loop_label_never_covers_a_card_the_loop_passes() {
     );
     let scene = scene_of(&w);
     let label = scene.edges.iter().find_map(|e| e.label.as_ref()).unwrap();
-    let widest = scene
-        .nodes
+    let lowest = ["a", "b", "c"]
         .iter()
-        .map(|n| n.rect.right())
+        .map(|id| node(&scene, id).rect.bottom())
         .fold(f32::MIN, f32::max);
-    assert!(label.at.x > widest, "{} vs {widest}", label.at.x);
+    assert!(
+        label.at.y - LABEL_H / 2. > lowest,
+        "{} vs {lowest}",
+        label.at.y
+    );
 }
