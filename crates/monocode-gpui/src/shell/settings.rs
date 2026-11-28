@@ -86,7 +86,17 @@ impl Shell {
             web_monos: web_choices.1,
             web_terminals: self.web_open_terminals(cx),
             web_policy: monocode_core::mobile::policy::flags(),
-            quick_error: self.quick.error.clone(),
+            quick_error: {
+                let chief = self
+                    .quick
+                    .chief_error
+                    .as_ref()
+                    .map(|e| format!("Ask Chief shortcut: {e}"));
+                match (self.quick.error.clone(), chief) {
+                    (Some(quick), Some(chief)) => Some(format!("{quick}\n{chief}")),
+                    (quick, chief) => quick.or(chief),
+                }
+            },
             mono_hotkey_error: self
                 .monos
                 .as_ref()
@@ -189,11 +199,21 @@ impl Shell {
         let context = self.settings_context(cx);
         let prefs = self.workspace.preferences.clone();
         let view = cx.new(|cx| SettingsView::new(section, prefs, context, cx));
+        if let Some(monos) = self.monos.clone() {
+            let chief = cx.new(|cx| crate::monos::chief_settings::ChiefSettings::new(monos, cx));
+            view.update(cx, |view, cx| view.set_chief_settings(chief, cx));
+        }
         self.settings_events = Some(cx.subscribe_in(
             &view,
             window,
             |this, _, event: &SettingsEvent, window, cx| match event {
-                SettingsEvent::Section(section) => this.select_settings(*section, cx),
+                SettingsEvent::Section(section) => {
+                    // Picked from the sidebar: Chief settings in their usual order.
+                    if let Some(monos) = this.monos.clone() {
+                        monos.update(cx, |monos, cx| monos.set_chief_history_first(false, cx));
+                    }
+                    this.select_settings(*section, cx)
+                }
                 SettingsEvent::ManageInboxProvider(provider) => {
                     this.open_inbox(window, cx);
                     if let Some(inbox) = &this.inbox {
@@ -502,6 +522,7 @@ impl Shell {
     pub(super) fn apply_preferences(&mut self, cx: &mut Context<Self>) {
         self.refresh_notification_permission();
         self.configure_quick_composer(cx);
+        self.configure_chief_shortcut(cx);
         // Switching search styles closes an open search of the other style.
         if self
             .app_search

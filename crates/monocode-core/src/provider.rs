@@ -1510,6 +1510,27 @@ fn write_mcp_config(
     Ok(file)
 }
 
+/// Why the Chief does not run on another harness: only Claude Code can drop every built-in tool
+/// (`--tools ""`) and ignore the user's MCP servers (`--strict-mcp-config`). Codex keeps
+/// `apply_patch` and the servers of the user's own config however its features are set.
+pub const CHIEF_HARNESS_REFUSAL: &str =
+    "The Chief runs on Claude Code only: no other harness can be limited to the app tool. Choose Claude Code in the Chief's settings.";
+
+/// What limits a Chief's Claude run to the `app` tool: no built-in tool at all (no shell, file,
+/// web, sub-agent or skill tool), no MCP server but the one the launch adds (`--strict-mcp-config`
+/// also drops the servers a plugin brings, checked against Claude Code 2.1.332), no slash commands.
+/// The MCP server and its allowlist entry are added by the launch as for any Mono.
+/// The permission mode of a Chief run: `default`, the one of `AccessMode::Supervised`. A tool
+/// that is not on the allowlist (only the app tool is) waits for the owner's approval.
+pub const CHIEF_PERMISSION_MODE: &str = "default";
+
+pub const CHIEF_CLAUDE_ARGS: [&str; 4] = [
+    "--tools",
+    "",
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+];
+
 /// Resolves the Mono's browser once and records the outcome in the settings, so the rules the
 /// provider gets agree with what the launch adds (the server, or the reason it is missing).
 fn apply_browser(
@@ -1521,7 +1542,7 @@ fn apply_browser(
     let attach = settings
         .mono
         .as_ref()
-        .filter(|_| !settings.text_only)
+        .filter(|mono| !settings.text_only && !mono.is_chief())
         .map_or(Attach::Off, resolve);
     if let Attach::Unavailable(reason) = &attach {
         settings.browser_unavailable = Some(reason.clone());
@@ -1544,6 +1565,10 @@ fn run_operation(
     let _turn = process::begin_turn();
     if cancel.load(Ordering::Relaxed) {
         return Err("Stopped".into());
+    }
+    if request.settings.mono.as_ref().is_some_and(|m| m.is_chief()) && request.kind != Kind::Claude
+    {
+        return Err(CHIEF_HARNESS_REFUSAL.into());
     }
     if request.kind == Kind::OpenCode {
         return opencode::run(request, cancel, controls, probe, compact, emit);
@@ -1626,7 +1651,12 @@ fn run_operation(
                 "stdio",
             ]);
             let settings = &request.settings;
-            let mode = if settings.plan {
+            let chief = settings.mono.as_ref().is_some_and(|m| m.is_chief());
+            // The Chief always asks: any tool but the allowlisted app tool needs the owner's
+            // approval in its chat, whatever mode the saved chat settings name.
+            let mode = if chief {
+                CHIEF_PERMISSION_MODE
+            } else if settings.plan {
                 "plan"
             } else {
                 settings.access.claude()
@@ -1643,12 +1673,14 @@ fn run_operation(
                     "--mcp-config",
                     "{\"mcpServers\":{}}",
                 ]);
+            } else if chief {
+                command.args(CHIEF_CLAUDE_ARGS);
             }
-            let visual_server = (!settings.text_only)
+            let visual_server = (!settings.text_only && !chief)
                 .then(|| crate::visual_bridge::mcp_server(&settings.environment))
                 .flatten();
             let mut allowed: Vec<String> = Vec::new();
-            if !settings.text_only && settings.access == AccessMode::ReadOnly {
+            if !settings.text_only && !chief && settings.access == AccessMode::ReadOnly {
                 command.args(["--tools", "Read,Glob,Grep,Bash"]);
                 allowed.push("Read,Glob,Grep,Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(pwd),Bash(ls *),Bash(rg *)".into());
             }
@@ -1673,11 +1705,14 @@ fn run_operation(
             }
             let mut system = Vec::new();
             if let Some(mono) = settings.mono.as_ref().filter(|_| !settings.text_only) {
-                system.push(crate::mono::browser::launch_instructions(
-                    mono,
-                    browser.is_some(),
-                    settings.browser_unavailable.as_deref(),
-                ));
+                system.push(match &mono.role {
+                    crate::agent::Role::Chief(chief) => crate::mono::chief::instructions(chief),
+                    crate::agent::Role::Mono => crate::mono::browser::launch_instructions(
+                        mono,
+                        browser.is_some(),
+                        settings.browser_unavailable.as_deref(),
+                    ),
+                });
             }
             if let Some(server) = visual_server {
                 servers.insert("monocode_visual".into(), server);
@@ -1708,7 +1743,7 @@ fn run_operation(
                 command.arg("--allow-dangerously-skip-permissions");
             }
             let mut config = json!({});
-            if settings.disable_claude_hooks || settings.text_only {
+            if settings.disable_claude_hooks || settings.text_only || chief {
                 config["disableAllHooks"] = true.into();
             }
             if settings.fast {
@@ -2184,6 +2219,7 @@ mod tests {
             root: "/monos".into(),
             executable: "/bin/monocode-gpui".into(),
             browser_database: None,
+            role: Default::default(),
         });
         let mut out = Vec::new();
         p.frame(json!({"id":1,"result":{}}), &mut out).unwrap();
@@ -2221,6 +2257,7 @@ mod tests {
             root: "/monos".into(),
             executable: "/bin/monocode-gpui".into(),
             browser_database: None,
+            role: Default::default(),
         }));
         assert_eq!(mono.matches(rule).count(), 1, "{mono}");
     }
@@ -2242,6 +2279,7 @@ mod tests {
                 root: "/monos".into(),
                 executable: "/bin/monocode-gpui".into(),
                 browser_database: None,
+                role: Default::default(),
             });
             let mut out = Vec::new();
             p.frame(json!({"id":1,"result":{}}), &mut out).unwrap();
@@ -2268,6 +2306,7 @@ mod tests {
             root: "/monos".into(),
             executable: "/bin/monocode-gpui".into(),
             browser_database: None,
+            role: Default::default(),
         }
     }
     #[test]
@@ -2629,6 +2668,7 @@ mod tests {
                 root: "/tmp/mono".into(),
                 executable: "/bin/app".into(),
                 browser_database: None,
+                role: Default::default(),
             });
             parked::key(&request)
         };
@@ -2676,6 +2716,62 @@ mod tests {
         );
         assert!(rules.contains("Google Chrome was not found"), "{rules}");
         assert!(rules.contains("could not be attached"));
+    }
+    fn chief_context() -> crate::agent::MonoContext {
+        crate::agent::MonoContext {
+            role: crate::agent::Role::Chief(Default::default()),
+            ..browser_mono_context()
+        }
+    }
+    #[test]
+    fn a_chief_run_has_no_built_in_tool_no_browser_and_no_other_mcp_server() {
+        // Claude: no built-in tool, only the servers the launch adds, no skills or commands.
+        assert_eq!(CHIEF_CLAUDE_ARGS[..2], ["--tools", ""]);
+        assert!(CHIEF_CLAUDE_ARGS.contains(&"--strict-mcp-config"));
+        assert!(CHIEF_CLAUDE_ARGS.contains(&"--disable-slash-commands"));
+        // Supervised, never auto or full access: only the allowlisted app tool runs unasked.
+        assert_eq!(CHIEF_PERMISSION_MODE, AccessMode::Supervised.claude());
+        for tool in ["Bash", "Read", "Edit", "WebFetch", "Task"] {
+            assert!(!CHIEF_CLAUDE_ARGS.contains(&tool));
+        }
+        // The browser is never resolved for a Chief, whatever the Mono data says.
+        let mut settings = Settings {
+            mono: Some(chief_context()),
+            ..Default::default()
+        };
+        let runtime = apply_browser(&mut settings, |_| panic!("a Chief resolves no browser"));
+        assert!(runtime.is_none());
+        assert!(!settings.browser_available);
+        assert!(settings.browser_unavailable.is_none());
+        // Its one MCP server is the app tool, started in the Chief's mode.
+        let environment = crate::mono::bridge::Server::start()
+            .unwrap()
+            .0
+            .environment(9);
+        let server = crate::mono::bridge::mcp_server(settings.mono.as_ref(), &environment).unwrap();
+        assert_eq!(server["args"], json!(["app-mcp", "--chief"]));
+        let description = crate::mono::bridge::tool_definitions_for(true)[0]["description"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(description.contains("chief.overview"));
+        assert!(!description.contains("sessions.start"));
+        // Every other harness is refused before anything starts.
+        for kind in [Kind::Codex, Kind::OpenCode, Kind::Cursor] {
+            let mut request = protocol(kind).request;
+            request.settings.mono = Some(chief_context());
+            let error = run_operation(
+                request,
+                Arc::new(AtomicBool::new(false)),
+                None,
+                false,
+                false,
+                false,
+                |_| Ok(()),
+            )
+            .unwrap_err();
+            assert_eq!(error, CHIEF_HARNESS_REFUSAL);
+        }
     }
     #[test]
     fn approvals_wait_for_a_decision_and_keep_the_requested_input() {

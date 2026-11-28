@@ -279,7 +279,7 @@ impl Shell {
         let id = id.filter(|id| !id.is_empty()).ok_or("Choose a session")?;
         match self.mobile_target(id, device, cx)? {
             Target::Session(id) => Ok(id),
-            Target::Mono(_) => Err(policy::Code::UnsupportedTarget.failure()),
+            Target::Mono(_) | Target::Chief => Err(policy::Code::UnsupportedTarget.failure()),
         }
     }
 

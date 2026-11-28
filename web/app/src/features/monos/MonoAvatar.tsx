@@ -21,6 +21,7 @@ export function MonoAvatar({
   monoId,
   name,
   mascot,
+  emoji,
   color,
   size = 40,
   working = false,
@@ -29,12 +30,27 @@ export function MonoAvatar({
   monoId: string;
   name: string;
   mascot?: string | null;
+  /** The Chief's own emoji (a character, not a Mono picture): drawn on a tinted disc in place of the mascot. */
+  emoji?: string | null | undefined;
   color?: string | null;
   size?: number;
   working?: boolean;
   className?: string;
 }) {
   const tint = monoColor(name, color);
+  if (emoji) {
+    return (
+      <span
+        aria-hidden="true"
+        data-testid="mono-avatar"
+        data-kind="emoji"
+        className={cn("flex shrink-0 items-center justify-center rounded-pill leading-none", className)}
+        style={{ width: size, height: size, backgroundColor: `${tint}33`, fontSize: Math.round(size * 0.55) }}
+      >
+        {emoji}
+      </span>
+    );
+  }
   if (isKnownMascot(mascot)) {
     return (
       <span aria-hidden="true" data-testid="mono-avatar" data-kind="mascot" className={cn("inline-flex shrink-0 items-center justify-center", className)} style={{ width: size, height: size }}>

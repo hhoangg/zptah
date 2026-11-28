@@ -72,7 +72,7 @@ pub(crate) use mobile::{
 };
 pub(crate) use mono::QueueChanged as MonoQueueChanged;
 pub(crate) use mono::Submitted as MonoSubmitted;
-pub(crate) use mono::{TurnEnd, WorkflowTurn};
+pub(crate) use mono::{FollowUpStatus, TurnEnd, WorkflowTurn};
 use monocode_core::{
     agent::{AccessMode, Approval, Control, Decision, Settings},
     catalog::{self, Model},
@@ -292,6 +292,9 @@ pub(crate) struct Conversation {
     /// Every prompt `launch_prompt` was asked to send, for tests that count sends.
     #[cfg(test)]
     pub(super) launched: Vec<String>,
+    /// A test that only counts sends: no provider is started after the prompt is recorded.
+    #[cfg(test)]
+    pub(super) hold_launches: bool,
     /// For each run that started, whether it was marked no-wake.
     #[cfg(test)]
     pub(super) launched_no_wake: Vec<bool>,
@@ -802,6 +805,8 @@ impl Conversation {
             resume_click: false,
             #[cfg(test)]
             launched: Vec::new(),
+            #[cfg(test)]
+            hold_launches: false,
             #[cfg(test)]
             launched_no_wake: Vec::new(),
             notification_cancelled: false,
@@ -1374,6 +1379,10 @@ impl Conversation {
         }
         #[cfg(test)]
         self.launched.push(prompt.clone());
+        #[cfg(test)]
+        if self.hold_launches {
+            return;
+        }
         if self.stopping && self.is_remote() {
             // Local follow-ups are never delivered to a host: queueing here would lose the prompt.
             self.status =

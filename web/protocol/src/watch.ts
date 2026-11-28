@@ -3,6 +3,7 @@
 // of `{rid, ok: true, result}` after `{rid, ok: true, watching: true}`.
 import "./zod-config.ts";
 import { z } from "zod";
+import { ChiefExtraSchema } from "./chief.ts";
 import { QuestionPromptSchema, TurnSchema, UsageLimitSchema } from "./wire.ts";
 
 // --- Cloud (architecture.md 6.6 "Fields") ---
@@ -133,5 +134,7 @@ export const WatchFrameSchema = z.looseObject({
   turns: z.array(TurnSchema),
   patches: z.array(WatchPatchSchema).optional(),
   ...CloudApprovalFields,
+  /** The Chief conversation only: sent on the first frame and when it changes. */
+  chief: ChiefExtraSchema.optional(),
 });
 export type WatchFrame = z.infer<typeof WatchFrameSchema>;

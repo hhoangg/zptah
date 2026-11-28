@@ -71,14 +71,16 @@ impl Status {
             signature: String::new(),
         })
     }
+    /// `chief` is the Chief's name while it is on: its entry, "Ask <name>...", comes first.
     /// `hotkey` is the modifier string of the Mono shortcuts, `None` while off.
     pub(super) fn update(
         &mut self,
+        chief: Option<&str>,
         monos: &[(String, String)],
         hotkey: Option<&str>,
         run: Rc<dyn Fn(&str)>,
     ) {
-        let signature = format!("{monos:?}:{hotkey:?}");
+        let signature = format!("{chief:?}{monos:?}:{hotkey:?}");
         if self.signature == signature {
             return;
         }
@@ -88,6 +90,16 @@ impl Status {
         };
         let menu = NSMenu::new(mtm);
         menu.setAutoenablesItems(false);
+        if let Some(name) = chief {
+            menu.addItem(&Item::new(
+                mtm,
+                &format!("Ask {name}..."),
+                super::chief_ui::CHIEF_ID.into(),
+                None,
+                run.clone(),
+            ));
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+        }
         if monos.is_empty() {
             let title = NSMenuItem::new(mtm);
             title.setTitle(&NSString::from_str("No monos yet"));

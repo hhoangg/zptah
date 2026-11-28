@@ -168,7 +168,9 @@ pub fn show(notification: Notification) -> Receiver<Result<(), String>> {
             return;
         }
         let content = UNMutableNotificationContent::new();
-        content.setTitle(&NSString::from_str("zptah"));
+        content.setTitle(&NSString::from_str(
+            notification.title.as_deref().unwrap_or("zptah"),
+        ));
         content.setSubtitle(&NSString::from_str(&notification.subtitle));
         content.setBody(&NSString::from_str(&notification.body));
         content.setCategoryIdentifier(&NSString::from_str(CATEGORY));

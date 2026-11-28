@@ -1459,6 +1459,10 @@ impl Monos {
     }
     pub(super) fn tick_at(&mut self, now: u64, cx: &mut Context<Self>) {
         let changed = self.check_habits(cx);
+        // The notes of an open card read live session state (busy, paused, asleep).
+        if self.chief_open_count() > 0 {
+            self.chief_sync_cards(cx);
+        }
         // Nothing changed means nothing to draw. Times on screen still advance
         // once a minute, which is as fine as they are shown.
         let minute = now / 60_000;

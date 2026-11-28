@@ -451,7 +451,9 @@ pub fn message(
         }
         more(&mut out, digest.more_notes);
     }
-    out
+    // Session titles, replies, notes and inbox lines are other people's words: none may carry
+    // the header of a command from the Chief.
+    super::chief::neutralize_chief_header(&out)
 }
 fn more(out: &mut String, n: usize) {
     if n > 0 {

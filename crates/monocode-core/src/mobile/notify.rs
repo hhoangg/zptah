@@ -42,6 +42,9 @@ pub struct WebNotice<'a> {
     /// Only devices with Control access get it (a result of something a
     /// Control device asked for, such as a remote update).
     pub control_only: bool,
+    /// Only devices with no project or Mono selection get it (the Chief's notices: a narrowed
+    /// device never sees the Chief, see `policy::chief_visible`).
+    pub whole_workspace_only: bool,
 }
 
 /// Tells the paired web devices that take `notice.category` about it, through
@@ -227,6 +230,9 @@ fn plan(
         .filter(|device| device.kind == super::policy::DeviceKind::Web)
         .filter(|device| {
             !notice.control_only || device.permission == super::policy::Permission::Control
+        })
+        .filter(|device| {
+            !notice.whole_workspace_only || (device.projects.is_none() && device.monos.is_none())
         })
         .filter_map(|device| {
             let id = device.server_device_id.as_deref()?;
@@ -429,6 +435,7 @@ mod tests {
             title: "Bach Tieu Thuan",
             preview: Some("Fixed the **login** bug.\n\n```sh\ncargo test\n```"),
             control_only: false,
+            whole_workspace_only: false,
         }
     }
 
@@ -508,6 +515,21 @@ mod tests {
             plan(&notice("agentInput", Some("s1"), None), &all, project_p1).unwrap()["status"],
             "needs_input"
         );
+    }
+
+    #[test]
+    fn a_whole_workspace_notice_skips_devices_with_a_selection() {
+        let devices = [
+            web_device("all", None, None),
+            web_device("p1", Some(&["p1"]), Some(&[])),
+            web_device("m1", Some(&[]), Some(&["m1"])),
+        ];
+        let mut notice = notice("monoMessages", Some("s1"), None);
+        let body = plan(&notice, &devices, project_p1).unwrap();
+        assert_eq!(body["deviceIds"], json!(["all", "p1"]));
+        notice.whole_workspace_only = true;
+        let body = plan(&notice, &devices, project_p1).unwrap();
+        assert_eq!(body["deviceIds"], json!(["all"]));
     }
 
     #[test]

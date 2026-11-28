@@ -182,6 +182,22 @@ pub fn fence(text: &str, nonce: &str) -> String {
     )
 }
 
+/// The text inside a [`fence`], or `text` itself when it is not one. A model that copies a fenced
+/// value (a project path from a list) back into a call still names the same thing.
+pub fn unfence(text: &str) -> String {
+    let lines: Vec<&str> = text.trim().lines().collect();
+    match (lines.first(), lines.last()) {
+        (Some(first), Some(last))
+            if lines.len() >= 3
+                && first.starts_with(&format!("<{TAG}-"))
+                && last.starts_with(&format!("</{TAG}-")) =>
+        {
+            lines[2..lines.len() - 1].join("\n")
+        }
+        _ => text.to_owned(),
+    }
+}
+
 /// A tool result with every text part fenced under one nonce. Images and other parts stay.
 pub fn fence_result(result: &Value, nonce: &str) -> Value {
     let mut out = result.clone();

@@ -19,6 +19,8 @@ import { WorkspaceFrame, useReadOnly } from "@/features/sessions/WorkspaceFrame"
 import { EmptyState } from "@/ui/EmptyState";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./contextMenu";
 import { stripEmoTokens } from "./emoji";
+import { ChiefHomeRow } from "@/features/chief/ChiefRow";
+import { useChiefCatalog } from "@/features/chief/chief";
 import { ResetMonoDialog, useCanResetMono } from "./ResetMonoDialog";
 import { CreateMonoDialog } from "./CreateMonoDialog";
 import { clearCreateMonoRequest, useCreateMonoRequest } from "./createRequest";
@@ -37,6 +39,8 @@ export function MonoHome({ desktopId, titleAs: Title = "h2" }: { desktopId: stri
   const hidden = useMemo(() => new Set(hiddenIds ?? []), [hiddenIds]);
   const sorted = useMemo(() => [...(monos ?? [])].sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0)), [monos]);
   const monoTools = useMonoTools();
+  // The Chief is pinned first, only when the desktop says it is on.
+  const chief = useChiefCatalog();
   const canCreate = monoTools && !readOnly;
   // "New Mono" asked for from the command palette: the dialog opens once the catalog says this device may create.
   const createRequested = useCreateMonoRequest((state) => state.requested);
@@ -70,7 +74,7 @@ export function MonoHome({ desktopId, titleAs: Title = "h2" }: { desktopId: stri
       )}
       {!monos ? (
         catalog.isError ? <Notice variant="error">Could not load your Monos.</Notice> : <DelayedSpinner label="Loading Monos" className="m-6" />
-      ) : shown.length === 0 ? (
+      ) : shown.length === 0 && !chief ? (
         <EmptyState
           data-testid="mono-home-empty"
           icon="bot"
@@ -83,6 +87,11 @@ export function MonoHome({ desktopId, titleAs: Title = "h2" }: { desktopId: stri
         />
       ) : (
         <ul className="flex flex-col">
+          {chief ? (
+            <li key="chief">
+              <ChiefHomeRow desktopId={desktopId} chief={chief} />
+            </li>
+          ) : null}
           {shown.map((mono) => (
             <li key={mono.id}>
               <MonoRow desktopId={desktopId} mono={mono} unread={unread.has(mono.id)} onHide={() => setHidden(desktopId, mono.id, true)} />

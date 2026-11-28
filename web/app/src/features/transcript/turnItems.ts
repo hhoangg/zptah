@@ -37,6 +37,8 @@ export type UserItem = {
   emojiOnly?: boolean;
   attachments?: number;
   compact?: boolean;
+  /** A command the Chief relayed through this Mono: the text is the instruction the owner confirmed. */
+  chiefRelay?: { proposalId: string; instruction: string; chiefName: string };
 };
 /** `emoji`: the pictures of a Mono reply, each at a UTF-16 offset of `text` (a Mono transcript only; validated by `readEmoji`). */
 export type TextItem = { type: "text"; id: string; text: string; streaming?: boolean; emoji?: MonoEmojiPick[] };
@@ -148,6 +150,12 @@ function launched(value: unknown): LaunchedSession[] {
   return out;
 }
 
+/** The `chiefRelay` of a Mono chat's user item; anything but three strings reads as absent. */
+function readChiefRelay(value: unknown): UserItem["chiefRelay"] | undefined {
+  if (!isRecord(value) || typeof value.proposalId !== "string" || typeof value.instruction !== "string" || typeof value.chiefName !== "string") return undefined;
+  return { proposalId: value.proposalId, instruction: value.instruction, chiefName: value.chiefName };
+}
+
 /** Narrows one wire item, or null for an unknown type or an item without an id. */
 export function readItem(raw: unknown): TurnItem | null {
   if (!isRecord(raw) || typeof raw.type !== "string" || !KNOWN.has(raw.type) || typeof raw.id !== "string") return null;
@@ -163,6 +171,7 @@ export function readItem(raw: unknown): TurnItem | null {
         ...(raw.emojiOnly === true ? { emojiOnly: true } : {}),
         ...(num(raw.attachments) ? { attachments: num(raw.attachments) } : {}),
         ...(raw.compact === true ? { compact: true } : {}),
+        ...(readChiefRelay(raw.chiefRelay) ? { chiefRelay: readChiefRelay(raw.chiefRelay) } : {}),
       };
     case "text": {
       const text = str(raw.text);
@@ -214,6 +223,16 @@ export function readItems(turn: Turn): TurnItem[] {
     cache.set(turn, items);
   }
   return items;
+}
+
+/**
+ * The proposal ids the Chief made in this turn, in order: the ids its `chief.propose` tool results returned, as the
+ * desktop lists them in the turn's `chiefProposals`. Anything but a list of non-empty strings reads as none.
+ */
+export function readProposalIds(turn: Turn): string[] {
+  const raw = (turn as Record<string, unknown>).chiefProposals;
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.filter((id): id is string => typeof id === "string" && id !== ""))];
 }
 
 /** Token accounting of the footer's metrics button (the desktop leaves it out for Monos). */

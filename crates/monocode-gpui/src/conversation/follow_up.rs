@@ -15,6 +15,7 @@ pub(super) struct FollowUps {
     pub draft_selected: bool,
     pub edit: Option<QueueEdit>,
 }
+const DELIVERED_KEPT: usize = 64;
 pub(super) struct QueueEdit {
     id: String,
     input: Entity<input::Input>,
@@ -287,6 +288,10 @@ impl Conversation {
             .messages
             .retain(|message| message.id != id);
         if before != self.follow_ups.state.messages.len() {
+            let delivered = &mut self.follow_ups.state.delivered;
+            delivered.push(id.to_owned());
+            let extra = delivered.len().saturating_sub(DELIVERED_KEPT);
+            delivered.drain(..extra);
             self.save_follow_ups(cx);
         }
     }

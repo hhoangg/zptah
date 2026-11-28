@@ -132,6 +132,7 @@ impl Shell {
         if !cx.is_test() && self.workspace.preferences.notifications {
             let _ = crate::notifications::platform::show(
                 crate::notifications::platform::Notification {
+                    title: None,
                     tag: format!("monocode-project-added:{}", monocode_core::time::now_ms()),
                     subtitle: "Project added".into(),
                     body: crate::notifications::delivery::clip_body(&text),

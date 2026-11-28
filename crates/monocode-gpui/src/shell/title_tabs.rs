@@ -113,7 +113,7 @@ impl Shell {
                         && self
                             .monos
                             .as_ref()
-                            .is_some_and(|m| m.read(cx).roster.get(id).is_some())
+                            .is_some_and(|m| m.read(cx).identity_for(id).is_some())
                 }
             })
             .cloned()

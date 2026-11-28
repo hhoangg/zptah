@@ -2718,6 +2718,7 @@ fn start_rejects_a_parent_this_mono_did_not_start(cx: &mut TestAppContext) {
                 completed: false,
                 dismissed: false,
                 visible: false,
+                origin: None,
             });
         })
     });
@@ -2818,6 +2819,7 @@ pub(super) fn launch_of(session: i64, cwd: &str) -> mono::Launch {
         completed: false,
         dismissed: false,
         visible: false,
+        origin: None,
     }
 }
 
@@ -2883,10 +2885,15 @@ fn plan(
     source_busy: bool,
     running: &[i64],
 ) -> Vec<(host::Batch, Vec<i64>)> {
-    host::ready_batches(launches, |_| source_busy, |id| !running.contains(&id))
-        .into_iter()
-        .map(|(batch, sessions)| (batch, sessions.into_iter().map(|(id, _)| id).collect()))
-        .collect()
+    host::ready_batches(
+        launches,
+        |_| source_busy,
+        |id| !running.contains(&id),
+        |_| false,
+    )
+    .into_iter()
+    .map(|(batch, sessions)| (batch, sessions.into_iter().map(|(id, _)| id).collect()))
+    .collect()
 }
 
 #[test]
@@ -2924,7 +2931,7 @@ fn later_turns_and_other_callers_do_not_wait_for_a_slow_earlier_group() {
         pending(3, later, false),
         pending(4, other, false),
     ];
-    let plan = host::ready_batches(&launches, |_| false, |id| id != 1);
+    let plan = host::ready_batches(&launches, |_| false, |id| id != 1, |_| false);
     let batches: Vec<_> = plan.iter().map(|(b, _)| *b).collect();
     assert_eq!(
         batches,

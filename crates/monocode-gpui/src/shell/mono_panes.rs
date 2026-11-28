@@ -63,6 +63,10 @@ impl Shell {
         let Some((target, edge)) = self.pane_drag.take().and_then(|d| d.over) else {
             return;
         };
+        // The Chief's chat is not a Mono's: it never joins a split.
+        if matches!(&mono, TitleTab::Mono { id, .. } if id == crate::monos::CHIEF_ID) {
+            return;
+        }
         self.tabs_frame.update(cx, |_, cx| cx.notify());
         let target = self.resolve_mono_target(target, cx);
         let before = self.active_leaves();

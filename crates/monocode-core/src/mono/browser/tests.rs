@@ -401,6 +401,7 @@ fn context(f: &Fixture, mono: Mono) -> crate::agent::MonoContext {
         root: f.root.path().join("monos"),
         executable: "/bin/app".into(),
         browser_database: Some(f.secrets.database().to_path_buf()),
+        role: Default::default(),
     }
 }
 

@@ -12,6 +12,36 @@
       "transport": "app"
     },
     {
+      "name": "chief.profile",
+      "class": "read",
+      "transport": "app"
+    },
+    {
+      "name": "chief.proposal.cancel",
+      "class": "control",
+      "transport": "app"
+    },
+    {
+      "name": "chief.proposal.edit",
+      "class": "control",
+      "transport": "app"
+    },
+    {
+      "name": "chief.proposal.send",
+      "class": "control",
+      "transport": "app"
+    },
+    {
+      "name": "chief.proposals",
+      "class": "read",
+      "transport": "app"
+    },
+    {
+      "name": "chief.update",
+      "class": "control",
+      "transport": "app"
+    },
+    {
       "name": "cloud.cancelMove",
       "class": "control",
       "transport": "app"
