@@ -503,6 +503,39 @@ impl Workflow {
         usize::from(self.run_requested) + self.run_backlog.len()
     }
 
+    /// How many requested runs were asked for by `mono` (the user's have no Mono).
+    pub fn pending_requests_of(&self, mono: &str) -> usize {
+        let own = |caller: &Option<RunCaller>| {
+            caller.as_ref().and_then(|c| c.mono_id.as_deref()) == Some(mono)
+        };
+        usize::from(self.run_requested && own(&self.run_caller))
+            + self.run_backlog.iter().filter(|r| own(&r.caller)).count()
+    }
+
+    /// Drops the requests `mono` asked for, and no one else's; the next one left becomes the
+    /// pending request. Returns how many were dropped.
+    pub fn cancel_requests_of(&mut self, mono: &str) -> usize {
+        let own = |caller: &Option<RunCaller>| {
+            caller.as_ref().and_then(|c| c.mono_id.as_deref()) == Some(mono)
+        };
+        let mut all: Vec<RunRequest> = Vec::new();
+        if self.run_requested {
+            all.push(RunRequest {
+                caller: self.run_caller.take(),
+                values: self.run_values.take(),
+            });
+        }
+        all.append(&mut self.run_backlog);
+        let before = all.len();
+        all.retain(|r| !own(&r.caller));
+        let dropped = before - all.len();
+        self.run_requested = false;
+        for request in all {
+            self.push_run_request(request);
+        }
+        dropped
+    }
+
     /// Drops every request that was not claimed. Returns how many there were.
     pub fn cancel_requests(&mut self) -> usize {
         let n = self.pending_requests();

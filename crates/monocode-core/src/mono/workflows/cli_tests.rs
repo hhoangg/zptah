@@ -3802,3 +3802,44 @@ fn stopping_a_workflow_with_only_unclaimed_requests_takes_them_back_and_runs_lis
     let result = f.ok("workflows.runs", json!({"id": id}));
     assert!(result.get("pendingRequests").is_none());
 }
+
+#[test]
+fn a_mono_that_stops_takes_back_only_its_own_requests_and_hears_about_queued_runs() {
+    let (mut f, mine, _) = mono_fx();
+    let theirs = RunCaller::mono("mono-2", "start");
+    let me = RunCaller::mono("mono-1", "start");
+    f.host.stored[0].push_run_request(RunRequest {
+        caller: Some(theirs.clone()),
+        values: None,
+    });
+    f.host.stored[0].push_run_request(RunRequest {
+        caller: Some(me),
+        values: None,
+    });
+    f.host.stored[0].push_run_request(RunRequest {
+        caller: None,
+        values: None,
+    });
+    f.host
+        .runs
+        .insert(mine.clone(), vec![queued("q1", &mine, 1)]);
+    let result = f.ok("workflows.stop", json!({"id": mine}));
+    assert_eq!(
+        result.get("cancelledRequests").and_then(Json::as_f64),
+        Some(1.0)
+    );
+    assert_eq!(
+        result.get("queuedRemaining").and_then(Json::as_f64),
+        Some(1.0)
+    );
+    assert!(text(&result, "note").contains("1 queued run still waits"));
+    // The other Mono's request is the pending one now, and the user's waits behind it.
+    let w = &f.stored()[0];
+    assert!(w.run_requested);
+    assert_eq!(w.run_caller, Some(theirs));
+    assert_eq!(w.run_backlog.len(), 1);
+    assert!(w.run_backlog[0].caller.is_none());
+    // Nothing of its own left: it is told the workflow is not running.
+    let e = f.err("workflows.stop", json!({"id": mine}));
+    assert!(e.contains("not running") || e.contains("queued"), "{e}");
+}

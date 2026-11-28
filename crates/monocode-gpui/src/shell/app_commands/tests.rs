@@ -2300,6 +2300,43 @@ fn a_terminal_or_a_busy_session_in_a_worktree_keeps_it_from_being_removed(cx: &m
 }
 
 #[gpui::test]
+fn a_worktree_of_a_run_that_is_going_or_claimed_is_not_deleted_from_settings(
+    cx: &mut TestAppContext,
+) {
+    let (window, _caller) = plain_session(cx);
+    let tree = "/work/monocode-worktrees/run-tree";
+    let holds = |cx: &mut TestAppContext| {
+        window
+            .update(cx, |shell, _, cx| shell.workflow_run_holds(tree, cx))
+            .unwrap()
+    };
+    // Not a run's worktree: nothing holds it.
+    assert_eq!(holds(cx), None);
+    window
+        .update(cx, |shell, _, _| {
+            monocode_core::session_worktree::mark_workflow_worktree(
+                &locked(&shell.store).unwrap(),
+                tree,
+                "run-9",
+            )
+            .unwrap()
+        })
+        .unwrap();
+    // Its run is over: it may go.
+    assert_eq!(holds(cx), None);
+    // A start or resume was claimed for the run.
+    let signals = window
+        .update(cx, |shell, _, cx| {
+            shell.workflows().unwrap().read(cx).signals.clone()
+        })
+        .unwrap();
+    signals.claim_run("wf-aaaaaaaa", "run-9");
+    assert!(holds(cx).unwrap().contains("workflow run is using"));
+    signals.release_run("wf-aaaaaaaa", "run-9");
+    assert_eq!(holds(cx), None);
+}
+
+#[gpui::test]
 fn a_session_may_only_read_terminals_every_other_action_is_refused(cx: &mut TestAppContext) {
     let (window, caller) = plain_session(cx);
     user_shell(window, WORK, WORK, "mine", cx);

@@ -145,6 +145,9 @@ pub struct Settings {
     pub worktree_base: Option<String>,
     pub worktree_cwd: Option<String>,
     pub worktree_removed: bool,
+    /// Removing the worktree moved the session's own folder to the main checkout (it was inside
+    /// the worktree), so bringing the worktree back moves it again.
+    pub worktree_cwd_moved: bool,
     pub handoff: Option<Handoff>,
     pub pending_provider_switch: Option<ProviderSwitch>,
     pub turns: std::collections::HashMap<usize, TurnInfo>,

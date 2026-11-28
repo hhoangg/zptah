@@ -850,3 +850,42 @@ fn a_run_worktree_path_never_reaches_a_device_but_its_branch_may() {
     // The allow-list of a run did not grow.
     assert!(!RUN_KEYS.contains(&"worktree") && !RUN_KEYS.contains(&"branchWorktrees"));
 }
+
+#[test]
+fn only_whole_paths_are_hidden_and_the_disk_spelling_counts() {
+    use monocode_core::mono::workflows::model::RunWorktree;
+    let dir = std::env::temp_dir().join(format!("wf-hide-{}", monocode_core::mono::new_id()));
+    let tree = dir.join("app-worktrees").join("wf-x-1");
+    std::fs::create_dir_all(&tree).unwrap();
+    let real = tree.canonicalize().unwrap();
+    let w = workflow("w", &["/work/a"]);
+    let mut run = run_of(&w, &[]);
+    // Recorded through the symlinked spelling; text may carry the real one (or the reverse).
+    run.worktree = Some(RunWorktree {
+        path: tree.to_string_lossy().into_owned(),
+        branch: "wf/x-1".into(),
+        base: "abc".into(),
+        removed_at: None,
+    });
+    let longer = format!("{}-each-0", real.display());
+    run.summary = Some(RunSummary {
+        title: "t".into(),
+        text: format!(
+            "in {} and {} and {longer} and x{}",
+            real.display(),
+            tree.display(),
+            real.display()
+        ),
+    });
+    let value = reply_of(&web(None, None), runs_of(&w, vec![run]), &Links::new());
+    let text = value["runs"][0]["summary"]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(!text.contains(&format!("{} ", real.display())), "{text}");
+    assert_eq!(text.matches("(worktree)").count(), 2, "{text}");
+    // A longer path that merely starts with it, and a path glued to other text, stay as written.
+    assert!(text.contains(&longer), "{text}");
+    assert!(text.contains(&format!("x{}", real.display())), "{text}");
+    std::fs::remove_dir_all(dir).unwrap();
+}

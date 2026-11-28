@@ -77,18 +77,63 @@ pub(super) fn workflow_visible(device: &DeviceContext, known: &[String], w: &Wor
         })
 }
 
-/// Every run worktree path the run records, removed or not. Branch names are not paths.
+/// Every run worktree path the run records, removed or not, as written and as the disk spells
+/// it (`/var` and `/private/var` are one folder). Branch names are not paths. The longest first,
+/// so a path inside another is not left half replaced.
 fn worktree_paths(run: &WorkflowRun) -> Vec<String> {
-    let mut paths: Vec<String> = run
-        .worktree
-        .iter()
-        .chain(run.branch_worktrees.values())
-        .map(|tree| tree.path.clone())
-        .filter(|path| !path.is_empty())
-        .collect();
-    // The longest first, so a path inside another is not left half replaced.
+    let mut paths: Vec<String> = Vec::new();
+    let mut add = |path: String| {
+        if !path.is_empty() && !paths.contains(&path) {
+            paths.push(path);
+        }
+    };
+    for tree in run.worktree.iter().chain(run.branch_worktrees.values()) {
+        add(tree.path.clone());
+        if let Ok(real) = std::path::Path::new(&tree.path).canonicalize() {
+            add(real.to_string_lossy().into_owned());
+        }
+        // The same folder under the other spelling of the system's symlinked roots.
+        for (short, long) in [("/var/", "/private/var/"), ("/tmp/", "/private/tmp/")] {
+            if let Some(rest) = tree.path.strip_prefix(short) {
+                add(format!("{long}{rest}"));
+            }
+            if let Some(rest) = tree.path.strip_prefix(long) {
+                add(format!("{short}{rest}"));
+            }
+        }
+    }
     paths.sort_by_key(|path| std::cmp::Reverse(path.len()));
     paths
+}
+
+/// Whether `c` can be part of a file name or folder, so a path that runs into it is a longer
+/// path, not this one.
+fn name_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '\\')
+}
+
+/// Replaces `path` in `text` where it stands as a whole path: not in the middle of a longer one.
+fn replace_path(text: &str, path: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(path) {
+        let (before, after) = (&rest[..at], &rest[at + path.len()..]);
+        let start_ok = before.chars().last().is_none_or(|c| !name_char(c));
+        // `/x/y` followed by `/file` is inside the worktree: still the worktree's path.
+        let end_ok = after
+            .chars()
+            .next()
+            .is_none_or(|c| !(name_char(c) && c != '/' && c != '\\'));
+        out.push_str(before);
+        if start_ok && end_ok {
+            out.push_str("(worktree)");
+        } else {
+            out.push_str(path);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Replaces the run's worktree paths wherever text carries them (a summary built from
@@ -98,7 +143,7 @@ fn hide_worktrees(value: &mut Value, paths: &[String]) {
         Value::String(text) => {
             for path in paths {
                 if text.contains(path.as_str()) {
-                    *text = text.replace(path.as_str(), "(worktree)");
+                    *text = replace_path(text, path);
                 }
             }
         }

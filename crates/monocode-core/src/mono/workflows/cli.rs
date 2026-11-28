@@ -198,6 +198,14 @@ impl Signals {
     pub fn is_running(&self, workflow_id: &str) -> bool {
         self.live_runs(workflow_id) > 0
     }
+    /// Whether `run_id` is counted as live in any workflow (claimed or started).
+    pub fn has_run_anywhere(&self, run_id: &str) -> bool {
+        self.running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .any(|runs| runs.contains(run_id))
+    }
     /// Whether `run_id` is counted as live in the workflow (claimed or started).
     pub fn has_run(&self, workflow_id: &str, run_id: &str) -> bool {
         self.running
@@ -1756,7 +1764,13 @@ fn stop<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
             _ => return Err("That run is not going or queued".into()),
         }
     } else {
-        if !host.is_running(&current.id) && current.pending_requests() > 0 {
+        // A Mono takes back only the runs it asked for; the user takes back all of them.
+        let mine = host.caller().map(|c| c.id.clone());
+        let pending = match &mine {
+            Some(mono) => current.pending_requests_of(mono),
+            None => current.pending_requests(),
+        };
+        if !host.is_running(&current.id) && pending > 0 {
             // Runs asked for and not claimed yet: stopping them takes the requests back.
             let dropped = host.update(|_, list| {
                 let mut dropped = 0;
@@ -1764,20 +1778,31 @@ fn stop<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
                     .into_iter()
                     .map(|mut w| {
                         if w.id == current.id {
-                            dropped = w.cancel_requests();
+                            dropped = match &mine {
+                                Some(mono) => w.cancel_requests_of(mono),
+                                None => w.cancel_requests(),
+                            };
                         }
                         w
                     })
                     .collect();
                 Ok((list, dropped))
             })?;
+            let waiting = queued_count(&runs);
+            let mut note =
+                "The runs that were asked for and had not started were cancelled.".to_string();
+            if waiting > 0 {
+                note.push_str(&format!(
+                    " {waiting} queued run{} still wait{}; cancel with workflows.stop and a runId.",
+                    if waiting == 1 { "" } else { "s" },
+                    if waiting == 1 { "s" } else { "" }
+                ));
+            }
             return Ok(obj([
                 ("id", st(&current.id)),
                 ("cancelledRequests", Json::Number(dropped as f64)),
-                (
-                    "note",
-                    st("The runs that were asked for and had not started were cancelled."),
-                ),
+                ("queuedRemaining", Json::Number(waiting as f64)),
+                ("note", st(note)),
             ]));
         }
         if !host.is_running(&current.id) {

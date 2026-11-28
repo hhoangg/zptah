@@ -207,6 +207,11 @@ impl Workflows {
         &self.dir
     }
 
+    /// Whether the runner holds the run (going, stopping) or a start or resume was claimed for it.
+    pub(crate) fn run_is_held(&self, run_id: &str) -> bool {
+        self.runner.is_run_live(run_id) || self.signals.has_run_anywhere(run_id)
+    }
+
     /// Whether a run of the workflow is going.
     #[cfg(test)]
     pub(crate) fn is_running(&self, workflow_id: &str) -> bool {

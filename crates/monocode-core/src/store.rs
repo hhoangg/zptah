@@ -1528,8 +1528,10 @@ impl Store {
             settings.revision += 1;
             settings.new_worktree = false;
             settings.worktree_base = None;
+            settings.worktree_cwd_moved = false;
             if crate::files::is_equal_or_inside(&session.cwd, path) {
                 session.cwd = main.into();
+                settings.worktree_cwd_moved = true;
             }
             session.provider_id = None;
             changed.push((session, settings));
@@ -1583,7 +1585,11 @@ impl Store {
             }
             settings.worktree_removed = false;
             settings.revision += 1;
-            session.cwd = execution;
+            // Only a session whose own folder the removal moved gets it back; one that lives in
+            // the project keeps it.
+            if std::mem::take(&mut settings.worktree_cwd_moved) {
+                session.cwd = execution;
+            }
             changed.push((session, settings));
         }
         let tx = self
@@ -1785,6 +1791,22 @@ mod tests {
             .unwrap()
             .cwd;
         assert_eq!(cwd, "/project-worktrees/run");
+        // A session that lives in the project keeps its folder.
+        let kept = store
+            .sessions()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == other.id)
+            .unwrap()
+            .cwd;
+        assert_eq!(kept, "/project");
+        assert!(
+            !store
+                .agent_settings(other.id)
+                .unwrap()
+                .unwrap()
+                .worktree_removed
+        );
         // Another worktree's sessions are left alone.
         assert!(store.reattach_worktree("/elsewhere").unwrap().is_empty());
     }

@@ -626,6 +626,10 @@ impl Shell {
                 return;
             }
         };
+        if let Some(error) = self.workflow_run_holds(&path, cx) {
+            self.finish_worktree_action(&path, Err(error), cx);
+            return;
+        }
         let run_dir = self.workflows().map(|w| w.read(cx).dir().clone());
         let check_cwd = cwd.clone();
         let check_path = path.clone();

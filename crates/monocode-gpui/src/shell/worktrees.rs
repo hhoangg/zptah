@@ -73,6 +73,18 @@ impl Shell {
             .retain(|_, focus| !is_equal_or_inside(&focus.path, path));
     }
 
+    /// Why a worktree a workflow run owns cannot be deleted now: the run is going, stopping, or
+    /// about to start or resume. `None` for any other worktree, and for a run that is over.
+    pub(crate) fn workflow_run_holds(&self, path: &str, cx: &App) -> Option<String> {
+        let owner = crate::runtime::locked(&self.store)
+            .ok()
+            .and_then(|db| monocode_core::session_worktree::workflow_worktree_owner(&db, path))?;
+        let workflows = self.workflows()?;
+        workflows.read(cx).run_is_held(&owner).then(|| {
+            "A workflow run is using this worktree. Stop it, or wait until it ends, first.".into()
+        })
+    }
+
     /// Shows the sessions `reattach_worktree` gave their folder back, so a resumed run goes on in
     /// the conversation it had.
     pub(crate) fn worktree_reattached(

@@ -32,6 +32,23 @@ pub fn mark_workflow_worktree(store: &Store, path: &str, run_id: &str) -> Result
     store.save_setting(&workflow_worktree_key(path), run_id)
 }
 
+/// The id of the run that owns `path`, if a workflow run does.
+pub fn workflow_worktree_owner(store: &Store, path: &str) -> Option<String> {
+    let owner = |key: String| {
+        store
+            .setting(&key)
+            .ok()
+            .flatten()
+            .filter(|id| !id.is_empty())
+    };
+    owner(workflow_worktree_key(path)).or_else(|| {
+        Path::new(path)
+            .canonicalize()
+            .ok()
+            .and_then(|real| owner(workflow_worktree_key(&real.to_string_lossy())))
+    })
+}
+
 /// Forgets the mark of a worktree the user removed.
 pub fn unmark_workflow_worktree(store: &Store, path: &str) -> Result<(), String> {
     store.delete_setting(&workflow_worktree_key(path))
