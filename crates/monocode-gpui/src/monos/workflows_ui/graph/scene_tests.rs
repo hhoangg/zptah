@@ -75,8 +75,46 @@ fn the_outs_of_a_switch_leave_in_order_by_case_then_default() {
         "{bug} {feature} {default}"
     );
     for (got, index) in [(bug, 0), (feature, 1), (default, 2)] {
-        assert!((got - NODE_H * out_at(index, 3)).abs() < 0.01, "{got}");
+        assert!((got - rect.h * out_at(index, 3)).abs() < 0.01, "{got}");
     }
+}
+
+#[test]
+fn a_switch_card_is_as_tall_as_its_cases_need_to_keep_an_ifs_spacing() {
+    let spacing_of = |w: &Workflow, id: &str| {
+        let scene = scene_of(w);
+        let rect = node(&scene, id).rect;
+        let outs = monocode_core::mono::workflows::board_model::out_handles(
+            &node(&scene, id).flow.data.node,
+        )
+        .len();
+        (rect.h, rect.h * (out_at(1, outs) - out_at(0, outs)))
+    };
+    let if_w = workflow(
+        json!([{"id": "gate", "type": "if", "condition": "{{a.b}}"}]),
+        json!([]),
+    );
+    let (if_h, if_gap) = spacing_of(&if_w, "gate");
+    assert_eq!(if_h, NODE_H);
+    let mut last = if_h;
+    for cases in [2usize, 3, 4, 6, 9] {
+        let names: Vec<String> = (0..cases).map(|i| format!("case{i}")).collect();
+        let w = workflow(
+            json!([{"id": "route", "type": "switch", "value": "{{a.kind}}", "cases": names}]),
+            json!([]),
+        );
+        let (height, gap) = spacing_of(&w, "route");
+        assert!(gap + 0.01 >= if_gap, "{cases} cases: {gap} < {if_gap}");
+        assert!(height >= last, "{cases} cases: {height} < {last}");
+        last = height;
+    }
+    assert!(last > 2. * NODE_H);
+    // One case is two outs, an If's: the same card.
+    let one = workflow(
+        json!([{"id": "route", "type": "switch", "value": "{{a.kind}}", "cases": ["only"]}]),
+        json!([]),
+    );
+    assert_eq!(spacing_of(&one, "route").0, NODE_H);
 }
 
 #[test]

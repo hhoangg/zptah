@@ -186,7 +186,7 @@ fn lanes_draw_every_item_side_by_side_and_single_draws_one() {
 }
 
 #[test]
-fn lanes_draw_compact_cards_and_the_group_counts_its_items() {
+fn lanes_draw_the_boards_cards_and_the_group_counts_its_items() {
     let run = each_run(4);
     let lanes = scene(&run, RunView::Lanes);
     let cards: Vec<_> = lanes
@@ -194,7 +194,7 @@ fn lanes_draw_compact_cards_and_the_group_counts_its_items() {
         .iter()
         .filter(|n| n.flow.id.contains('@'))
         .collect();
-    assert!(cards.iter().all(|n| n.flow.data.compact));
+    assert!(cards.iter().all(|n| !n.flow.data.compact));
     let group = lanes.nodes.iter().find(|n| n.flow.id == "each").unwrap();
     assert_eq!(group.flow.data.run_items, Some(4));
     assert_eq!(group.flow.data.node.title.as_deref(), Some("Tickets"));
@@ -311,26 +311,25 @@ fn bars_title_each_lane_and_the_round_selector_sits_over_the_group() {
         })
         .collect();
     assert_eq!(titles, vec!["Ticket 1", "Ticket 2"]);
-    // Titles sit above their lanes, left to right, as wide as the lane's cards.
+    // Titles sit above their lanes, top to bottom, as wide as the row of the lane's cards.
     let lanes: Vec<_> = s
         .bars
         .iter()
         .filter(|b| matches!(b.kind, BarKind::Lane { .. }))
         .collect();
-    assert!(lanes[0].rect.x < lanes[1].rect.x);
+    assert_eq!(lanes[0].rect.x, lanes[1].rect.x);
+    assert!(lanes[0].rect.bottom() <= lanes[1].rect.y);
     let first = s.nodes.iter().find(|n| n.flow.id == "dev@each#0").unwrap();
     assert_eq!(lanes[0].rect.x, first.rect.x);
-    assert_eq!(
-        lanes[0].rect.w,
-        first.rect.w.max(
-            s.nodes
-                .iter()
-                .find(|n| n.flow.id == "review@each#0")
-                .unwrap()
-                .rect
-                .w
-        )
-    );
+    let row: Vec<_> = s
+        .nodes
+        .iter()
+        .filter(|n| n.flow.id.ends_with("@each#0"))
+        .collect();
+    let right = row.iter().map(|n| n.rect.right()).fold(f32::MIN, f32::max);
+    assert_eq!(lanes[0].rect.w, right - first.rect.x);
+    // The second title is under the whole first row.
+    assert!(row.iter().all(|n| n.rect.bottom() <= lanes[1].rect.y));
     assert!(lanes[0].rect.bottom() <= first.rect.y);
     assert!(
         s.bars

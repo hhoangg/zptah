@@ -362,28 +362,6 @@ pub(super) fn input_problem(
     input_value_problems(&inputs, &values).into_iter().next()
 }
 
-/// Keeps `value` for the input `name` of the workflow `id`. The error is the real reason it
-/// could not be saved.
-pub(super) fn save_input(
-    host: &mut impl WorkflowHost,
-    id: &str,
-    name: &str,
-    value: &InputValue,
-) -> Result<(), String> {
-    host.update(|_, list| {
-        let list = list
-            .into_iter()
-            .map(|mut w| {
-                if w.id == id {
-                    w.input_values.insert(name.to_string(), value.clone());
-                }
-                w
-            })
-            .collect();
-        Ok((list, ()))
-    })
-}
-
 /// `Number(text)` for what a user typed into a number input: NaN when it is not a number.
 pub(super) fn js_number(typed: &str) -> f64 {
     let text = typed.trim();

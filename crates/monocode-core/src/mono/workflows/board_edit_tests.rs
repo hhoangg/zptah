@@ -37,6 +37,48 @@ fn selected(flow: &Flow, id: &str) -> Flow {
     select(flow, Some(id), None)
 }
 
+mod trigger_edges {
+    use super::*;
+
+    #[test]
+    fn selecting_the_edge_from_the_trigger_frame_selects_every_trigger_edge_to_the_step() {
+        let (flow, current) = board(&workflow());
+        let (flow, id) = add_node(&flow, &current, NodeType::Schedule);
+        assert!(has_edge(&flow, "start", "report"));
+        assert!(has_edge(&flow, &id, "report"));
+        let edge = flow
+            .edges
+            .iter()
+            .find(|e| e.source == "start" && e.target == "report")
+            .unwrap()
+            .id
+            .clone();
+        let picked = select(&flow, None, Some(&edge));
+        let chosen: Vec<&FlowEdge> = picked.edges.iter().filter(|e| e.selected).collect();
+        assert_eq!(chosen.len(), 2);
+        assert!(chosen.iter().all(|e| e.target == "report"));
+        // Deleting takes both, and nothing else.
+        let after = delete_selected(&picked);
+        assert!(!has_edge(&after, "start", "report"));
+        assert!(!has_edge(&after, &id, "report"));
+        assert_eq!(after.nodes.len(), flow.nodes.len());
+    }
+
+    #[test]
+    fn an_edge_that_does_not_leave_a_trigger_is_selected_alone() {
+        let (flow, _) = board(&ticket_workflow());
+        let inner = flow
+            .edges
+            .iter()
+            .find(|e| e.source == "fetch")
+            .unwrap()
+            .id
+            .clone();
+        let picked = select(&flow, None, Some(&inner));
+        assert_eq!(picked.edges.iter().filter(|e| e.selected).count(), 1);
+    }
+}
+
 mod tidy_action {
     use super::*;
 
@@ -1268,6 +1310,45 @@ mod switch {
         assert!(
             matches!(&by_value.kind, NodeKind::Switch { cases, .. } if cases == &["bug", "feature"])
         );
+    }
+
+    #[test]
+    fn a_switch_card_grows_with_its_cases_so_its_outs_keep_an_ifs_spacing() {
+        // An If puts its two outs 44% of a card apart.
+        let if_gap = NODE_H * (0.72 - 0.28);
+        let (mut flow, _) = board(&routed());
+        let mut last = node(&flow, "route").height;
+        // Two cases and the default are three outs: more than an If's two need.
+        assert!(last > NODE_H, "{last}");
+        for k in 0..6 {
+            flow = add_switch_case(&flow, "route", &format!("extra{k}"));
+            let height = node(&flow, "route").height;
+            assert!(height >= last, "{height} < {last}");
+            let outs = out_handles(&node(&flow, "route").data.node).len() as f32;
+            // The first and last outs sit 12% and 88% of the way down, the rest between.
+            let spacing = (0.88 - 0.12) * height / (outs - 1.0);
+            assert!(
+                spacing + 0.01 >= if_gap,
+                "{outs} outs: {spacing} < {if_gap}"
+            );
+            last = height;
+        }
+        // A Switch with one case has two outs, like an If, and keeps the plain card.
+        let one = remove_switch_case(
+            &remove_switch_case(&flow, "route", "bug"),
+            "route",
+            "feature",
+        );
+        let mut small = one.clone();
+        for k in 0..5 {
+            small = remove_switch_case(&small, "route", &format!("extra{k}"));
+        }
+        assert_eq!(node(&small, "route").height, NODE_H);
+        // Removing a case makes the card shorter again, and a fresh layout agrees.
+        let fewer = remove_switch_case(&flow, "route", "extra5");
+        assert!(node(&fewer, "route").height < last);
+        let w = from_flow(&routed(), &flow.nodes, &flow.edges);
+        assert_eq!(node(&to_flow(&w), "route").height, last);
     }
 
     #[test]

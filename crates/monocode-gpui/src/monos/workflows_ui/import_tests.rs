@@ -164,8 +164,8 @@ fn import_waits_for_every_input_and_saves_paused_and_flagged(cx: &mut TestAppCon
     assert!(w.next_run_at.is_none());
     // What came from a file is read again, and approved, before it can run.
     assert!(w.needs_review);
-    // The import page is replaced by the new workflow's page.
-    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(w.id.clone())));
+    // The import page is replaced by the new workflow's page, on its board.
+    assert_eq!(route(&s, visual), Some(WfRoute::Board(w.id.clone())));
 }
 
 #[gpui::test]

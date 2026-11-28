@@ -1,8 +1,8 @@
 //! The pure side of the run graph: a run's definition snapshot as flow nodes and edges, each
 //! carrying what the run did with it. Port of `runGraphModel.ts`. A For each is drawn either as
-//! one lane per item (side by side) or as one lane at a time; the lane's child nodes get ids that
+//! one lane per item (titled rows, stacked top to bottom) or as one lane at a time; the lane's child nodes get ids that
 //! name their branch (`<node>@<branch>`), so the same definition node can appear in every lane.
-use super::board_model::{to_flow, FlowEdge, FlowKind, FlowNode, Point, GROUP_PAD, NODE_W};
+use super::board_model::{to_flow, FlowEdge, FlowKind, FlowNode, Point, NODE_H};
 use super::engine::is_asking;
 use super::model::{
     archived_branch, archived_items_key, parse_branch, stable_json, BranchKey, Edge, Node, NodeId,
@@ -176,14 +176,9 @@ pub struct RunGraph {
 
 /// Space above the lanes of a group, for lane titles or item tabs.
 pub const LANE_HEADER: f32 = 28.0;
-/// Width of a card in the lanes view: four lanes of two nodes fit the panel on the first frame.
-pub const LANE_CARD_W: f32 = 92.0;
-/// Space between two lanes.
+/// Space between two lanes (each lane is a titled row; the rows stack top to bottom).
 pub const LANE_GAP: f32 = 26.0;
-/// Room right of the last lane.
-const LANE_EDGE: f32 = 12.0;
 
-const LANE_SCALE: f32 = LANE_CARD_W / NODE_W;
 const LANES_MAX_ITEMS: usize = 4;
 const LANES_MAX_CHILDREN: usize = 3;
 const LABEL_MAX: usize = 60;
@@ -592,31 +587,10 @@ pub fn group_views(run: &WorkflowRun, pick: &Picks, now: u64) -> Vec<GroupView> 
         .collect()
 }
 
-/// The width of one lane of a group: its children's snapshot layout, left padding left out.
-/// The children run left to right, so a lane is as wide as its row of cards.
-fn lane_width_of(kids: &[&FlowNode]) -> f32 {
-    kids.iter()
-        .map(|k| k.position.x + NODE_W - GROUP_PAD)
-        .fold(NODE_W, f32::max)
-}
-
-/// Lanes when every For each is small (up to 4 items, up to 3 narrow nodes in it), else one lane
-/// at a time.
+/// Lanes when every For each is small (up to 4 items, up to 3 nodes in it), else one lane at a
+/// time.
 pub fn default_run_view(run: &WorkflowRun) -> RunView {
-    let flow = to_flow(&run.definition).nodes;
     for group_id in for_each_ids(run) {
-        // A row of cards too long to repeat side by side, even narrowed to a lane's cards.
-        let kids: Vec<&FlowNode> = flow
-            .iter()
-            .filter(|n| n.parent_id.as_deref() == Some(group_id))
-            .collect();
-        let narrowed = kids
-            .iter()
-            .map(|k| (k.position.x - GROUP_PAD) * LANE_SCALE + LANE_CARD_W)
-            .fold(LANE_CARD_W, f32::max);
-        if narrowed > NODE_W * 1.5 {
-            return RunView::Single;
-        }
         let info = rounds_of(run, group_id);
         let items = info
             .rounds
@@ -752,12 +726,25 @@ fn grow(boxes: &mut [Rect], at: usize, dx: f32, dy: f32) {
 
 struct Lane {
     branch: BranchKey,
-    x: f32,
+    /// How far down the lane's row starts, counted from the top of the group's children.
+    y: f32,
+}
+
+/// The height of the row one lane takes: its children's snapshot layout, top padding left out.
+fn lane_height_of(kids: &[&FlowNode]) -> f32 {
+    let top = kids
+        .iter()
+        .map(|k| k.position.y)
+        .fold(f32::INFINITY, f32::min);
+    kids.iter()
+        .map(|k| k.position.y + k.height - top)
+        .fold(NODE_H, f32::max)
 }
 
 /// The run graph for `view`: the definition laid out like the board, each For each replaced by
 /// the lanes of the items in `groups` (all of them in the lanes view, the selected one in the
-/// single view), groups grown to hold them with whatever they would cover moved aside. `now` is
+/// single view), groups grown to hold them with whatever they would cover moved aside. The lanes
+/// are titled rows stacked top to bottom, each as wide as the board's own row of cards. `now` is
 /// the clock in ms for "Running 3m".
 pub fn run_graph(run: &WorkflowRun, view: RunView, groups: &[GroupView], now: u64) -> RunGraph {
     let base = to_flow(&run.definition);
@@ -778,7 +765,6 @@ pub fn run_graph(run: &WorkflowRun, view: RunView, groups: &[GroupView], now: u6
         .filter(|e| e.loop_spec.is_some())
         .map(|e| e.to.as_str())
         .collect();
-    let compact = view == RunView::Lanes;
 
     // The branches each group draws a lane for, in order.
     let mut lanes: HashMap<NodeId, Vec<Lane>> = HashMap::new();
@@ -819,35 +805,23 @@ pub fn run_graph(run: &WorkflowRun, view: RunView, groups: &[GroupView], now: u6
                 None => Vec::new(),
             };
             let picks: Vec<&GroupItem> = if kids.is_empty() { Vec::new() } else { picked };
-            // Side by side, a lane is a narrow column of compact cards; alone it keeps the
-            // board's width.
-            let lane_w = if compact {
-                kids.iter()
-                    .map(|k| (k.position.x - GROUP_PAD) * LANE_SCALE + LANE_CARD_W)
-                    .fold(LANE_CARD_W, f32::max)
-            } else {
-                lane_width_of(&kids)
-            };
+            let lane_h = lane_height_of(&kids);
             let round = gv.map_or(1, |g| g.round);
             let group_lanes: Vec<Lane> = picks
                 .iter()
                 .enumerate()
                 .map(|(k, item)| Lane {
                     branch: branch_of(&flow.id, item.index, round, info.live),
-                    x: GROUP_PAD + k as f32 * (lane_w + LANE_GAP),
+                    y: LANE_HEADER + k as f32 * (lane_h + LANE_HEADER + LANE_GAP),
                 })
                 .collect();
             if !picks.is_empty() {
                 let n = picks.len() as f32;
-                let wide = GROUP_PAD * 2.0 + n * lane_w + (n - 1.0) * LANE_GAP + LANE_EDGE;
-                let dx = if compact {
-                    (wide - rect.w).max(0.0)
-                } else {
-                    (n - 1.0) * (lane_w + LANE_GAP)
-                };
+                // One row needs only its title strip; every other row adds a row and a title.
+                let dy = LANE_HEADER + (n - 1.0) * (lane_h + LANE_HEADER + LANE_GAP);
                 match growth.iter_mut().find(|g| g.0 == flow.id) {
-                    Some(slot) => *slot = (flow.id.clone(), dx, LANE_HEADER),
-                    None => growth.push((flow.id.clone(), dx, LANE_HEADER)),
+                    Some(slot) => *slot = (flow.id.clone(), 0.0, dy),
+                    None => growth.push((flow.id.clone(), 0.0, dy)),
                 }
             }
             lanes.insert(flow.id.clone(), group_lanes);
@@ -893,13 +867,9 @@ pub fn run_graph(run: &WorkflowRun, view: RunView, groups: &[GroupView], now: u6
             let mut node = flow.clone();
             node.id = format!("{}@{}", flow.id, lane.branch);
             node.position = Point {
-                x: lane.x + (flow.position.x - GROUP_PAD) * if compact { LANE_SCALE } else { 1.0 },
-                y: flow.position.y + LANE_HEADER,
+                x: flow.position.x,
+                y: flow.position.y + lane.y,
             };
-            if compact {
-                node.width = LANE_CARD_W;
-            }
-            node.data.compact = compact;
             node.data.run = Some(state_of(&by_key, &flow.id, &lane.branch, now));
             node.data.loop_in = loop_to.contains(flow.id.as_str());
             node.data.loop_out = loop_from.contains(flow.id.as_str());
@@ -933,7 +903,6 @@ pub fn run_graph(run: &WorkflowRun, view: RunView, groups: &[GroupView], now: u6
                 edge.source = format!("{}@{}", def.from, lane.branch);
                 edge.target = format!("{}@{}", def.to, lane.branch);
                 edge.run = Some(edge_state(def, &lane.branch, &by_key, branching(&def.from)));
-                edge.compact = compact;
                 edges.push(edge);
             }
         }

@@ -424,50 +424,51 @@ fn lanes_view_fans_a_for_each_into_one_lane_per_item() {
     let one = pending(1);
     let lone_graph = graph(&one, RunView::Lanes);
     let lone = lone_graph.nodes.iter().find(|n| n.id == "each").unwrap();
-    assert!(group.width > lone.width);
-    // Lanes sit side by side without overlapping.
-    let xs: Vec<f32> = (0..4)
-        .map(|i| {
-            nodes
-                .iter()
-                .find(|n| n.id == format!("dev@each#{i}"))
-                .unwrap()
-                .position
-                .x
-        })
-        .collect();
-    for i in 1..xs.len() {
-        assert!(xs[i] - xs[i - 1] >= LANE_CARD_W + LANE_GAP);
+    assert!(group.height > lone.height);
+    assert_eq!(group.width, lone.width);
+    // Lanes are titled rows stacked top to bottom without overlapping, all at the same x.
+    let at = |i: usize| {
+        nodes
+            .iter()
+            .find(|n| n.id == format!("dev@each#{i}"))
+            .unwrap()
+            .position
+    };
+    for i in 1..4 {
+        assert_eq!(at(i).x, at(0).x);
+        assert!(at(i).y - at(i - 1).y >= NODE_H + LANE_HEADER + LANE_GAP);
     }
 }
 
 #[test]
-fn lanes_view_is_compact_four_lanes_of_two_nodes_side_by_side() {
+fn lanes_view_stacks_four_rows_of_the_boards_own_cards() {
     let r = each_run(&[Done, Running, Failed, Pending]);
     let RunGraph { nodes, edges } = graph(&r, RunView::Lanes);
     let group = nodes.iter().find(|n| n.id == "each").unwrap();
-    // A lane is a row of narrow cards (dev, then review one column on), and the lanes sit
-    // side by side inside the frame.
-    let lane_w = (NODE_W + GAP_X) * (LANE_CARD_W / NODE_W) + LANE_CARD_W;
-    assert!((group.width - (GROUP_PAD * 2.0 + 4.0 * lane_w + 3.0 * LANE_GAP + 12.0)).abs() < 0.01);
+    let one = graph(&pending(1), RunView::Lanes);
+    let lone = one.nodes.iter().find(|n| n.id == "each").unwrap();
+    // The frame keeps its width and grows by one titled row for each lane after the first.
+    assert_eq!(group.width, lone.width);
+    assert!(
+        (group.height - lone.height - 3.0 * (NODE_H + LANE_HEADER + LANE_GAP)).abs() < 0.01,
+        "{} vs {}",
+        group.height,
+        lone.height
+    );
     let kids = children(&nodes);
-    assert!(kids
-        .iter()
-        .all(|n| n.width == LANE_CARD_W && n.data.compact));
+    assert!(kids.iter().all(|n| n.width == NODE_W && !n.data.compact));
     // Every card stays inside the group box.
     for k in &kids {
         assert!(k.position.x + k.width <= group.width);
+        assert!(k.position.y + k.height <= group.height);
     }
     assert!(edges
         .iter()
         .filter(|e| e.source.starts_with("dev@"))
-        .all(|e| e.compact));
-    // One lane or the single view keeps the board's cards.
+        .all(|e| !e.compact));
+    // The single view shows one row, as before.
     let single = graph(&r, RunView::Single);
-    assert!(children(&single.nodes)
-        .iter()
-        .all(|n| n.width == NODE_W && !n.data.compact));
-    assert!(single.edges.iter().all(|e| !e.compact));
+    assert_eq!(children(&single.nodes).len(), 2);
 }
 
 #[test]
@@ -650,10 +651,10 @@ fn places_nodes_without_positions_like_the_board() {
 }
 
 #[test]
-fn keeps_a_widened_group_clear_of_a_sibling_beside_it() {
+fn a_group_with_lanes_stays_as_wide_so_a_sibling_beside_it_stays_clear_and_in_place() {
     let mut w = each_workflow();
     move_node(&mut w, "each", 0.0, 100.0);
-    move_node(&mut w, "report", 300.0, 100.0);
+    move_node(&mut w, "report", 700.0, 100.0);
     let r = WorkflowRun {
         definition: w,
         ..each_run(&[Done, Done, Done])
@@ -662,6 +663,7 @@ fn keeps_a_widened_group_clear_of_a_sibling_beside_it() {
     let group = g.nodes.iter().find(|n| n.id == "each").unwrap();
     let report = g.nodes.iter().find(|n| n.id == "report").unwrap();
     assert!(report.position.x >= group.position.x + group.width);
+    assert_eq!(report.position, Point { x: 700.0, y: 100.0 });
 }
 
 #[test]
@@ -838,7 +840,7 @@ fn no_items_is_only_for_a_for_each_that_expanded_to_an_empty_list() {
 }
 
 #[test]
-fn defaults_to_single_view_when_the_row_of_children_is_too_long_for_a_lane() {
+fn a_long_row_of_children_keeps_the_lanes_view_because_the_rows_stack() {
     let mut w = each_workflow();
     move_node(&mut w, "dev", 16.0, 32.0);
     move_node(&mut w, "review", 16.0 + 3.0 * (232.0 + 72.0), 32.0);
@@ -846,9 +848,9 @@ fn defaults_to_single_view_when_the_row_of_children_is_too_long_for_a_lane() {
         definition: w,
         ..pending(2)
     };
-    assert_eq!(default_run_view(&r), RunView::Single);
-    // Two cards one column apart are a lane that fits.
-    assert_eq!(default_run_view(&pending(2)), RunView::Lanes);
+    assert_eq!(default_run_view(&r), RunView::Lanes);
+    // Many items or many nodes still ask for one lane at a time.
+    assert_eq!(default_run_view(&pending(5)), RunView::Single);
 }
 
 #[test]
@@ -918,11 +920,10 @@ fn moves_each_node_below_or_beside_a_widened_group_exactly_once() {
         .find(|n| n.id == "each")
         .unwrap()
         .width;
-    // Three lanes of narrow cards, dev and review one column apart.
-    let lane_w = (320.0 - 16.0) * (LANE_CARD_W / NODE_W) + LANE_CARD_W;
-    let dx = (2.0 * 16.0 + 3.0 * lane_w + 2.0 * LANE_GAP + 12.0 - base).max(0.0);
-    assert!(dx > 0.0);
-    let dy = LANE_HEADER;
+    // Three lanes stack as rows: the frame grows taller only, so what is under it moves down by
+    // exactly that and what is beside it stays.
+    assert_eq!(g.nodes.iter().find(|n| n.id == "each").unwrap().width, base);
+    let dy = LANE_HEADER + 2.0 * (NODE_H + LANE_HEADER + LANE_GAP);
     for i in [0, 1, 2, 5] {
         let down = g.nodes.iter().find(|n| n.id == format!("down{i}")).unwrap();
         let (x, y) = at[&format!("down{i}")];
@@ -938,7 +939,7 @@ fn moves_each_node_below_or_beside_a_widened_group_exactly_once() {
         assert_eq!(
             side.position,
             Point {
-                x: x as f32 + dx,
+                x: x as f32,
                 y: y as f32
             }
         );
@@ -1081,10 +1082,10 @@ fn an_edge_between_a_lane_and_the_outside_is_left_out() {
 }
 
 #[test]
-fn a_node_below_the_widened_part_of_a_group_moves_down() {
+fn a_node_below_a_group_grown_by_its_lanes_moves_down_by_as_much() {
     let mut w = each_workflow();
     w.nodes
-        .push(session("corner", json!({"ui": {"x": 632, "y": 400}})));
+        .push(session("corner", json!({"ui": {"x": 300, "y": 400}})));
     move_node(&mut w, "each", 0.0, 0.0);
     move_node(&mut w, "start", 700.0, 3000.0);
     move_node(&mut w, "report", 700.0, 3100.0);
@@ -1097,8 +1098,8 @@ fn a_node_below_the_widened_part_of_a_group_moves_down() {
     assert_eq!(
         corner.position,
         Point {
-            x: 632.0,
-            y: 400.0 + LANE_HEADER
+            x: 300.0,
+            y: 400.0 + LANE_HEADER + 2.0 * (NODE_H + LANE_HEADER + LANE_GAP)
         }
     );
 }

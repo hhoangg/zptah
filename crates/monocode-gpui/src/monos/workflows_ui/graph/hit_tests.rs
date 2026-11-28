@@ -97,7 +97,10 @@ fn a_switch_leaves_by_each_case_and_default_spread_down_its_right_side() {
     for pair in outs.windows(2) {
         assert!(pair[1].1 - pair[0].1 > 10., "{outs:?}");
     }
-    assert!(outs[0].1 > 0. && outs[3].1 < NODE_H, "{outs:?}");
+    assert!(
+        outs[0].1 > 0. && outs[3].1 < node(&scene, "route").rect.h,
+        "{outs:?}"
+    );
     let route = node(&scene, "route").rect;
     assert!(
         handles_of(node(&scene, "route"))

@@ -86,13 +86,12 @@ impl Monos {
         let scope = self.wf.scope.clone();
         let body = match self.wf.route.clone() {
             None => self.workflows_home(&scope, window, cx),
-            Some(WfRoute::Workflow(id)) => self.workflow_page(&scope, &id, window, cx),
             Some(WfRoute::Review(id, intent)) => self.workflow_review_page(&id, intent, cx),
             Some(WfRoute::Import) => self.import_workflow_page(&scope, cx),
-            Some(WfRoute::Run(id, run)) => self.workflow_run_page(&scope, &id, &run, window, cx),
-            Some(route @ (WfRoute::New | WfRoute::Board(_))) => {
-                self.workflow_board_page(&scope, &route, window, cx)
-            }
+            Some(
+                route
+                @ (WfRoute::New | WfRoute::Board(_) | WfRoute::Workflow(_) | WfRoute::Run(..)),
+            ) => self.workflow_shell(&scope, &route, window, cx),
         };
         div()
             .size_full()

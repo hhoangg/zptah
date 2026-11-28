@@ -4,10 +4,10 @@
 //! board draws and calls these.
 use super::board_model::{
     auto_place, connection_kind, definition_key, deletion, drop_crossing_edges, drop_nodes,
-    fit_groups, from_flow, groupable, is_group, make_edge, new_node, project_input_for, push_right,
-    settle_drop, stack_triggers, to_flow, trigger_frame, trigger_frame_size, trigger_slot,
-    BoardNodeData, ConnectionKind, Flow, FlowEdge, FlowKind, FlowNode, NodeType, Point,
-    EMPTY_GROUP_H, EMPTY_GROUP_W, GAP_X, NODE_H, NODE_W,
+    fit_groups, from_flow, groupable, is_group, make_edge, new_node, node_height,
+    project_input_for, push_right, settle_drop, stack_triggers, to_flow, trigger_frame,
+    trigger_frame_size, trigger_slot, BoardNodeData, ConnectionKind, Flow, FlowEdge, FlowKind,
+    FlowNode, NodeType, Point, EMPTY_GROUP_H, EMPTY_GROUP_W, GAP_X, NODE_W,
 };
 use super::engine::looped_node_ids;
 use super::model::{
@@ -305,14 +305,28 @@ pub fn loop_allowed(w: &Workflow, from: &str, to: &str) -> bool {
     connection_kind(w, from, to, None) == ConnectionKind::Loop
 }
 
-/// The flow with the node (and edge) given selected and nothing else.
+/// The flow with the node (and edge) given selected and nothing else. The canvas draws one edge
+/// from the trigger frame for all the edges the triggers have to the same step, so selecting a
+/// trigger's edge selects every trigger edge to that step: deleting it removes them all.
 pub fn select(flow: &Flow, node: Option<&str>, edge: Option<&str>) -> Flow {
     let mut out = flow.clone();
     for n in &mut out.nodes {
         n.selected = node == Some(n.id.as_str());
     }
+    let is_trigger = |id: &str| {
+        flow.nodes
+            .iter()
+            .any(|n| n.id == id && n.parent_id.is_none() && n.data.node.is_trigger())
+    };
+    let framed_target = edge
+        .and_then(|id| flow.edges.iter().find(|e| e.id == id))
+        .filter(|e| is_trigger(&e.source))
+        .map(|e| e.target.clone());
     for e in &mut out.edges {
-        e.selected = edge == Some(e.id.as_str());
+        e.selected = edge == Some(e.id.as_str())
+            || framed_target
+                .as_deref()
+                .is_some_and(|target| e.target == target && is_trigger(&e.source));
     }
     out
 }
@@ -355,7 +369,11 @@ pub fn add_node(flow: &Flow, w: &Workflow, ty: NodeType) -> (Flow, NodeId) {
             },
             position,
             width: if group { EMPTY_GROUP_W } else { NODE_W },
-            height: if group { EMPTY_GROUP_H } else { NODE_H },
+            height: if group {
+                EMPTY_GROUP_H
+            } else {
+                node_height(&node)
+            },
             parent_id,
             selected: true,
             data: BoardNodeData::new(node.clone()),
@@ -546,6 +564,7 @@ pub fn update_node(flow: &Flow, next: &Node) -> Flow {
     for n in &mut out.nodes {
         if n.id == next.id {
             n.data.node = next.clone();
+            n.height = node_height(next);
         }
     }
     out
@@ -870,6 +889,7 @@ fn edit_switch(
         return out;
     };
     edit(cases);
+    node.height = node_height(&node.data.node);
     out.edges = flow
         .edges
         .iter()

@@ -108,6 +108,7 @@ mod review;
 mod right_panel;
 mod runtime;
 mod search;
+mod segmented;
 mod send_morph;
 mod session_mark;
 mod session_review;

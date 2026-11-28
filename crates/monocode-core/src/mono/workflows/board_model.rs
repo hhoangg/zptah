@@ -32,6 +32,23 @@ pub const GROUP_SLACK: f32 = 44.0;
 /// A loop edge runs under the children of a group, so the frame has room below them.
 pub const GROUP_LOOP: f32 = 36.0;
 
+/// How far apart an If card puts its two outs (true at 28% and false at 72% of its height), and
+/// the share of its height a card with three or more outs spreads them over (12% to 88%).
+const IF_OUT_SPACING: f32 = NODE_H * (0.72 - 0.28);
+const MANY_OUTS_SPAN: f32 = 0.88 - 0.12;
+
+/// The height of the card of `node`: `NODE_H`, and for a Switch as much as its outs need to sit
+/// at least as far apart as an If's two (more cases make a taller card).
+pub fn node_height(node: &Node) -> f32 {
+    match &node.kind {
+        NodeKind::Switch { cases, .. } if cases.len() >= 2 => {
+            let gaps = cases.len() as f32;
+            NODE_H.max((gaps * IF_OUT_SPACING / MANY_OUTS_SPAN).ceil())
+        }
+        _ => NODE_H,
+    }
+}
+
 /// The size of a For each with nothing in it yet.
 pub const EMPTY_GROUP_W: f32 = GROUP_PAD + NODE_W + GROUP_PAD + GROUP_SLACK;
 pub const EMPTY_GROUP_H: f32 = GROUP_HEADER + NODE_H + GROUP_PAD + GROUP_LOOP;
@@ -117,7 +134,7 @@ impl FlowNode {
             kind: FlowKind::Board,
             position,
             width: NODE_W,
-            height: NODE_H,
+            height: node_height(&node),
             parent_id: None,
             selected: false,
             data: BoardNodeData::new(node),
@@ -430,7 +447,7 @@ fn layout_scope(
     let size_of = |n: &Node| {
         sizes.get(&n.id).copied().unwrap_or(Size {
             width: NODE_W,
-            height: NODE_H,
+            height: node_height(n),
         })
     };
     let stack_h = |layer: &Vec<&Node>| -> f32 {

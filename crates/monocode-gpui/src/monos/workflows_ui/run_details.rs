@@ -317,52 +317,45 @@ impl Monos {
             })
     }
 
-    /// The panel under the graph: collapsible, scrolling on its own.
-    pub(super) fn run_details(
+    /// The docked inspector of the Runs mode: what the run did with the picked node. It scrolls
+    /// on its own.
+    pub(super) fn run_inspector(
         &mut self,
-        window: &Window,
+        has_pick: bool,
         color: u32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let open = !self.wf.run.details_closed;
-        let details = self.wf.run.details.clone();
-        let key = self.wf.run.selection.clone();
+        // Without a run picked, what a run left behind is not this page's.
+        let details = self.wf.run.details.clone().filter(|_| has_pick);
+        let key = self.wf.run.selection.clone().filter(|_| has_pick);
         let body = match (&details, &key) {
-            (Some(d), Some(key)) if open => Some(self.details_body(d, key, color, cx)),
+            (Some(d), Some(key)) => Some(self.details_body(d, key, color, cx)),
             _ => None,
         };
         div()
             .id("wf-details")
             .debug_selector(|| "wf-details".into())
+            .w(px(super::layout::INSPECTOR_W))
             .flex_shrink_0()
-            .border_t_1()
+            .h_full()
+            .border_l_1()
             .border_color(content(0.1))
+            .bg(floating_fill())
+            .flex()
+            .flex_col()
             .child(
                 div()
-                    .id("wf-details-toggle")
-                    .debug_selector(|| "wf-details-toggle".into())
-                    .role(Role::Button)
-                    .aria_expanded(open)
-                    .w_full()
+                    .h(px(40.))
+                    .flex_shrink_0()
+                    .border_b_1()
+                    .border_color(content(0.1))
+                    .px_4()
                     .flex()
                     .items_center()
                     .gap_1p5()
-                    .px_4()
-                    .py_2()
-                    .cursor_pointer()
-                    .child(
-                        icon(
-                            if open {
-                                "chevron-down"
-                            } else {
-                                "chevron-right"
-                            },
-                            12.,
-                        )
-                        .text_color(content(0.4)),
-                    )
                     .child(
                         div()
+                            .flex_shrink_0()
                             .text_size(px(11.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(content(0.4))
@@ -381,34 +374,31 @@ impl Monos {
                                     .map(|d| d.heading.clone())
                                     .unwrap_or_default(),
                             ),
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.wf.run.details_closed = !this.wf.run.details_closed;
-                        cx.notify();
-                    })),
+                    ),
             )
-            .when(open, |d| {
-                d.child(
-                    div()
-                        .id("wf-details-body")
-                        .debug_selector(|| "wf-details-body".into())
-                        .max_h(window.viewport_size().height * 0.3)
-                        .overflow_y_scroll()
-                        .px_2()
-                        .pb_3()
-                        .map(|el| match body {
-                            Some(body) => el.child(body),
-                            None => el.child(
-                                div()
-                                    .px_4()
-                                    .py_2()
-                                    .text_size(px(12.))
-                                    .text_color(content(0.45))
-                                    .child("Pick a node to see what it did."),
-                            ),
-                        }),
-                )
-            })
+            .child(
+                div()
+                    .id("wf-details-body")
+                    .debug_selector(|| "wf-details-body".into())
+                    .w_full()
+                    .min_w_0()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_2()
+                    .py_2()
+                    .map(|el| match body {
+                        Some(body) => el.child(body),
+                        None => el.child(
+                            div()
+                                .px_2()
+                                .py_2()
+                                .text_size(px(12.))
+                                .text_color(content(0.45))
+                                .child("Pick a node to see what it did."),
+                        ),
+                    }),
+            )
             .into_any_element()
     }
 }

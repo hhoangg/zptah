@@ -562,10 +562,8 @@ fn the_settings_edit_the_description_and_the_inputs(cx: &mut TestAppContext) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
-    do_with(&s, visual, |m, cx| {
-        m.board_menu_picked("Workflow menu", "settings".into(), cx)
-    });
-    assert!(visual.debug_bounds("wf-inspector").is_some());
+    open_settings(&s, visual);
+    assert!(visual.debug_bounds("wf-settings-page").is_some());
     type_in(&s, visual, BoardField::Description, "What it is for.");
     assert_eq!(
         on_board(&s, visual, |b| b.meta.description.clone()).as_deref(),
@@ -683,7 +681,7 @@ fn focus_field(s: &Setup, visual: &mut VisualTestContext, spec: BoardField) {
 
 fn open_settings(s: &Setup, visual: &mut VisualTestContext) {
     do_with(s, visual, |m, cx| {
-        m.board_menu_picked("Workflow menu", "settings".into(), cx)
+        m.wf_set_mode(super::layout::WfMode::Settings, cx)
     });
     visual.refresh().unwrap();
 }
@@ -713,7 +711,10 @@ fn a_new_input_is_declared_by_enter_or_plus_and_never_by_leaving_the_field(
     assert_eq!(declared(&s, visual, "retries"), None);
     assert!(!on_board(&s, visual, |b| b.changed()));
     // Leaving the page does not declare it either.
-    click(visual, "wf-inspector-back");
+    do_with(&s, visual, |m, cx| {
+        m.wf_set_mode(super::layout::WfMode::Edit, cx)
+    });
+    visual.refresh().unwrap();
     assert_eq!(declared(&s, visual, "retries"), None);
     open_settings(&s, visual);
     // Enter does, with the type chosen.

@@ -663,7 +663,7 @@ impl Monos {
                         // The import page is replaced by the new workflow's page.
                         if this.wf.route == Some(WfRoute::Import) {
                             this.wf.page_notice = None;
-                            this.wf.route = Some(WfRoute::Workflow(id));
+                            this.wf.route = Some(WfRoute::Board(id));
                         }
                         this.changed(cx);
                     }

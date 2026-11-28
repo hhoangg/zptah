@@ -1,5 +1,6 @@
-//! The board editor (`WorkflowBoard.tsx`): a workflow drawn top to bottom on the graph canvas and
-//! edited in place. Edits stay in `BoardState` until Save; an edit made elsewhere (the Mono's
+//! The board editor (`WorkflowBoard.tsx`): a workflow drawn left to right on the graph canvas and
+//! edited in place. Its state also backs the Runs and Settings modes of the page (`layout.rs`),
+//! so a draft survives a switch of mode. Edits stay in `BoardState` until Save; an edit made elsewhere (the Mono's
 //! CLI) shows up live while there are none and is asked about otherwise. The rules are in core's
 //! `board_edit`; this file holds the state, the canvas events, saving and the field handlers.
 //! All file access and model probing runs off the UI thread.
@@ -12,7 +13,7 @@ use monocode_core::mono::workflows::{
     board_edit::*,
     board_model::{
         BoardNodeData, Flow, FlowKind, NodeType, Point, absolute, blank_workflow, definition_key,
-        issues_by_node, to_flow,
+        issues_by_node, node_height, to_flow,
     },
     model::{
         InputValue, LoopSpec, Node, NodeKind, Requirement, RequirementKind, SWITCH_DEFAULT,
@@ -55,11 +56,11 @@ fn next_case_name(cases: &[String], taken: &[String]) -> String {
     }
 }
 
-/// What the slide-over of the board shows.
+/// What the docked inspector of the board shows: one node's form. (The workflow's own settings
+/// are a mode of the page, not an inspector.)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum InspectorView {
     Node(String),
-    Settings,
 }
 
 /// The text fields of the board. A `Live` one applies every change; a `Commit` one when it is
@@ -68,6 +69,8 @@ pub(super) enum InspectorView {
 pub(super) enum BoardField {
     Name,
     Description,
+    /// The text of the template the run summary is made from.
+    SummaryTemplate,
     Title(String),
     Prompt(String),
     Command(String),
@@ -134,6 +137,10 @@ pub(in crate::monos) enum BoardPick {
     NewInputType,
     /// The kind of the requirement at this place.
     RequireKind(usize),
+    /// The harness, then the effort, of the model that makes the AI decisions.
+    DecisionEffort,
+    /// The Mono the run summary goes to (empty: none).
+    ReportTo,
 }
 
 /// The loop being asked for after a connection back up a branch.
@@ -160,6 +167,9 @@ pub(super) struct BoardState {
     pub view: Option<InspectorView>,
     pub loop_ask: Option<LoopAsk>,
     pub leaving: bool,
+    /// Where Discard goes after the leave dialog (None: the list). Set when the dialog was
+    /// opened by switching workflows.
+    pub leave_to: Option<WfRoute>,
     pub saving: bool,
     pub show_issues: bool,
     /// An edit made elsewhere; `true` when it stopped a Save, which then waits for a choice.
@@ -171,10 +181,11 @@ pub(super) struct BoardState {
     pub canvas: Entity<GraphCanvas>,
     /// A new key makes the canvas fit its view again.
     pub fit_gen: u64,
-    pub add_anchor: AnchorSlot,
     pub more_anchor: AnchorSlot,
+    pub switch_anchor: AnchorSlot,
     pub area: AnchorSlot,
     pub model_anchor: AnchorSlot,
+    pub decision_anchor: AnchorSlot,
     /// The type chosen for the next input declared in the settings.
     pub new_input_type: String,
     /// What the settings say is wrong with an input value just typed.
@@ -184,10 +195,12 @@ pub(super) struct BoardState {
     subs: Vec<Subscription>,
 }
 
-fn is_board(route: &WfRoute) -> Option<String> {
+/// The key of the board a page route is drawn from: the workflow's id, or "new". Every mode of
+/// the page (Edit, Runs, Settings) shares the one board of its workflow.
+pub(super) fn is_board(route: &WfRoute) -> Option<String> {
     match route {
         WfRoute::New => Some("new".into()),
-        WfRoute::Board(id) => Some(id.clone()),
+        WfRoute::Board(id) | WfRoute::Workflow(id) | WfRoute::Run(id, _) => Some(id.clone()),
         _ => None,
     }
 }
@@ -250,10 +263,12 @@ impl Monos {
             return true;
         }
         let (workflow, is_new) = match route {
-            WfRoute::Board(id) => match self.global_workflow(id) {
-                Some(w) => (w.clone(), false),
-                None => return false,
-            },
+            WfRoute::Board(id) | WfRoute::Workflow(id) | WfRoute::Run(id, _) => {
+                match self.global_workflow(id) {
+                    Some(w) => (w.clone(), false),
+                    None => return false,
+                }
+            }
             _ => (blank_workflow(now_ms()), true),
         };
         let canvas = cx.new(|_| GraphCanvas::new(scope.color));
@@ -274,6 +289,7 @@ impl Monos {
             view: None,
             loop_ask: None,
             leaving: false,
+            leave_to: None,
             saving: false,
             show_issues: false,
             elsewhere: None,
@@ -283,10 +299,11 @@ impl Monos {
             issues: Vec::new(),
             canvas,
             fit_gen: 0,
-            add_anchor: AnchorSlot::default(),
             more_anchor: AnchorSlot::default(),
+            switch_anchor: AnchorSlot::default(),
             area: AnchorSlot::default(),
             model_anchor: AnchorSlot::default(),
+            decision_anchor: AnchorSlot::default(),
             new_input_type: "string".into(),
             input_problem: None,
             _events: events,
@@ -325,6 +342,10 @@ impl Monos {
         let mut nodes = b.flow.nodes.clone();
         for n in &mut nodes {
             let id = n.id.clone();
+            if n.kind == FlowKind::Board {
+                // A Switch card is as tall as its cases need.
+                n.height = node_height(&n.data.node);
+            }
             n.data = BoardNodeData {
                 issues: by_node.get(&id).cloned().unwrap_or_default(),
                 loop_in: loops.iter().any(|(_, to)| *to == id),
@@ -519,11 +540,25 @@ impl Monos {
                 let id = id.clone();
                 self.board_flow(|flow, _| select(flow, None, Some(&id)), cx);
             }
-            GraphEvent::PaneClick => self.board_flow(|flow, _| select(flow, None, None), cx),
-            // Not while the inspector is open: Backspace on one of its buttons must not delete a
-            // node.
-            GraphEvent::Delete if self.wf.board.as_ref().is_some_and(|b| b.view.is_none()) => {
-                self.board_flow(|flow, _| delete_selected(flow), cx)
+            GraphEvent::PaneClick => {
+                self.board_flow(|flow, _| select(flow, None, None), cx);
+                self.board_view(None, cx);
+            }
+            // The canvas sends this only while it has the focus, so Backspace in one of the
+            // inspector's fields (beside the canvas, not over it) never gets here.
+            GraphEvent::Delete => {
+                self.board_flow(|flow, _| delete_selected(flow), cx);
+                // A deleted node leaves nothing for the inspector to show.
+                if let Some(InspectorView::Node(id)) =
+                    self.wf.board.as_ref().and_then(|b| b.view.clone())
+                    && self
+                        .wf
+                        .board
+                        .as_ref()
+                        .is_some_and(|b| b.node(&id).is_none())
+                {
+                    self.board_view(None, cx);
+                }
             }
             _ => {}
         }
@@ -606,6 +641,35 @@ impl Monos {
                     self.board_flow(|flow, _| set_loop(flow, &id, Some(next)), cx);
                 }
             }
+        }
+    }
+
+    /// The board laid out again, left to right; the canvas then fits the whole of it.
+    pub(super) fn board_tidy(&mut self, cx: &mut Context<Self>) {
+        self.board_flow(tidy, cx);
+        if let Some(b) = self.wf.board.as_mut() {
+            b.fit_gen += 1;
+            self.board_rebuild(cx);
+        }
+    }
+
+    /// A problem was picked in the bar: its node is selected and its form opens. A problem that
+    /// belongs to no node is about the workflow's own settings, so those open.
+    pub(super) fn board_pick_problem(&mut self, node: Option<String>, cx: &mut Context<Self>) {
+        match node {
+            Some(id)
+                if self
+                    .wf
+                    .board
+                    .as_ref()
+                    .is_some_and(|b| b.node(&id).is_some()) =>
+            {
+                self.wf_set_mode(super::layout::WfMode::Edit, cx);
+                self.board_flow(|flow, _| select(flow, Some(&id), None), cx);
+                self.board_view(Some(InspectorView::Node(id)), cx);
+            }
+            Some(_) => {}
+            None => self.wf_set_mode(super::layout::WfMode::Settings, cx),
         }
     }
 
@@ -730,6 +794,9 @@ impl Monos {
         match spec {
             BoardField::Name => self.board_meta_edit(|m| m.name = text, cx),
             BoardField::Description => self.board_meta_edit(|m| m.description = Some(text), cx),
+            BoardField::SummaryTemplate => {
+                self.board_meta_edit(|m| m.summary_template = some(&text), cx)
+            }
             BoardField::Title(id) => self.board_node_edit(id, |n| n.title = some(&text), cx),
             BoardField::Time(id) => self.board_node_edit(
                 id,
@@ -1175,12 +1242,22 @@ impl Monos {
     }
 
     pub(super) fn board_request_back(&mut self, cx: &mut Context<Self>) {
+        self.board_request_leave(None, cx);
+    }
+
+    /// Leaves for `to` (None: the list), asking first when edits are unsaved.
+    pub(super) fn board_request_leave(&mut self, to: Option<WfRoute>, cx: &mut Context<Self>) {
         match self.wf.board.as_mut() {
             Some(b) if b.changed() => {
                 b.leaving = true;
+                b.leave_to = to;
                 cx.notify();
             }
-            _ => self.board_back(cx),
+            Some(b) => {
+                b.leave_to = to;
+                self.board_back(cx);
+            }
+            None => self.board_back(cx),
         }
     }
 
@@ -1194,37 +1271,20 @@ impl Monos {
         self.board_request_back(cx);
     }
 
-    /// Leaves the board for the page it came from.
+    /// Leaves the page: for the list, or for the workflow the leave dialog was asked about.
     pub(super) fn board_back(&mut self, cx: &mut Context<Self>) {
-        let id = self
-            .wf
-            .board
-            .as_ref()
-            .map(|b| (b.is_new, b.base.id.clone()));
+        let next = self.wf.board.as_mut().and_then(|b| b.leave_to.take());
         self.board_drop();
         self.wf.page_notice = None;
-        self.wf.route = match id {
-            Some((false, id)) => Some(WfRoute::Workflow(id)),
-            _ => None,
-        };
-        self.refresh_workflows(cx);
-        cx.notify();
-    }
-
-    pub(super) fn board_run_now(&mut self, cx: &mut Context<Self>) {
-        let Some(b) = self.wf.board.as_ref() else {
-            return;
-        };
-        let id = b.base.id.clone();
-        if b.base.needs_review {
-            let back = self.wf.route.clone();
-            self.open_workflow_review(&id, super::ReviewIntent::Run, back, cx);
-            return;
+        match next {
+            Some(route) => self.open_workflow_route(route, cx),
+            None => {
+                self.wf.settings = false;
+                self.wf.route = None;
+                self.refresh_workflows(cx);
+                cx.notify();
+            }
         }
-        if self.run_gate_for_run(&id, true, cx) {
-            return;
-        }
-        self.run_workflow_now(&id, None, true, cx);
     }
 
     pub(super) fn board_toggle_enabled(&mut self, cx: &mut Context<Self>) {

@@ -17,10 +17,7 @@ fn the_board_that_was_left_is_not_built_again_by_later_frames(cx: &mut TestAppCo
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
     click(visual, "mono-page-back");
-    assert_eq!(
-        s.manager.read_with(visual, |m, _| m.wf.route.clone()),
-        Some(WfRoute::Workflow(A.into()))
-    );
+    assert_eq!(s.manager.read_with(visual, |m, _| m.wf.route.clone()), None);
     // Drawing the page again must not make a board.
     for _ in 0..3 {
         frame(&s, visual);
@@ -36,6 +33,11 @@ fn the_board_drops_its_field_subscriptions_with_it(cx: &mut TestAppContext) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
+    // The form of a node has text fields, each with its subscriptions.
+    do_with(&s, visual, |m, cx| {
+        m.board_graph_event(&super::graph::GraphEvent::Click("fetch".into()), cx)
+    });
+    visual.refresh().unwrap();
     let held = s.manager.read_with(visual, |m, _| {
         m.wf.board.as_ref().map(|b| b.subscriptions())
     });

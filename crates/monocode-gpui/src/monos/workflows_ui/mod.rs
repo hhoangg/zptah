@@ -1,5 +1,6 @@
-//! The pages of the global Workflows view: the list, one workflow, its review before it may run,
-//! the board, a run, and the import page. Port of `MonoWorkflows.tsx`, `WorkflowPage.tsx`,
+//! The pages of the global Workflows view: the list, one workflow (a page with the modes Edit,
+//! Runs and Settings: the board, a workflow's runs and a run, and its settings), its review before
+//! it may run, and the import page. Port of `MonoWorkflows.tsx`, `WorkflowPage.tsx`,
 //! `WorkflowReviewPage.tsx` and `ImportWorkflowPage.tsx`, now hosted by `app_page::WorkflowsPage`
 //! and independent of any Mono.
 //!
@@ -27,6 +28,9 @@ mod inspector;
 mod inspector_parts;
 #[cfg(test)]
 mod inspector_tests;
+mod layout;
+#[cfg(test)]
+mod layout_tests;
 mod list;
 pub(in crate::monos) mod page;
 #[cfg(test)]
@@ -72,8 +76,6 @@ const IDLE_POLLS: u32 = 15;
 /// What a picker on a workflow page chooses for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Pick {
-    /// An input of the stored workflow.
-    Input(String, String),
     /// An input of the file being imported, by name and declared type.
     Import(String, String),
     /// A drop-down of the board editor.
@@ -135,6 +137,13 @@ pub(super) struct WorkflowsUi {
     route: Option<WfRoute>,
     /// Whether the Workflows view is the one on screen.
     open: bool,
+    /// The page of a workflow is on its Settings mode (the Edit mode otherwise, for the routes
+    /// that edit the board).
+    settings: bool,
+    /// The page hides its inner list and its inspector so the canvas has the room.
+    focus_canvas: bool,
+    /// Where the page's switcher menu and Run popover open from.
+    run_anchor: AnchorSlot,
     /// What the pages need from the app (see `Scope`).
     scope: Scope,
     revision: u64,
@@ -289,15 +298,9 @@ impl Monos {
         // The open page also shows the workflow's recent runs.
         // A run the runner holds is shown from there, not from its file.
         let wanted = match &self.wf.route {
-            Some(WfRoute::Run(id, run))
-                if self
-                    .workflows
-                    .with_run(id, |r| r.id == *run)
-                    .unwrap_or(false) =>
-            {
-                None
+            Some(WfRoute::Workflow(id) | WfRoute::Board(id) | WfRoute::Run(id, _)) => {
+                Some(id.clone())
             }
-            Some(WfRoute::Workflow(id) | WfRoute::Run(id, _)) => Some(id.clone()),
             _ => None,
         };
         let work = cx.background_executor().spawn(async move {
@@ -346,6 +349,7 @@ impl Monos {
         };
         if gone {
             self.wf.route = None;
+            self.board_drop();
         }
         // The dialog of a workflow that is gone has nothing left to run.
         if self
@@ -364,7 +368,12 @@ impl Monos {
         if matches!(self.wf.route, Some(WfRoute::Run(..))) {
             self.run_page_sync(cx);
         }
-        if matches!(self.wf.route, Some(WfRoute::Board(_) | WfRoute::New)) {
+        if self
+            .wf
+            .route
+            .as_ref()
+            .is_some_and(|r| board::is_board(r).is_some())
+        {
             self.board_sync(cx);
         }
         self.refresh_preflights(cx);
@@ -451,14 +460,18 @@ impl Monos {
     /// Opens a workflow page and reads its files again.
     pub(super) fn open_workflow_route(&mut self, route: WfRoute, cx: &mut Context<Self>) {
         self.wf.page_notice = None;
-        // A board opens fresh from the files.
-        if matches!(route, WfRoute::Board(_) | WfRoute::New) {
+        // A board opens fresh from the files, and the board of another workflow is not kept.
+        let key = board::is_board(&route);
+        if matches!(route, WfRoute::Board(_) | WfRoute::New)
+            || self.wf.board.as_ref().map(|b| &b.key) != key.as_ref()
+        {
             self.board_drop();
         }
         // A run page opened from a link starts fresh.
         if matches!(route, WfRoute::Run(..)) {
             self.wf.run.key = None;
         }
+        self.wf.settings = false;
         self.wf.route = Some(route);
         self.refresh_workflows(cx);
         cx.notify();
@@ -667,7 +680,6 @@ impl Monos {
 
     fn workflow_picked(&mut self, pick: &Pick, value: String, cx: &mut Context<Self>) {
         match pick {
-            Pick::Input(workflow, name) => self.workflow_choose_input(workflow, name, &value, cx),
             Pick::Import(name, ty) => self.import_choose(name, ty, &value, cx),
             Pick::Board(pick) => self.board_picked(pick, &value, cx),
             Pick::Gate(name) => self.run_gate_picked(name, &value, cx),

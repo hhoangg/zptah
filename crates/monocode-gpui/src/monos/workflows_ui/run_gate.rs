@@ -501,6 +501,7 @@ impl Monos {
             // Another page is on screen; the dialog belonged to the one that was left.
             return None;
         }
+        let run_anchor = self.wf.run_anchor.clone();
         let gate = self.wf.gate.as_mut()?;
         if gate.focus_pending
             && let Some(focus) = gate.focus.clone()
@@ -510,6 +511,7 @@ impl Monos {
         }
         let focus = gate.focus.clone();
         let submitting = gate.submitting.is_some();
+        let on_page = gate.page;
         let gate = &*gate;
         let (title, verb) = match &gate.mode {
             GateMode::Run => (format!("Run {}", gate.subject.name), "Run"),
@@ -534,6 +536,106 @@ impl Monos {
         let weak = cx.weak_entity();
         let width = 420f32.min(size.width.as_f32() - 24.);
         let tall = (size.height.as_f32() - 48.).max(160.);
+        let card = div()
+            .id("wf-run-gate")
+            .debug_selector(|| "wf-run-gate".into())
+            .role(Role::Dialog)
+            .aria_label(title.clone())
+            .max_h(px(tall))
+            .flex()
+            .flex_col()
+            .when_some(focus, |d, focus| d.track_focus(&focus))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px_4()
+                    .pt_4()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(content(1.))
+                    .truncate()
+                    .child(title),
+            )
+            .child(
+                div()
+                    .id("wf-gate-body")
+                    .debug_selector(|| "wf-gate-body".into())
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_4()
+                    .py_3()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .when(!inputs.is_empty(), |d| {
+                        d.child(fields)
+                            .children(problems.first().map(|p| line(p.clone(), true)))
+                    })
+                    .when(has_requires, |d| {
+                        d.child(requirements_block(
+                            rows,
+                            checking,
+                            checking || submitting,
+                            cx,
+                        ))
+                    })
+                    .children(notice.map(|n| line(n, true))),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px_4()
+                    .pb_4()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        crate::modal::ghost_button("wf-gate-cancel", "Cancel")
+                            .debug_selector(|| "wf-gate-cancel".into())
+                            .on_click(cx.listener(|this, _, _, cx| this.run_gate_close(cx))),
+                    )
+                    .child(
+                        crate::modal::disabled(
+                            crate::modal::primary_button(
+                                "wf-gate-submit",
+                                if submitting { "Starting\u{2026}" } else { verb },
+                            )
+                            .debug_selector(|| "wf-gate-submit".into()),
+                            !ready,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if ready {
+                                this.run_gate_submit(cx);
+                            }
+                        })),
+                    ),
+            );
+        let dismiss = move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                // A press in a drop-down of the dialog is outside the card, but not outside the
+                // dialog.
+                if this.picker.is_none() {
+                    this.run_gate_close(cx);
+                }
+            });
+        };
+        // On a workflow's page the form is a popover under its Run button; on the list it is a
+        // dialog over everything.
+        if on_page {
+            return Some(
+                popover("wf-run-gate-modal", Anchor::Slot(run_anchor))
+                    .align(crate::popover::Align::End)
+                    .width(width)
+                    .gap(6.)
+                    .priority(80)
+                    .max_height(tall)
+                    .on_dismiss(dismiss)
+                    .child(card)
+                    .into_any_element(),
+            );
+        }
         Some(
             div()
                 .absolute()
@@ -559,102 +661,8 @@ impl Monos {
                         .gap(0.)
                         .priority(80)
                         .max_height(tall)
-                        .on_dismiss(move |_, cx| {
-                            let _ = weak.update(cx, |this, cx| {
-                                // A press in a drop-down of the dialog is outside the card, but
-                                // not outside the dialog.
-                                if this.picker.is_none() {
-                                    this.run_gate_close(cx);
-                                }
-                            });
-                        })
-                        .child(
-                            div()
-                                .id("wf-run-gate")
-                                .debug_selector(|| "wf-run-gate".into())
-                                .role(Role::Dialog)
-                                .aria_label(title.clone())
-                                .max_h(px(tall))
-                                .flex()
-                                .flex_col()
-                                .when_some(focus, |d, focus| d.track_focus(&focus))
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .px_4()
-                                        .pt_4()
-                                        .text_size(px(14.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(content(1.))
-                                        .truncate()
-                                        .child(title),
-                                )
-                                .child(
-                                    div()
-                                        .id("wf-gate-body")
-                                        .debug_selector(|| "wf-gate-body".into())
-                                        .flex_1()
-                                        .min_h_0()
-                                        .overflow_y_scroll()
-                                        .px_4()
-                                        .py_3()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_3()
-                                        .when(!inputs.is_empty(), |d| {
-                                            d.child(fields).children(
-                                                problems.first().map(|p| line(p.clone(), true)),
-                                            )
-                                        })
-                                        .when(has_requires, |d| {
-                                            d.child(requirements_block(
-                                                rows,
-                                                checking,
-                                                checking || submitting,
-                                                cx,
-                                            ))
-                                        })
-                                        .children(notice.map(|n| line(n, true))),
-                                )
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .px_4()
-                                        .pb_4()
-                                        .flex()
-                                        .items_center()
-                                        .justify_end()
-                                        .gap_2()
-                                        .child(
-                                            crate::modal::ghost_button("wf-gate-cancel", "Cancel")
-                                                .debug_selector(|| "wf-gate-cancel".into())
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.run_gate_close(cx)
-                                                })),
-                                        )
-                                        .child(
-                                            crate::modal::disabled(
-                                                crate::modal::primary_button(
-                                                    "wf-gate-submit",
-                                                    if submitting {
-                                                        "Starting\u{2026}"
-                                                    } else {
-                                                        verb
-                                                    },
-                                                )
-                                                .debug_selector(|| "wf-gate-submit".into()),
-                                                !ready,
-                                            )
-                                            .on_click(
-                                                cx.listener(move |this, _, _, cx| {
-                                                    if ready {
-                                                        this.run_gate_submit(cx);
-                                                    }
-                                                }),
-                                            ),
-                                        ),
-                                ),
-                        ),
+                        .on_dismiss(dismiss)
+                        .child(card),
                 )
                 .into_any_element(),
         )

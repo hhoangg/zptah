@@ -85,27 +85,34 @@ fn run_bars(nodes: &[FlowNode], groups: &[GroupView], view: RunView) -> Vec<Bar>
             });
             continue;
         }
-        // One title above each lane, as wide as the lane's cards.
-        let mut lanes: Vec<(String, f32, f32)> = Vec::new();
+        // One title above each lane: the lanes are rows stacked top to bottom, each title as
+        // wide as the row's cards.
+        let mut lanes: Vec<(String, f32, f32, f32)> = Vec::new();
         for kid in &kids {
             let branch = kid.id.split_once('@').map_or(kid.id.as_str(), |(_, b)| b);
             let right = kid.position.x + kid.width;
             match lanes.iter_mut().find(|l| l.0 == branch) {
                 Some(lane) => {
                     lane.1 = lane.1.min(kid.position.x);
-                    lane.2 = lane.2.max(right);
+                    lane.2 = lane.2.min(kid.position.y);
+                    lane.3 = lane.3.max(right);
                 }
-                None => lanes.push((branch.to_string(), kid.position.x, right)),
+                None => lanes.push((branch.to_string(), kid.position.x, kid.position.y, right)),
             }
         }
-        lanes.sort_by(|a, b| a.1.total_cmp(&b.1));
-        for (k, (_, x, right)) in lanes.iter().enumerate() {
+        lanes.sort_by(|a, b| a.2.total_cmp(&b.2));
+        for (k, (_, x, top, right)) in lanes.iter().enumerate() {
             let Some(item) = gv.items.get(k) else {
                 break;
             };
             bars.push(Bar {
                 id: format!("bar-lane:{}:{k}", group.id),
-                rect: Rect::new(group.position.x + x, y, right - x, BAR_H),
+                rect: Rect::new(
+                    group.position.x + x,
+                    group.position.y + top - LANE_HEADER,
+                    right - x,
+                    BAR_H,
+                ),
                 kind: BarKind::Lane {
                     title: item.title.clone(),
                     status: item.status,

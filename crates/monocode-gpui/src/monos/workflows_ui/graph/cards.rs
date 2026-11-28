@@ -405,8 +405,10 @@ impl GraphCanvas {
                     .child(title.clone()),
             )
             .when_some(badge, |d, badge| {
+                let selector = format!("wf-round-badge-{id}");
                 d.child(
                     div()
+                        .debug_selector(move || selector.clone())
                         .flex_shrink_0()
                         .rounded_full()
                         .px(self.px(6.))

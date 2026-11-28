@@ -302,7 +302,7 @@ impl Monos {
                     .on_click(cx.listener({
                         let id = id.clone();
                         move |this, _, _, cx| {
-                            this.open_workflow_route(WfRoute::Workflow(id.clone()), cx)
+                            this.open_workflow_route(WfRoute::Board(id.clone()), cx)
                         }
                     })),
             )
@@ -408,18 +408,6 @@ impl Monos {
             )
     }
 
-    /// The workflow page's header actions are the row's, always shown.
-    pub(in crate::monos) fn workflow_page_actions(
-        &self,
-        w: &Workflow,
-        before_remove: Option<AnyElement>,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        let running = self.workflow_running(&w.id);
-        let starting = !running && w.run_requested;
-        self.workflow_actions(w, running, starting, true, before_remove, cx)
-    }
-
     fn workflow_back(&self, page: bool) -> Option<WfRoute> {
         if page { self.wf.route.clone() } else { None }
     }
@@ -480,10 +468,16 @@ impl Monos {
             move |this, (notice, left), cx| {
                 let mut page = page;
                 if notice.is_none()
-                    && matches!(&this.wf.route, Some(WfRoute::Workflow(open)) if *open == removed)
+                    && this.wf.board.as_ref().is_some_and(|b| b.base.id == removed)
+                    && this
+                        .wf
+                        .route
+                        .as_ref()
+                        .is_some_and(|r| super::board::is_board(r).is_some() && *r != WfRoute::New)
                 {
                     // Once the workflow is gone, its page closes. A text for the user then
                     // belongs to the list, which is what shows.
+                    this.board_drop();
                     this.wf.route = None;
                     page = false;
                 }
