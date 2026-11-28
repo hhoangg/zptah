@@ -1,6 +1,6 @@
 use super::fixtures::{example, node, patch_node};
 use super::model::{NodeKind, Workflow};
-use super::validate::{validate_workflow, RUN_VARS};
+use super::validate::{validate_workflow, RUN_VARS, TRIGGER_VARS};
 use super::variables::*;
 
 fn paths(w: &Workflow, id: &str) -> Vec<String> {
@@ -122,9 +122,14 @@ fn a_loop_body_is_offered_the_previous_rounds_output() {
 #[test]
 fn a_for_each_body_is_offered_the_loop_variable_and_downstream_the_results() {
     let w = example();
-    let item = in_group(&w, "dev", &VariableGroup::Item);
-    assert_eq!(item, ["{{item}}", "{{item.field}}"]);
-    assert!(in_group(&w, "fetch", &VariableGroup::Item).is_empty());
+    let loop_item = VariableGroup::Loop("item".into());
+    assert_eq!(in_group(&w, "dev", &loop_item), ["{{item}}", "{{item.}}"]);
+    let field = available_variables(&w, "dev")
+        .into_iter()
+        .find(|v| v.path == "{{item.}}")
+        .unwrap();
+    assert_eq!(field.caret_back, 2);
+    assert!(in_group(&w, "fetch", &loop_item).is_empty());
     assert!(paths(&w, "report").contains(&"{{each.results}}".to_string()));
 }
 
@@ -132,8 +137,8 @@ fn a_for_each_body_is_offered_the_loop_variable_and_downstream_the_results() {
 fn a_renamed_loop_variable_is_offered_under_its_name() {
     let w = patch_node(&example(), "each", r#"{"as":"ticket"}"#);
     assert_eq!(
-        in_group(&w, "dev", &VariableGroup::Item),
-        ["{{ticket}}", "{{ticket.field}}"]
+        in_group(&w, "dev", &VariableGroup::Loop("ticket".into())),
+        ["{{ticket}}", "{{ticket.}}"]
     );
     assert_all_validate(&w, "dev");
 }
@@ -215,4 +220,50 @@ fn event_item_variables_wait_for_an_event_trigger() {
     assert!(!paths(&w, "fetch")
         .iter()
         .any(|p| p.starts_with("{{trigger.item")));
+}
+
+#[test]
+fn nested_for_each_loops_offer_each_variable_once_and_the_inner_name_wins() {
+    let mut w = example();
+    // A second loop inside the first, with the same variable name, holding a new step.
+    w.nodes.push(node(
+        r#"{"id":"inner","type":"forEach","parent":"each","in":"{{item.files}}"}"#,
+    ));
+    w.nodes.push(node(
+        r#"{"id":"deep","type":"session","parent":"inner","project":"{{inputs.project}}","prompt":"p","checkout":"root","outputs":{}}"#,
+    ));
+    w.edges
+        .push(super::fixtures::edge(r#"{"from":"dev","to":"inner"}"#));
+    w.edges
+        .push(super::fixtures::edge(r#"{"from":"inner","to":"deep"}"#));
+    let all = paths(&w, "deep");
+    assert_eq!(all.iter().filter(|p| *p == "{{item}}").count(), 1);
+    assert_eq!(all.iter().filter(|p| *p == "{{item.}}").count(), 1);
+    // A differently named outer loop is still offered next to the inner one.
+    let w = patch_node(&w, "each", r#"{"as":"ticket"}"#);
+    let all = paths(&w, "deep");
+    assert!(all.contains(&"{{item}}".to_string()) && all.contains(&"{{ticket}}".to_string()));
+    assert_all_validate(&w, "deep");
+}
+
+#[test]
+fn every_trigger_variable_in_the_table_is_accepted_by_validation() {
+    let w = example();
+    for v in available_variables(&w, "fetch") {
+        if let Some(field) = v.path.strip_prefix("{{trigger.") {
+            let field = field.trim_end_matches("}}");
+            assert!(TRIGGER_VARS.contains(&field), "{}", v.path);
+        }
+    }
+    assert!(!in_group(&w, "fetch", &VariableGroup::Trigger).is_empty());
+}
+
+#[test]
+fn a_step_variable_is_labelled_with_its_field_only() {
+    let w = example();
+    let reply = available_variables(&w, "each")
+        .into_iter()
+        .find(|v| v.path == "{{fetch.reply}}")
+        .unwrap();
+    assert_eq!(reply.label, "reply");
 }

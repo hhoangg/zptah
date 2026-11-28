@@ -51,7 +51,9 @@ pub enum VariableGroup {
     Run,
     /// The outputs of the upstream node with this id.
     Step(String),
-    /// The loop variable of an enclosing For each, and what an event brought.
+    /// The loop variable of an enclosing For each, by its name.
+    Loop(String),
+    /// What an event brought.
     Item,
 }
 
@@ -62,6 +64,9 @@ pub struct Variable {
     pub label: String,
     pub group: VariableGroup,
     pub kind: VariableKind,
+    /// How many characters before the end of `path` the caret goes after it is inserted: 2 for
+    /// `{{item.}}`, so the field name is typed next. 0 for a complete variable.
+    pub caret_back: usize,
 }
 
 /// Which workflows a scope variable applies to.
@@ -179,11 +184,14 @@ pub fn available_variables(w: &Workflow, node_id: &str) -> Vec<Variable> {
     };
     let mut out = Vec::new();
     let mut push = |path: &str, label: String, group: VariableGroup, kind: VariableKind| {
+        // A path ending in `.` waits for a field name: the caret goes before the braces.
+        let caret_back = if path.ends_with('.') { 2 } else { 0 };
         out.push(Variable {
             path: braces(path),
             label,
             group,
             kind,
+            caret_back,
         });
     };
     for (group, path, label, kind, when) in SCOPE_VARS {
@@ -215,16 +223,17 @@ pub fn available_variables(w: &Workflow, node_id: &str) -> Vec<Variable> {
         }
     }
     for name in &items {
+        let group = VariableGroup::Loop(name.clone());
         push(
             name,
-            "The current item of the loop".into(),
-            VariableGroup::Item,
+            "The current item".into(),
+            group.clone(),
             VariableKind::Any,
         );
         push(
-            &format!("{name}.field"),
-            "A field of the current item (replace field)".into(),
-            VariableGroup::Item,
+            &format!("{name}."),
+            "A field of the current item".into(),
+            group,
             VariableKind::Any,
         );
     }
@@ -237,7 +246,7 @@ pub fn available_variables(w: &Workflow, node_id: &str) -> Vec<Variable> {
         for field in output_fields(node) {
             push(
                 &format!("{}.{field}", node.id),
-                format!("{field} of {}", node.id),
+                field.clone(),
                 VariableGroup::Step(node.id.clone()),
                 field_kind(node, &field),
             );

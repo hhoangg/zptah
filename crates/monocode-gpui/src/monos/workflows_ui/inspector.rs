@@ -441,13 +441,6 @@ impl Monos {
             NodeKind::Session { .. } | NodeKind::Command { .. }
         );
         let fields = self.board_node_fields(scope, w, node, window, cx);
-        // Last, so the controls above keep their place whether the list is long or short.
-        let variables = match &node.kind {
-            NodeKind::Session { .. } => Some(BoardField::Prompt(id.clone())),
-            NodeKind::Command { .. } => Some(BoardField::Command(id.clone())),
-            _ => None,
-        }
-        .and_then(|target| self.board_variables(w, &id, target, cx));
         let loop_out = w
             .edges
             .iter()
@@ -551,7 +544,6 @@ impl Monos {
             })
             .child(fields)
             .children(loop_section)
-            .children(variables)
             .into_any_element()
     }
 
@@ -676,6 +668,7 @@ impl Monos {
                     window,
                     cx,
                 );
+                let variables = self.board_variables(w, &id, BoardField::Prompt(id.clone()), cx);
                 let outputs = self.board_outputs(&id, output, window, cx);
                 let how = self.board_session_how(w, node, cx);
                 div()
@@ -694,6 +687,7 @@ impl Monos {
                     .child(how)
                     .children(reuse.map(|r| div().px_2().child(r)))
                     .child(prompt_section)
+                    .children(variables)
                     .child(outputs)
                     .into_any_element()
             }
@@ -730,6 +724,7 @@ impl Monos {
                     window,
                     cx,
                 );
+                let variables = self.board_variables(w, &id, BoardField::Command(id.clone()), cx);
                 let mut out = div()
                     .flex()
                     .flex_col()
@@ -737,7 +732,8 @@ impl Monos {
                     .child(command_section)
                     .child(hint(
                         "Fills in from {{ }} are quoted for the shell. It reports exitCode, stdout and stderr.",
-                    ));
+                    ))
+                    .children(variables);
                 if cfg!(windows) {
                     out = out.child(hint(
                         "Command nodes are not supported on Windows yet, so this step will fail when it runs.",

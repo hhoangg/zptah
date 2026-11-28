@@ -26,7 +26,7 @@ fn a_step_lists_its_variables_by_group_and_leaves_out_downstream_steps(cx: &mut 
         "wf-variables-group:trigger",
         "wf-variables-group:inputs",
         "wf-variables-group:run",
-        "wf-variables-group:item",
+        "wf-variables-group:loop:item",
         // The first step is upstream of the loop body; the next one is the previous round.
         "wf-variables-group:step:fetch",
         "wf-variables-group:step:review",
@@ -44,7 +44,7 @@ fn a_step_lists_its_variables_by_group_and_leaves_out_downstream_steps(cx: &mut 
         "wf-variables-group:step:dev",
         "wf-variables-group:step:review",
         "wf-variables-group:step:report",
-        "wf-variables-group:item",
+        "wf-variables-group:loop:item",
         "wf-var:{{dev.pr_url}}",
     ] {
         assert!(visual.debug_bounds(selector).is_none(), "{selector}");
@@ -67,22 +67,13 @@ fn clicking_a_variable_inserts_it_at_the_caret_of_the_prompt(cx: &mut TestAppCon
         let field = m.fields[&BoardField::Prompt("review".into()).key()].clone();
         field.update(cx, |f, cx| f.select_range(6..6, cx));
     });
-    // The list is the last part of a long form: scroll it into view.
-    let inspector = visual.debug_bounds("wf-inspector").unwrap();
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: inspector.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-4000.))),
-        ..Default::default()
-    });
-    visual.run_until_parked();
-    visual.refresh().unwrap();
-    click(visual, "wf-var:{{dev.pr_url}}");
+    click_in_inspector(visual, "wf-var:{{dev.pr_url}}");
     assert_eq!(
         prompt_of(node_of(&s, visual, "review")),
         "Check {{dev.pr_url}} now"
     );
     // A second click goes right after the first insert.
-    click(visual, "wf-var:{{inputs.project}}");
+    click_in_inspector(visual, "wf-var:{{inputs.project}}");
     assert_eq!(
         prompt_of(node_of(&s, visual, "review")),
         "Check {{dev.pr_url}}{{inputs.project}} now"
@@ -101,9 +92,44 @@ fn a_command_step_lists_variables_and_inserts_into_its_command(cx: &mut TestAppC
             .debug_bounds("wf-variables-group:step:each")
             .is_some()
     );
-    click(visual, "wf-var:{{each.results}}");
+    click_in_inspector(visual, "wf-var:{{each.results}}");
     let NodeKind::Command { command, .. } = node_of(&s, visual, "report").kind else {
         panic!()
     };
     assert_eq!(command, "echo {{each.results}}");
+}
+
+#[gpui::test]
+fn the_list_folds_away_and_comes_back(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    event(&s, visual, GraphEvent::Click("fetch".into()));
+    assert!(visual.debug_bounds("wf-var:{{inputs.project}}").is_some());
+    click(visual, "wf-variables-toggle");
+    assert!(visual.debug_bounds("wf-var:{{inputs.project}}").is_none());
+    // Still folded on another step; the heading stays so it can be opened again.
+    event(&s, visual, GraphEvent::Click("review".into()));
+    assert!(visual.debug_bounds("wf-variables-toggle").is_some());
+    assert!(visual.debug_bounds("wf-var:{{inputs.project}}").is_none());
+    click(visual, "wf-variables-toggle");
+    assert!(visual.debug_bounds("wf-var:{{inputs.project}}").is_some());
+}
+
+#[gpui::test]
+fn a_field_variable_leaves_the_caret_before_the_closing_braces(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    event(&s, visual, GraphEvent::Click("dev".into()));
+    type_in(&s, visual, BoardField::Prompt("dev".into()), "Do ");
+    click_in_inspector(visual, "wf-var:{{item.}}");
+    do_with(&s, visual, |m, cx| {
+        let field = m.fields[&BoardField::Prompt("dev".into()).key()].clone();
+        field.update(cx, |f, cx| {
+            assert_eq!(f.content.as_ref(), "Do {{item.}}");
+            assert_eq!(f.selection_range(), 10..10);
+            let _ = cx;
+        });
+    });
 }

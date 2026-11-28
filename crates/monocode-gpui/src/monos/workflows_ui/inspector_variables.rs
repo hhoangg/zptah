@@ -17,6 +17,7 @@ fn group_key(group: &VariableGroup) -> String {
         VariableGroup::Inputs => "inputs".into(),
         VariableGroup::Run => "run".into(),
         VariableGroup::Item => "item".into(),
+        VariableGroup::Loop(name) => format!("loop:{name}"),
         VariableGroup::Step(id) => format!("step:{id}"),
     }
 }
@@ -31,9 +32,43 @@ impl Monos {
         target: BoardField,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
-        let variables = available_variables(w, id);
+        let board = self.wf.board.as_mut()?;
+        let folded = board.variables_folded;
+        if !board.variables.contains_key(id) {
+            board
+                .variables
+                .insert(id.to_string(), available_variables(w, id));
+        }
+        let variables = board.variables[id].clone();
         if variables.is_empty() {
             return None;
+        }
+        let toggle = div()
+            .id("wf-variables-toggle")
+            .debug_selector(|| "wf-variables-toggle".into())
+            .role(gpui::Role::Button)
+            .aria_label(if folded {
+                "Show available variables"
+            } else {
+                "Hide available variables"
+            })
+            .cursor_pointer()
+            .rounded_sm()
+            .px_1p5()
+            .py_0p5()
+            .text_size(px(11.))
+            .text_color(content(0.6))
+            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+            .child(if folded { "Show" } else { "Hide" })
+            .on_click(cx.listener(|this, _, _, cx| {
+                if let Some(b) = this.wf.board.as_mut() {
+                    b.variables_folded = !b.variables_folded;
+                }
+                cx.notify();
+            }))
+            .into_any_element();
+        if folded {
+            return Some(section("Available variables", Some(toggle)));
         }
         let mut groups: Vec<(VariableGroup, Vec<Variable>)> = Vec::new();
         for variable in variables {
@@ -55,6 +90,7 @@ impl Monos {
                 VariableGroup::Inputs => "Inputs".to_string(),
                 VariableGroup::Run => "Run".to_string(),
                 VariableGroup::Item => "Item".to_string(),
+                VariableGroup::Loop(name) => format!("Each {name}"),
                 VariableGroup::Step(step) => {
                     w.node(step).map(node_title).unwrap_or_else(|| step.clone())
                 }
@@ -81,7 +117,7 @@ impl Monos {
                     .child(list),
             );
         }
-        Some(section("Available variables", None).child(body))
+        Some(section("Available variables", Some(toggle)).child(body))
     }
 
     fn variable_row(
@@ -92,6 +128,7 @@ impl Monos {
     ) -> impl IntoElement {
         let selector = format!("wf-var:{}", variable.path);
         let insert = variable.path.clone();
+        let caret_back = variable.caret_back;
         let field = target.key();
         div()
             .id(SharedString::from(selector.clone()))
@@ -121,13 +158,15 @@ impl Monos {
                     .min_w_0()
                     .truncate()
                     .text_color(content(0.4))
-                    .child(format!("{} - {}", variable.kind.name(), variable.label)),
+                    .child(format!("{} ({})", variable.label, variable.kind.name())),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
                 let Some(input) = this.fields.get(&field).cloned() else {
                     return;
                 };
-                input.update(cx, |input, cx| input.insert_at_cursor(&insert, window, cx));
+                input.update(cx, |input, cx| {
+                    input.insert_at_cursor(&insert, caret_back, window, cx)
+                });
                 window.focus(&input.focus_handle(cx), cx);
             }))
     }

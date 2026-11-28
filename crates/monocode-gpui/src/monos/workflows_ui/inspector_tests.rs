@@ -20,13 +20,13 @@ fn the_in_report_button_stores_the_opposite_of_the_effective_value(cx: &mut Test
     let visual = &mut visual;
     event(&s, visual, GraphEvent::Click("dev".into()));
     // A string field is in the report, a number field is not.
-    click(visual, "wf-output-report-pr_url");
+    click_in_inspector(visual, "wf-output-report-pr_url");
     let node = node_of(&s, visual, "dev");
     let NodeKind::Session { output, .. } = &node.kind else {
         panic!()
     };
     assert_eq!(output.get("pr_url").unwrap().in_report, Some(false));
-    click(visual, "wf-output-report-count");
+    click_in_inspector(visual, "wf-output-report-count");
     let node = node_of(&s, visual, "dev");
     let NodeKind::Session { output, .. } = &node.kind else {
         panic!()
@@ -510,7 +510,7 @@ fn a_new_output_field_can_be_renamed_and_removed(cx: &mut TestAppContext) {
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
     event(&s, visual, GraphEvent::Click("fetch".into()));
-    click(visual, "wf-output-add");
+    click_in_inspector(visual, "wf-output-add");
     let NodeKind::Session { output, .. } = node_of(&s, visual, "fetch").kind else {
         panic!()
     };
@@ -529,7 +529,7 @@ fn a_new_output_field_can_be_renamed_and_removed(cx: &mut TestAppContext) {
         m.board_graph_event(&GraphEvent::PaneClick, cx);
     });
     event(&s, visual, GraphEvent::Click("fetch".into()));
-    click(visual, "wf-output-remove-field");
+    click_in_inspector(visual, "wf-output-remove-field");
     let NodeKind::Session { output, .. } = node_of(&s, visual, "fetch").kind else {
         panic!()
     };
@@ -630,7 +630,7 @@ fn an_output_field_named_like_a_built_in_is_flagged_on_the_step(cx: &mut TestApp
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
     event(&s, visual, GraphEvent::Click("fetch".into()));
-    click(visual, "wf-output-add");
+    click_in_inspector(visual, "wf-output-add");
     type_in(
         &s,
         visual,

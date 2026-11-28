@@ -122,6 +122,34 @@ pub(super) fn can_save(s: &Setup, visual: &mut VisualTestContext) -> bool {
     on_board(s, visual, BoardState::can_save)
 }
 
+/// Clicks a control of the docked inspector, scrolling its body first when the control is out of
+/// view (the form is long: the click would miss it).
+pub(super) fn click_in_inspector(visual: &mut VisualTestContext, selector: &'static str) {
+    for _ in 0..8 {
+        let view = visual.debug_bounds("wf-inspector").expect("the inspector");
+        let target = visual
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is not drawn"));
+        // The header takes the top 40px of the inspector.
+        let (top, bottom) = (view.top() + px(48.), view.bottom() - px(8.));
+        let dy = if target.bottom() > bottom {
+            bottom - target.bottom()
+        } else if target.top() < top {
+            top - target.top()
+        } else {
+            break;
+        };
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position: view.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), dy)),
+            ..Default::default()
+        });
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+    }
+    super::tests::click(visual, selector);
+}
+
 pub(super) fn event(s: &Setup, visual: &mut VisualTestContext, e: GraphEvent) {
     do_with(s, visual, |m, cx| m.board_graph_event(&e, cx));
 }

@@ -1357,11 +1357,13 @@ pub(super) fn node_scope(w: &Workflow, node_id: &str) -> Option<(HashSet<String>
         descendants_cache: RefCell::default(),
     };
     let node = c.g.by_id.get(node_id).copied()?;
-    let items = c
-        .parent_chain(node)
-        .iter()
-        .filter_map(|p| item_name(p))
-        .collect();
+    // Innermost first; a name an inner loop shares with an outer one is the inner loop's.
+    let mut items: Vec<String> = Vec::new();
+    for name in c.parent_chain(node).iter().filter_map(|p| item_name(p)) {
+        if !items.contains(&name) {
+            items.push(name);
+        }
+    }
     Some((c.scope_of(node_id), items))
 }
 
