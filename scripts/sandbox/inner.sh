@@ -58,6 +58,8 @@ do_apt() {
 do_clone() {
   mkdir -p "$HOME/work" && cd "$HOME/work" || return 1
   [ -d repo/.git ] || git clone --quiet "$BOX_REPO_URL" repo || return 1
+  # An older clone may point at another repo (the pre-rename monoptah): always follow BOX_REPO_URL.
+  git -C repo remote set-url origin "$BOX_REPO_URL" || return 1
   cd repo && git fetch --quiet origin && git checkout --quiet --detach "origin/$BOX_REF" 2>/dev/null \
     || git checkout --quiet --detach "$BOX_REF" || return 1
   git log -1 --oneline
@@ -190,6 +192,24 @@ cmd_refresh() {
 
 fmt_check() { cargo fmt --manifest-path "$BOX_MANIFEST" --all --check >/dev/null 2>&1; }
 
+# rust_changed: succeeds when the staged patch touches Rust-relevant files, AND when that cannot be
+# determined (fail safe: run the checks rather than skip them). The list is captured first and
+# grepped from a here-string: `git diff | grep -q` under pipefail reports SIGPIPE (141) when grep
+# quits at its first match while git still writes, which a large patch (a merge commit, hundreds
+# of files) turned into a false "no Rust files changed".
+rust_changed() {
+  local list
+  if ! list=$(git diff --cached --name-only); then
+    ts "cannot list the changed files against $BOX_BASE_SHA: running the Rust checks"
+    return 0
+  fi
+  if [ -z "$list" ]; then
+    ts "the changed-file list is empty against $BOX_BASE_SHA: running the Rust checks"
+    return 0
+  fi
+  grep -Eq '\.rs$|(^|/)Cargo\.(toml|lock)$|(^|/)\.cargo/|nextest\.toml$' <<<"$list"
+}
+
 # check PATCH: the edit loop. Base checkout, patch with --index, fmt, clippy, then tests only if
 # clippy passed. BOX_FILTER (nextest filter expression) selects tests; BOX_FULL=1 runs everything.
 cmd_check() {
@@ -203,8 +223,8 @@ cmd_check() {
   git apply --index "$patch" || { ts "patch does not apply to $BOX_BASE_SHA"; return 1; }
   git diff --cached --stat | tail -n 1
 
-  if ! git diff --cached --name-only | grep -Eq '\.rs$|(^|/)Cargo\.(toml|lock)$|(^|/)\.cargo/|nextest\.toml$'; then
-    ts "no Rust files changed: skipping fmt, clippy and tests"
+  if ! rust_changed; then
+    ts "no Rust files changed (base $BOX_BASE_SHA): skipping fmt, clippy and tests"
     if [ -n "$BOX_NODE_TEST_CMD" ]; then
       # shellcheck disable=SC2086
       step node-tests $BOX_NODE_TEST_CMD || rc=1
