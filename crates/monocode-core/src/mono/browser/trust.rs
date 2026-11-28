@@ -19,8 +19,9 @@ pub mod rules;
 
 use super::risk::decide::{decide, effective, never_granted, Decision, DecisionInput};
 use super::risk::signals::{
-    domains_in_text, element_classification, gate_categories, navigation_category,
-    registrable_domain_of, site_category, ActionKind, ElementSignals, FormSignals, TaskContext,
+    domains_in_text, element_classification, gate_categories, host_of, names_site_by_bare_name,
+    navigation_category, registrable_domain_of, site_category, ActionKind, ElementSignals,
+    FormSignals, TaskContext,
 };
 use super::risk::Category;
 use super::soul_rules::{ActionFacts, FactKind, Parsed};
@@ -431,6 +432,29 @@ impl TrustState {
                 self.read_only_domains.insert(domain);
             }
         }
+    }
+
+    /// A gated open or navigation went through: the gate judged `requested` and the page landed on
+    /// `shown`. A site the user named by its bare name is the task and binds that name to it, but
+    /// only when the page stayed on the domain the gate judged (a redirect could land anywhere);
+    /// any other new domain is read-only as for a link. Only the gated navigations call this: a
+    /// click that landed somewhere never names a site.
+    pub fn note_navigated(&mut self, requested: &str, shown: &str) {
+        if let (Some(host), Some(domain), Some(asked)) = (
+            host_of(shown),
+            registrable_domain_of(shown),
+            registrable_domain_of(requested),
+        ) {
+            if domain == asked
+                && !self.task_domains.contains(&domain)
+                && names_site_by_bare_name(&self.user_messages, &self.task_domains, &domain, &host)
+            {
+                self.read_only_domains.remove(&domain);
+                self.task_domains.insert(domain);
+                return;
+            }
+        }
+        self.note_link_followed(shown);
     }
 
     /// An injection pattern was found in a page of this run: every write asks.

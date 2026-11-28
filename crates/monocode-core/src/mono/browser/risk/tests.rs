@@ -405,6 +405,25 @@ fn navigation_outside_task_domains_is_unrelated() {
     assert_eq!(navigation_category(&task, "https://www.tiki.vn/p"), None);
 }
 
+#[test]
+fn a_bare_site_name_in_a_user_message_names_the_site() {
+    let task = TaskContext {
+        user_messages: vec!["open VnExpress, then bbc.".to_owned()],
+        ..TaskContext::default()
+    };
+    assert_eq!(navigation_category(&task, "https://vnexpress.net/a"), None);
+    assert_eq!(navigation_category(&task, "https://news.bbc.co.uk/"), None);
+    assert_eq!(
+        navigation_category(&task, "https://vnexpress.com/"),
+        None,
+        "the name is the site, not its suffix"
+    );
+    assert_eq!(
+        navigation_category(&task, "https://other.example/"),
+        Some(Category::UnrelatedDomain)
+    );
+}
+
 // ---- the signals table ------------------------------------------------------------------------
 
 fn task(url: &str) -> TaskContext {

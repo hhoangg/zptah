@@ -71,6 +71,22 @@ fn an_open_asks_for_an_address_outside_the_task_at_every_level() {
 }
 
 #[test]
+fn an_open_of_a_site_the_user_named_by_its_bare_name_does_not_ask() {
+    let a = act();
+    a.up.run_started(0, "dùng ardia mở vnexpress check thông tin mới");
+    let (error, text) = a.call(
+        "browser_open",
+        json!({"url": "https://vnexpress.net/tin-moi-nhat"}),
+    );
+    assert!(!error, "{text}");
+    assert!(a.cards().is_empty(), "the user named the site");
+    // Another site still asks.
+    let (error, text) = a.call("browser_open", json!({"url": "https://unnamed.example/"}));
+    assert!(!error, "{text}");
+    assert_eq!(a.cards().len(), 1);
+}
+
+#[test]
 fn the_first_entry_to_a_sensitive_site_asks_once() {
     let a = act();
     // The task names the bank, so the sensitive site is the only question.

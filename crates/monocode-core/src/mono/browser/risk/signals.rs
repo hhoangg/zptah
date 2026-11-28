@@ -196,6 +196,11 @@ impl Sites {
         })
     }
 
+    /// Whether a multi-label public suffix such as `co.uk` is in the list.
+    fn has_registrable_suffix(&self, suffix: &str) -> bool {
+        self.registrable_suffixes.iter().any(|s| s == suffix)
+    }
+
     /// The registrable domain of a host (`www.shop.example.com.vn` is `example.com.vn`).
     pub fn registrable_domain(&self, host: &str) -> String {
         let host = host.trim_end_matches('.').to_lowercase();
@@ -253,10 +258,103 @@ pub fn domains_in_text(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Navigating to a domain outside the task domains asks (`unrelated_domain`, 7.4).
+/// Navigating to a domain outside the task domains asks (`unrelated_domain`, 7.4). A site the user
+/// named by its bare name does not ask (see [`names_site_by_bare_name`]).
 pub fn navigation_category(task: &TaskContext, target_url: &str) -> Option<Category> {
-    let domain = registrable_domain_of(target_url)?;
-    (!task.task_domains.contains(&domain)).then_some(Category::UnrelatedDomain)
+    let host = host_of(target_url)?;
+    let domain = sites().registrable_domain(&host);
+    (!task.task_domains.contains(&domain)
+        && !names_site_by_bare_name(&task.user_messages, &task.task_domains, &domain, &host))
+    .then_some(Category::UnrelatedDomain)
+}
+
+/// The shortest bare site name the user can type to name a site (`bbc` for `bbc.co.uk`).
+const MIN_SITE_NAME_LEN: usize = 3;
+
+/// Labels that are a suffix or a prefix of many hosts, never the name of one site.
+const GENERIC_SITE_NAMES: &[&str] = &[
+    "com", "net", "org", "edu", "gov", "mil", "int", "biz", "info", "www", "co", "ac",
+];
+
+/// The one-label suffixes (besides any 2-letter country code) a bare name may sit under.
+const COMMON_TLDS: &[&str] = &["com", "net", "org", "edu", "gov", "info", "biz", "io"];
+
+/// Shared-hosting domains that look like a site under a common TLD: anyone can host a page there,
+/// so the name before the suffix says nothing about who runs the page.
+const SHARED_HOSTING: &[&str] = &[
+    "github.io",
+    "gitlab.io",
+    "blogspot.com",
+    "herokuapp.com",
+    "firebaseapp.com",
+    "appspot.com",
+    "azurewebsites.net",
+    "cloudfront.net",
+    "glitch.me",
+    "wordpress.com",
+    "wixsite.com",
+    "ngrok.io",
+    "webflow.io",
+    "gitbook.io",
+    "readthedocs.io",
+    "repl.co",
+    "carrd.co",
+    "amazonaws.com",
+    "trycloudflare.com",
+    "myshopify.com",
+    "weebly.com",
+    "onrender.com",
+    "000webhostapp.com",
+    "neocities.org",
+    "duckdns.org",
+    "ddns.net",
+    "azurestaticapps.net",
+    "tumblr.com",
+    "substack.com",
+];
+
+/// The site name of a registrable domain a bare name may stand for, or `None` when it may not
+/// (too short, generic, shared hosting, or an uncommon suffix). `host` is the host being judged.
+fn bare_site_name<'a>(domain: &'a str, host: &str) -> Option<&'a str> {
+    if domain.parse::<std::net::IpAddr>().is_ok() || SHARED_HOSTING.contains(&domain) {
+        return None;
+    }
+    let (name, suffix) = domain.split_once('.')?;
+    // Open second-level zones (`blog.br`, `mail.pl`) collapse to a registrable domain of anyone's
+    // subdomain: under a country code only the bare domain and its `www.` host count.
+    let cc_tld = suffix.len() == 2 && suffix.chars().all(|c| c.is_ascii_alphabetic());
+    let host = host.trim_end_matches('.').to_lowercase();
+    let cc_ok = cc_tld && (host == domain || host.strip_prefix("www.") == Some(domain));
+    let suffix_ok = cc_ok
+        || COMMON_TLDS.contains(&suffix)
+        || (suffix.contains('.') && sites().has_registrable_suffix(suffix));
+    (suffix_ok && name.len() >= MIN_SITE_NAME_LEN && !GENERIC_SITE_NAMES.contains(&name))
+        .then_some(name)
+}
+
+/// Whether the user named this registrable domain by its bare site name (`vnexpress` for
+/// `vnexpress.net`, `bbc` for `bbc.co.uk`). Only words of the user's own messages count, never
+/// page text, and typed domains are cut out first (typing `github.com` does not say `com`). The
+/// name is bound to the first domain that has it: once a task domain has the same site name, no
+/// other domain does (`vnexpress.ru` after `vnexpress.net`). `host` is the host of the address.
+pub fn names_site_by_bare_name(
+    user_messages: &[String],
+    task_domains: &BTreeSet<String>,
+    domain: &str,
+    host: &str,
+) -> bool {
+    let Some(name) = bare_site_name(domain, host) else {
+        return false;
+    };
+    let bound_elsewhere = task_domains
+        .iter()
+        .any(|d| d != domain && d.split('.').next() == Some(name));
+    !bound_elsewhere
+        && user_messages.iter().any(|message| {
+            let text = domain_regex().replace_all(message, " ");
+            text.split(|c: char| !(c.is_alphanumeric() || c == '-'))
+                .any(|word| word.is_ascii() && word.eq_ignore_ascii_case(name))
+        })
 }
 
 // ---------------------------------------------------------------------------------------------

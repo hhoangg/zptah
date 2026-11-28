@@ -943,7 +943,7 @@ impl ArdiaUpstream {
         let body =
             format!("### Result\nOpened a new tab {tab} and made it this conversation's tab.\n");
         let reply = self.page_reply(id, &tab, "browser_open", shown, title, body)?;
-        self.with_trust(id, |state, _| state.note_link_followed(shown));
+        self.with_trust(id, |state, _| state.note_navigated(url, shown));
         Ok(reply)
     }
 
@@ -974,7 +974,7 @@ impl ArdiaUpstream {
             format!("### Text\n{}\n", cap(&lines.join("\n")))
         };
         let reply = self.page_reply(id, &tab, "browser_navigate", shown, title, body)?;
-        self.with_trust(id, |state, _| state.note_link_followed(shown));
+        self.with_trust(id, |state, _| state.note_navigated(url, shown));
         Ok(reply)
     }
 
