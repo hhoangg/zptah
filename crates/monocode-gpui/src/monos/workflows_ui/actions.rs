@@ -5,12 +5,13 @@
 use monocode_core::mono::workflows::{
     cli::{WorkflowHost, account_issues, checked_run_values},
     model::{
-        InputValue, NodeKind, Workflow, WorkflowInput, definition_fingerprint,
-        interrupted_instances, left_instances_text, trigger_of, with_run_values,
+        InputValue, Workflow, WorkflowInput, definition_fingerprint, interrupted_instances,
+        left_instances_text, with_run_values,
     },
     models::workflow_issues,
     ordered::OrderedMap,
     preflight::{Preflight, union_requires},
+    schedule::{schedule_triggers, scheduled},
     validate::WorkflowIssue,
     yaml::input_value_problems,
 };
@@ -67,12 +68,10 @@ pub(super) fn issues_of(host: &mut impl WorkflowHost, w: &Workflow) -> Vec<Workf
 /// The workflow switched on, its next scheduled run counted from `now`.
 fn enabled_now(mut w: Workflow, now: u64) -> Result<Workflow, String> {
     w.enabled = true;
-    let next = match trigger_of(&w).map(|n| &n.kind) {
-        Some(NodeKind::Schedule { schedule }) => Some(schedule.next(now)?),
-        _ => None,
-    };
-    if next.is_some() {
-        w.next_run_at = next;
+    if !schedule_triggers(&w).is_empty() {
+        let timed = scheduled(&w, now)?;
+        w.next_run_at = timed.next_run_at;
+        w.next_run_at_by_node = timed.next_run_at_by_node;
     }
     Ok(w)
 }
@@ -167,6 +166,8 @@ pub(super) fn run_now(
         }
         let mut next = w;
         next.run_requested = true;
+        // The user asks for this run, whatever a Mono left in the request before.
+        next.run_caller = None;
         // Only for the run that starts now; a value left by an earlier request must not leak in.
         next.run_values = values.clone();
         Ok((Some(next), None))
@@ -295,6 +296,7 @@ pub(super) fn approve(
             let approved = match intent {
                 ReviewIntent::Run => {
                     approved.run_requested = true;
+                    approved.run_caller = None;
                     approved.run_values = None;
                     Ok(approved)
                 }

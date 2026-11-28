@@ -1,14 +1,49 @@
 //! When a workflow is due. Pure: the clock and the "is a run going" answer are passed in, so the
 //! scheduler tick decides what to start and what only has to move on.
-use super::model::{NodeKind, Workflow};
+//!
+//! A workflow may have several schedule triggers. With one, its next time is `next_run_at`; with
+//! several, each has its own entry in `next_run_at_by_node` and `next_run_at` is the earliest.
+//! When more than one comes due in the same look, the workflow runs once.
+use super::model::{Node, NodeKind, Workflow};
 use crate::mono::habits::{Schedule, GRACE_MS};
 
-/// The schedule a workflow runs on, when its trigger is a schedule.
-fn schedule_of(workflow: &Workflow) -> Option<&Schedule> {
-    match &workflow.trigger()?.kind {
-        NodeKind::Schedule { schedule } => Some(schedule),
-        _ => None,
-    }
+/// The schedule triggers of a workflow, in definition order.
+pub fn schedule_triggers(workflow: &Workflow) -> Vec<(&Node, &Schedule)> {
+    workflow
+        .nodes
+        .iter()
+        .filter(|n| n.parent.is_none())
+        .filter_map(|n| match &n.kind {
+            NodeKind::Schedule { schedule } => Some((n, schedule)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// When each schedule trigger runs next (`None`: not picked yet).
+fn next_times(workflow: &Workflow) -> Vec<(&Node, &Schedule, Option<u64>)> {
+    let triggers = schedule_triggers(workflow);
+    let single = triggers.len() == 1;
+    triggers
+        .into_iter()
+        .map(|(node, schedule)| {
+            let at = if single {
+                workflow.next_run_at
+            } else {
+                workflow.next_run_at_by_node.get(&node.id).copied()
+            };
+            (node, schedule, at)
+        })
+        .collect()
+}
+
+/// The schedule trigger that is due at `now`: the one with the earliest time that has passed.
+pub fn due_schedule_trigger(workflow: &Workflow, now: u64) -> Option<&Node> {
+    next_times(workflow)
+        .into_iter()
+        .filter_map(|(node, _, at)| Some((node, at.filter(|at| *at <= now)?)))
+        .min_by_key(|(_, at)| *at)
+        .map(|(node, _)| node)
 }
 
 /// What the scheduler tick found: workflows to start, and ones whose schedule only moves on.
@@ -44,24 +79,48 @@ pub fn due_workflows<'a>(
             }
             continue;
         }
-        if !workflow.enabled || schedule_of(workflow).is_none() {
+        let times = next_times(workflow);
+        if !workflow.enabled || times.is_empty() {
             continue;
         }
-        // Enabled with no next time yet: pick one, do not run.
-        let Some(next) = workflow.next_run_at else {
+        // Enabled with a trigger that has no next time yet: pick one, do not run.
+        if times.iter().any(|(_, _, at)| at.is_none()) {
             due.advance.push(workflow);
             continue;
+        }
+        let Some(first) = times.iter().filter_map(|(_, _, at)| *at).min() else {
+            continue;
         };
-        if next > now {
+        if first > now {
             continue;
         }
-        if !busy && now - next <= GRACE_MS {
+        if !busy && now - first <= GRACE_MS {
             due.run.push(workflow);
         } else {
             due.advance.push(workflow);
         }
     }
     due
+}
+
+/// The workflow with the next run time of every schedule trigger right for its enabled state:
+/// picked from `now` while it is enabled, cleared while it is not.
+pub fn scheduled(workflow: &Workflow, now: u64) -> Result<Workflow, String> {
+    let mut next = workflow.clone();
+    next.next_run_at = None;
+    next.next_run_at_by_node.clear();
+    if !workflow.enabled {
+        return Ok(next);
+    }
+    let triggers = schedule_triggers(workflow);
+    for (node, schedule) in &triggers {
+        let at = schedule.next(now)?;
+        if triggers.len() > 1 {
+            next.next_run_at_by_node.insert(node.id.clone(), at);
+        }
+        next.next_run_at = Some(next.next_run_at.map_or(at, |old| old.min(at)));
+    }
+    Ok(next)
 }
 
 /// The workflow with its schedule moved past `now` and its run request answered. A schedule that
@@ -71,16 +130,34 @@ pub fn after_claim(workflow: &Workflow, now: u64, run_id: Option<&str>) -> Workf
     let run_id = run_id.filter(|id| !id.is_empty());
     let mut next = workflow.clone();
     next.run_requested = false;
+    next.run_caller = None;
     // The values were for the run that is being claimed now; they never carry to a later one.
     next.run_values = None;
     // A stop asked for before a run started was meant for an earlier one. Moving the schedule
     // past a workflow whose run is still going must keep a stop written for that run.
     next.stop_requested = workflow.stop_requested && run_id.is_none();
-    let keep = workflow.run_requested && workflow.next_run_at.is_some_and(|at| at > now);
-    if let Some(schedule) = schedule_of(workflow) {
+    let triggers = schedule_triggers(workflow);
+    if triggers.len() == 1 {
+        let keep = workflow.run_requested && workflow.next_run_at.is_some_and(|at| at > now);
         if !keep {
-            next.next_run_at = schedule.next(now).ok();
+            next.next_run_at = triggers[0].1.next(now).ok();
         }
+    } else if triggers.len() > 1 {
+        // Each trigger moves on only when its own time has passed (or it has none yet).
+        let mut by_node = std::collections::BTreeMap::new();
+        for (node, schedule) in &triggers {
+            let at = match workflow.next_run_at_by_node.get(&node.id) {
+                Some(at) if *at > now => Some(*at),
+                _ => schedule.next(now).ok(),
+            };
+            if let Some(at) = at {
+                by_node.insert(node.id.clone(), at);
+            }
+        }
+        next.next_run_at = by_node.values().min().copied();
+        next.next_run_at_by_node = by_node;
+    } else {
+        next.next_run_at_by_node.clear();
     }
     if let Some(id) = run_id {
         next.last_run_id = Some(id.to_string());
@@ -111,7 +188,7 @@ mod tests {
         w
     }
 
-    const DAILY: &str = r#"{"id":"trigger","type":"schedule","schedule":{"scheduleKind":"daily","time":"09:00","minute":0,"dayOfWeek":1}}"#;
+    const DAILY: &str = r#"{"id":"start","type":"schedule","schedule":{"scheduleKind":"daily","time":"09:00","minute":0,"dayOfWeek":1}}"#;
 
     fn workflow() -> Workflow {
         workflow_with(DAILY, "")
@@ -172,7 +249,7 @@ mod tests {
 
         #[test]
         fn a_manual_workflow_has_no_schedule_to_move() {
-            let mut w = workflow_with(r#"{"id":"trigger","type":"manual"}"#, "");
+            let mut w = workflow_with(r#"{"id":"start","type":"manual"}"#, "");
             w.run_requested = true;
             w.next_run_at = None;
             let claimed = after_claim(&w, now(), Some("run-3"));
@@ -193,11 +270,11 @@ mod tests {
         #[test]
         fn an_interval_schedule_moves_to_its_next_slot() {
             let w = workflow_with(
-                r#"{"id":"trigger","type":"schedule","schedule":{"scheduleKind":"interval","time":"00:00","minute":0,"dayOfWeek":1,"intervalHours":6,"intervalFrom":"2026-10-01"}}"#,
+                r#"{"id":"start","type":"schedule","schedule":{"scheduleKind":"interval","time":"00:00","minute":0,"dayOfWeek":1,"intervalHours":6,"intervalFrom":"2026-10-01"}}"#,
                 "",
             );
             let moved = after_claim(&w, now(), Some("r")).next_run_at.unwrap();
-            let schedule = match &w.trigger().unwrap().kind {
+            let schedule = match &w.first_trigger().unwrap().kind {
                 NodeKind::Schedule { schedule } => schedule.clone(),
                 _ => unreachable!(),
             };
@@ -208,7 +285,7 @@ mod tests {
         #[test]
         fn a_schedule_that_cannot_be_computed_leaves_no_time_to_fire_on() {
             let w = workflow_with(
-                r#"{"id":"trigger","type":"schedule","schedule":{"scheduleKind":"daily","time":"99:99","minute":0,"dayOfWeek":1}}"#,
+                r#"{"id":"start","type":"schedule","schedule":{"scheduleKind":"daily","time":"99:99","minute":0,"dayOfWeek":1}}"#,
                 "",
             );
             assert_eq!(after_claim(&w, now(), Some("r")).next_run_at, None);
@@ -247,7 +324,7 @@ mod tests {
             later.next_run_at = Some(now() + 1);
             let mut off = workflow();
             off.enabled = false;
-            let manual = workflow_with(r#"{"id":"trigger","type":"manual"}"#, "");
+            let manual = workflow_with(r#"{"id":"start","type":"manual"}"#, "");
             let list = [later, off, manual];
             let due = due_workflows(&list, now(), never);
             assert!(due.run.is_empty() && due.advance.is_empty());
@@ -312,6 +389,123 @@ mod tests {
             reviewed.needs_review = false;
             let list = [reviewed];
             assert_eq!(due_workflows(&list, now(), never).run.len(), 1);
+        }
+    }
+
+    /// A workflow with a manual trigger and two schedule triggers, all leading to one step.
+    mod several_schedules {
+        use super::*;
+
+        fn two_schedules() -> Workflow {
+            let mut w = workflow_from(
+                r#"{"id":"wf-abcd1234","name":"Ship it","inputs":{},"inputValues":{},
+                    "nodes":[{"id":"hand","type":"manual"},
+                      {"id":"morning","type":"schedule","schedule":{"scheduleKind":"daily","time":"08:00","minute":0,"dayOfWeek":1}},
+                      {"id":"evening","type":"schedule","schedule":{"scheduleKind":"daily","time":"18:00","minute":0,"dayOfWeek":1}}],
+                    "edges":[],"enabled":true,"createdAt":0}"#,
+            );
+            w.next_run_at = None;
+            w
+        }
+
+        #[test]
+        fn picking_times_gives_every_schedule_its_own_and_keeps_the_earliest() {
+            let w = scheduled(&two_schedules(), now()).unwrap();
+            let morning = w.next_run_at_by_node["morning"];
+            let evening = w.next_run_at_by_node["evening"];
+            assert!(morning > now() && evening > now());
+            assert!(!w.next_run_at_by_node.contains_key("hand"));
+            assert_eq!(w.next_run_at, Some(morning.min(evening)));
+        }
+
+        #[test]
+        fn a_paused_workflow_has_no_times_and_a_single_schedule_keeps_the_plain_field() {
+            let mut paused = two_schedules();
+            paused.enabled = false;
+            let w = scheduled(&paused, now()).unwrap();
+            assert_eq!((w.next_run_at, w.next_run_at_by_node.len()), (None, 0));
+            let single = scheduled(&workflow(), now()).unwrap();
+            assert!(single.next_run_at.is_some());
+            assert!(single.next_run_at_by_node.is_empty());
+        }
+
+        #[test]
+        fn a_workflow_with_a_schedule_without_a_time_yet_is_advanced_not_run() {
+            let mut w = two_schedules();
+            w.next_run_at_by_node
+                .insert("morning".into(), now() - 1_000);
+            let list = [w];
+            let due = due_workflows(&list, now(), never);
+            assert!(due.run.is_empty());
+            assert_eq!(due.advance.len(), 1);
+        }
+
+        #[test]
+        fn the_workflow_runs_once_when_two_schedules_come_due_in_the_same_look() {
+            let mut w = two_schedules();
+            w.next_run_at_by_node
+                .insert("morning".into(), now() - 2_000);
+            w.next_run_at_by_node
+                .insert("evening".into(), now() - 1_000);
+            w.next_run_at = Some(now() - 2_000);
+            let list = [w.clone()];
+            let due = due_workflows(&list, now(), never);
+            assert_eq!(due.run.len(), 1);
+            // The earlier one is the trigger that fired.
+            assert_eq!(due_schedule_trigger(&w, now()).unwrap().id, "morning");
+            // Claiming moves both on, so the minute does not run again.
+            let claimed = after_claim(&w, now(), Some("run-1"));
+            assert!(claimed.next_run_at_by_node["morning"] > now());
+            assert!(claimed.next_run_at_by_node["evening"] > now());
+            let after = [claimed];
+            let due = due_workflows(&after, now(), never);
+            assert!(due.run.is_empty() && due.advance.is_empty());
+        }
+
+        #[test]
+        fn a_schedule_that_is_not_due_keeps_its_time_when_the_other_one_runs() {
+            let mut w = two_schedules();
+            let later = now() + 3_600_000;
+            w.next_run_at_by_node
+                .insert("morning".into(), now() - 1_000);
+            w.next_run_at_by_node.insert("evening".into(), later);
+            w.next_run_at = Some(now() - 1_000);
+            let claimed = after_claim(&w, now(), Some("run-1"));
+            assert_eq!(claimed.next_run_at_by_node["evening"], later);
+            assert!(claimed.next_run_at_by_node["morning"] > now());
+            assert_eq!(
+                claimed.next_run_at,
+                claimed.next_run_at_by_node.values().min().copied()
+            );
+            assert_eq!(due_schedule_trigger(&w, now()).unwrap().id, "morning");
+        }
+
+        #[test]
+        fn a_busy_workflow_skips_the_occurrence_and_moves_on() {
+            let mut w = two_schedules();
+            w.next_run_at_by_node
+                .insert("morning".into(), now() - 1_000);
+            w.next_run_at_by_node
+                .insert("evening".into(), now() + 3_600_000);
+            w.next_run_at = Some(now() - 1_000);
+            let list = [w];
+            let due = due_workflows(&list, now(), |_| true);
+            assert!(due.run.is_empty());
+            assert_eq!(due.advance.len(), 1);
+        }
+
+        #[test]
+        fn a_schedule_that_came_due_long_ago_is_not_run() {
+            let mut w = two_schedules();
+            let old = now() - GRACE_MS - 1_000;
+            w.next_run_at_by_node.insert("morning".into(), old);
+            w.next_run_at_by_node
+                .insert("evening".into(), now() + 3_600_000);
+            w.next_run_at = Some(old);
+            let list = [w];
+            let due = due_workflows(&list, now(), never);
+            assert!(due.run.is_empty());
+            assert_eq!(due.advance.len(), 1);
         }
     }
 }

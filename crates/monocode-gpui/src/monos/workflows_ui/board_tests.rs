@@ -8,7 +8,7 @@ use super::tests::{click, open_tab, page_notice, route, settle};
 use super::*;
 use crate::monos::tests::{Setup, setup};
 use gpui::{TestAppContext, VisualTestContext};
-use monocode_core::mono::workflows::model::{NodeKind, Workflow};
+use monocode_core::mono::workflows::model::{NodeKind, WORKFLOWS_MAX, Workflow};
 use serde_json::{Value, json};
 
 /// The ClickUp -> Dev -> Review example, laid out (`ticketWorkflow` of the React fixtures).
@@ -28,7 +28,7 @@ pub(super) fn ticket(extra: Value) -> Workflow {
     build(
         all,
         json!([
-            {"id": "trigger", "type": "schedule", "title": "Weekdays", "ui": {"x": 0, "y": 0},
+            {"id": "start", "type": "schedule", "title": "Weekdays", "ui": {"x": 0, "y": 0},
              "schedule": {"scheduleKind": "weekdays", "time": "09:00", "minute": 0, "dayOfWeek": 1}},
             {"id": "fetch", "type": "session", "title": "Fetch tickets", "project": "{{inputs.project}}",
              "model": "claude:sonnet-5", "checkout": "root", "output": {"tickets": {"type": "list"}},
@@ -41,12 +41,12 @@ pub(super) fn ticket(extra: Value) -> Workflow {
             {"id": "review", "type": "session", "title": "Review", "parent": "each", "project": "{{inputs.project}}",
              "checkout": {"worktreeOf": "dev"}, "nestUnder": "dev", "ui": {"x": 16, "y": 130},
              "prompt": "Review {{dev.pr_url}}.", "output": {"verdict": {"type": "string"}}},
-            {"id": "report", "type": "report", "title": "Report to Mono", "ui": {"x": 0, "y": 480}},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "title": "Report to Mono", "ui": {"x": 0, "y": 480}},
         ]),
         json!([
-            {"from": "trigger", "to": "fetch"}, {"from": "fetch", "to": "each"},
+            {"from": "start", "to": "fetch"}, {"from": "fetch", "to": "each"},
             {"from": "dev", "to": "review"}, {"from": "each", "to": "report"},
-            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "mono"}},
+            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
         ]),
     )
 }
@@ -57,7 +57,7 @@ pub(super) fn open_board(s: &Setup, w: &Workflow, cx: &mut TestAppContext) -> Vi
     let mut visual = VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     s.manager.update(&mut visual, |m, cx| {
-        m.open_workflow_route(Route::WorkflowBoard(w.id.clone()), cx)
+        m.open_workflow_route(WfRoute::Board(w.id.clone()), cx)
     });
     visual.run_until_parked();
     settle(s, &mut visual);
@@ -146,10 +146,10 @@ fn renders_one_card_per_workflow_node(cx: &mut TestAppContext) {
     let visual = &mut visual;
     assert_eq!(
         node_ids(&s, visual),
-        vec!["dev", "each", "fetch", "report", "review", "trigger"]
+        vec!["dev", "each", "fetch", "report", "review", "start"]
     );
     for selector in [
-        "wf-node-trigger",
+        "wf-node-start",
         "wf-node-fetch",
         "wf-node-each",
         "wf-node-dev",
@@ -214,8 +214,8 @@ fn a_session_model_the_catalog_lacks_is_flagged_and_blocks_saving_enabled(cx: &m
             *model = Some("claude-sonnet-5-5".into());
         }
     }
-    s.manager.update(cx, |m, _| {
-        m.workflow_live = crate::monos::workflow_runner::Live::new().with_probe(listing)
+    crate::monos::tests::set_probes(&s, cx, |p| {
+        *p = crate::workflows::Probes::new().with_probe(listing)
     });
     let mut visual = open_board(&s, &w, cx);
     let visual = &mut visual;
@@ -272,12 +272,13 @@ fn a_flagged_workflow_is_not_saved_enabled_points_to_the_review_and_keeps_its_ma
     click(visual, "wf-board-review-open");
     assert!(matches!(
         route(&s, visual),
-        Some(Route::WorkflowReview(_, super::ReviewIntent::Enable))
+        Some(WfRoute::Review(_, super::ReviewIntent::Enable))
     ));
     assert!(stored_first(&s).enabled);
     // Back on the board: Save paused keeps the mark.
-    s.manager.update(visual, |m, _| {
-        m.route = Some(Route::WorkflowBoard(A.into()))
+    s.manager.update(visual, |m, cx| {
+        m.wf.route = Some(WfRoute::Board(A.into()));
+        cx.notify();
     });
     visual.run_until_parked();
     settle(&s, visual);
@@ -337,16 +338,17 @@ fn run_now_and_resume_in_the_menu_open_the_review_of_a_flagged_workflow(cx: &mut
     do_with(&s, visual, |m, cx| m.board_run_now(cx));
     assert!(matches!(
         route(&s, visual),
-        Some(Route::WorkflowReview(_, super::ReviewIntent::Run))
+        Some(WfRoute::Review(_, super::ReviewIntent::Run))
     ));
-    s.manager.update(visual, |m, _| {
-        m.route = Some(Route::WorkflowBoard(A.into()))
+    s.manager.update(visual, |m, cx| {
+        m.wf.route = Some(WfRoute::Board(A.into()));
+        cx.notify();
     });
     visual.run_until_parked();
     do_with(&s, visual, |m, cx| m.board_toggle_enabled(cx));
     assert!(matches!(
         route(&s, visual),
-        Some(Route::WorkflowReview(_, super::ReviewIntent::Enable))
+        Some(WfRoute::Review(_, super::ReviewIntent::Enable))
     ));
     // Nothing was switched on, in the draft or in the file.
     assert!(!on_board(&s, visual, |b| b.meta.enabled));
@@ -385,20 +387,20 @@ fn leaving_with_unsaved_changes_asks_to_save_or_discard(cx: &mut TestAppContext)
     let visual = &mut visual;
     // Nothing changed: Back just goes.
     click(visual, "mono-page-back");
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
     s.manager.update(visual, |m, cx| {
-        m.open_workflow_route(Route::WorkflowBoard(A.into()), cx)
+        m.open_workflow_route(WfRoute::Board(A.into()), cx)
     });
     visual.run_until_parked();
     rename(&s, visual, "Changed");
     click(visual, "mono-page-back");
-    assert_eq!(route(&s, visual), Some(Route::WorkflowBoard(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Board(A.into())));
     assert!(visual.debug_bounds("wf-board-leave").is_some());
     click(visual, "wf-board-keep-editing");
     assert!(visual.debug_bounds("wf-board-leave").is_none());
     click(visual, "mono-page-back");
     click(visual, "wf-board-discard");
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
     assert_eq!(stored_first(&s).name, "ClickUp -> Dev -> Review");
     assert!(s.manager.read_with(visual, |m, _| m.wf.board.is_none()));
 }
@@ -413,7 +415,7 @@ fn save_in_the_leave_dialog_saves_then_leaves(cx: &mut TestAppContext) {
     click(visual, "wf-board-leave-save");
     visual.run_until_parked();
     assert_eq!(stored_first(&s).name, "Changed");
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
 }
 
 #[gpui::test]
@@ -431,9 +433,7 @@ fn a_blocked_workflow_is_saved_paused_from_the_leave_dialog(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-fn a_new_workflow_starts_with_a_manual_trigger_and_a_report_and_is_saved_paused(
-    cx: &mut TestAppContext,
-) {
+fn a_new_workflow_starts_with_a_manual_trigger_and_is_saved_paused(cx: &mut TestAppContext) {
     let s = setup(cx);
     put(&s, vec![]);
     open_tab(&s, cx);
@@ -441,8 +441,8 @@ fn a_new_workflow_starts_with_a_manual_trigger_and_a_report_and_is_saved_paused(
     visual.run_until_parked();
     click(visual, "mono-workflow-new");
     settle(&s, visual);
-    assert_eq!(route(&s, visual), Some(Route::NewWorkflow));
-    assert_eq!(node_ids(&s, visual), vec!["report", "trigger"]);
+    assert_eq!(route(&s, visual), Some(WfRoute::New));
+    assert_eq!(node_ids(&s, visual), vec!["start"]);
     assert_eq!(
         on_board(&s, visual, |b| b.meta.name.clone()),
         "New workflow"
@@ -455,13 +455,13 @@ fn a_new_workflow_starts_with_a_manual_trigger_and_a_report_and_is_saved_paused(
     assert!(w.inputs.is_empty() && w.input_values.is_empty());
     assert!(w.id.starts_with("wf-") && w.id.len() == 11);
     let types: Vec<&str> = w.nodes.iter().map(|n| n.kind.type_name()).collect();
-    assert_eq!(types, vec!["manual", "report"]);
+    assert_eq!(types, vec!["manual"]);
 }
 
 #[gpui::test]
 fn the_twenty_first_workflow_is_refused_when_saved(cx: &mut TestAppContext) {
     let s = setup(cx);
-    let list: Vec<Workflow> = (0..20)
+    let list: Vec<Workflow> = (0..WORKFLOWS_MAX)
         .map(|i| {
             let mut w = ticket(json!({}));
             w.id = format!("wf-{i:08}");
@@ -472,17 +472,16 @@ fn the_twenty_first_workflow_is_refused_when_saved(cx: &mut TestAppContext) {
     open_tab(&s, cx);
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
-    s.manager.update(visual, |m, cx| {
-        m.open_workflow_route(Route::NewWorkflow, cx)
-    });
+    s.manager
+        .update(visual, |m, cx| m.open_workflow_route(WfRoute::New, cx));
     visual.run_until_parked();
     settle(&s, visual);
     click(visual, "wf-board-save");
     visual.run_until_parked();
-    assert_eq!(saved(&s).len(), 20);
+    assert_eq!(saved(&s).len(), WORKFLOWS_MAX);
     assert_eq!(
         page_notice(&s, visual).as_deref(),
-        Some("At most 20 workflows.")
+        Some(format!("At most {WORKFLOWS_MAX} workflows.").as_str())
     );
 }
 
@@ -683,7 +682,7 @@ fn saving_an_interval_schedule_anchors_it_and_leaves_the_board_clean(cx: &mut Te
     assert!(!can_save(&s, visual));
     click(visual, "mono-page-back");
     assert!(visual.debug_bounds("wf-board-leave").is_none());
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
 }
 
 #[gpui::test]
@@ -693,7 +692,7 @@ fn shows_the_real_reason_a_save_failed(cx: &mut TestAppContext) {
     let visual = &mut visual;
     // A step too large for the file: the store says so.
     do_with(&s, visual, |m, cx| {
-        let huge = "x".repeat(2 * 1024 * 1024 + 10);
+        let huge = "x".repeat(8 * 1024 * 1024 + 10);
         m.board_node_edit(
             "fetch",
             |n| {
@@ -709,7 +708,7 @@ fn shows_the_real_reason_a_save_failed(cx: &mut TestAppContext) {
     assert_eq!(
         page_notice(&s, visual).as_deref(),
         Some(
-            "The workflows are too large to save (over 2 MiB in total). Remove a workflow or shorten its steps."
+            "The workflows are too large to save (over 8 MiB in total). Remove a workflow or shorten its steps."
         )
     );
     assert_eq!(stored_first(&s).name, "ClickUp -> Dev -> Review");

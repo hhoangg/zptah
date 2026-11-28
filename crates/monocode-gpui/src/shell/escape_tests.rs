@@ -528,8 +528,8 @@ fn run_dialog_escape_closes_it_and_leaves_the_busy_mono_running(cx: &mut TestApp
                 &monocode_core::mono::workflows::ordered::Json::from(&serde_json::json!({
                     "id": "wf-aaaaaaaa", "name": "Nightly", "enabled": true, "createdAt": 1,
                     "inputs": {"area": {"type": "string"}}, "inputValues": {"area": "src"},
-                    "nodes": [{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}],
-                    "edges": [{"from": "trigger", "to": "report"}],
+                    "nodes": [{"id": "start", "type": "manual"}, {"id": "work", "type": "command", "project": "{{inputs.area}}", "command": "true"}],
+                    "edges": [{"from": "start", "to": "work"}],
                 })),
             )
             .expect("a workflow");

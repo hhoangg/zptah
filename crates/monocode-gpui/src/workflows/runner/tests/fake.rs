@@ -39,13 +39,12 @@ pub(super) struct World {
     pub(super) starts: Vec<SessionRequest>,
     pub(super) sends: Vec<(String, String)>,
     pub(super) stops: Vec<String>,
-    pub(super) ended: Vec<String>,
     pub(super) released: Vec<String>,
-    pub(super) approvals: Vec<ApprovalAsk>,
-    pub(super) asks: Vec<(String, String)>,
+    /// Every AI decision the run asked for.
+    pub(super) decisions: Vec<DecisionRequest>,
     pub(super) commands: Vec<(String, String, u64, String)>,
     pub(super) cancelled: Vec<String>,
-    pub(super) posts: Vec<Posted>,
+    pub(super) posts: Vec<Summary>,
     pub(super) saves: Vec<WorkflowRun>,
 }
 
@@ -104,7 +103,7 @@ impl FakeHost {
     pub(super) fn answer(&self, reply: Result<String, String>) {
         self.0.borrow_mut().answers.push_back(Some(reply));
     }
-    pub(super) fn hang_next_ask(&self) {
+    pub(super) fn hang_next_decision(&self) {
         self.0.borrow_mut().answers.push_back(None);
     }
     pub(super) fn fail_starts(&self, error: &str) {
@@ -171,11 +170,7 @@ impl FakeHost {
 }
 
 impl WorkflowHost for FakeHost {
-    fn start_session(
-        &self,
-        _mono_id: &str,
-        req: SessionRequest,
-    ) -> Fut<Result<StartedSession, String>> {
+    fn start_session(&self, req: SessionRequest) -> Fut<Result<StartedSession, String>> {
         let host = self.clone();
         let call = {
             let mut w = host.0.borrow_mut();
@@ -229,7 +224,6 @@ impl WorkflowHost for FakeHost {
             let settled = host.turn(&id, req.prompt);
             Ok(StartedSession {
                 session_id: id,
-                folder_id: Some(format!("folder:{}", req.project)),
                 settled,
             })
         })
@@ -268,14 +262,6 @@ impl WorkflowHost for FakeHost {
         w.sessions.iter().any(|s| s.id == session_id && s.waiting)
     }
 
-    fn ask_approval(&self, ask: ApprovalAsk) {
-        self.0.borrow_mut().approvals.push(ask);
-    }
-
-    fn end_approvals(&self, session_id: &str) {
-        self.0.borrow_mut().ended.push(session_id.into());
-    }
-
     fn release_session(&self, session_id: &str) {
         self.0.borrow_mut().released.push(session_id.into());
     }
@@ -287,6 +273,7 @@ impl WorkflowHost for FakeHost {
             .find(|s| s.id == session_id)
             .map(|s| SessionInfo {
                 session_id: s.id.clone(),
+                local_id: None,
                 cwd: s.cwd.clone(),
                 title: format!("Session {}", s.id),
                 harness: "claude".into(),
@@ -335,9 +322,9 @@ impl WorkflowHost for FakeHost {
         Box::pin(async move { Ok(hit) })
     }
 
-    fn ask_mono(&self, mono_id: &str, prompt: String) -> Fut<Result<String, String>> {
+    fn decide(&self, request: DecisionRequest) -> Fut<Result<String, String>> {
         let mut w = self.0.borrow_mut();
-        w.asks.push((mono_id.into(), prompt));
+        w.decisions.push(request);
         let answer = w
             .answers
             .pop_front()
@@ -350,11 +337,11 @@ impl WorkflowHost for FakeHost {
         })
     }
 
-    fn post(&self, report: Posted) {
-        self.0.borrow_mut().posts.push(report);
+    fn post(&self, summary: Summary) {
+        self.0.borrow_mut().posts.push(summary);
     }
 
-    fn project_path(&self, _mono_id: &str, input: &str) -> Option<String> {
+    fn project_path(&self, input: &str) -> Option<String> {
         ["/code/app", "/code/lib"]
             .contains(&input)
             .then(|| input.to_string())
@@ -364,7 +351,7 @@ impl WorkflowHost for FakeHost {
         (!self.0.borrow().no_worktrees).then(|| format!("/code/app-wt-{session_id}"))
     }
 
-    fn save_run(&self, _mono_id: &str, run: WorkflowRun) -> Fut<Result<(), String>> {
+    fn save_run(&self, run: WorkflowRun) -> Fut<Result<(), String>> {
         let host = self.clone();
         let (delay, executor) = {
             let mut w = host.0.borrow_mut();
@@ -412,13 +399,21 @@ impl Rig {
 
     /// A manual run of `def` with the id `run-1`.
     pub(super) fn start(&self, cx: &TestAppContext, def: &Workflow) -> bool {
-        self.start_run(cx, start_run(def, RunTrigger::Manual, 1_000, "run-1"))
+        self.start_run(
+            cx,
+            start_run(
+                def,
+                RunCaller::new(CallerKind::Manual, "start"),
+                1_000,
+                "run-1",
+            ),
+        )
     }
 
     pub(super) fn start_run(&self, cx: &TestAppContext, run: WorkflowRun) -> bool {
         self.fake.0.borrow_mut().executor = Some(cx.executor());
         self.runner
-            .start(Rc::new(self.fake.clone()), &cx.to_async(), "mono-1", run)
+            .start(Rc::new(self.fake.clone()), &cx.to_async(), run)
     }
 
     /// The newest state the run was written in.

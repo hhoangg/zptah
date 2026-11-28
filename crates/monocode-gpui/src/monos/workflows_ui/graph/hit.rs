@@ -52,17 +52,14 @@ pub(in crate::monos) fn handles_of(node: &SceneNode) -> Vec<Handle> {
     }
     let kind = &node.flow.data.node.kind;
     let trigger = matches!(kind, NodeKind::Schedule { .. } | NodeKind::Manual);
-    let report = matches!(kind, NodeKind::Report { .. });
     let mut out = Vec::new();
     if !trigger {
         out.push(handle(HandleKind::In, r.x + r.w / 2., r.y));
-        if !report {
-            out.push(handle(
-                HandleKind::LoopIn,
-                r.right(),
-                r.y + r.h * LOOP_IN_AT,
-            ));
-        }
+        out.push(handle(
+            HandleKind::LoopIn,
+            r.right(),
+            r.y + r.h * LOOP_IN_AT,
+        ));
     }
     match kind {
         NodeKind::If { .. } | NodeKind::Switch { .. } => {
@@ -75,13 +72,9 @@ pub(in crate::monos) fn handles_of(node: &SceneNode) -> Vec<Handle> {
                 ));
             }
         }
-        _ if !report => out.push(handle(HandleKind::Out(None), r.x + r.w / 2., r.bottom())),
-        _ => {}
+        _ => out.push(handle(HandleKind::Out(None), r.x + r.w / 2., r.bottom())),
     }
-    if matches!(
-        kind,
-        NodeKind::Session { .. } | NodeKind::Command { .. } | NodeKind::AskMono { .. }
-    ) {
+    if matches!(kind, NodeKind::Session { .. } | NodeKind::Command { .. }) {
         out.push(handle(
             HandleKind::LoopOut,
             r.right(),

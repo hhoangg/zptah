@@ -1,14 +1,18 @@
-//! The Workflows tab of a Mono's overview and its pages: the list, one workflow, its review
-//! before it may run, and the import page. Port of `MonoWorkflows.tsx`, `WorkflowPage.tsx`,
-//! `WorkflowReviewPage.tsx` and `ImportWorkflowPage.tsx`.
+//! The pages of the global Workflows view: the list, one workflow, its review before it may run,
+//! the board, a run, and the import page. Port of `MonoWorkflows.tsx`, `WorkflowPage.tsx`,
+//! `WorkflowReviewPage.tsx` and `ImportWorkflowPage.tsx`, now hosted by `app_page::WorkflowsPage`
+//! and independent of any Mono.
 //!
-//! The Mono's workflow files are the source of truth and there is no change notification, so the
-//! UI reads them again whenever something may have changed: when a page or the tab opens, after
+//! The global workflow files are the source of truth and there is no change notification, so the
+//! UI reads them again whenever something may have changed: when the view or a page opens, after
 //! every action, when the app's own `workflows.*` actions saved (`reload_files`), and while the
-//! tab or a workflow page is shown, on a short clock that also notices a run starting or ending
-//! in the runner. All file access and model probing runs off the UI thread. Actions go through
-//! `actions`, which follows the same rules as the `workflows.*` CLI actions.
+//! view is shown, on a short clock that also notices a run starting or ending in the runner. All
+//! file access and model probing runs off the UI thread. Actions go through `actions`, which
+//! follows the same rules as the `workflows.*` CLI actions.
 pub(in crate::monos) mod actions;
+mod app_page;
+#[cfg(test)]
+mod app_page_tests;
 mod board;
 #[cfg(test)]
 mod board_canvas_tests;
@@ -46,6 +50,7 @@ pub(in crate::monos) mod tests;
 pub(in crate::monos) mod view;
 
 pub(crate) use actions::ReviewIntent;
+pub(crate) use app_page::WorkflowsPage;
 pub(in crate::monos) use import::{apply_picked_file, pick_text_file, preview_later};
 
 use super::*;
@@ -54,7 +59,7 @@ use monocode_core::mono::workflows::{
     cli::StoreHost,
     model::{Workflow, WorkflowRun},
     preflight::Preflight,
-    store::{MonoDir, load_runs, load_workflows},
+    store::{load_runs, load_workflows},
 };
 use std::collections::BTreeSet;
 
@@ -75,15 +80,63 @@ pub(super) enum Pick {
     Board(board::BoardPick),
     /// An input of the Run dialog.
     Gate(String),
+    /// The Mono "Ask Mono to build a workflow" goes to.
+    AskMono,
+}
+
+/// A page of the Workflows view (the list is no page: it is `None`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::monos) enum WfRoute {
+    Workflow(String),
+    Run(String, String),
+    Board(String),
+    Review(String, ReviewIntent),
+    New,
+    Import,
+}
+
+/// What the pages need from the app, taken fresh each time the view is drawn: the accent of the
+/// drawings, the app's projects, and what a new session starts with.
+#[derive(Clone, PartialEq)]
+pub(in crate::monos) struct Scope {
+    pub(in crate::monos) color: u32,
+    /// The app's projects, as paths.
+    pub(in crate::monos) projects: Vec<String>,
+    /// The open project: where a model list is read from.
+    pub(in crate::monos) project: String,
+    /// The harness and model a new session starts with when a step sets none.
+    pub(in crate::monos) default_kind: Option<monocode_core::provider::Kind>,
+    pub(in crate::monos) default_model: Option<String>,
+}
+
+impl Default for Scope {
+    fn default() -> Self {
+        Self {
+            color: crate::theme::ACCENT,
+            projects: Vec::new(),
+            project: String::new(),
+            default_kind: None,
+            default_model: None,
+        }
+    }
 }
 
 #[derive(Default)]
 pub(super) struct WorkflowsUi {
-    /// Each Mono's workflows as last loaded, so switching back shows them at once.
-    loaded: HashMap<String, Vec<Workflow>>,
-    /// The runs of the workflows that need them (the open page), by `(mono, workflow)`.
-    runs: HashMap<(String, String), Vec<WorkflowRun>>,
-    requested: HashSet<String>,
+    /// The workflows as last loaded, so the view shows them at once when it opens again.
+    loaded: Option<Vec<Workflow>>,
+    /// The runs of the workflows that need them (the open page), by workflow.
+    runs: HashMap<String, Vec<WorkflowRun>>,
+    /// Whether the files were asked for already.
+    requested: bool,
+    /// Where the Ask Mono picker opens from.
+    ask_anchor: AnchorSlot,
+    /// The open page, or the list when `None`.
+    route: Option<WfRoute>,
+    /// Whether the Workflows view is the one on screen.
+    open: bool,
+    /// What the pages need from the app (see `Scope`).
+    scope: Scope,
     revision: u64,
     /// What a refused action says under the list, and under a page's header.
     notice: Option<String>,
@@ -118,68 +171,63 @@ pub(super) struct WorkflowsUi {
 }
 
 impl Monos {
-    /// The active Mono's workflows, once loaded.
-    pub(super) fn mono_workflows(&self) -> Option<&Vec<Workflow>> {
-        self.active.as_ref().and_then(|id| self.wf.loaded.get(id))
+    /// The workflows, once loaded.
+    pub(super) fn all_workflows(&self) -> Option<&Vec<Workflow>> {
+        self.wf.loaded.as_ref()
     }
 
-    pub(super) fn mono_workflow(&self, id: &str) -> Option<&Workflow> {
-        self.mono_workflows()?.iter().find(|w| w.id == id)
+    pub(super) fn global_workflow(&self, id: &str) -> Option<&Workflow> {
+        self.all_workflows()?.iter().find(|w| w.id == id)
     }
 
     pub(super) fn workflow_runs_of(&self, id: &str) -> Option<&Vec<WorkflowRun>> {
-        self.wf.runs.get(&(self.active.clone()?, id.to_string()))
+        self.wf.runs.get(id)
     }
 
-    /// Whether the Mono's workflows were asked for already.
-    pub(super) fn workflows_requested(&self, mono: &str) -> bool {
-        self.wf.requested.contains(mono)
+    /// Whether the workflows were asked for already.
+    pub(super) fn workflows_requested(&self) -> bool {
+        self.wf.requested
     }
 
-    /// How many workflows the active Mono has, once known.
+    /// How many workflows there are, once known.
     pub(super) fn workflow_count(&self) -> Option<usize> {
-        self.mono_workflows().map(Vec::len)
+        self.all_workflows().map(Vec::len)
     }
 
-    /// The Mono's workflow files, with how this app probes the model catalog.
-    pub(super) fn workflow_store(&self, mono: &str) -> StoreHost {
-        let host = StoreHost::new(
-            MonoDir::new(&self.root, mono),
-            self.workflow_signals.clone(),
-        )
-        .with_probe(self.workflow_live.probe())
-        .with_preflight(self.workflow_live.preflight());
-        match self.roster.get(mono) {
-            Some(m) => host.with_projects(m.projects.clone()),
-            None => host,
+    /// How the app judges workflows (model catalog and requirements): the `Workflows` entity's
+    /// probes, so a test swaps them in one place.
+    pub(crate) fn workflow_probes(&self, cx: &App) -> crate::workflows::Probes {
+        self.workflows_entity
+            .as_ref()
+            .and_then(|workflows| workflows.upgrade())
+            .map(|workflows| workflows.read(cx).probes())
+            .unwrap_or_default()
+    }
+
+    /// The global workflow files, with how this app probes the model catalog and checks accounts.
+    /// The user is the caller.
+    pub(super) fn workflow_store(&self, cx: &App) -> StoreHost {
+        match self.workflows_entity.as_ref().and_then(|w| w.upgrade()) {
+            Some(workflows) => workflows.read(cx).store_host(cx),
+            None => {
+                let probes = crate::workflows::Probes::new();
+                StoreHost::new(self.workflow_dir.clone(), self.workflow_signals.clone())
+                    .with_probe(probes.probe())
+                    .with_preflight(probes.preflight())
+            }
         }
     }
 
-    /// Whether the tab or a workflow page is on screen.
+    /// Whether the Workflows view is on screen.
     fn workflows_shown(&self) -> bool {
-        self.active.is_some()
-            && (self.overview_tab == OverviewTab::Workflows
-                || matches!(
-                    self.route,
-                    Some(
-                        Route::Workflow(_)
-                            | Route::WorkflowReview(..)
-                            | Route::WorkflowRun(..)
-                            | Route::WorkflowBoard(_)
-                            | Route::NewWorkflow
-                            | Route::ImportWorkflow
-                    )
-                ))
+        self.wf.open
     }
 
-    /// Called while the tab or a page is drawn: loads on first sight and keeps looking.
+    /// Called while the view is drawn: loads on first sight and keeps looking.
     pub(super) fn ensure_workflows(&mut self, cx: &mut Context<Self>) {
-        let Some(mono) = self.active.clone() else {
-            return;
-        };
         self.wf.last_drawn = Some(std::time::Instant::now());
-        // First sight, or the tab shown again after the clock stopped: look at once.
-        let first = self.wf.requested.insert(mono);
+        // First sight, or the view shown again after the clock stopped: look at once.
+        let first = !std::mem::replace(&mut self.wf.requested, true);
         if first || self.wf.poll.is_none() {
             self.refresh_workflows(cx);
         }
@@ -198,7 +246,7 @@ impl Monos {
 
     /// One look of the clock: false once nothing shows workflows any more.
     fn workflows_poll(&mut self, cx: &mut Context<Self>) -> bool {
-        // Not drawn for a beat or two (the panel is hidden): stop reading files. Drawing it
+        // Not drawn for a beat or two (the view is hidden): stop reading files. Drawing it
         // again starts the clock and reads at once.
         let hidden = self
             .wf
@@ -210,15 +258,13 @@ impl Monos {
             }
             return false;
         }
-        // A look asks for a draw, which is how a hidden panel is told from a still one.
+        // A look asks for a draw, which is how a hidden view is told from a still one.
         cx.notify();
-        // Only this Mono's runs count: another Mono's run changes nothing shown here.
         let running: Vec<String> = self
             .workflows
             .running()
             .into_iter()
             .map(|(workflow, _)| workflow)
-            .filter(|workflow| self.mono_workflow(workflow).is_some())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -235,18 +281,15 @@ impl Monos {
         true
     }
 
-    /// Reads the active Mono's workflow files again, off the UI thread.
+    /// Reads the workflow files again, off the UI thread.
     pub(super) fn refresh_workflows(&mut self, cx: &mut Context<Self>) {
-        let Some(mono) = self.active.clone() else {
-            return;
-        };
         self.wf.revision += 1;
         let revision = self.wf.revision;
-        let dir = MonoDir::new(&self.root, mono.clone());
+        let dir = self.workflow_dir.clone();
         // The open page also shows the workflow's recent runs.
         // A run the runner holds is shown from there, not from its file.
-        let wanted = match &self.route {
-            Some(Route::WorkflowRun(id, run))
+        let wanted = match &self.wf.route {
+            Some(WfRoute::Run(id, run))
                 if self
                     .workflows
                     .with_run(id, |r| r.id == *run)
@@ -254,7 +297,7 @@ impl Monos {
             {
                 None
             }
-            Some(Route::Workflow(id) | Route::WorkflowRun(id, _)) => Some(id.clone()),
+            Some(WfRoute::Workflow(id) | WfRoute::Run(id, _)) => Some(id.clone()),
             _ => None,
         };
         let work = cx.background_executor().spawn(async move {
@@ -271,7 +314,7 @@ impl Monos {
                     return;
                 }
                 match result {
-                    Ok((workflows, runs)) => this.workflows_loaded(&mono, workflows, runs, cx),
+                    Ok((workflows, runs)) => this.workflows_loaded(workflows, runs, cx),
                     Err(error) => eprintln!("Could not read the workflows: {error}"),
                 }
             });
@@ -281,54 +324,48 @@ impl Monos {
 
     fn workflows_loaded(
         &mut self,
-        mono: &str,
         workflows: Vec<Workflow>,
         runs: Option<(String, Vec<WorkflowRun>)>,
         cx: &mut Context<Self>,
     ) {
-        let count_changed = self.wf.loaded.get(mono).map(Vec::len) != Some(workflows.len());
-        self.wf.runs.retain(|(m, _), _| m != mono);
+        let count_changed = self.wf.loaded.as_ref().map(Vec::len) != Some(workflows.len());
+        self.wf.runs.clear();
         if let Some((id, runs)) = runs {
-            self.wf.runs.insert((mono.to_string(), id), runs);
+            self.wf.runs.insert(id, runs);
         }
-        self.wf.loaded.insert(mono.to_string(), workflows);
-        if self.active.as_deref() == Some(mono) {
-            // A workflow removed while open closes its pages.
-            let gone = match &self.route {
-                Some(
-                    Route::Workflow(id)
-                    | Route::WorkflowRun(id, _)
-                    | Route::WorkflowBoard(id)
-                    | Route::WorkflowReview(id, _),
-                ) => self.mono_workflow(id).is_none(),
-                _ => false,
-            };
-            if gone {
-                self.route = None;
-            }
-            // The dialog of a workflow that is gone has nothing left to run.
-            if self
-                .wf
-                .gate
-                .as_ref()
-                .is_some_and(|g| self.mono_workflow(&g.workflow_id).is_none())
-            {
-                self.wf.gate = None;
-            }
-            // A review that is no longer on screen is dropped, not probed again.
-            if !matches!(self.route, Some(Route::WorkflowReview(..))) {
-                self.wf.review = None;
-            }
-            self.review_sync(cx);
-            if matches!(self.route, Some(Route::WorkflowRun(..))) {
-                self.run_page_sync(cx);
-            }
-            if matches!(
-                self.route,
-                Some(Route::WorkflowBoard(_) | Route::NewWorkflow)
-            ) {
-                self.board_sync(cx);
-            }
+        self.wf.loaded = Some(workflows);
+        // A workflow removed while open closes its pages.
+        let gone = match &self.wf.route {
+            Some(
+                WfRoute::Workflow(id)
+                | WfRoute::Run(id, _)
+                | WfRoute::Board(id)
+                | WfRoute::Review(id, _),
+            ) => self.global_workflow(id).is_none(),
+            _ => false,
+        };
+        if gone {
+            self.wf.route = None;
+        }
+        // The dialog of a workflow that is gone has nothing left to run.
+        if self
+            .wf
+            .gate
+            .as_ref()
+            .is_some_and(|g| self.global_workflow(&g.workflow_id).is_none())
+        {
+            self.wf.gate = None;
+        }
+        // A review that is no longer on screen is dropped, not probed again.
+        if !matches!(self.wf.route, Some(WfRoute::Review(..))) {
+            self.wf.review = None;
+        }
+        self.review_sync(cx);
+        if matches!(self.wf.route, Some(WfRoute::Run(..))) {
+            self.run_page_sync(cx);
+        }
+        if matches!(self.wf.route, Some(WfRoute::Board(_) | WfRoute::New)) {
+            self.board_sync(cx);
         }
         self.refresh_preflights(cx);
         if count_changed {
@@ -338,21 +375,15 @@ impl Monos {
         }
     }
 
-    /// Runs `work` over the Mono's workflow files off the UI thread, then `done` here, and reads
-    /// the files again.
+    /// Runs `work` over the workflow files off the UI thread, then `done` here, and reads the
+    /// files again.
     pub(super) fn workflow_task<T: Send + 'static>(
         &mut self,
         work: impl FnOnce(&mut StoreHost) -> T + Send + 'static,
         done: impl FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) {
-        let Some(mono) = self.active.clone() else {
-            return;
-        };
-        let mut host = self.workflow_store(&mono);
-        if let Some(check) = super::host::workflow_account_check(cx) {
-            host = host.with_accounts(check);
-        }
+        let mut host = self.workflow_store(cx);
         let task = cx
             .background_executor()
             .spawn(async move { work(&mut host) });
@@ -382,7 +413,7 @@ impl Monos {
         cx.notify();
     }
 
-    /// The tab is left: its notice goes (React resets it on unmount).
+    /// The list is left: its notice goes (React resets it on unmount).
     pub(super) fn wf_leave_tab(&mut self) {
         self.wf.notice = None;
         self.wf.gate = None;
@@ -392,25 +423,43 @@ impl Monos {
     pub(super) fn wf_leave_page(&mut self) {
         self.wf.page_notice = None;
         self.wf.gate = None;
-        self.wf.run.session_back = None;
         self.board_drop();
-        if matches!(self.route, Some(Route::WorkflowReview(..))) {
+        if matches!(self.wf.route, Some(WfRoute::Review(..))) {
             self.wf.review = None;
         }
     }
 
-    /// Opens a workflow page and reads its files again.
-    pub(super) fn open_workflow_route(&mut self, route: Route, cx: &mut Context<Self>) {
-        self.wf.page_notice = None;
-        // A run page opened from a link starts fresh (a session's Back returns to the old one).
-        if matches!(route, Route::WorkflowRun(..)) {
-            self.wf.run.key = None;
+    /// The Workflows view opens or closes (it is the one on screen, or not).
+    pub(crate) fn workflows_view_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        if self.wf.open == shown {
+            return;
         }
+        self.wf.open = shown;
+        if shown {
+            // Opened fresh: the list, read again.
+            self.wf.route = None;
+            self.refresh_workflows(cx);
+        } else {
+            self.wf_leave_page();
+            self.wf_leave_tab();
+            self.wf.route = None;
+            self.picker = None;
+        }
+        cx.notify();
+    }
+
+    /// Opens a workflow page and reads its files again.
+    pub(super) fn open_workflow_route(&mut self, route: WfRoute, cx: &mut Context<Self>) {
+        self.wf.page_notice = None;
         // A board opens fresh from the files.
-        if matches!(route, Route::WorkflowBoard(_) | Route::NewWorkflow) {
+        if matches!(route, WfRoute::Board(_) | WfRoute::New) {
             self.board_drop();
         }
-        self.route = Some(route);
+        // A run page opened from a link starts fresh.
+        if matches!(route, WfRoute::Run(..)) {
+            self.wf.run.key = None;
+        }
+        self.wf.route = Some(route);
         self.refresh_workflows(cx);
         cx.notify();
     }
@@ -421,9 +470,27 @@ impl Monos {
         self.wf.seeds.clear();
     }
 
-    /// "Ask Mono to build a workflow": starts a sentence in the Mono's composer for the user to
-    /// finish. It never sends.
-    pub(super) fn ask_mono_for_workflow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// The Mono "Ask Mono to build a workflow" goes to unless the user picks another: the one
+    /// open last, else the first.
+    pub(super) fn ask_mono_default(&self) -> Option<String> {
+        self.last_active
+            .clone()
+            .filter(|id| self.roster.get(id).is_some())
+            .or_else(|| self.roster.monos.first().map(|m| m.id.clone()))
+    }
+
+    /// "Ask Mono to build a workflow": opens the Mono and starts a sentence in its composer for
+    /// the user to finish. It never sends.
+    pub(crate) fn ask_mono_for_workflow(
+        &mut self,
+        mono: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open(mono, window, cx);
+        if self.active.as_deref() != Some(mono) {
+            return;
+        }
         let Some(chat) = self.chat() else {
             return;
         };
@@ -440,6 +507,30 @@ impl Monos {
         });
         window.focus(&input.focus_handle(cx), cx);
         cx.notify();
+    }
+
+    /// Opens the Mono picker of "Ask Mono to build a workflow".
+    pub(super) fn open_ask_mono_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let choices: Vec<(String, String)> = self
+            .roster
+            .monos
+            .iter()
+            .map(|mono| (mono.id.clone(), mono.label()))
+            .collect();
+        if choices.is_empty() {
+            return;
+        }
+        let current = self.ask_mono_default().unwrap_or_default();
+        let anchor = self.wf.ask_anchor.clone();
+        self.open_workflow_picker(
+            "Ask which Mono".into(),
+            choices,
+            current,
+            Pick::AskMono,
+            anchor,
+            window,
+            cx,
+        );
     }
 
     fn workflow_focus(&mut self, key: &str, cx: &mut Context<Self>) -> gpui::FocusHandle {
@@ -580,6 +671,7 @@ impl Monos {
             Pick::Import(name, ty) => self.import_choose(name, ty, &value, cx),
             Pick::Board(pick) => self.board_picked(pick, &value, cx),
             Pick::Gate(name) => self.run_gate_picked(name, &value, cx),
+            Pick::AskMono => cx.emit(AskMonoForWorkflow(value)),
         }
     }
 }

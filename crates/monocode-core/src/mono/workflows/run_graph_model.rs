@@ -14,7 +14,7 @@ use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// How one node stands in a run, as the card shows it. `Waiting` is a node waiting for approval
-/// or asking the Mono.
+/// or asking the AI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunNodeStatus {
     Done,
@@ -291,7 +291,7 @@ pub fn label_for(r: Option<&NodeRun>, status: RunNodeStatus, now: u64) -> String
         }),
         RunNodeStatus::Waiting => parts.push(
             if r.is_some_and(is_asking) {
-                "Asking the Mono"
+                "Asking the AI"
             } else {
                 "Waiting for approval"
             }

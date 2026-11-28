@@ -27,16 +27,16 @@ fn session(id: &str, y: f64) -> Value {
 fn scene() -> Scene {
     let w = workflow(
         json!([
-            {"id": "trigger", "type": "manual", "ui": {"x": 0, "y": 0}},
+            {"id": "start", "type": "manual", "ui": {"x": 0, "y": 0}},
             session("a", 100.),
-            {"id": "check", "type": "if", "decide": "mono", "ui": {"x": 0, "y": 200}},
+            {"id": "check", "type": "if", "decide": "ai", "ui": {"x": 0, "y": 200}},
             {"id": "each", "type": "forEach", "in": "{{a.list}}", "ui": {"x": 400, "y": 0}},
-            {"id": "report", "type": "report", "ui": {"x": 0, "y": 300}},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "ui": {"x": 0, "y": 300}},
             {"id": "route", "type": "switch", "value": "{{a.kind}}",
              "cases": ["bug", "feature", "chore"], "ui": {"x": 800, "y": 0}},
         ]),
         json!([
-            {"from": "trigger", "to": "a"}, {"from": "a", "to": "check"},
+            {"from": "start", "to": "a"}, {"from": "a", "to": "check"},
             {"from": "route", "to": "report", "handle": "feature"},
             {"from": "route", "to": "a", "handle": "default"},
         ]),
@@ -58,7 +58,7 @@ fn kinds(scene: &Scene, id: &str) -> Vec<HandleKind> {
 
 #[test]
 fn a_trigger_has_only_an_out_handle() {
-    assert_eq!(kinds(&scene(), "trigger"), vec![HandleKind::Out(None)]);
+    assert_eq!(kinds(&scene(), "start"), vec![HandleKind::Out(None)]);
 }
 
 #[test]
@@ -121,8 +121,16 @@ fn the_line_of_a_case_leaves_from_the_handle_of_that_case() {
 }
 
 #[test]
-fn a_report_only_takes_lines_in() {
-    assert_eq!(kinds(&scene(), "report"), vec![HandleKind::In]);
+fn a_command_takes_and_gives_lines_and_loops_like_a_session() {
+    assert_eq!(
+        kinds(&scene(), "report"),
+        vec![
+            HandleKind::In,
+            HandleKind::LoopIn,
+            HandleKind::Out(None),
+            HandleKind::LoopOut
+        ]
+    );
 }
 
 #[test]
@@ -228,7 +236,7 @@ fn a_connection_dropped_on_a_card_connects_to_it() {
         y: a.y + 20.,
     };
     assert_eq!(
-        drop_target(inside, &scene.nodes, "trigger", 1.).as_deref(),
+        drop_target(inside, &scene.nodes, "start", 1.).as_deref(),
         Some("a")
     );
     // Not to the card it started from.
@@ -244,14 +252,14 @@ fn a_connection_dropped_a_little_outside_a_card_still_finds_it() {
         y: a.y - 10.,
     };
     assert_eq!(
-        drop_target(near, &scene.nodes, "trigger", 1.).as_deref(),
+        drop_target(near, &scene.nodes, "start", 1.).as_deref(),
         Some("a")
     );
     let far = Point {
         x: a.x - 60.,
         y: a.y - 60.,
     };
-    assert_eq!(drop_target(far, &scene.nodes, "trigger", 1.), None);
+    assert_eq!(drop_target(far, &scene.nodes, "start", 1.), None);
 }
 
 #[test]
@@ -263,9 +271,9 @@ fn the_drop_radius_is_in_screen_pixels() {
         y: a.y + 10.,
     };
     // 15 graph pixels is 30 on screen at zoom 2: too far; at zoom 0.5 it is 7.5: close enough.
-    assert_eq!(drop_target(near, &scene.nodes, "trigger", 2.), None);
+    assert_eq!(drop_target(near, &scene.nodes, "start", 2.), None);
     assert_eq!(
-        drop_target(near, &scene.nodes, "trigger", 0.5).as_deref(),
+        drop_target(near, &scene.nodes, "start", 0.5).as_deref(),
         Some("a")
     );
 }
@@ -279,21 +287,21 @@ fn a_for_each_is_a_target_by_its_header_not_by_its_empty_inside() {
         y: g.y + GROUP_HEADER / 2.,
     };
     assert_eq!(
-        drop_target(header, &scene.nodes, "trigger", 1.).as_deref(),
+        drop_target(header, &scene.nodes, "start", 1.).as_deref(),
         Some("each")
     );
     let inside = Point {
         x: g.x + 40.,
         y: g.y + g.h - 10.,
     };
-    assert_eq!(drop_target(inside, &scene.nodes, "trigger", 1.), None);
+    assert_eq!(drop_target(inside, &scene.nodes, "start", 1.), None);
 }
 
 #[test]
 fn a_card_wins_over_the_frame_it_sits_in() {
     let w = workflow(
         json!([
-            {"id": "trigger", "type": "manual", "ui": {"x": -400, "y": 0}},
+            {"id": "start", "type": "manual", "ui": {"x": -400, "y": 0}},
             {"id": "each", "type": "forEach", "in": "x", "ui": {"x": 0, "y": 0}},
             {"id": "dev", "type": "command", "project": "p", "command": "ls", "parent": "each",
              "ui": {"x": 16, "y": 40}},
@@ -308,7 +316,7 @@ fn a_card_wins_over_the_frame_it_sits_in() {
         y: dev.y + 5.,
     };
     assert_eq!(
-        drop_target(over, &scene.nodes, "trigger", 1.).as_deref(),
+        drop_target(over, &scene.nodes, "start", 1.).as_deref(),
         Some("dev")
     );
 }

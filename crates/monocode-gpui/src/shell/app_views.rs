@@ -15,6 +15,7 @@ impl Shell {
             AppView::Inbox => "Inbox",
             AppView::Notes => "Notes",
             AppView::Automations => "Automations",
+            AppView::Workflows => "Workflows",
             AppView::Contributors => "Contributors",
         })
     }
@@ -158,6 +159,11 @@ impl Shell {
             notes.update(cx, |notes, cx| notes.flush(cx));
         }
         self.hide_contributors(cx);
+        if self.active_app_view == Some(AppView::Workflows)
+            && let Some(page) = &self.workflows_page
+        {
+            page.update(cx, |page, cx| page.set_shown(false, cx));
+        }
         self.active_app_view = None;
         self.invalidate_chrome(cx);
     }
@@ -243,6 +249,10 @@ impl Shell {
             AppView::Today => self.today.clone().map(IntoElement::into_any_element),
             AppView::Inbox => self.inbox.clone().map(IntoElement::into_any_element),
             AppView::Automations => self.automations.clone().map(IntoElement::into_any_element),
+            AppView::Workflows => self
+                .workflows_page
+                .clone()
+                .map(IntoElement::into_any_element),
             AppView::Contributors => self.contributors.clone().map(IntoElement::into_any_element),
         }
     }
@@ -255,6 +265,10 @@ impl Shell {
             Some(AppView::Automations) => {
                 self.automations.as_ref().map(|view| view.focus_handle(cx))
             }
+            Some(AppView::Workflows) => self
+                .workflows_page
+                .as_ref()
+                .map(|view| view.focus_handle(cx)),
             Some(AppView::Contributors) => {
                 self.contributors.as_ref().map(|view| view.focus_handle(cx))
             }
@@ -502,6 +516,38 @@ impl Shell {
             });
         }
         self.show_app_view(AppView::Automations, window, cx);
+    }
+
+    pub(crate) fn open_workflows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.prepare_app_view(window, cx);
+        if self.workflows_page.is_none()
+            && let Some(monos) = self.monos.clone()
+        {
+            let view = cx.new(|cx| crate::monos::WorkflowsPage::new(monos, cx));
+            self.workflows_page = Some(view);
+        }
+        if let Some(view) = self.workflows_page.clone() {
+            self.push_workflows_context(&view, cx);
+            view.update(cx, |page, cx| page.set_shown(true, cx));
+        }
+        self.show_app_view(AppView::Workflows, window, cx);
+    }
+
+    /// Tells the Workflows page which projects the app has and what a new session starts with.
+    pub(super) fn push_workflows_context(
+        &self,
+        view: &Entity<crate::monos::WorkflowsPage>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut projects = self.workspace.projects.clone();
+        if !self.workspace.project.is_empty() && !projects.contains(&self.workspace.project) {
+            projects.push(self.workspace.project.clone());
+        }
+        let project = self.workspace.project.clone();
+        let default = self.workflow_default_choice(&project, None);
+        view.update(cx, |page, cx| {
+            page.set_context(projects, project, default, cx)
+        });
     }
 
     /// Opens the Contributors page on `tab` (Ticket when `None`)

@@ -3,6 +3,7 @@ use super::tests::*;
 use super::*;
 use crate::monos::tests::{Setup, call_from, setup};
 use gpui::{TestAppContext, VisualTestContext};
+use monocode_core::mono::workflows::model::WORKFLOWS_MAX;
 use monocode_core::mono::workflows::{
     model::{InputValue, NodeKind, Workflow},
     yaml::export_workflow,
@@ -24,16 +25,16 @@ fn source(extra: Value) -> Workflow {
     build(
         all,
         json!([
-            {"id": "trigger", "type": "manual", "title": "Start by hand"},
+            {"id": "start", "type": "manual", "title": "Start by hand"},
             {"id": "build", "type": "command", "title": "Build it", "project": "{{inputs.project}}",
              "command": "npm run build && echo 'done' | tee out.txt"},
             {"id": "fix", "type": "session", "title": "Fix failures", "project": "{{inputs.project}}",
              "checkout": "root", "prompt": "Fix what broke in {{inputs.area}}.",
              "output": {"summary": {"type": "string", "description": "One line on what changed"}}},
-            {"id": "report", "type": "report", "title": "Tell the Mono"},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "title": "Tell the Mono"},
         ]),
         json!([
-            {"from": "trigger", "to": "build"},
+            {"from": "start", "to": "build"},
             {"from": "build", "to": "fix"},
             {"from": "fix", "to": "report"},
             {"from": "fix", "to": "build", "loop": {"maxRounds": 3, "decide": "{{fix.summary}} != \"clean\""}},
@@ -44,8 +45,8 @@ fn source(extra: Value) -> Workflow {
 fn plain_source() -> Workflow {
     build(
         json!({"id": "wf-sourceaaa", "name": "Tiny"}),
-        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}]),
-        json!([{"from": "trigger", "to": "report"}]),
+        json!([{"id": "start", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
+        json!([{"from": "start", "to": "report"}]),
     )
 }
 
@@ -164,7 +165,7 @@ fn import_waits_for_every_input_and_saves_paused_and_flagged(cx: &mut TestAppCon
     // What came from a file is read again, and approved, before it can run.
     assert!(w.needs_review);
     // The import page is replaced by the new workflow's page.
-    assert_eq!(route(&s, visual), Some(Route::Workflow(w.id.clone())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(w.id.clone())));
 }
 
 #[gpui::test]
@@ -177,11 +178,10 @@ fn validation_issues_are_shown_without_blocking_the_import(cx: &mut TestAppConte
     let broken_file = build(
         json!({"id": "wf-sourceaaa", "name": "Odd", "inputs": {"project": {"type": "project"}}}),
         json!([
-            {"id": "trigger", "type": "manual"},
-            {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": "make"},
-            {"id": "report", "type": "report"},
+            {"id": "start", "type": "manual"},
+            {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": "make", "timeoutMinutes": 0},
         ]),
-        json!([{"from": "trigger", "to": "build"}]),
+        json!([{"from": "start", "to": "build"}]),
     );
     paste(&s, &export_workflow(&broken_file), visual);
     let preview = preview_of(&s, visual).unwrap();
@@ -224,22 +224,22 @@ fn the_limit_disables_the_import_and_is_checked_again_over_the_disk(cx: &mut Tes
     // The page believes there is room; the disk is full.
     put(
         &s,
-        (0..20)
+        (0..WORKFLOWS_MAX)
             .map(|i| workflow(json!({"id": format!("wf-full{i:04}")})))
             .collect(),
     );
     assert!(!ready(&s, visual), "the disk is full");
-    assert_eq!(saved(&s).len(), 20);
+    assert_eq!(saved(&s).len(), WORKFLOWS_MAX);
     assert!(
         import_error(&s, visual)
             .unwrap()
-            .contains("at most 20 workflows")
+            .contains(&format!("at most {WORKFLOWS_MAX} workflows"))
     );
-    assert_eq!(route(&s, visual), Some(Route::ImportWorkflow));
+    assert_eq!(route(&s, visual), Some(WfRoute::Import));
     // Once the page knows, the button is off.
     refresh(&s, visual);
     assert!(!ready(&s, visual));
-    assert_eq!(saved(&s).len(), 20);
+    assert_eq!(saved(&s).len(), WORKFLOWS_MAX);
 }
 
 #[gpui::test]
@@ -337,10 +337,10 @@ fn an_interval_schedule_is_anchored_like_the_cli_import(cx: &mut TestAppContext)
     let timed = build(
         json!({"id": "wf-sourceaaa", "name": "Timed"}),
         json!([
-            {"id": "trigger", "type": "schedule", "schedule": {"scheduleKind": "interval", "time": "09:00", "minute": 0, "dayOfWeek": 1, "intervalHours": 4}},
-            {"id": "report", "type": "report"},
+            {"id": "start", "type": "schedule", "schedule": {"scheduleKind": "interval", "time": "09:00", "minute": 0, "dayOfWeek": 1, "intervalHours": 4}},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
-        json!([{"from": "trigger", "to": "report"}]),
+        json!([{"from": "start", "to": "report"}]),
     );
     paste(&s, &export_workflow(&timed), visual);
     assert!(ready(&s, visual));
@@ -365,8 +365,8 @@ fn an_input_value_is_not_carried_to_a_file_that_declares_it_differently(cx: &mut
     let file = |ty: &str| {
         export_workflow(&build(
             json!({"id": "wf-sourceaaa", "name": "One input", "inputs": {"area": {"type": ty}}}),
-            json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}]),
-            json!([{"from": "trigger", "to": "report"}]),
+            json!([{"id": "start", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
+            json!([{"from": "start", "to": "report"}]),
         ))
     };
     paste(&s, &file("string"), visual);
@@ -397,14 +397,14 @@ fn the_real_reason_an_import_could_not_be_saved_is_shown(cx: &mut TestAppContext
     visual.run_until_parked();
     paste(&s, &export_workflow(&plain_source()), visual);
     // The workflows file cannot be read as a file any more.
-    let file = s.root.join(&s.id).join("workflows.json");
+    let file = s.workflows_dir().root().join("workflows.json");
     let _ = std::fs::remove_file(&file);
     std::fs::create_dir_all(&file).unwrap();
     click(visual, "mono-import-paused");
     let error = import_error(&s, visual).expect("an error");
     assert_ne!(error, "Could not save the workflow.");
     assert!(!error.is_empty());
-    assert_eq!(route(&s, visual), Some(Route::ImportWorkflow));
+    assert_eq!(route(&s, visual), Some(WfRoute::Import));
 }
 
 #[gpui::test]
@@ -426,8 +426,8 @@ fn a_workflow_the_mono_adds_shows_up_in_the_open_tab(cx: &mut TestAppContext) {
         "workflows.add",
         json!({"workflow": {
             "name": "From the Mono",
-            "nodes": [{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}],
-            "edges": [{"from": "trigger", "to": "report"}],
+            "nodes": [{"id": "start", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}],
+            "edges": [{"from": "start", "to": "report"}],
         }}),
         visual,
     );

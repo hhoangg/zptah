@@ -7,7 +7,7 @@ use gpui::TestAppContext;
 use monocode_core::mono::workflows::{
     command::CommandResult,
     engine::start_run,
-    model::{RunTrigger, Workflow},
+    model::{CallerKind, DecisionModel, RunCaller, Workflow},
     ordered::Json,
     parse::parse_workflow,
     validate::validate_workflow,
@@ -85,28 +85,18 @@ fn utf16_slices_never_split_a_character() {
 }
 
 #[test]
-fn the_run_folder_is_named_after_the_workflow_and_the_minute_it_started() {
-    use chrono::{Local, TimeZone};
-    let at = Local
-        .with_ymd_and_hms(2026, 10, 22, 14, 5, 59)
-        .single()
-        .unwrap()
-        .timestamp_millis() as u64;
-    assert_eq!(run_folder_name("Ship it", at), "Ship it · 2026-10-22 14:05");
+fn the_workflow_folder_is_named_after_the_workflow() {
+    assert_eq!(workflow_folder_name("Ship it"), "Ship it");
     // White space runs collapse and the ends are trimmed.
-    assert_eq!(
-        run_folder_name("  Ship \n\t it  ", at),
-        "Ship it · 2026-10-22 14:05"
-    );
-    assert_eq!(run_folder_name("   ", at), "Workflow · 2026-10-22 14:05");
+    assert_eq!(workflow_folder_name("  Ship \n\t it  "), "Ship it");
+    assert_eq!(workflow_folder_name("   "), "Workflow");
 }
 
 #[test]
-fn the_run_folder_name_stays_within_100_characters() {
-    let name = run_folder_name(&"w".repeat(300), 1_700_000_000_000);
+fn the_workflow_folder_name_stays_within_100_characters() {
+    let name = workflow_folder_name(&"w".repeat(300));
     assert_eq!(name.encode_utf16().count(), 100);
-    assert!(name.contains(" · 20"));
-    let wide = run_folder_name(&"😀".repeat(300), 1_700_000_000_000);
+    let wide = workflow_folder_name(&"😀".repeat(300));
     assert!(wide.encode_utf16().count() <= 100);
 }
 
@@ -280,11 +270,7 @@ fn a_nudge_is_remembered_until_someone_waits(cx: &mut TestAppContext) {
 const WF: &str = "wf-abcd1234";
 
 fn trigger() -> Value {
-    json!({"id": "trigger", "type": "manual"})
-}
-
-fn report() -> Value {
-    json!({"id": "report", "type": "report"})
+    json!({"id": "start", "type": "manual"})
 }
 
 fn session(id: &str, output: Value, extra: Value) -> Value {
@@ -324,8 +310,8 @@ fn workflow_with(nodes: Vec<Value>, edges: Vec<Value>, values: Value) -> Workflo
 /// trigger -> dev -> report
 fn simple(output: Value) -> Workflow {
     workflow(
-        vec![trigger(), session("dev", output, json!({})), report()],
-        vec![edge("trigger", "dev"), edge("dev", "report")],
+        vec![trigger(), session("dev", output, json!({}))],
+        vec![edge("start", "dev")],
     )
 }
 
@@ -338,20 +324,17 @@ fn command_workflow(extra: Value) -> Workflow {
     for (key, value) in extra.as_object().unwrap() {
         cmd[key] = value.clone();
     }
-    workflow(
-        vec![trigger(), cmd, report()],
-        vec![edge("trigger", "cmd"), edge("cmd", "report")],
-    )
+    workflow(vec![trigger(), cmd], vec![edge("start", "cmd")])
 }
 
 fn ask_workflow() -> Workflow {
     workflow(
         vec![
             trigger(),
-            json!({"id": "ask", "type": "askMono", "question": "Ship it?", "answers": ["yes", "no"]}),
-            report(),
+            session("dev", json!({}), json!({})),
+            json!({"id": "ask", "type": "switch", "decide": "ai", "question": "Ship it?", "cases": ["yes", "no"]}),
         ],
-        vec![edge("trigger", "ask"), edge("ask", "report")],
+        vec![edge("start", "dev"), edge("dev", "ask")],
     )
 }
 
@@ -391,31 +374,32 @@ fn a_run_starts_a_session_per_node_and_posts_one_report(cx: &mut TestAppContext)
     assert_eq!(dev.status, NodeStatus::Done);
     assert_eq!(dev.session_id.as_deref(), Some("s1"));
     assert_eq!(output_of(&run, "dev"), "summary=\"all good\"");
-    assert_eq!(run.folder_id.as_deref(), Some("folder:/code/app"));
 
     let w = rig.fake.world();
     let request = &w.starts[0];
     assert_eq!(request.project, "/code/app");
     assert!(!request.new_worktree);
     assert!(request.prompt.contains("Do dev") && request.prompt.contains("workflow-output"));
-    assert_eq!(
-        request.folder_name.as_deref(),
-        Some(run_folder_name("Ship it", 1_000).as_str())
-    );
-    assert_eq!(request.folder_id, None);
+    // The session is filed in the workflow's own folder, named after it.
+    assert_eq!(request.folder_name.as_deref(), Some("Ship it"));
 
     assert_eq!(w.posts.len(), 1);
     let post = &w.posts[0];
-    assert_eq!(
-        (post.mono_id.as_str(), post.run_id.as_str()),
-        ("mono-1", "run-1")
-    );
+    assert_eq!(post.run.id, "run-1");
     assert_eq!(post.title, "Ship it · completed");
     assert!(post.text.contains("all good"));
+    // The run page has the same summary.
+    assert_eq!(
+        run.summary
+            .as_ref()
+            .map(|s| (s.title.as_str(), s.text.as_str())),
+        Some((post.title.as_str(), post.text.as_str()))
+    );
     assert_eq!(
         post.launches,
         [SessionInfo {
             session_id: "s1".into(),
+            local_id: None,
             cwd: "/code/app".into(),
             title: "Session s1".into(),
             harness: "claude".into(),
@@ -522,13 +506,11 @@ fn a_loop_continues_the_dev_session_through_send(cx: &mut TestAppContext) {
             trigger(),
             session("dev", json!({"summary": {"type": "string"}}), json!({})),
             session("review", json!({"verdict": {"type": "string"}}), json!({})),
-            report(),
         ],
         vec![
-            edge("trigger", "dev"),
+            edge("start", "dev"),
             edge("dev", "review"),
             json!({"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "{{review.verdict}} != \"approve\""}}),
-            edge("review", "report"),
         ],
     );
     let rig = Rig::new(&[
@@ -552,19 +534,17 @@ fn a_loop_continues_the_dev_session_through_send(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_mono_decided_loop_asks_the_mono_and_goes_round_again(cx: &mut TestAppContext) {
+fn an_ai_decided_loop_asks_the_model_and_goes_round_again(cx: &mut TestAppContext) {
     let def = workflow(
         vec![
             trigger(),
             session("dev", json!({"summary": {"type": "string"}}), json!({})),
             session("review", json!({"notes": {"type": "string"}}), json!({})),
-            report(),
         ],
         vec![
-            edge("trigger", "dev"),
+            edge("start", "dev"),
             edge("dev", "review"),
-            edge("review", "report"),
-            json!({"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "mono"}}),
+            json!({"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}}),
         ],
     );
     let rig = Rig::new(&[
@@ -583,9 +563,8 @@ fn a_mono_decided_loop_asks_the_mono_and_goes_round_again(cx: &mut TestAppContex
     let run = rig.last_run();
     assert_eq!(run.status, RunStatus::Done);
     let w = rig.fake.world();
-    assert_eq!(w.asks.len(), 2);
-    assert_eq!(w.asks[0].0, "mono-1");
-    assert!(w.asks[0].1.contains("Allowed answers"));
+    assert_eq!(w.decisions.len(), 2);
+    assert!(w.decisions[0].prompt.contains("Allowed answers"));
     // The second round continues both sessions.
     assert_eq!(w.sends.len(), 2);
     drop(w);
@@ -597,20 +576,26 @@ fn a_mono_decided_loop_asks_the_mono_and_goes_round_again(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-fn the_node_fails_when_the_monos_answer_cannot_be_read(cx: &mut TestAppContext) {
+fn the_node_fails_when_the_ais_answer_cannot_be_read(cx: &mut TestAppContext) {
     let rig = Rig::new(&[]);
     rig.fake.answer(Ok("I think so, not sure.".into()));
+    rig.fake.answer(Ok("Still not sure.".into()));
     rig.start(cx, &ask_workflow());
     cx.run_until_parked();
     let run = rig.last_run();
-    assert_eq!(run.status, RunStatus::Failed);
+    // The step before it succeeded, so the run ends with failures rather than failed.
+    assert_eq!(run.status, RunStatus::DoneWithFailures);
     let ask = node(&run, "ask");
     assert_eq!(ask.status, NodeStatus::Failed);
     assert!(ask.error.as_deref().unwrap().contains("workflow-output"));
+    // A reply that cannot be read is put back once before the node fails.
+    let w = rig.fake.world();
+    assert_eq!(w.decisions.len(), 2);
+    assert!(w.decisions[1].prompt.contains("could not be used"));
 }
 
 #[gpui::test]
-fn the_monos_answer_is_a_decision_and_its_reason_is_capped(cx: &mut TestAppContext) {
+fn the_ais_answer_is_a_decision_and_its_reason_is_capped(cx: &mut TestAppContext) {
     let rig = Rig::new(&[]);
     rig.fake.answer(Ok(fenced(
         json!({"answer": "yes", "reason": "r".repeat(20_000)}),
@@ -619,43 +604,160 @@ fn the_monos_answer_is_a_decision_and_its_reason_is_capped(cx: &mut TestAppConte
     cx.run_until_parked();
     let run = rig.last_run();
     assert_eq!(run.status, RunStatus::Done);
-    let output = node(&run, "ask").output.clone().unwrap();
-    assert_eq!(output.get("answer"), Some(&Json::String("yes".into())));
-    let Some(Json::String(reason)) = output.get("reason") else {
-        panic!("a reason")
-    };
+    let decision = node(&run, "ask").decision.clone().expect("a decision");
+    assert_eq!(decision.value, "yes");
+    let reason = decision.reason.expect("a reason");
     assert!(reason.len() < 16_200 && reason.contains("truncated"));
 }
 
 #[gpui::test]
-fn a_host_that_cannot_ask_fails_the_node_with_its_message(cx: &mut TestAppContext) {
+fn a_host_that_cannot_decide_fails_the_node_with_its_message(cx: &mut TestAppContext) {
     let rig = Rig::new(&[]);
-    rig.fake
-        .answer(Err("The Mono's chat is not available".into()));
+    rig.fake.answer(Err("Codex is not installed".into()));
     rig.start(cx, &ask_workflow());
     cx.run_until_parked();
     let ask = rig.last_run();
     assert_eq!(
         node(&ask, "ask").error.as_deref(),
-        Some("The Mono's chat is not available")
+        Some("Codex is not installed")
     );
 }
 
 #[gpui::test]
-fn an_unanswered_question_fails_after_ten_minutes(cx: &mut TestAppContext) {
+fn the_decision_is_asked_with_its_own_timeout(cx: &mut TestAppContext) {
     let rig = Rig::new(&[]);
-    rig.fake.hang_next_ask();
+    rig.fake.hang_next_decision();
     rig.start(cx, &ask_workflow());
     cx.run_until_parked();
     assert_eq!(rig.last_run().status, RunStatus::Running);
-    minutes(cx, 9 * 60);
-    assert_eq!(rig.last_run().status, RunStatus::Running);
-    minutes(cx, 61);
-    let run = rig.last_run();
-    assert_eq!(run.status, RunStatus::Failed);
+    // The host owns the wait (its call times out and answers with an error); the run only passes
+    // the limit on.
     assert_eq!(
-        node(&run, "ask").error.as_deref(),
-        Some("The Mono did not answer in time")
+        rig.fake.world().decisions[0].timeout_ms,
+        Limits::default().decision_timeout_ms
+    );
+}
+
+// --- which model answers a decision ----------------------------------------------------------
+
+/// What the one decision of `def` was asked with, by the model fields and the project.
+fn decided_with(cx: &mut TestAppContext, def: &Workflow, replies: &[&str]) -> DecisionRequest {
+    let rig = Rig::new(replies);
+    rig.fake.answer(Ok(fenced(json!({"answer": "yes"}))));
+    rig.start(cx, def);
+    cx.run_until_parked();
+    assert_eq!(rig.last_run().status, RunStatus::Done);
+    let w = rig.fake.world();
+    assert_eq!(w.decisions.len(), 1);
+    w.decisions[0].clone()
+}
+
+fn model_triple(request: &DecisionRequest) -> (Option<&str>, Option<&str>, Option<&str>) {
+    (
+        request.harness.as_deref(),
+        request.model.as_deref(),
+        request.effort.as_deref(),
+    )
+}
+
+#[gpui::test]
+fn the_workflows_decision_model_answers_even_when_a_session_names_another(cx: &mut TestAppContext) {
+    let mut def = workflow(
+        vec![
+            trigger(),
+            session(
+                "dev",
+                json!({}),
+                json!({"harness": "codex", "model": "codex:test", "effort": "low"}),
+            ),
+            json!({"id": "ask", "type": "switch", "decide": "ai", "question": "Ship it?", "cases": ["yes", "no"]}),
+        ],
+        vec![edge("start", "dev"), edge("dev", "ask")],
+    );
+    def.decision_model = Some(DecisionModel {
+        harness: "claude".into(),
+        model: "claude:opus-5".into(),
+        effort: Some("high".into()),
+    });
+    let request = decided_with(cx, &def, &["ok"]);
+    assert_eq!(
+        model_triple(&request),
+        (Some("claude"), Some("claude:opus-5"), Some("high"))
+    );
+    assert_eq!(request.project.as_deref(), Some("/code/app"));
+}
+
+#[gpui::test]
+fn without_a_decision_model_the_nearest_upstream_session_answers(cx: &mut TestAppContext) {
+    let def = workflow(
+        vec![
+            trigger(),
+            session(
+                "far",
+                json!({}),
+                json!({"harness": "grok", "model": "grok:grok-4.6"}),
+            ),
+            session(
+                "near",
+                json!({}),
+                json!({"harness": "codex", "model": "codex:test", "effort": "low"}),
+            ),
+            json!({"id": "ask", "type": "switch", "decide": "ai", "question": "Ship it?", "cases": ["yes", "no"]}),
+        ],
+        vec![
+            edge("start", "far"),
+            edge("far", "near"),
+            edge("near", "ask"),
+        ],
+    );
+    let request = decided_with(cx, &def, &["ok", "ok"]);
+    assert_eq!(
+        model_triple(&request),
+        (Some("codex"), Some("codex:test"), Some("low"))
+    );
+}
+
+#[gpui::test]
+fn a_session_that_uses_the_apps_defaults_leaves_the_decision_to_them(cx: &mut TestAppContext) {
+    // The session sets no harness or model, so the decision does not either: the host answers
+    // with the app's default for a new session, in the project the session works in.
+    let request = decided_with(cx, &ask_workflow(), &["ok"]);
+    assert_eq!(model_triple(&request), (None, None, None));
+    assert_eq!(request.project.as_deref(), Some("/code/app"));
+    assert!(request.prompt.contains("Ship it?"));
+}
+
+#[gpui::test]
+fn a_loop_edge_decides_on_the_model_of_the_session_it_leaves(cx: &mut TestAppContext) {
+    let def = workflow(
+        vec![
+            trigger(),
+            session("dev", json!({"summary": {"type": "string"}}), json!({})),
+            session(
+                "review",
+                json!({"summary": {"type": "string"}}),
+                json!({"harness": "codex", "model": "codex:test"}),
+            ),
+        ],
+        vec![
+            edge("start", "dev"),
+            edge("dev", "review"),
+            json!({"from": "review", "to": "dev", "loop": {"maxRounds": 2, "decide": "ai"}}),
+        ],
+    );
+    let rig = Rig::new(&[
+        &fenced(json!({"summary": "a"})),
+        &fenced(json!({"summary": "b"})),
+    ]);
+    rig.fake
+        .answer(Ok(fenced(json!({"answer": "exit", "reason": "done"}))));
+    rig.start(cx, &def);
+    cx.run_until_parked();
+    let w = rig.fake.world();
+    assert_eq!(w.decisions.len(), 1);
+    assert_eq!(
+        model_triple(&w.decisions[0]),
+        (Some("codex"), Some("codex:test"), None)
     );
 }
 
@@ -670,14 +772,13 @@ fn a_long_output_string_is_cut_before_it_is_stored(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_project_that_is_not_the_monos_fails_the_node(cx: &mut TestAppContext) {
+fn a_project_that_is_not_an_app_project_fails_the_node(cx: &mut TestAppContext) {
     let def = workflow_with(
         vec![
             trigger(),
             session("dev", json!({}), json!({"project": "{{inputs.lib}}"})),
-            report(),
         ],
-        vec![edge("trigger", "dev"), edge("dev", "report")],
+        vec![edge("start", "dev")],
         json!({"repo": "/code/app", "lib": "/elsewhere"}),
     );
     let rig = Rig::new(&[]);
@@ -686,7 +787,7 @@ fn a_project_that_is_not_the_monos_fails_the_node(cx: &mut TestAppContext) {
     let run = rig.last_run();
     assert_eq!(
         node(&run, "dev").error.as_deref(),
-        Some("\"{{inputs.lib}}\" is not one of the Mono's projects")
+        Some("\"{{inputs.lib}}\" is not one of the app's projects")
     );
     assert!(rig.fake.world().starts.is_empty());
 }
@@ -734,13 +835,8 @@ fn it_nests_under_another_nodes_session_and_uses_its_worktree(cx: &mut TestAppCo
                 json!({}),
                 json!({"nestUnder": "dev", "checkout": {"worktreeOf": "dev"}}),
             ),
-            report(),
         ],
-        vec![
-            edge("trigger", "dev"),
-            edge("dev", "review"),
-            edge("review", "report"),
-        ],
+        vec![edge("start", "dev"), edge("dev", "review")],
     );
     let rig = Rig::new(&["ok", "ok"]);
     rig.start(cx, &def);
@@ -751,7 +847,6 @@ fn it_nests_under_another_nodes_session_and_uses_its_worktree(cx: &mut TestAppCo
     assert!(!second.new_worktree);
     assert_eq!(second.parent_session_id.as_deref(), Some("s1"));
     assert_eq!(second.worktree_cwd.as_deref(), Some("/code/app-wt-s1"));
-    assert_eq!(second.folder_id.as_deref(), Some("folder:/code/app"));
     assert_eq!(second.folder_name, w.starts[0].folder_name);
 }
 
@@ -765,9 +860,8 @@ fn a_new_worktree_checkout_asks_for_one(cx: &mut TestAppContext) {
                 json!({}),
                 json!({"checkout": "newWorktree", "harness": "codex", "model": "codex:test", "effort": "high"}),
             ),
-            report(),
         ],
-        vec![edge("trigger", "dev"), edge("dev", "report")],
+        vec![edge("start", "dev")],
     );
     let rig = Rig::new(&["ok"]);
     rig.start(cx, &def);
@@ -796,13 +890,8 @@ fn it_fails_the_node_when_the_worktree_it_wants_is_not_there(cx: &mut TestAppCon
                 json!({}),
                 json!({"checkout": {"worktreeOf": "dev"}}),
             ),
-            report(),
         ],
-        vec![
-            edge("trigger", "dev"),
-            edge("dev", "review"),
-            edge("review", "report"),
-        ],
+        vec![edge("start", "dev"), edge("dev", "review")],
     );
     let rig = Rig::new(&["ok"]);
     rig.fake.no_worktrees();
@@ -817,20 +906,18 @@ fn it_fails_the_node_when_the_worktree_it_wants_is_not_there(cx: &mut TestAppCon
 }
 
 #[gpui::test]
-fn it_keeps_one_folder_per_project_for_a_run(cx: &mut TestAppContext) {
+fn every_session_of_a_workflow_is_filed_in_the_folder_named_after_it(cx: &mut TestAppContext) {
     let def = workflow(
         vec![
             trigger(),
             session("dev", json!({}), json!({})),
             session("docs", json!({}), json!({"project": "{{inputs.lib}}"})),
             session("more", json!({}), json!({"project": "{{inputs.lib}}"})),
-            report(),
         ],
         vec![
-            edge("trigger", "dev"),
+            edge("start", "dev"),
             edge("dev", "docs"),
             edge("docs", "more"),
-            edge("more", "report"),
         ],
     );
     let rig = Rig::new(&["ok", "ok", "ok"]);
@@ -838,20 +925,12 @@ fn it_keeps_one_folder_per_project_for_a_run(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(rig.last_run().status, RunStatus::Done);
     let w = rig.fake.world();
-    // First session: no folder yet, so it names one.
+    // The folder is the workflow's, whatever the project and the run: the host finds it by name
+    // in the project's folders or makes it.
+    let folders: Vec<_> = w.starts.iter().map(|s| s.folder_name.as_deref()).collect();
+    assert_eq!(folders, [Some("Ship it"), Some("Ship it"), Some("Ship it")]);
     assert_eq!(w.starts[0].project, "/code/app");
-    assert_eq!(w.starts[0].folder_id, None);
-    // First session in another project: the name makes a folder there.
     assert_eq!(w.starts[1].project, "/code/lib");
-    assert_eq!(w.starts[1].folder_name, w.starts[0].folder_name);
-    // Later sessions reuse the folder of their own project, not the first project's.
-    assert_eq!(w.starts[2].project, "/code/lib");
-    assert_eq!(w.starts[2].folder_id.as_deref(), Some("folder:/code/lib"));
-    drop(w);
-    assert_eq!(
-        rig.last_run().folder_id.as_deref(),
-        Some("folder:/code/app")
-    );
 }
 
 // --- the run: timeouts and approvals --------------------------------------------------------
@@ -861,9 +940,8 @@ fn one_minute() -> Workflow {
         vec![
             trigger(),
             session("dev", json!({}), json!({"timeoutMinutes": 1})),
-            report(),
         ],
-        vec![edge("trigger", "dev"), edge("dev", "report")],
+        vec![edge("start", "dev")],
     )
 }
 
@@ -949,30 +1027,15 @@ fn an_approval_nobody_answers_ends_the_session(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn an_approval_is_shown_and_the_node_is_marked_waiting(cx: &mut TestAppContext) {
+fn an_approval_marks_the_node_waiting_and_no_mono_is_asked(cx: &mut TestAppContext) {
     let rig = Rig::new(&["ok"]);
     let hold = rig.fake.hold();
     rig.start(cx, &simple(json!({})));
     cx.run_until_parked();
     rig.fake.set_waiting("s1", true);
     minutes(cx, 5);
-    {
-        let w = rig.fake.world();
-        assert!(!w.approvals.is_empty());
-        let ask = &w.approvals[0];
-        assert_eq!(
-            (
-                ask.mono_id.as_str(),
-                ask.session_id.as_str(),
-                ask.run_id.as_str()
-            ),
-            ("mono-1", "s1", "run-1")
-        );
-        assert_eq!(
-            (ask.workflow_id.as_str(), ask.workflow_name.as_str()),
-            (WF, "Ship it")
-        );
-    }
+    // The session shows the approval itself (the app raises its usual notices); the run only
+    // marks the node.
     assert_eq!(
         node(&rig.last_run(), "dev").status,
         NodeStatus::WaitingApproval
@@ -983,7 +1046,6 @@ fn an_approval_is_shown_and_the_node_is_marked_waiting(cx: &mut TestAppContext) 
     cx.run_until_parked();
     let run = rig.last_run();
     assert_eq!(run.status, RunStatus::Done);
-    assert!(rig.fake.world().ended.contains(&"s1".to_string()));
 }
 
 // --- the run: commands ----------------------------------------------------------------------
@@ -1024,13 +1086,8 @@ fn a_command_runs_in_the_worktree_of_an_earlier_session(cx: &mut TestAppContext)
             trigger(),
             session("dev", json!({}), json!({})),
             json!({"id": "cmd", "type": "command", "project": "{{inputs.repo}}", "command": "make", "cwd": {"worktreeOf": "dev"}}),
-            report(),
         ],
-        vec![
-            edge("trigger", "dev"),
-            edge("dev", "cmd"),
-            edge("cmd", "report"),
-        ],
+        vec![edge("start", "dev"), edge("dev", "cmd")],
     );
     let rig = Rig::new(&["ok"]);
     rig.start(cx, &def);
@@ -1047,13 +1104,8 @@ fn a_failing_command_fails_only_its_branch(cx: &mut TestAppContext) {
             session("fetch", json!({"tickets": {"type": "list"}}), json!({})),
             json!({"id": "each", "type": "forEach", "in": "{{fetch.tickets}}", "as": "item"}),
             json!({"id": "cmd", "type": "command", "project": "{{inputs.repo}}", "command": "echo {{item}}", "parent": "each"}),
-            report(),
         ],
-        vec![
-            edge("trigger", "fetch"),
-            edge("fetch", "each"),
-            edge("each", "report"),
-        ],
+        vec![edge("start", "fetch"), edge("fetch", "each")],
     );
     let rig = Rig::new(&[&fenced(json!({"tickets": ["ok", "bad"]}))]);
     rig.fake
@@ -1183,7 +1235,6 @@ fn stop_stops_running_sessions_ends_stopped_and_reports_once(cx: &mut TestAppCon
     assert_eq!(node(&run, "dev").status, NodeStatus::Stopped);
     let w = rig.fake.world();
     assert_eq!(w.stops, ["s1"]);
-    assert!(w.ended.contains(&"s1".to_string()));
     assert_eq!(w.posts.len(), 1, "a stopped run reports once");
     assert_eq!(w.posts[0].title, "Ship it · stopped");
     assert!(w.posts[0].text.contains("stopped"));
@@ -1241,12 +1292,12 @@ fn stop_retries_a_cancel_that_beat_the_command_starting(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
-fn stop_does_not_wait_for_a_pending_ask_mono_question(cx: &mut TestAppContext) {
+fn stop_does_not_wait_for_a_pending_decision(cx: &mut TestAppContext) {
     let rig = Rig::new(&[]);
-    rig.fake.hang_next_ask();
+    rig.fake.hang_next_decision();
     rig.start(cx, &ask_workflow());
     cx.run_until_parked();
-    assert_eq!(rig.fake.world().asks.len(), 1);
+    assert_eq!(rig.fake.world().decisions.len(), 1);
     rig.runner.stop(WF);
     cx.run_until_parked();
     assert_eq!(rig.last_run().status, RunStatus::Stopped);
@@ -1271,7 +1322,6 @@ fn stop_does_not_wait_for_a_session_that_never_finishes_starting(cx: &mut TestAp
     assert_eq!(rig.fake.world().stops, ["s1"]);
     // And the host lets go of it, so it keeps no watch, wake-up or id for a run that is over.
     assert_eq!(rig.fake.world().released, ["s1"]);
-    assert_eq!(rig.fake.world().ended, ["s1"]);
 }
 
 #[gpui::test]
@@ -1282,13 +1332,8 @@ fn starts_queued_behind_another_are_not_launched_once_the_run_is_stopped(cx: &mu
             session("fetch", json!({"tickets": {"type": "list"}}), json!({})),
             json!({"id": "each", "type": "forEach", "in": "{{fetch.tickets}}", "as": "item"}),
             session("work", json!({}), json!({"parent": "each"})),
-            report(),
         ],
-        vec![
-            edge("trigger", "fetch"),
-            edge("fetch", "each"),
-            edge("each", "report"),
-        ],
+        vec![edge("start", "fetch"), edge("fetch", "each")],
     );
     let rig = Rig::new(&[&fenced(json!({"tickets": ["a", "b"]}))]);
     // The first branch's start is slow, so the second one waits in the queue behind it.
@@ -1323,10 +1368,6 @@ fn stop_goes_on_when_a_session_cannot_be_stopped(cx: &mut TestAppContext) {
     assert_eq!(rig.last_run().status, RunStatus::Stopped);
     let w = rig.fake.world();
     assert_eq!(w.posts.len(), 1);
-    assert!(
-        w.ended.contains(&"s1".to_string()),
-        "its approvals are withdrawn all the same"
-    );
 }
 
 #[gpui::test]
@@ -1342,7 +1383,12 @@ fn stopping_a_run_that_is_over_does_nothing(cx: &mut TestAppContext) {
 #[gpui::test]
 fn stopping_a_run_that_is_already_over_does_not_hold_it_open(cx: &mut TestAppContext) {
     let def = simple(json!({}));
-    let mut run = start_run(&def, RunTrigger::Manual, 1_000, "run-1");
+    let mut run = start_run(
+        &def,
+        RunCaller::new(CallerKind::Manual, "start"),
+        1_000,
+        "run-1",
+    );
     run.status = RunStatus::Failed;
     run.ended_at = Some(2_000);
     let rig = Rig::new(&[]);
@@ -1399,7 +1445,12 @@ fn saves_fold_into_the_newest_state_and_never_overlap(cx: &mut TestAppContext) {
 fn a_run_that_cannot_make_progress_fails_saying_so(cx: &mut TestAppContext) {
     use monocode_core::mono::workflows::engine::{EngineEvent, apply_event};
     let def = simple(json!({}));
-    let started = start_run(&def, RunTrigger::Manual, 1_000, "run-1");
+    let started = start_run(
+        &def,
+        RunCaller::new(CallerKind::Manual, "start"),
+        1_000,
+        "run-1",
+    );
     // A run left `running` with its node running and no task behind it.
     let stuck = apply_event(
         &started,
@@ -1427,10 +1478,17 @@ fn a_run_that_cannot_make_progress_fails_saying_so(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_run_that_is_already_over_is_only_written(cx: &mut TestAppContext) {
     let def = simple(json!({}));
-    let mut run = start_run(&def, RunTrigger::Manual, 1_000, "run-1");
+    let mut run = start_run(
+        &def,
+        RunCaller::new(CallerKind::Manual, "start"),
+        1_000,
+        "run-1",
+    );
     run.status = RunStatus::Failed;
     run.ended_at = Some(2_000);
     run.error = Some("The workflow is not valid: nope".into());
+    // Its summary went out when it was made, so nothing is delivered again.
+    run.report_posted_at = Some(2_000);
     let rig = Rig::new(&[]);
     rig.start_run(cx, run);
     cx.run_until_parked();
@@ -1450,14 +1508,16 @@ fn a_run_that_is_already_over_is_only_written(cx: &mut TestAppContext) {
 fn it_resumes_an_interrupted_run_from_where_it_stopped(cx: &mut TestAppContext) {
     use monocode_core::mono::workflows::engine::mark_interrupted;
     let def = simple(json!({}));
-    let interrupted = mark_interrupted(&start_run(&def, RunTrigger::Manual, 1_000, "run-old"));
+    let interrupted = mark_interrupted(&start_run(
+        &def,
+        RunCaller::new(CallerKind::Manual, "start"),
+        1_000,
+        "run-old",
+    ));
     assert_eq!(interrupted.status, RunStatus::Interrupted);
     let rig = Rig::new(&["ok"]);
     let host: Rc<dyn WorkflowHost> = Rc::new(rig.fake.clone());
-    assert!(
-        rig.runner
-            .resume(host, &cx.to_async(), "mono-1", &interrupted)
-    );
+    assert!(rig.runner.resume(host, &cx.to_async(), &interrupted));
     cx.run_until_parked();
     let run = rig.last_run();
     assert_eq!((run.id.as_str(), run.status), ("run-old", RunStatus::Done));
@@ -1469,10 +1529,15 @@ fn it_resumes_an_interrupted_run_from_where_it_stopped(cx: &mut TestAppContext) 
 #[gpui::test]
 fn only_an_interrupted_run_can_be_resumed(cx: &mut TestAppContext) {
     let def = simple(json!({}));
-    let running = start_run(&def, RunTrigger::Manual, 1_000, "run-1");
+    let running = start_run(
+        &def,
+        RunCaller::new(CallerKind::Manual, "start"),
+        1_000,
+        "run-1",
+    );
     let rig = Rig::new(&[]);
     let host: Rc<dyn WorkflowHost> = Rc::new(rig.fake.clone());
-    assert!(!rig.runner.resume(host, &cx.to_async(), "mono-1", &running));
+    assert!(!rig.runner.resume(host, &cx.to_async(), &running));
     cx.run_until_parked();
     assert!(rig.fake.world().saves.is_empty());
 }
@@ -1485,17 +1550,20 @@ fn a_resumed_loop_node_continues_its_session_with_a_follow_up(cx: &mut TestAppCo
             trigger(),
             session("dev", json!({"summary": {"type": "string"}}), json!({})),
             session("review", json!({"verdict": {"type": "string"}}), json!({})),
-            report(),
         ],
         vec![
-            edge("trigger", "dev"),
+            edge("start", "dev"),
             edge("dev", "review"),
             json!({"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "{{review.verdict}} != \"approve\""}}),
-            edge("review", "report"),
         ],
     );
     // Round 1 happened; round 2's dev was running in session s9 when the app closed.
-    let mut run = start_run(&def, RunTrigger::Manual, 1_000, "run-old");
+    let mut run = start_run(
+        &def,
+        RunCaller::new(CallerKind::Manual, "start"),
+        1_000,
+        "run-old",
+    );
     let at = 2_000;
     let step = |run: &WorkflowRun, event| apply_event(run, &event);
     run = step(
@@ -1559,10 +1627,7 @@ fn a_resumed_loop_node_continues_its_session_with_a_follow_up(cx: &mut TestAppCo
         &fenced(json!({"verdict": "approve"})),
     ]);
     let host: Rc<dyn WorkflowHost> = Rc::new(rig.fake.clone());
-    assert!(
-        rig.runner
-            .resume(host, &cx.to_async(), "mono-1", &interrupted)
-    );
+    assert!(rig.runner.resume(host, &cx.to_async(), &interrupted));
     cx.run_until_parked();
     let w = rig.fake.world();
     assert_eq!(
@@ -1646,7 +1711,6 @@ fn a_session_that_finishes_starting_after_the_quit_writes_nothing(cx: &mut TestA
     cx.run_until_parked();
     // The start came through (with its folder) after the app began to go down: not recorded.
     assert_eq!(rig.fake.world().saves.len(), saved);
-    assert_eq!(rig.last_run().folder_id, None);
     assert_eq!(rig.last_run().status, RunStatus::Running);
 }
 
@@ -1672,71 +1736,27 @@ fn nothing_starts_or_resumes_once_the_app_is_quitting(cx: &mut TestAppContext) {
     assert!(!rig.start(cx, &simple(json!({}))));
     let interrupted = monocode_core::mono::workflows::engine::mark_interrupted(&start_run(
         &simple(json!({})),
-        RunTrigger::Manual,
+        RunCaller::new(CallerKind::Manual, "start"),
         1_000,
         "run-old",
     ));
-    assert!(!rig.runner.resume(
-        Rc::new(rig.fake.clone()),
-        &cx.to_async(),
-        "mono-1",
-        &interrupted
-    ));
+    assert!(
+        !rig.runner
+            .resume(Rc::new(rig.fake.clone()), &cx.to_async(), &interrupted)
+    );
     cx.run_until_parked();
     assert!(rig.fake.world().saves.is_empty(), "not even a record");
     assert!(!rig.signals.is_running(WF));
 }
 
 #[gpui::test]
-fn quitting_stops_waiting_on_a_question_to_the_mono(cx: &mut TestAppContext) {
+fn quitting_stops_waiting_on_a_decision(cx: &mut TestAppContext) {
     let rig = Rig::new(&[]);
-    rig.fake.hang_next_ask();
+    rig.fake.hang_next_decision();
     rig.start(cx, &ask_workflow());
     cx.run_until_parked();
     rig.runner.quit();
     cx.run_until_parked();
     assert!(!rig.runner.is_running(WF));
     assert_eq!(rig.last_run().status, RunStatus::Running);
-}
-
-fn start_for(rig: &Rig, cx: &TestAppContext, mono: &str, workflow_id: &str) {
-    let mut def = simple(json!({}));
-    def.id = workflow_id.into();
-    let run = start_run(
-        &def,
-        RunTrigger::Manual,
-        1_000,
-        &format!("run-{workflow_id}"),
-    );
-    assert!(
-        rig.runner
-            .start(Rc::new(rig.fake.clone()), &cx.to_async(), mono, run)
-    );
-}
-
-#[gpui::test]
-fn stopping_a_monos_runs_leaves_the_runs_of_other_monos_going(cx: &mut TestAppContext) {
-    let rig = Rig::new(&["ok", "ok"]);
-    let hold = rig.fake.hold();
-    start_for(&rig, cx, "mono-1", "wf-first000");
-    start_for(&rig, cx, "mono-2", "wf-second00");
-    cx.run_until_parked();
-    assert_eq!(rig.runner.running().len(), 2);
-    rig.runner.stop_mono("mono-2");
-    cx.run_until_parked();
-    assert!(rig.runner.is_running("wf-first000"));
-    assert!(!rig.runner.is_running("wf-second00"));
-    let stopped = rig
-        .fake
-        .world()
-        .saves
-        .iter()
-        .filter(|r| r.status == RunStatus::Stopped)
-        .map(|r| r.workflow_id.clone())
-        .collect::<Vec<_>>();
-    assert!(stopped.iter().all(|id| id == "wf-second00") && !stopped.is_empty());
-    assert_eq!(rig.runner.stop_mono("mono-none"), 0);
-    hold.close();
-    cx.run_until_parked();
-    assert!(!rig.runner.is_running("wf-first000"));
 }

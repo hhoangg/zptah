@@ -6,14 +6,16 @@
 //! positions and edges. Every string in it is checked for absolute paths, so a file can be
 //! handed to someone else.
 use super::model::{
-    new_workflow_id, Checkout, Cwd, Decide, Edge, InputValue, Node, NodeId, NodeKind, OutputField,
-    OutputFieldType, Requirement, SessionTarget, TargetInstance, Workflow, WorkflowId,
-    WorkflowInput, NODE_TYPES,
+    new_workflow_id, Checkout, Cwd, DecisionModel, Edge, InputValue, Node, NodeId, NodeKind,
+    OutputField, OutputFieldType, Requirement, SessionTarget, TargetInstance, Workflow, WorkflowId,
+    WorkflowInput, DECIDE_AI, NODE_TYPES,
 };
 use super::models::{workflow_issues, ModelCatalog};
 use super::ordered::{Json, OrderedMap};
 use super::output::output_instruction;
-use super::parse::{drop_stray_handles, parse_edge, parse_inputs, parse_node, read_requires};
+use super::parse::{
+    drop_stray_handles, parse_decision_model, parse_edge, parse_inputs, parse_node, read_requires,
+};
 use super::template::{js_space, js_trim};
 use super::validate::{find_absolute_path, WorkflowIssue};
 use super::yaml_emit::{stringify, Doc};
@@ -195,21 +197,13 @@ fn export_node(node: &Node) -> Doc {
             put(&mut out, "timeoutMinutes", timeout_minutes.map(number));
             put(&mut out, "command", Some(text(command)));
         }
-        NodeKind::AskMono { question, answers } => {
-            put(&mut out, "question", Some(text(question)));
-            put(
-                &mut out,
-                "answers",
-                Some(Doc::Seq(answers.iter().map(|a| text(a)).collect())),
-            );
-        }
         NodeKind::If {
             condition,
             decide,
             question,
         } => {
             put(&mut out, "condition", condition.as_deref().map(text));
-            put(&mut out, "decide", decide.map(|Decide::Mono| text("mono")));
+            put(&mut out, "decide", decide.map(|_| text(DECIDE_AI)));
             put(&mut out, "question", question.as_deref().map(text));
         }
         NodeKind::Switch {
@@ -224,7 +218,7 @@ fn export_node(node: &Node) -> Doc {
                 "cases",
                 Some(Doc::Seq(cases.iter().map(|c| text(c)).collect())),
             );
-            put(&mut out, "decide", decide.map(|Decide::Mono| text("mono")));
+            put(&mut out, "decide", decide.map(|_| text(DECIDE_AI)));
             put(&mut out, "question", question.as_deref().map(text));
         }
         NodeKind::ForEach {
@@ -235,9 +229,6 @@ fn export_node(node: &Node) -> Doc {
             put(&mut out, "in", Some(text(list)));
             put(&mut out, "as", item.as_deref().map(text));
             put(&mut out, "maxParallel", max_parallel.map(number));
-        }
-        NodeKind::Report { template } => {
-            put(&mut out, "template", template.as_deref().map(text));
         }
     }
     put(&mut out, "ui", ui);
@@ -287,8 +278,19 @@ fn export_requirement(r: &Requirement) -> Doc {
     Doc::Map(out)
 }
 
+fn export_decision_model(model: &DecisionModel) -> Doc {
+    let mut out = vec![
+        ("harness".to_string(), text(&model.harness)),
+        ("model".to_string(), text(&model.model)),
+    ];
+    put(&mut out, "effort", model.effort.as_deref().map(text));
+    Doc::Map(out)
+}
+
 /// The shareable definition: only name, description, inputs (declarations, no values),
-/// requirements, nodes (with board positions) and edges. The output is deterministic.
+/// requirements, the decision model and summary template, nodes (with board positions) and
+/// edges. `reportTo` names a Mono of this computer, so it is not shared. The output is
+/// deterministic.
 fn export_document(w: &Workflow) -> Doc {
     let mut out = vec![
         (
@@ -313,6 +315,19 @@ fn export_document(w: &Workflow) -> Doc {
             Doc::Seq(w.requires.iter().map(export_requirement).collect()),
         ));
     }
+    put(
+        &mut out,
+        "decisionModel",
+        w.decision_model.as_ref().map(export_decision_model),
+    );
+    put(
+        &mut out,
+        "summaryTemplate",
+        w.summary_template
+            .as_deref()
+            .filter(|t| !t.is_empty())
+            .map(text),
+    );
     out.push((
         "nodes".to_string(),
         Doc::Seq(w.nodes.iter().map(export_node).collect()),
@@ -349,6 +364,8 @@ pub struct WorkflowDraft {
     pub description: Option<String>,
     pub inputs: OrderedMap<WorkflowInput>,
     pub requires: Vec<Requirement>,
+    pub decision_model: Option<DecisionModel>,
+    pub summary_template: Option<String>,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
 }
@@ -360,6 +377,8 @@ impl From<&Workflow> for WorkflowDraft {
             description: w.description.clone(),
             inputs: w.inputs.clone(),
             requires: w.requires.clone(),
+            decision_model: w.decision_model.clone(),
+            summary_template: w.summary_template.clone(),
             nodes: w.nodes.clone(),
             edges: w.edges.clone(),
         }
@@ -385,11 +404,12 @@ pub struct ImportPreview {
     pub commands: Vec<ReviewCommand>,
     /// Every text that reaches an agent, as the agent will read it before templates are filled
     /// in: a session's prompt followed by the output instruction (which carries the output
-    /// field descriptions), the questions put to the Mono with their answers, and a report's
-    /// template (the report is posted into the Mono's own session, so the Mono reads it as its
-    /// own reply).
+    /// field descriptions), the questions put to the AI, and the summary template (the summary
+    /// can be posted into a Mono's chat, so that Mono reads it as its own reply).
     pub prompts: Vec<ReviewPrompt>,
     pub issues: Vec<WorkflowIssue>,
+    /// What the import changed to fit this app (a Report node folded into `summaryTemplate`).
+    pub warnings: Vec<String>,
 }
 
 /// What a user reviews before a workflow runs: every command verbatim, and every text that
@@ -422,21 +442,6 @@ pub fn review_texts(nodes: &[Node]) -> (Vec<ReviewCommand>, Vec<ReviewPrompt>) {
                     },
                 );
             }
-            NodeKind::AskMono { question, answers } => {
-                let answers = answers
-                    .iter()
-                    .map(|a| format!("- {a}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                prompt(
-                    node,
-                    if answers.is_empty() {
-                        question.clone()
-                    } else {
-                        format!("{question}\n\nAnswers:\n{answers}")
-                    },
-                );
-            }
             NodeKind::If {
                 question: Some(question),
                 ..
@@ -445,23 +450,35 @@ pub fn review_texts(nodes: &[Node]) -> (Vec<ReviewCommand>, Vec<ReviewPrompt>) {
                 question: Some(question),
                 ..
             } => prompt(node, question.clone()),
-            NodeKind::Report {
-                template: Some(template),
-            } if !js_trim(template).is_empty() => prompt(node, template.clone()),
             _ => {}
         }
     }
     (commands, prompts)
 }
 
+/// The id a summary template is listed under in the review (it has no node).
+pub const SUMMARY_REVIEW_ID: &str = "summary";
+
+/// The summary template as a review item, when there is one that is not blank.
+pub fn summary_review_prompt(template: Option<&str>) -> Option<ReviewPrompt> {
+    template
+        .filter(|t| !js_trim(t).is_empty())
+        .map(|t| ReviewPrompt {
+            node_id: SUMMARY_REVIEW_ID.to_string(),
+            text: t.to_string(),
+        })
+}
+
 /// The review of a workflow already stored, built from its current definition.
 pub fn review_of(w: &Workflow, catalog: &ModelCatalog) -> ImportPreview {
-    let (commands, prompts) = review_texts(&w.nodes);
+    let (commands, mut prompts) = review_texts(&w.nodes);
+    prompts.extend(summary_review_prompt(w.summary_template.as_deref()));
     ImportPreview {
         workflow: WorkflowDraft::from(w),
         commands,
         prompts,
         issues: workflow_issues(w, catalog),
+        warnings: Vec::new(),
     }
 }
 
@@ -567,11 +584,136 @@ fn fail<T>(message: impl Into<String>) -> Result<T, String> {
     Err(message.into())
 }
 
+/// `trigger` is reserved for the event item (`{{trigger.item}}`), but a file written before that
+/// used it as the id of its trigger node. Such a node gets a free id, and the edges, the `parent`
+/// fields and the `{{trigger.*}}` references that meant its outputs follow it.
+fn rename_trigger_node(file: &mut OrderedMap<Json>, warnings: &mut Vec<String>) {
+    const OLD: &str = "trigger";
+    let ids: Vec<String> = match file.get("nodes") {
+        Some(Json::Array(nodes)) => nodes
+            .iter()
+            .filter_map(|n| n.get("id").and_then(Json::as_str).map(str::to_string))
+            .collect(),
+        _ => return,
+    };
+    if !ids.iter().any(|id| id == OLD) {
+        return;
+    }
+    let new_id = std::iter::once("start".to_string())
+        .chain((2..).map(|n| format!("start{n}")))
+        .find(|candidate| !ids.contains(candidate))
+        .unwrap_or_default();
+    if let Some(Json::Array(nodes)) = file.get_mut("nodes") {
+        for node in nodes.iter_mut() {
+            rename_in_node(node, OLD, &new_id);
+        }
+    }
+    if let Some(Json::Array(edges)) = file.get_mut("edges") {
+        for edge in edges.iter_mut() {
+            if let Json::Object(fields) = edge {
+                for key in ["from", "to"] {
+                    if fields.get(key).and_then(Json::as_str) == Some(OLD) {
+                        fields.insert(key, Json::String(new_id.clone()));
+                    }
+                }
+            }
+        }
+    }
+    if let Some(Json::String(template)) = file.get_mut("summaryTemplate") {
+        *template = rename_template_head(template, OLD, &new_id);
+    }
+    warnings.push(format!(
+        "The node \"{OLD}\" was renamed \"{new_id}\": \"{OLD}\" now names the event item, and its references were updated"
+    ));
+}
+
+fn rename_in_node(node: &mut Json, old: &str, new: &str) {
+    let Json::Object(fields) = node else {
+        return;
+    };
+    let keys: Vec<String> = fields.keys().cloned().collect();
+    for key in keys {
+        let Some(value) = fields.get_mut(&key) else {
+            continue;
+        };
+        if key == "id" || key == "parent" {
+            if value.as_str() == Some(old) {
+                *value = Json::String(new.to_string());
+            }
+        } else {
+            rename_in_templates(value, old, new);
+        }
+    }
+}
+
+fn rename_in_templates(value: &mut Json, old: &str, new: &str) {
+    match value {
+        Json::String(text) => *text = rename_template_head(text, old, new),
+        Json::Array(items) => items
+            .iter_mut()
+            .for_each(|item| rename_in_templates(item, old, new)),
+        Json::Object(fields) => {
+            let keys: Vec<String> = fields.keys().cloned().collect();
+            for key in keys {
+                if let Some(item) = fields.get_mut(&key) {
+                    rename_in_templates(item, old, new);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `{{old.x}}` and `{{#if old.x}}` become `{{new.x}}` and `{{#if new.x}}`.
+pub(super) fn rename_template_head(text: &str, old: &str, new: &str) -> String {
+    if !text.contains("{{") {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let old_chars: Vec<char> = old.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '{' && chars.get(i + 1) == Some(&'{') {
+            let mut j = i + 2;
+            while j < chars.len() && js_space(chars[j]) {
+                j += 1;
+            }
+            let if_end = j + 3;
+            if chars.get(j..if_end).is_some_and(|c| c == ['#', 'i', 'f'])
+                && chars.get(if_end).is_some_and(|c| js_space(*c))
+            {
+                j = if_end;
+                while j < chars.len() && js_space(chars[j]) {
+                    j += 1;
+                }
+            }
+            let end = j + old_chars.len();
+            if chars.get(j..end) == Some(old_chars.as_slice())
+                && chars
+                    .get(end)
+                    .is_none_or(|c| *c == '.' || *c == '}' || js_space(*c))
+            {
+                out.extend(&chars[i..j]);
+                out.push_str(new);
+                i = end;
+                continue;
+            }
+            out.extend(&chars[i..j]);
+            i = j;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
 /// Reads YAML or JSON. Validation problems are reported in `issues`, not as a rejection.
 /// `catalog` is what the session nodes' models are judged against.
 pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPreview, String> {
     let file = parse_file(text)?;
-    let Json::Object(file) = file else {
+    let Json::Object(mut file) = file else {
         return fail("Not a zptah workflow file");
     };
     let file_json = Json::Object(file.clone());
@@ -598,11 +740,19 @@ pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPrevie
         Some(Json::String(d)) => Some(d.clone()),
         Some(_) => return fail("description must be text"),
     };
+    if !matches!(file.get("nodes"), Some(Json::Array(_))) {
+        return fail("The workflow file needs a list of nodes");
+    }
+    let mut warnings = Vec::new();
+    rename_trigger_node(&mut file, &mut warnings);
     let Some(Json::Array(raw_nodes)) = file.get("nodes") else {
         return fail("The workflow file needs a list of nodes");
     };
 
     let mut nodes = Vec::new();
+    // A Report node of an older file is folded into `summaryTemplate`, and its edges go with it.
+    let mut folded_ids: Vec<String> = Vec::new();
+    let mut folded_template: Option<String> = None;
     for (index, raw) in raw_nodes.iter().enumerate() {
         let id = raw
             .get("id")
@@ -612,6 +762,33 @@ pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPrevie
             return fail(format!("nodes[{index}] needs an id"));
         };
         let ty = fields.get("type").and_then(Json::as_str);
+        if ty == Some("askMono") {
+            return fail(format!(
+                "Node \"{id}\" is an Ask Mono node, which this app no longer has: use a Switch node with decide \"ai\", with the answers as its cases"
+            ));
+        }
+        if ty == Some("report") {
+            folded_ids.push(id.to_string());
+            let template = fields
+                .get("template")
+                .and_then(Json::as_str)
+                .filter(|t| !js_trim(t).is_empty());
+            let kept = template.is_some() && folded_template.is_none();
+            if kept {
+                folded_template = template.map(str::to_string);
+            }
+            warnings.push(format!(
+                "The Report node \"{id}\" was removed: every run now ends with a summary{}",
+                if kept {
+                    ", and its template became the workflow's summaryTemplate"
+                } else if template.is_some() {
+                    ", and its template was dropped (another one is already used)"
+                } else {
+                    ""
+                }
+            ));
+            continue;
+        }
         if !ty.is_some_and(|t| NODE_TYPES.contains(&t)) {
             let shown = fields
                 .get("type")
@@ -651,16 +828,36 @@ pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPrevie
                 index + 1
             ));
         };
-        edges.push(edge);
+        if !folded_ids.contains(&edge.from) && !folded_ids.contains(&edge.to) {
+            edges.push(edge);
+        }
     }
     drop_stray_handles(&nodes, &mut edges);
 
     let requires = read_requires(file.get("requires"))?;
+    let Some(decision_model) = parse_decision_model(file.get("decisionModel")) else {
+        return fail("decisionModel needs a harness and a model (and optionally an effort)");
+    };
+    let summary_template = match file.get("summaryTemplate") {
+        None | Some(Json::Null) => folded_template,
+        Some(Json::String(template)) => {
+            if folded_template.is_some() {
+                warnings.push(
+                    "The Report template was dropped: the file already has a summaryTemplate"
+                        .to_string(),
+                );
+            }
+            Some(template.clone())
+        }
+        Some(_) => return fail("summaryTemplate must be text"),
+    };
     let workflow = WorkflowDraft {
         name,
         description,
         inputs: parse_inputs(file.get("inputs")),
         requires,
+        decision_model,
+        summary_template,
         nodes,
         edges,
     };
@@ -668,15 +865,19 @@ pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPrevie
     preview.description = workflow.description.clone();
     preview.inputs = workflow.inputs.clone();
     preview.requires = workflow.requires.clone();
+    preview.decision_model = workflow.decision_model.clone();
+    preview.summary_template = workflow.summary_template.clone();
     preview.nodes = workflow.nodes.clone();
     preview.edges = workflow.edges.clone();
     let issues = workflow_issues(&preview, catalog);
-    let (commands, prompts) = review_texts(&workflow.nodes);
+    let (commands, mut prompts) = review_texts(&workflow.nodes);
+    prompts.extend(summary_review_prompt(workflow.summary_template.as_deref()));
     Ok(ImportPreview {
         workflow,
         commands,
         prompts,
         issues,
+        warnings,
     })
 }
 
@@ -815,6 +1016,8 @@ pub fn finish_import_with_id(
     workflow.description = draft.description;
     workflow.inputs = draft.inputs;
     workflow.requires = draft.requires;
+    workflow.decision_model = draft.decision_model;
+    workflow.summary_template = draft.summary_template;
     workflow.input_values = values;
     workflow.nodes = draft.nodes;
     workflow.edges = draft.edges;

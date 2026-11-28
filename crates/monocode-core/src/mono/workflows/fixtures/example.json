@@ -17,7 +17,7 @@
   },
   "nodes": [
     {
-      "id": "trigger",
+      "id": "start",
       "type": "schedule",
       "schedule": {
         "scheduleKind": "weekdays",
@@ -91,15 +91,11 @@
           "type": "list"
         }
       }
-    },
-    {
-      "id": "report",
-      "type": "report"
     }
   ],
   "edges": [
     {
-      "from": "trigger",
+      "from": "start",
       "to": "fetch"
     },
     {
@@ -111,15 +107,11 @@
       "to": "review"
     },
     {
-      "from": "each",
-      "to": "report"
-    },
-    {
       "from": "review",
       "to": "dev",
       "loop": {
         "maxRounds": 3,
-        "decide": "mono"
+        "decide": "ai"
       }
     }
   ],

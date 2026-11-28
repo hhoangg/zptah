@@ -190,9 +190,14 @@ impl Conversation {
             .retain(|id| mono.outbox.iter().any(|m| &m.id == id));
         self.sync_mono_pending(cx);
         // Only a Mono's composer knows `@workflow/`; no other conversation ever gets this.
-        let (mono_root, mono_id) = (root.clone(), mono.id.clone());
+        let workflows = crate::runtime::locked(&self.store)
+            .ok()
+            .map(|store| monocode_core::mono::workflows::global::WorkflowsDir::for_store(&store));
+        let mono_id = mono.id.clone();
         self.completion.update(cx, |completion, cx| {
-            completion.set_mono(mono_root, mono_id, cx)
+            if let Some(workflows) = workflows {
+                completion.set_mono(workflows, mono_id, cx)
+            }
         });
         let browser_database = crate::runtime::locked(&self.store).ok().and_then(|store| {
             monocode_core::mono::browser::MonoBrowserStore::for_store(&store)
@@ -397,11 +402,6 @@ impl Conversation {
     /// No turn is running, and none that was stopped is still finishing its writes.
     pub(crate) fn mono_settled(&self) -> bool {
         !self.busy && !self.stopping
-    }
-    /// Makes the conversation look like a stopped turn is still finishing.
-    #[cfg(test)]
-    pub(crate) fn hold_working_for_test(&mut self, on: bool) {
-        self.stopping = on;
     }
     /// Gives the conversation a Codex model whose reasoning efforts its settings can pick.
     #[cfg(test)]

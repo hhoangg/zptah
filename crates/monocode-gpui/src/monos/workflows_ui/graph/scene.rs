@@ -145,7 +145,7 @@ pub(in crate::monos) struct Scene {
     pub fit_key: String,
 }
 
-/// "Mono decides · max 3", or "If <condition> · max 3".
+/// "AI decides · max 3", or "If <condition> · max 3".
 pub(in crate::monos) fn loop_label(spec: &LoopSpec, full: bool) -> String {
     let condition = js_trim(&spec.decide);
     let shown: String = if condition.chars().count() > CONDITION_MAX && !full {
@@ -155,8 +155,8 @@ pub(in crate::monos) fn loop_label(spec: &LoopSpec, full: bool) -> String {
     } else {
         condition.to_string()
     };
-    let who = if spec.decide == "mono" {
-        "Mono decides".to_string()
+    let who = if monocode_core::mono::workflows::parse::is_ai_decide(&spec.decide) {
+        "AI decides".to_string()
     } else {
         format!("If {shown}")
     };

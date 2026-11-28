@@ -10,6 +10,7 @@ use gpui::{TestAppContext, VisualTestContext};
 use monocode_core::catalog;
 use monocode_core::mono::workflows::{
     cli::Signals,
+    global::WorkflowsDir,
     model::{
         InputType, InputValue, RunStatus, WORKFLOWS_MAX, WorkflowInput, definition_fingerprint,
     },
@@ -43,27 +44,52 @@ pub(super) fn build(extra: Value, nodes: Value, edges: Value) -> Workflow {
 }
 
 /// manual trigger -> report.
-pub(super) fn workflow(extra: Value) -> Workflow {
+/// The project input the command steps below name, unless the test declares its own inputs.
+fn with_project_input(mut extra: Value) -> Value {
+    if extra.get("inputs").is_none() {
+        extra["inputs"] = json!({"project": {"type": "project"}});
+        extra["inputValues"] = json!({"project": "/work/api"});
+    }
+    extra
+}
+
+/// manual trigger -> report, where the report is a condition, so a run of it ends by itself with
+/// no process or provider (a command would finish on its own thread). Its project input points
+/// at the test's own project.
+pub(super) fn workflow_in(s: &Setup, mut extra: Value) -> Workflow {
+    extra["inputs"] = json!({"project": {"type": "project"}});
+    extra["inputValues"] = json!({"project": s.project});
     build(
         extra,
-        json!([{"id": "trigger", "type": "manual"}, {"id": "report", "type": "report"}]),
-        json!([{"from": "trigger", "to": "report"}]),
+        json!([
+            {"id": "start", "type": "manual"},
+            {"id": "report", "type": "if", "condition": "{{inputs.project}} == \"nothing\""},
+        ]),
+        json!([{"from": "start", "to": "report"}]),
+    )
+}
+
+pub(super) fn workflow(extra: Value) -> Workflow {
+    build(
+        with_project_input(extra),
+        json!([{"id": "start", "type": "manual"}, {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"}]),
+        json!([{"from": "start", "to": "report"}]),
     )
 }
 
 /// weekdays trigger -> report, next run in an hour.
 fn scheduled(extra: Value) -> Workflow {
     let mut all = json!({"nextRunAt": monocode_core::time::now_ms() + 3_600_000});
-    for (key, value) in extra.as_object().unwrap() {
+    for (key, value) in with_project_input(extra).as_object().unwrap() {
         all[key] = value.clone();
     }
     build(
         all,
         json!([
-            {"id": "trigger", "type": "schedule", "schedule": serde_json::from_str::<Value>(SCHEDULE).unwrap()},
-            {"id": "report", "type": "report"},
+            {"id": "start", "type": "schedule", "schedule": serde_json::from_str::<Value>(SCHEDULE).unwrap()},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
-        json!([{"from": "trigger", "to": "report"}]),
+        json!([{"from": "start", "to": "report"}]),
     )
 }
 
@@ -88,12 +114,12 @@ fn typed_model(extra: Value) -> Workflow {
             all
         },
         json!([
-            {"id": "trigger", "type": "manual"},
+            {"id": "start", "type": "manual"},
             {"id": "hi", "type": "session", "project": "{{inputs.project}}", "prompt": "hi",
              "checkout": "root", "output": {}, "model": MODEL},
-            {"id": "report", "type": "report"},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
         ]),
-        json!([{"from": "trigger", "to": "hi"}, {"from": "hi", "to": "report"}]),
+        json!([{"from": "start", "to": "hi"}, {"from": "hi", "to": "report"}]),
     )
 }
 
@@ -117,7 +143,7 @@ pub(super) fn listing(_: Kind) -> Probe {
 
 /// A Mono's folder in a temp dir with the host the actions run over.
 pub(super) struct Disk {
-    pub(super) dir: MonoDir,
+    pub(super) dir: WorkflowsDir,
     pub(super) host: StoreHost,
     pub(super) signals: Arc<Signals>,
 }
@@ -125,7 +151,7 @@ pub(super) struct Disk {
 pub(super) fn disk(list: Vec<Workflow>) -> Disk {
     let root = std::env::temp_dir().join(format!("wf-ui-{}", monocode_core::mono::new_id()));
     std::fs::create_dir_all(&root).unwrap();
-    let dir = MonoDir::new(&root, "mono-1");
+    let dir = WorkflowsDir::new(root.join("workflows"));
     let signals = Arc::new(Signals::default());
     let host = StoreHost::new(dir.clone(), signals.clone()).with_probe(listing);
     update_workflows(&dir, |_| Ok((list.clone(), ()))).unwrap();
@@ -236,7 +262,10 @@ fn remove_takes_the_workflow_out_and_empties_its_history() {
     let mut d = disk(vec![workflow(json!({}))]);
     let run = monocode_core::mono::workflows::engine::start_run(
         &workflow(json!({})),
-        monocode_core::mono::workflows::model::RunTrigger::Manual,
+        monocode_core::mono::workflows::model::RunCaller::new(
+            monocode_core::mono::workflows::model::CallerKind::Manual,
+            "start",
+        ),
         1,
         "run-1",
     );
@@ -249,7 +278,7 @@ fn remove_takes_the_workflow_out_and_empties_its_history() {
 
 #[test]
 fn removing_a_workflow_first_names_the_instances_its_interrupted_runs_left() {
-    use monocode_core::mono::workflows::model::{RunInstance, RunStatus, RunTrigger};
+    use monocode_core::mono::workflows::model::{CallerKind, RunCaller, RunInstance, RunStatus};
     let mut d = disk(vec![workflow(json!({}))]);
     let used = |name: &str| RunInstance {
         kind: "codespace".into(),
@@ -261,7 +290,7 @@ fn removing_a_workflow_first_names_the_instances_its_interrupted_runs_left() {
     let new_run = |id: &str, status: RunStatus, instance: &str| {
         let mut run = monocode_core::mono::workflows::engine::start_run(
             &workflow(json!({})),
-            RunTrigger::Manual,
+            RunCaller::new(CallerKind::Manual, "start"),
             1,
             id,
         );
@@ -292,12 +321,12 @@ fn removing_a_workflow_first_names_the_instances_its_interrupted_runs_left() {
 fn removing_a_workflow_from_its_own_page_still_shows_the_instances_it_left(
     cx: &mut TestAppContext,
 ) {
-    use monocode_core::mono::workflows::model::{RunInstance, RunStatus, RunTrigger};
+    use monocode_core::mono::workflows::model::{CallerKind, RunCaller, RunInstance, RunStatus};
     let s = setup(cx);
     put(&s, vec![workflow(json!({}))]);
     let mut run = monocode_core::mono::workflows::engine::start_run(
         &workflow(json!({})),
-        RunTrigger::Manual,
+        RunCaller::new(CallerKind::Manual, "start"),
         1,
         "run-1",
     );
@@ -309,15 +338,12 @@ fn removing_a_workflow_from_its_own_page_still_shows_the_instances_it_left(
         nodes: vec!["build".into()],
         sessions: vec!["remote:1".into()],
     }];
-    update_runs(&MonoDir::new(&s.root, &s.id), A, |_| {
-        Ok((vec![run.clone()], ()))
-    })
-    .unwrap();
+    update_runs(&s.workflows_dir(), A, |_| Ok((vec![run.clone()], ()))).unwrap();
     open_tab(&s, cx);
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     s.manager.update(visual, |m, cx| {
-        m.open_workflow_route(Route::Workflow(A.into()), cx)
+        m.open_workflow_route(WfRoute::Workflow(A.into()), cx)
     });
     visual.run_until_parked();
     settle(&s, visual);
@@ -393,16 +419,44 @@ fn approve_clears_the_mark_and_asks_for_a_run() {
 }
 
 #[test]
+fn a_run_the_user_asks_for_does_not_keep_the_caller_a_mono_left() {
+    let mono = || {
+        Some(monocode_core::mono::workflows::model::RunCaller::mono(
+            "mono-1", "start",
+        ))
+    };
+    let mut left = workflow(json!({}));
+    left.run_caller = mono();
+    let mut d = disk(vec![left]);
+    assert_eq!(actions::run_now(&mut d.host, A, None), None);
+    let now = d.first();
+    assert!(now.run_requested && now.run_caller.is_none());
+
+    let mut flagged = workflow(json!({"enabled": false, "needsReview": true}));
+    flagged.run_caller = mono();
+    let mut d = disk(vec![flagged.clone()]);
+    let result = actions::approve(
+        &mut d.host,
+        A,
+        ReviewIntent::Run,
+        &definition_fingerprint(&flagged),
+    );
+    assert_eq!(result, Approval::Done);
+    let now = d.first();
+    assert!(now.run_requested && now.run_caller.is_none());
+}
+
+#[test]
 fn approve_changes_nothing_when_the_stored_definition_is_not_the_one_reviewed() {
     let command = |text: &str| {
         build(
             json!({"enabled": false, "needsReview": true, "inputs": {"project": {"type": "project"}}, "inputValues": {"project": "/work/api"}}),
             json!([
-                {"id": "trigger", "type": "manual"},
+                {"id": "start", "type": "manual"},
                 {"id": "build", "type": "command", "project": "{{inputs.project}}", "command": text},
-                {"id": "report", "type": "report"},
+                {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true"},
             ]),
-            json!([{"from": "trigger", "to": "build"}, {"from": "build", "to": "report"}]),
+            json!([{"from": "start", "to": "build"}, {"from": "build", "to": "report"}]),
         )
     };
     let reviewed = command("npm test");
@@ -485,7 +539,7 @@ fn a_saved_input_value_lands_in_the_file_and_the_real_reason_comes_back_on_failu
         d.first().input_values.get("limit"),
         Some(&InputValue::Number(7.))
     );
-    let huge = InputValue::String("x".repeat(3 * 1024 * 1024));
+    let huge = InputValue::String("x".repeat(9 * 1024 * 1024));
     let error = actions::save_input(&mut d.host, A, "repo", &huge).unwrap_err();
     assert!(error.contains("too large to save"), "{error}");
     assert_eq!(
@@ -570,7 +624,10 @@ fn a_row_says_what_the_workflow_is_doing() {
 fn branches_count_nodes_at_work_not_the_group_itself() {
     let mut run = monocode_core::mono::workflows::engine::start_run(
         &workflow(json!({})),
-        monocode_core::mono::workflows::model::RunTrigger::Manual,
+        monocode_core::mono::workflows::model::RunCaller::new(
+            monocode_core::mono::workflows::model::CallerKind::Manual,
+            "start",
+        ),
         1,
         "run-live",
     );
@@ -663,24 +720,22 @@ fn hidden_characters_are_shown_in_what_the_review_prints() {
 // ---- the pages, in a real Monos -----------------------------------------------------------
 
 pub(super) fn put(s: &Setup, list: Vec<Workflow>) {
-    let dir = MonoDir::new(&s.root, &s.id);
+    let dir = s.workflows_dir();
     update_workflows(&dir, |_| Ok((list.clone(), ()))).unwrap();
 }
 
 pub(super) fn saved(s: &Setup) -> Vec<Workflow> {
-    load_workflows(&MonoDir::new(&s.root, &s.id))
-        .unwrap()
-        .workflows
+    load_workflows(&s.workflows_dir()).unwrap().workflows
 }
 
 pub(super) fn history(
     s: &Setup,
     id: &str,
 ) -> Vec<monocode_core::mono::workflows::model::WorkflowRun> {
-    load_runs(&MonoDir::new(&s.root, &s.id), id).unwrap()
+    load_runs(&s.workflows_dir(), id).unwrap()
 }
 
-/// The overview open on the Workflows tab with the Mono's files read.
+/// The Workflows page open on its list with the global files read.
 pub(super) fn open_tab(s: &Setup, cx: &mut TestAppContext) {
     cx.update(|cx| {
         cx.set_reduce_motion(true);
@@ -688,15 +743,11 @@ pub(super) fn open_tab(s: &Setup, cx: &mut TestAppContext) {
         crate::popover::bind(cx);
     });
     s.window
-        .update(cx, |shell, _, cx| {
-            // Wide enough for the tab strip (now with Overview) plus the header buttons.
-            shell.workspace.right_panel_width = 520.;
-            s.manager.update(cx, |m, cx| {
-                m.settings = None;
-                m.overview_tab = OverviewTab::Workflows;
+        .update(cx, |shell, window, cx| {
+            s.manager.update(cx, |m, _| {
                 m.wf.import.debounce = Some(Duration::ZERO);
-                cx.notify();
-            })
+            });
+            shell.open_workflows(window, cx);
         })
         .unwrap();
     cx.run_until_parked();
@@ -715,10 +766,8 @@ pub(in crate::monos) fn click(visual: &mut VisualTestContext, selector: &'static
     visual.run_until_parked();
 }
 
-/// Lets the page slide finish, so what is clicked is where it is drawn.
-pub(super) fn settle(s: &Setup, visual: &mut VisualTestContext) {
-    let details = s.manager.read_with(visual, |m, _| m.details.clone());
-    details.update(visual, |d, cx| d.elapsed(Duration::from_secs(2), cx));
+/// Lets the page draw, so what is clicked is where it is drawn.
+pub(super) fn settle(_: &Setup, visual: &mut VisualTestContext) {
     visual.run_until_parked();
     visual.refresh().unwrap();
 }
@@ -731,8 +780,8 @@ pub(super) fn page_notice(s: &Setup, visual: &mut VisualTestContext) -> Option<S
     s.manager.read_with(visual, |m, _| m.wf.page_notice.clone())
 }
 
-pub(super) fn route(s: &Setup, visual: &mut VisualTestContext) -> Option<Route> {
-    s.manager.read_with(visual, |m, _| m.route.clone())
+pub(super) fn route(s: &Setup, visual: &mut VisualTestContext) -> Option<WfRoute> {
+    s.manager.read_with(visual, |m, _| m.wf.route.clone())
 }
 
 #[gpui::test]
@@ -755,7 +804,7 @@ fn the_tab_lists_the_workflows_in_order_with_a_count(cx: &mut TestAppContext) {
         s.manager.read_with(visual, |m, _| m.workflow_count()),
         Some(2)
     );
-    assert!(visual.debug_bounds("mono-overview-Workflows").is_some());
+    assert!(visual.debug_bounds("workflows-view").is_some());
     assert!(visual.debug_bounds("mono-workflow-needs-review").is_none());
 }
 
@@ -769,15 +818,23 @@ fn an_empty_tab_says_how_to_fill_it(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("mono-workflows-list").is_some());
     assert!(visual.debug_bounds("mono-workflow-wf-aaaaaaaa").is_none());
     assert_eq!(
-        super::list::empty_message("Broski"),
-        "Ask Broski to chain sessions into a workflow, or create one with +."
+        super::list::EMPTY_MESSAGE,
+        "Chain sessions, commands and decisions into a workflow. Ask a Mono to build one, or create one here."
     );
 }
 
 #[gpui::test]
 fn run_now_on_a_row_starts_a_manual_run(cx: &mut TestAppContext) {
     let s = setup(cx);
-    put(&s, vec![workflow(json!({}))]);
+    // No inputs, so the click starts the run without a dialog; the trigger alone ends it.
+    put(
+        &s,
+        vec![build(
+            json!({}),
+            json!([{"id": "start", "type": "manual"}]),
+            json!([]),
+        )],
+    );
     open_tab(&s, cx);
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
@@ -786,9 +843,10 @@ fn run_now_on_a_row_starts_a_manual_run(cx: &mut TestAppContext) {
     assert_eq!(runs.len(), 1, "the runner took the request");
     assert_eq!(runs[0].status, RunStatus::Done);
     assert!(
-        chat_rows(&s)
+        !chat_rows(&s)
             .iter()
-            .any(|r| r.starts_with("## Nightly checks"))
+            .any(|r| r.starts_with("## Nightly checks")),
+        "a run the user started posts its summary to no Mono"
     );
     assert_eq!(notice(&s, visual), None);
 }
@@ -823,17 +881,20 @@ fn resume_and_run_now_on_a_flagged_workflow_open_the_review_instead(cx: &mut Tes
     click(visual, "mono-workflow-toggle-wf-aaaaaaaa");
     assert_eq!(
         route(&s, visual),
-        Some(Route::WorkflowReview(A.into(), ReviewIntent::Enable))
+        Some(WfRoute::Review(A.into(), ReviewIntent::Enable))
     );
     let w = &saved(&s)[0];
     assert!(!w.enabled && w.needs_review && w.next_run_at.is_none());
-    s.manager.update(visual, |m, _| m.route = None);
+    s.manager.update(visual, |m, cx| {
+        m.wf.route = None;
+        cx.notify();
+    });
     visual.run_until_parked();
     settle(&s, visual);
     click(visual, "mono-workflow-run-wf-aaaaaaaa");
     assert_eq!(
         route(&s, visual),
-        Some(Route::WorkflowReview(A.into(), ReviewIntent::Run))
+        Some(WfRoute::Review(A.into(), ReviewIntent::Run))
     );
     assert!(!saved(&s)[0].run_requested);
 }
@@ -884,23 +945,30 @@ fn remove_on_a_row_is_refused_while_a_run_is_going(cx: &mut TestAppContext) {
         .read_with(visual, |m, _| m.workflow_signals.set_running(A, false));
 }
 
-fn waiting(extra: Value) -> Workflow {
+/// manual trigger -> a session step that never gets a turn in a test, so a run of it stays live.
+pub(super) fn waiting_workflow(s: &Setup, extra: Value) -> Workflow {
+    waiting(s, extra)
+}
+
+fn waiting(s: &Setup, extra: Value) -> Workflow {
+    let mut extra = extra;
+    extra["inputs"] = json!({"project": {"type": "project"}});
+    extra["inputValues"] = json!({"project": s.project});
     build(
         extra,
         json!([
-            {"id": "trigger", "type": "manual"},
-            {"id": "ask", "type": "askMono", "question": "Ship it?", "answers": ["yes", "no"]},
-            {"id": "report", "type": "report"},
+            {"id": "start", "type": "manual"},
+            {"id": "ask", "type": "session", "project": "{{inputs.project}}", "prompt": "Ship it?", "checkout": "root", "output": {}},
         ]),
-        json!([{"from": "trigger", "to": "ask"}, {"from": "ask", "to": "report"}]),
+        json!([{"from": "start", "to": "ask"}]),
     )
 }
 
 #[gpui::test]
 fn a_running_row_offers_stop_and_stop_ends_the_run(cx: &mut TestAppContext) {
     let s = setup(cx);
-    put(&s, vec![waiting(json!({"runRequested": true}))]);
-    s.manager.update(cx, |m, cx| m.check_workflows(cx));
+    put(&s, vec![waiting(&s, json!({"runRequested": true}))]);
+    crate::monos::tests::check_workflows(&s, cx);
     cx.run_until_parked();
     assert!(s.manager.read_with(cx, |m, _| m.workflows.is_running(A)));
     open_tab(&s, cx);
@@ -931,7 +999,7 @@ fn a_running_row_offers_stop_and_stop_ends_the_run(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_list_follows_a_run_that_starts_and_ends_in_the_runner(cx: &mut TestAppContext) {
     let s = setup(cx);
-    put(&s, vec![waiting(json!({}))]);
+    put(&s, vec![waiting(&s, json!({}))]);
     open_tab(&s, cx);
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
@@ -940,13 +1008,13 @@ fn the_list_follows_a_run_that_starts_and_ends_in_the_runner(cx: &mut TestAppCon
             .debug_bounds("mono-workflow-stop-wf-aaaaaaaa")
             .is_none()
     );
-    let dir = MonoDir::new(&s.root, &s.id);
+    let dir = s.workflows_dir();
     update_workflows(&dir, |mut list| {
         list[0].run_requested = true;
         Ok((list, ()))
     })
     .unwrap();
-    s.manager.update(visual, |m, cx| m.check_workflows(cx));
+    crate::monos::tests::check_workflows(&s, visual);
     visual.run_until_parked();
     // The clock notices the runner started a run.
     s.manager.update(visual, |m, cx| {
@@ -974,11 +1042,11 @@ fn the_list_follows_a_run_that_starts_and_ends_in_the_runner(cx: &mut TestAppCon
 }
 
 #[gpui::test]
-fn import_and_new_are_off_at_the_limit_and_ask_mono_starts_a_sentence(cx: &mut TestAppContext) {
+fn import_and_new_are_off_at_the_limit(cx: &mut TestAppContext) {
     let s = setup(cx);
     put(
         &s,
-        (0..20)
+        (0..WORKFLOWS_MAX)
             .map(|i| workflow(json!({"id": format!("wf-full{i:04}")})))
             .collect(),
     );
@@ -988,22 +1056,6 @@ fn import_and_new_are_off_at_the_limit_and_ask_mono_starts_a_sentence(cx: &mut T
     click(visual, "mono-workflow-import");
     click(visual, "mono-workflow-new");
     assert_eq!(route(&s, visual), None, "the limit refuses both");
-    assert_eq!(WORKFLOWS_MAX, 20);
-    // Ask Mono fills the composer and never sends.
-    let before = chat_rows(&s).len();
-    click(visual, "mono-workflow-ask");
-    click(visual, "mono-workflow-ask");
-    let draft = s.manager.read_with(visual, |m, cx| {
-        m.chat()
-            .unwrap()
-            .read(cx)
-            .input
-            .read(cx)
-            .content
-            .to_string()
-    });
-    assert_eq!(draft, "Help me build a workflow that ");
-    assert_eq!(chat_rows(&s).len(), before);
 }
 
 #[gpui::test]
@@ -1014,18 +1066,21 @@ fn import_and_new_open_their_pages_below_the_limit(cx: &mut TestAppContext) {
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     click(visual, "mono-workflow-new");
-    assert_eq!(route(&s, visual), Some(Route::NewWorkflow));
+    assert_eq!(route(&s, visual), Some(WfRoute::New));
     assert!(visual.debug_bounds("wf-board").is_some());
-    s.manager.update(visual, |m, _| m.route = None);
+    s.manager.update(visual, |m, cx| {
+        m.wf.route = None;
+        cx.notify();
+    });
     visual.run_until_parked();
     click(visual, "mono-workflow-import");
-    assert_eq!(route(&s, visual), Some(Route::ImportWorkflow));
+    assert_eq!(route(&s, visual), Some(WfRoute::Import));
     assert!(visual.debug_bounds("mono-import-page").is_some());
 }
 
 pub(super) fn open_page(s: &Setup, visual: &mut VisualTestContext) {
     s.manager.update(visual, |m, cx| {
-        m.open_workflow_route(Route::Workflow(A.into()), cx)
+        m.open_workflow_route(WfRoute::Workflow(A.into()), cx)
     });
     visual.run_until_parked();
 }
@@ -1037,7 +1092,10 @@ fn the_page_lists_recent_runs_newest_first_and_opens_one(cx: &mut TestAppContext
     put(&s, vec![w.clone()]);
     let mut done = monocode_core::mono::workflows::engine::start_run(
         &w,
-        monocode_core::mono::workflows::model::RunTrigger::Manual,
+        monocode_core::mono::workflows::model::RunCaller::new(
+            monocode_core::mono::workflows::model::CallerKind::Manual,
+            "start",
+        ),
         1_000,
         "run-1",
     );
@@ -1046,7 +1104,7 @@ fn the_page_lists_recent_runs_newest_first_and_opens_one(cx: &mut TestAppContext
     let mut failed = done.clone();
     failed.id = "run-2".into();
     failed.status = RunStatus::Failed;
-    update_runs(&MonoDir::new(&s.root, &s.id), A, |_| {
+    update_runs(&s.workflows_dir(), A, |_| {
         Ok((vec![failed.clone(), done.clone()], ()))
     })
     .unwrap();
@@ -1060,7 +1118,7 @@ fn the_page_lists_recent_runs_newest_first_and_opens_one(cx: &mut TestAppContext
     click(visual, "mono-workflow-run-run-1");
     assert_eq!(
         route(&s, visual),
-        Some(Route::WorkflowRun(A.into(), "run-1".into()))
+        Some(WfRoute::Run(A.into(), "run-1".into()))
     );
 }
 
@@ -1166,7 +1224,7 @@ fn the_real_reason_an_input_could_not_be_saved_is_shown(cx: &mut TestAppContext)
     open_page(&s, visual);
     let key = format!("wf-input:{A}:note");
     s.manager.update(visual, |m, cx| {
-        m.fields[&key].update(cx, |f, cx| f.set_text("x".repeat(3 * 1024 * 1024), cx));
+        m.fields[&key].update(cx, |f, cx| f.set_text("x".repeat(9 * 1024 * 1024), cx));
         m.workflow_commit_input(A, "note", cx);
     });
     visual.run_until_parked();
@@ -1198,7 +1256,7 @@ fn remove_on_the_page_closes_it_and_is_refused_while_a_run_is_going(cx: &mut Tes
             .contains("Stop the workflow before removing it")
     );
     assert_eq!(saved(&s).len(), 1);
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
     s.manager
         .read_with(visual, |m, _| m.workflow_signals.set_running(A, false));
     click(visual, "mono-workflow-delete");
@@ -1226,15 +1284,15 @@ fn a_page_shows_the_needs_review_badge_only_when_needed_and_sends_run_and_resume
     click(visual, "mono-workflow-run");
     assert_eq!(
         route(&s, visual),
-        Some(Route::WorkflowReview(A.into(), ReviewIntent::Run))
+        Some(WfRoute::Review(A.into(), ReviewIntent::Run))
     );
     // Back from the review returns to the page it came from.
     click(visual, "mono-page-back");
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
     click(visual, "mono-workflow-toggle");
     assert_eq!(
         route(&s, visual),
-        Some(Route::WorkflowReview(A.into(), ReviewIntent::Enable))
+        Some(WfRoute::Review(A.into(), ReviewIntent::Enable))
     );
     let w = &saved(&s)[0];
     assert!(!w.enabled && w.needs_review && !w.run_requested);
@@ -1248,7 +1306,7 @@ fn a_removed_workflow_closes_its_pages(cx: &mut TestAppContext) {
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     open_page(&s, visual);
-    assert_eq!(route(&s, visual), Some(Route::Workflow(A.into())));
+    assert_eq!(route(&s, visual), Some(WfRoute::Workflow(A.into())));
     put(&s, Vec::new());
     refresh(&s, visual);
     assert_eq!(route(&s, visual), None);
@@ -1270,25 +1328,6 @@ fn a_step_named_by_its_id_reads_it_as_words() {
     let mut titled = node("x");
     titled.title = Some("  ".into());
     assert_eq!(super::review::node_title(&titled), "X");
-}
-
-#[gpui::test]
-fn ask_mono_focuses_the_composer(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    put(&s, vec![workflow(json!({}))]);
-    open_tab(&s, cx);
-    let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
-    visual.run_until_parked();
-    click(visual, "mono-workflow-ask");
-    let focused = s
-        .window
-        .update(visual, |_, window, cx| {
-            let chat = s.manager.read(cx).chat().unwrap();
-            let handle = chat.read(cx).input.focus_handle(cx);
-            handle.is_focused(window)
-        })
-        .unwrap();
-    assert!(focused);
 }
 
 #[gpui::test]
@@ -1321,7 +1360,7 @@ fn the_tab_reads_the_files_again_when_it_is_shown_again(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
-fn a_notice_goes_with_the_tab_and_the_page_it_was_shown_on(cx: &mut TestAppContext) {
+fn a_notice_goes_with_the_view_and_the_page_it_was_shown_on(cx: &mut TestAppContext) {
     let s = setup(cx);
     put(&s, vec![workflow(json!({}))]);
     open_tab(&s, cx);
@@ -1329,18 +1368,18 @@ fn a_notice_goes_with_the_tab_and_the_page_it_was_shown_on(cx: &mut TestAppConte
     visual.run_until_parked();
     s.manager.update(visual, |m, cx| {
         m.wf.notice = Some("Can't run yet: x.".into());
-        m.select_overview(OverviewTab::Workflows, cx);
-        assert!(m.wf.notice.is_some(), "the same tab keeps it");
-        m.select_overview(OverviewTab::Sessions, cx);
+        m.workflows_view_shown(true, cx);
+        assert!(m.wf.notice.is_some(), "the same view keeps it");
+        m.workflows_view_shown(false, cx);
         assert!(m.wf.notice.is_none());
+        m.workflows_view_shown(true, cx);
     });
     open_page(&s, visual);
     s.manager.update(visual, |m, _| {
         m.wf.page_notice = Some("Can't export.".into())
     });
-    s.manager.update(visual, |m, cx| {
-        m.select_overview(OverviewTab::Workflows, cx)
-    });
+    s.manager
+        .update(visual, |m, cx| m.workflows_view_shown(false, cx));
     assert_eq!(page_notice(&s, visual), None);
 }
 
@@ -1352,8 +1391,8 @@ fn the_board_and_run_pages_go_back_to_the_workflow(cx: &mut TestAppContext) {
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     for page in [
-        Route::WorkflowBoard(A.into()),
-        Route::WorkflowRun(A.into(), "run-1".into()),
+        WfRoute::Board(A.into()),
+        WfRoute::Run(A.into(), "run-1".into()),
     ] {
         s.manager
             .update(visual, |m, cx| m.open_workflow_route(page.clone(), cx));
@@ -1362,7 +1401,7 @@ fn the_board_and_run_pages_go_back_to_the_workflow(cx: &mut TestAppContext) {
         click(visual, "mono-page-back");
         assert_eq!(
             route(&s, visual),
-            Some(Route::Workflow(A.into())),
+            Some(WfRoute::Workflow(A.into())),
             "{page:?}"
         );
     }

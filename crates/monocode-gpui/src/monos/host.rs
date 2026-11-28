@@ -1,10 +1,7 @@
 //! Capability-checked app actions used by Mono provider subprocesses.
 use super::*;
 use crate::shell::FilesOutcome;
-use monocode_core::mono::workflows::{
-    cli::{StoreHost, handle_value},
-    store::MonoDir,
-};
+use monocode_core::mono::workflows::cli::{LEGACY_ID_ERROR, MonoCaller, handle_value};
 use monocode_core::mono::{
     Document, Launch,
     bridge::Call,
@@ -73,7 +70,7 @@ pub(super) enum Folder {
     New { id: String, name: String },
 }
 /// Refused for a cloud `sessions.start` whose `account` has no setup token or API key.
-pub(super) const CLOUD_ACCOUNT_NEEDS_TOKEN: &str = "A cloud session needs a Claude account with a setup token or API key. Run accounts.list and pick an account whose authKind is setupToken or apiKey.";
+pub(crate) const CLOUD_ACCOUNT_NEEDS_TOKEN: &str = "A cloud session needs a Claude account with a setup token or API key. Run accounts.list and pick an account whose authKind is setupToken or apiKey.";
 
 /// Why a cloud step cannot run as the account `selector` (`None` when it can): it names no
 /// account, or one without a setup token or API key. The same lookup `prepare_start` makes for
@@ -93,7 +90,7 @@ pub(super) fn cloud_account_problem(
 
 /// A snapshot of the accounts as the workflow actions judge a cloud step's account (it is used
 /// off the UI thread, so it holds copies). `None` while the accounts are not available.
-pub(super) fn workflow_account_check(
+pub(crate) fn workflow_account_check(
     cx: &gpui::App,
 ) -> Option<monocode_core::mono::workflows::cli::AccountCheck> {
     let center = crate::accounts::get(cx)?;
@@ -390,42 +387,32 @@ impl Monos {
                     .get(&call.session)
                     .and_then(|r| self.roster.get(&r.mono))
             })
-            .or_else(|| {
-                self.workflow_live
-                    .asked_by(call.session)
-                    .and_then(|mono| self.roster.get(mono))
-            })
             .cloned()
             .ok_or("This Mono no longer owns an active app capability")?;
-        // A habit run, or the hidden session of a workflow's question to the Mono.
+        // A habit run.
         let habit_run = self.running.contains_key(&call.session);
-        let question = self.workflow_live.asked_by(call.session).is_some();
         let heartbeat = self
             .running
             .get(&call.session)
             .is_some_and(|r| r.habit == mono::heartbeat::RUN_ID);
         if call.action.starts_with("habits.")
             && !matches!(call.action.as_str(), "habits.list" | "habits.export")
-            && (habit_run || question)
+            && habit_run
         {
             return Err("A habit run cannot schedule more runs".into());
         }
         // A terminal outlives the turn that started it and can run commands: only the Mono's
         // own chat drives them, never an unattended or injected context.
-        if call.action.starts_with("terminals.") && (habit_run || question || heartbeat) {
-            return Err("A habit run, heartbeat or workflow question cannot use terminals".into());
+        if call.action.starts_with("terminals.") && (habit_run || heartbeat) {
+            return Err("A habit run or heartbeat cannot use terminals".into());
         }
         // Restarting the app is only ever the user's request, made in the Mono's own chat.
-        if call.action == "app.update" && (habit_run || question || heartbeat) {
-            return Err("A habit run, heartbeat or workflow question cannot update the app".into());
+        if call.action == "app.update" && (habit_run || heartbeat) {
+            return Err("A habit run or heartbeat cannot update the app".into());
         }
         // Adding a project changes what the user sees and works in: only the Mono's own chat.
-        if call.action == "projects.add" && (habit_run || question || heartbeat) {
-            return Err("A habit run, heartbeat or workflow question cannot add projects".into());
-        }
-        // A workflow must not start workflows through its own question to the Mono.
-        if call.action.starts_with("workflows.") && question {
-            return Err("A workflow's question to its Mono cannot use workflows".into());
+        if call.action == "projects.add" && (habit_run || heartbeat) {
+            return Err("A habit run or heartbeat cannot add projects".into());
         }
         if call.action.starts_with("workflows.") && heartbeat {
             return Err("A heartbeat cannot use workflows".into());
@@ -448,29 +435,32 @@ impl Monos {
             monocode_core::mono::move_api::MOVE_TO_CLOUD
                 | monocode_core::mono::move_api::MOVE_TO_LOCAL
                 | monocode_core::mono::move_api::CANCEL_MOVE
-        ) && (habit_run || question || heartbeat)
+        ) && (habit_run || heartbeat)
         {
             return Err(
-                "A habit run, heartbeat or workflow question cannot move sessions to or from the cloud"
-                    .into(),
+                "A habit run or heartbeat cannot move sessions to or from the cloud".into(),
             );
         }
         Ok(mono)
     }
     /// A session that a Mono must not manage through the app: its own, another Mono's chat, a
-    /// habit run, a workflow's question and a worker. The one rule of `sessions.delete`,
+    /// habit run and a worker. The one rule of `sessions.delete`,
     /// `sessions.archive` with a cloud stop or delete, and the move actions.
     fn unmanaged_session(&self, session: i64, caller: i64, cx: &App) -> bool {
         session == caller
             || self.is_mono_session(session)
             || self.running.contains_key(&session)
-            || self.workflow_live.asked_by(session).is_some()
             || self
                 .owner
                 .upgrade()
                 .is_some_and(|o| o.read(cx).mono_is_worker(session))
     }
     fn finish_call(&mut self, call: Call, result: Result<Value, String>, cx: &mut Context<Self>) {
+        if call.action.starts_with("workflows.")
+            && matches!(&result, Err(error) if error == LEGACY_ID_ERROR)
+        {
+            self.tell_legacy_workflow(&call, cx);
+        }
         let key = (call.session, call.request_id.clone());
         self.app_pending.remove(&key);
         // A read has nothing to replay, and a day's list is large to keep as a receipt.
@@ -698,6 +688,71 @@ impl Monos {
             _ => shell.api_cancel_move(project, session, cx),
         })
     }
+    /// Puts the summary of a run in the Mono's chat, with a card for each session the run started
+    /// (`cards` is the session id and title of each). A Mono that was deleted has no chat to report
+    /// to. The Workflows entity calls this for `reportTo` and for the Mono that started the run.
+    pub(crate) fn workflow_post(
+        &mut self,
+        mono_id: &str,
+        text: String,
+        cards: Vec<(i64, String)>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mono) = self.roster.get_mut(mono_id) else {
+            return;
+        };
+        mono.pending_reports.push(text);
+        mono.pending_reports.extend(cards.into_iter().map(|(session, title)| {
+            format!(
+                "mono-card:{}",
+                json!({"id": mono::new_id(), "type": "session", "sessionId": session, "title": title, "state": "Saved"})
+            )
+        }));
+        self.ensure_chat(mono_id, cx);
+        self.save(cx);
+        self.dispatch(mono_id, cx);
+    }
+
+    /// A Mono used the id of a workflow from before workflows were global: it is told once, in its
+    /// chat and without a phone push, what the error already said.
+    fn tell_legacy_workflow(&mut self, call: &Call, cx: &mut Context<Self>) {
+        let Ok(mono) = self.app_caller(call) else {
+            return;
+        };
+        let Some(entry) = self
+            .roster
+            .get_mut(&mono.id)
+            .filter(|m| !m.legacy_workflow_noticed)
+        else {
+            return;
+        };
+        entry.legacy_workflow_noticed = true;
+        entry.quiet_reports.push(format!(
+            "{LEGACY_ID_ERROR}. Workflows are now shared by every Mono, and the old per-Mono ones are no longer used."
+        ));
+        self.ensure_chat(&mono.id, cx);
+        self.save(cx);
+        self.dispatch(&mono.id, cx);
+    }
+
+    /// Puts the result of a remote update in the Mono's chat. It waits in the Mono's pending
+    /// reports until the chat can take it, so it also works right after a launch. False when
+    /// the Mono is gone.
+    pub(crate) fn post_update_result(
+        &mut self,
+        mono: &str,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(entry) = self.roster.get_mut(mono) else {
+            return false;
+        };
+        entry.quiet_reports.push(text.to_owned());
+        self.ensure_chat(mono, cx);
+        self.save(cx);
+        self.dispatch(mono, cx);
+        true
+    }
     fn call_work(
         &mut self,
         call: Call,
@@ -746,6 +801,11 @@ impl Monos {
                         this.reload_today_habits(cx);
                     }
                     this.reload_files(&mono_id, cx);
+                    // Workflows are global: the open page shows what a Mono saved, whichever Mono
+                    // is open.
+                    if call.action.starts_with("workflows.") && this.workflows_requested() {
+                        this.refresh_workflows(cx);
+                    }
                     this.refresh_cards(cx);
                     this.changed(cx);
                     value
@@ -1662,18 +1722,17 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.set_enabled
                 // Probing the model catalog may start a CLI, and run/resumeRun/get check a
                 // workflow's requirements (up to 12 s), so the whole handler runs off the UI
                 // thread. run/stop/resumeRun then only write their request into the file.
-                let mut host = StoreHost::new(
-                    MonoDir::new(root, target.clone()),
-                    self.workflow_signals.clone(),
-                )
-                .with_probe(self.workflow_live.probe())
-                .with_preflight(self.workflow_live.preflight());
-                if let Some(m) = self.roster.get(&target) {
-                    host = host.with_projects(m.projects.clone());
-                }
-                if let Some(check) = workflow_account_check(cx) {
-                    host = host.with_accounts(check);
-                }
+                // The files are the global store; the Mono is only the caller, whose projects
+                // bound what it may add, change and run.
+                // The caller is the Mono that owns the capability: a roster miss must never fall
+                // back to the user's unscoped host.
+                let mut host =
+                    self.workflow_store(cx)
+                        .with_legacy_root(root)
+                        .with_caller(MonoCaller {
+                            id: mono.id.clone(),
+                            projects: mono.projects.clone(),
+                        });
                 let name = action.clone();
                 self.call_work(
                     call,

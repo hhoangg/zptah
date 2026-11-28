@@ -15,16 +15,16 @@ use monocode_core::{
     files::ProjectFile,
     mono::account_mention,
     mono::workflows::{
+        global::WorkflowsDir,
         mention::{self, MentionFacts, RequiresView, WorkflowSlug},
         model::{Workflow, WorkflowId},
         preflight::{Preflight, native_preflight},
-        store::{MonoDir, last_run_of, load_workflows},
+        store::{last_run_of, load_workflows},
     },
     skills::DiscoveredSkill,
 };
 use std::{
     collections::HashMap,
-    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -116,9 +116,9 @@ pub(crate) struct Completion {
     input: Entity<input::Input>,
     store: Option<crate::runtime::Database>,
     notes: Vec<monocode_core::notes::Note>,
-    /// The Mono this composer belongs to (root, id). `None` for every other composer, which then
-    /// offers and expands no `@workflow/` mention.
-    mono: Option<(PathBuf, String)>,
+    /// The Mono this composer belongs to (the global workflow files, id). `None` for every other
+    /// composer, which then offers and expands no `@workflow/` mention.
+    mono: Option<(WorkflowsDir, String)>,
     /// Provider accounts for `@claude/<label>` mentions; `None` outside a Mono composer.
     accounts: Option<AccountSnapshot>,
     /// The `@provider/label` tokens of those accounts, highlighted like any known mention.
@@ -268,13 +268,17 @@ impl Completion {
         self.store = Some(store);
         self
     }
-    /// Makes this the composer of one Mono, so `@workflow/<slug>` offers and attaches that Mono's
-    /// workflows. Called for Mono conversations only.
-    pub(crate) fn set_mono(&mut self, root: PathBuf, mono: String, cx: &mut Context<Self>) {
-        if self.mono.as_ref() == Some(&(root.clone(), mono.clone())) {
+    /// Makes this the composer of one Mono, so `@workflow/<slug>` offers and attaches the app's
+    /// workflows (the global files in `dir`). Called for Mono conversations only.
+    pub(crate) fn set_mono(&mut self, dir: WorkflowsDir, mono: String, cx: &mut Context<Self>) {
+        if self
+            .mono
+            .as_ref()
+            .is_some_and(|(open, id)| open.root() == dir.root() && *id == mono)
+        {
             return;
         }
-        self.mono = Some((root, mono));
+        self.mono = Some((dir, mono));
         // An in-flight load belongs to the previous Mono and must not fill this one's list.
         self.generation += 1;
         self.loading = false;
@@ -695,7 +699,7 @@ impl Completion {
         let mono = self.mono.clone();
         let work = cx.background_executor().spawn(async move {
             let workflows = mono
-                .and_then(|(root, id)| load_workflows(&MonoDir::new(root, id)).ok())
+                .and_then(|(dir, _)| load_workflows(&dir).ok())
                 .map(|loaded| loaded.workflows);
             let notes = store
                 .as_ref()
@@ -792,9 +796,9 @@ impl Completion {
         })
         .detach();
     }
-    /// Re-reads only the Mono's workflows, off the UI thread.
+    /// Re-reads only the workflows, off the UI thread.
     fn reload_workflows(&mut self, cx: &mut Context<Self>) {
-        let Some((root, id)) = self.mono.clone() else {
+        let Some((dir, _)) = self.mono.clone() else {
             return;
         };
         if self.workflows_loading {
@@ -804,7 +808,7 @@ impl Completion {
         let generation = self.generation;
         let work = cx
             .background_executor()
-            .spawn(async move { load_workflows(&MonoDir::new(root, id)).map(|l| l.workflows) });
+            .spawn(async move { load_workflows(&dir).map(|l| l.workflows) });
         cx.spawn(async move |this, cx| {
             let loaded = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -969,24 +973,23 @@ impl Completion {
         rows.sort_by(|(a, _), (b, _)| b.cmp(a));
         rows.into_iter().take(8).map(|(_, choice)| choice).collect()
     }
-    /// The context block for each workflow the user typed, read fresh from the Mono's files so a
+    /// The context block for each workflow the user typed, read fresh from the global files so a
     /// removed workflow stops resolving. Reads files only; it never runs a preflight.
     fn attach_workflows(&self, prompt: String, typed: &str) -> String {
         self.attach_workflows_with(prompt, typed, Instant::now())
     }
     fn attach_workflows_with(&self, prompt: String, typed: &str, now: Instant) -> String {
-        let Some((root, id)) = &self.mono else {
+        let Some((dir, _)) = &self.mono else {
             return prompt;
         };
         if mention::mentioned_slugs(typed).is_empty() {
             return prompt;
         }
-        let dir = MonoDir::new(root, id);
-        let Ok(loaded) = load_workflows(&dir) else {
+        let Ok(loaded) = load_workflows(dir) else {
             return prompt;
         };
         mention::attach_workflows(&prompt, typed, &loaded.workflows, |workflow| {
-            let runs = last_run_of(&dir, &workflow.id);
+            let runs = last_run_of(dir, &workflow.id);
             let last_run_unreadable = runs.is_err();
             let last_run = runs.ok().flatten();
             let requires = if workflow.requires.is_empty() {
@@ -1990,24 +1993,23 @@ mod tests {
                 .collect(),
         }
     }
-    fn mono_root(workflows: &[(&str, &str, &str)]) -> PathBuf {
+    /// The global workflow files with these `(id, name)` workflows saved.
+    fn mono_root(workflows: &[(&str, &str)]) -> WorkflowsDir {
         let root =
             std::env::temp_dir().join(format!("wf-mention-{}", monocode_core::mono::new_id()));
         std::fs::create_dir_all(&root).unwrap();
-        for (mono, id, name) in workflows {
+        let root = WorkflowsDir::new(root.join("workflows"));
+        for (id, name) in workflows {
             let mut w = Workflow::new(*id, *name);
             w.requires = vec![monocode_core::mono::workflows::model::Requirement {
                 kind: monocode_core::mono::workflows::model::RequirementKind::Cli,
                 name: "gh".into(),
                 hint: None,
             }];
-            monocode_core::mono::workflows::store::update_workflows(
-                &MonoDir::new(&root, *mono),
-                |mut list| {
-                    list.push(w.clone());
-                    Ok((list, ()))
-                },
-            )
+            monocode_core::mono::workflows::store::update_workflows(&root, |mut list| {
+                list.push(w.clone());
+                Ok((list, ()))
+            })
             .unwrap();
         }
         root
@@ -2141,11 +2143,10 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_mono_composer_lists_only_its_own_workflows_and_attaches_them(cx: &mut TestAppContext) {
-        let root = mono_root(&[
-            ("mono-a", "wf-cnt1", "Nightly Deploy"),
-            ("mono-b", "wf-bbbb", "Other Mono Flow"),
-        ]);
+    fn a_mono_composer_lists_the_global_workflows_and_attaches_the_mentioned(
+        cx: &mut TestAppContext,
+    ) {
+        let root = mono_root(&[("wf-cnt1", "Nightly Deploy"), ("wf-bbbb", "Other Flow")]);
         let window = window(cx);
         window
             .update(cx, |view, _, cx| {
@@ -2159,18 +2160,22 @@ mod tests {
         cx.run_until_parked();
         window
             .update(cx, |view, _, cx| {
-                let choices: Vec<_> = view
+                let mut choices: Vec<_> = view
                     .choices
                     .iter()
                     .map(|c| (c.insertion.as_str(), c.detail.as_str(), c.label.as_str()))
                     .collect();
+                choices.sort();
                 assert_eq!(
                     choices,
-                    [(
-                        "@workflow/nightly-deploy",
-                        "workflow/nightly-deploy",
-                        "Nightly Deploy"
-                    )]
+                    [
+                        (
+                            "@workflow/nightly-deploy",
+                            "workflow/nightly-deploy",
+                            "Nightly Deploy"
+                        ),
+                        ("@workflow/other-flow", "workflow/other-flow", "Other Flow")
+                    ]
                 );
                 assert_eq!(view.choices[0].icon().0, "git-branch");
                 assert!(view.known.contains("@workflow/nightly-deploy"));
@@ -2224,7 +2229,7 @@ mod tests {
         let window = window(cx);
         window
             .update(cx, |view, _, cx| {
-                view.set_mono(PathBuf::from("/none"), "mono-a".into(), cx);
+                view.set_mono(WorkflowsDir::new("/none"), "mono-a".into(), cx);
                 view.files = vec![ProjectFile {
                     name: "src".into(),
                     path: "/p/claude/src".into(),
@@ -2304,7 +2309,7 @@ mod tests {
         let window = window(cx);
         window
             .update(cx, |view, _, cx| {
-                view.set_mono(PathBuf::from("/none"), "mono-a".into(), cx);
+                view.set_mono(WorkflowsDir::new("/none"), "mono-a".into(), cx);
                 view.input
                     .update(cx, |input, cx| input.set_text("@codex/".into(), cx));
             })
@@ -2361,7 +2366,7 @@ mod tests {
             window
                 .update(cx, |view, _, cx| {
                     if mono {
-                        view.set_mono(PathBuf::from("/none"), "mono-a".into(), cx);
+                        view.set_mono(WorkflowsDir::new("/none"), "mono-a".into(), cx);
                         // A reload would rebuild `known` from the (empty) project.
                         view.loaded = Some(Instant::now());
                     }
@@ -2393,7 +2398,7 @@ mod tests {
         let window = window(cx);
         window
             .update(cx, |view, _, cx| {
-                view.set_mono(PathBuf::from("/none"), "mono-a".into(), cx);
+                view.set_mono(WorkflowsDir::new("/none"), "mono-a".into(), cx);
                 view.input
                     .update(cx, |input, cx| input.set_text("@cod".into(), cx));
             })
@@ -2442,7 +2447,7 @@ mod tests {
         let window = window(cx);
         window
             .update(cx, |view, _, cx| {
-                view.set_mono(PathBuf::from("/none"), "mono-a".into(), cx);
+                view.set_mono(WorkflowsDir::new("/none"), "mono-a".into(), cx);
                 view.refresh_accounts(cx);
                 let text = "start it with @\"claude/Work account\" and @claude/can.le.";
                 let sent = view.prepare_prompt(text);
@@ -2465,7 +2470,7 @@ mod tests {
 
     #[gpui::test]
     fn a_send_before_the_check_finished_says_not_checked(cx: &mut TestAppContext) {
-        let root = mono_root(&[("mono-a", "wf-cnt2", "Deploy")]);
+        let root = mono_root(&[("wf-cnt2", "Deploy")]);
         let window = window(cx);
         window
             .update(cx, |view, _, cx| {
@@ -2481,7 +2486,7 @@ mod tests {
 
     #[gpui::test]
     fn a_workflow_removed_since_loading_no_longer_resolves(cx: &mut TestAppContext) {
-        let root = mono_root(&[("mono-a", "wf-aaaa", "Deploy")]);
+        let root = mono_root(&[("wf-aaaa", "Deploy")]);
         let window = window(cx);
         window
             .update(cx, |view, _, _| {
@@ -2524,7 +2529,7 @@ mod tests {
 
     #[gpui::test]
     fn app_written_messages_and_quoted_lines_attach_nothing(cx: &mut TestAppContext) {
-        let root = mono_root(&[("mono-a", "wf-aaaa", "Deploy")]);
+        let root = mono_root(&[("wf-aaaa", "Deploy")]);
         let window = window(cx);
         window
             .update(cx, |view, _, _| {
@@ -2544,15 +2549,12 @@ mod tests {
     #[gpui::test]
     fn a_cached_check_counts_only_for_the_same_requirements(cx: &mut TestAppContext) {
         use monocode_core::mono::workflows::model::{Requirement, RequirementKind};
-        let root = mono_root(&[("mono-a", "wf-aaaa", "Deploy")]);
+        let root = mono_root(&[("wf-aaaa", "Deploy")]);
         let window = window(cx);
         window
             .update(cx, |view, _, _| {
                 view.mono = Some((root.clone(), "mono-a".into()));
-                let stored = load_workflows(&MonoDir::new(&root, "mono-a"))
-                    .unwrap()
-                    .workflows
-                    .remove(0);
+                let stored = load_workflows(&root).unwrap().workflows.remove(0);
                 let key = requires_key(&stored);
                 let text = "@workflow/deploy";
                 let put = |view: &mut Completion, w: &Workflow, key: &str| {
@@ -2592,10 +2594,7 @@ mod tests {
 
     #[gpui::test]
     fn changing_mono_drops_in_flight_loads_of_the_old_one(cx: &mut TestAppContext) {
-        let root = mono_root(&[
-            ("mono-a", "wf-aaaa", "Deploy"),
-            ("mono-b", "wf-bbbb", "Other"),
-        ]);
+        let root = mono_root(&[("wf-aaaa", "Deploy"), ("wf-bbbb", "Other")]);
         let window = window(cx);
         window
             .update(cx, |view, _, cx| {

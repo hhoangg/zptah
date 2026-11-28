@@ -3,13 +3,14 @@
 //!
 //! Contract with the runner:
 //! - A node that is `running` with `ended_at` set is not running anything: it has finished and the
-//!   Mono is being asked whether to loop (see `is_asking`). The runner must not apply a session or
+//!   AI is being asked whether to loop (see `is_asking`). The runner must not apply a session or
 //!   command timeout to it and must not run it again.
 //! - `start_run`, `apply_event` and `resume_run` return a run that is already "settled": every step
-//!   the engine can take by itself (triggers, If conditions, For each expansion, skipping untaken
-//!   sides, failing a branch, condition loops, the final status) has been applied.
+//!   the engine can take by itself (the firing trigger, If conditions, For each expansion, skipping
+//!   untaken sides, failing a branch, condition loops, the final status) has been applied.
 //! - `next_actions` only reads. It lists what the runner must do for nodes that are ready. An
-//!   action is repeated until the matching `NodeStarted` event is applied, and never after.
+//!   action is repeated until the matching `NodeStarted` event is applied, and never after. Once a
+//!   run has settled it lists one `PostSummary` until `ReportPosted` is applied.
 //!
 //! Every function takes the run by reference and returns a new one. An event that changes nothing
 //! returns a clone equal to the input.
@@ -17,15 +18,15 @@ use super::condition::eval_condition;
 use super::model::*;
 use super::ordered::{js_number_text, Json, OrderedMap};
 use super::output::output_instruction;
+use super::parse::is_ai_decide;
 use super::template::{
     js_space, js_trim, lookup, render_template, shell_dash_problems, shell_template_problems,
 };
 use std::collections::{HashMap, HashSet};
 
-/// Why the Mono is asked.
+/// Why the AI is asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AskPurpose {
-    AskMono,
+pub enum DecidePurpose {
     If,
     Switch,
     Loop,
@@ -47,15 +48,18 @@ pub enum EngineAction {
         branch: BranchKey,
         command: String,
     },
-    AskMono {
+    /// A one-shot AI call with no tools, for an If, a Switch or a loop edge. No Mono is involved:
+    /// the runner picks the model with `decision_model_for`.
+    Decide {
         node_id: NodeId,
         branch: BranchKey,
-        purpose: AskPurpose,
+        purpose: DecidePurpose,
         question: String,
         answers: Vec<String>,
         context: OrderedMap<Json>,
     },
-    PostReport,
+    /// The run settled: deliver its summary (`compose_report`), then apply `ReportPosted`.
+    PostSummary,
 }
 
 /// What happened outside the engine. `at` is the time the runner saw it (ms since the epoch, the
@@ -158,7 +162,7 @@ fn graph_of(def: &Workflow) -> Graph<'_> {
             // Only nodes that finish with a value the decider can look at can loop.
             let loopable = matches!(
                 from.kind,
-                NodeKind::Session { .. } | NodeKind::Command { .. } | NodeKind::AskMono { .. }
+                NodeKind::Session { .. } | NodeKind::Command { .. }
             );
             if loopable {
                 loops.entry(e.from.as_str()).or_insert(LoopEdge {
@@ -213,9 +217,6 @@ impl Graph<'_> {
 
 fn is_for_each_kind(k: &NodeKind) -> bool {
     matches!(k, NodeKind::ForEach { .. })
-}
-fn is_report_kind(k: &NodeKind) -> bool {
-    matches!(k, NodeKind::Report { .. })
 }
 
 /// Everything reachable from `start` by `next`, in the order found (`start` only when a cycle
@@ -338,7 +339,7 @@ fn open_loop(g: &Graph, r: &NodeRun) -> bool {
         && g.loops.contains_key(r.node_id.as_str())
 }
 
-/// A finished node whose loop edge is being put to the Mono (the node itself is not running).
+/// A finished node whose loop edge is being put to the AI (the node itself is not running).
 pub fn is_asking(r: &NodeRun) -> bool {
     r.status == NodeStatus::Running && r.ended_at.is_some()
 }
@@ -352,10 +353,6 @@ fn unsettled(g: &Graph, r: &NodeRun) -> bool {
         r.status,
         NodeStatus::Pending | NodeStatus::Running | NodeStatus::WaitingApproval
     ) || open_loop(g, r)
-}
-
-fn is_report(g: &Graph, r: &NodeRun) -> bool {
-    g.is_type(&r.node_id, is_report_kind)
 }
 
 fn branch_key(for_each_id: &str, index: usize) -> BranchKey {
@@ -425,6 +422,14 @@ fn build_scope<'n>(
     info.insert("startedAt", Json::Number(run.started_at as f64));
     info.insert("round", Json::Number(f64::from(round)));
     scope.insert("run", Json::Object(info));
+    // `trigger` is what fired the run ("trigger" is a reserved node id, so nothing else uses it).
+    let mut trigger = OrderedMap::new();
+    trigger.insert("node", Json::String(run.caller.trigger_node.clone()));
+    trigger.insert("kind", Json::String(run.caller.kind.as_str().to_string()));
+    if let Some(item) = &run.caller.item {
+        trigger.insert("item", item.clone());
+    }
+    scope.insert("trigger", Json::Object(trigger));
     scope
 }
 
@@ -442,7 +447,7 @@ fn scope_in(d: &Draft, branch: &str, node_id: Option<&str>) -> OrderedMap<Json> 
     build_scope(&d.run, |id| d.g.by_id.get(id).copied(), branch, node_id)
 }
 
-/// Outputs the Mono needs to decide: the named nodes, the loop variable and the round.
+/// Outputs the AI needs to decide: the named nodes, the loop variable and the round.
 fn context_for(d: &Draft, r: &NodeRun, ids: &[String]) -> OrderedMap<Json> {
     let scope = scope_in(d, &r.branch, Some(&r.node_id));
     let mut context = OrderedMap::new();
@@ -589,7 +594,7 @@ fn fail_node(d: &mut Draft, i: usize, error: String) {
     let branch = r.branch.clone();
     for k in 0..d.run.nodes.len() {
         let o = &d.run.nodes[k];
-        if o.branch != branch || o.status != NodeStatus::Pending || is_report(&d.g, o) {
+        if o.branch != branch || o.status != NodeStatus::Pending {
             continue;
         }
         let o = &mut d.run.nodes[k];
@@ -661,7 +666,7 @@ fn reset_loop(d: &mut Draft, from: usize, to: &str) {
         let Some(k) = d.at_slot(&id, &branch) else {
             continue;
         };
-        if d.run.nodes[k].status != NodeStatus::Skipped || d.g.is_type(&id, is_report_kind) {
+        if d.run.nodes[k].status != NodeStatus::Skipped {
             continue;
         }
         let r = &mut d.run.nodes[k];
@@ -864,7 +869,7 @@ fn pass(d: &mut Draft) -> bool {
                     reason: Some(MAX_ROUNDS_REASON.into()),
                 });
                 changed = true;
-            } else if spec.spec.decide != "mono" {
+            } else if !is_ai_decide(&spec.spec.decide) {
                 let scope = Json::Object(scope_in(d, &branch, Some(&node_id)));
                 match eval_condition(&spec.spec.decide, &scope) {
                     Err(error) => fail_node(d, i, error),
@@ -910,7 +915,7 @@ fn pass(d: &mut Draft) -> bool {
             continue;
         }
 
-        if d.run.nodes[i].status != NodeStatus::Pending || is_report_kind(&node.kind) {
+        if d.run.nodes[i].status != NodeStatus::Pending {
             continue;
         }
         if !branch.is_empty() && !admitted.contains(&branch) {
@@ -994,7 +999,7 @@ fn pass(d: &mut Draft) -> bool {
                     changed = true;
                 }
             }
-            // Session and Ask Mono nodes are the runner's to start.
+            // Session nodes are the runner's to start.
             _ => {}
         }
     }
@@ -1029,19 +1034,7 @@ fn settle(d: &mut Draft) {
             break;
         }
     }
-    if d.run
-        .nodes
-        .iter()
-        .any(|n| !is_report(&d.g, n) && unsettled(&d.g, n))
-    {
-        return;
-    }
-    // Everything else is finished; the report still has to be posted.
-    if d.run
-        .nodes
-        .iter()
-        .any(|n| is_report(&d.g, n) && n.status == NodeStatus::Pending)
-    {
+    if d.run.nodes.iter().any(|n| unsettled(&d.g, n)) {
         return;
     }
     d.run.status = final_status(d);
@@ -1050,7 +1043,33 @@ fn settle(d: &mut Draft) {
 
 // --- public API --------------------------------------------------------------------------------
 
-pub fn start_run(def: &Workflow, trigger: RunTrigger, now: u64, id: &str) -> WorkflowRun {
+/// The trigger node `caller` names. A caller that names none (an old request, a trigger the
+/// workflow no longer has) fires the first trigger of its kind, else the first trigger.
+fn firing_trigger<'a>(def: &'a Workflow, caller: &RunCaller) -> Option<&'a Node> {
+    let triggers: Vec<&Node> = def
+        .nodes
+        .iter()
+        .filter(|n| n.parent.is_none() && n.is_trigger())
+        .collect();
+    triggers
+        .iter()
+        .copied()
+        .find(|n| n.id == caller.trigger_node)
+        .or_else(|| {
+            triggers.iter().copied().find(|n| {
+                matches!(
+                    (&n.kind, caller.kind),
+                    (NodeKind::Schedule { .. }, CallerKind::Schedule)
+                        | (NodeKind::Manual, CallerKind::Manual | CallerKind::Mono)
+                )
+            })
+        })
+        .or_else(|| triggers.first().copied())
+}
+
+/// Starts a run of `def` for `caller`. Only the trigger the caller names runs (it is `Done`); the
+/// other triggers are `Skipped`. `caller.trigger_node` is set to the trigger that fired.
+pub fn start_run(def: &Workflow, caller: RunCaller, now: u64, id: &str) -> WorkflowRun {
     let definition = def.clone();
     let g = graph_of(&definition);
     let top: Vec<&Node> = definition
@@ -1058,18 +1077,19 @@ pub fn start_run(def: &Workflow, trigger: RunTrigger, now: u64, id: &str) -> Wor
         .iter()
         .filter(|n| n.parent.is_none())
         .collect();
-    let roots: Vec<&Node> = top.iter().copied().filter(|n| n.is_trigger()).collect();
+    let firing = firing_trigger(&definition, &caller).map(|n| n.id.clone());
+    let mut caller = caller;
+    if let Some(fired) = &firing {
+        caller.trigger_node = fired.clone();
+    }
     // Without a trigger (an invalid definition) start from the nodes nothing leads to.
-    let starts: Vec<&Node> = if roots.is_empty() {
-        top.iter()
+    let starts: Vec<&Node> = match &firing {
+        Some(fired) => top.iter().copied().filter(|n| &n.id == fired).collect(),
+        None => top
+            .iter()
             .copied()
-            .filter(|n| {
-                !is_report_kind(&n.kind)
-                    && g.incoming.get(n.id.as_str()).is_none_or(|e| e.is_empty())
-            })
-            .collect()
-    } else {
-        roots
+            .filter(|n| g.incoming.get(n.id.as_str()).is_none_or(|e| e.is_empty()))
+            .collect(),
     };
     let mut reachable: HashSet<String> = starts.iter().map(|n| n.id.clone()).collect();
     for s in &starts {
@@ -1092,13 +1112,13 @@ pub fn start_run(def: &Workflow, trigger: RunTrigger, now: u64, id: &str) -> Wor
         status: RunStatus::Running,
         started_at: now,
         ended_at: None,
-        trigger,
-        folder_id: None,
+        caller,
         items: Default::default(),
         nodes,
         report_posted_at: None,
         error: None,
         cloud_instances: Vec::new(),
+        summary: None,
     };
     let mut d = draft_of(run, &definition, now);
     // A schedule trigger exposes when it fired; a manual one has nothing to expose.
@@ -1122,7 +1142,19 @@ fn describe_node(node: &Node) -> String {
     format!("\"{}\"", node.title.as_deref().unwrap_or(&node.id))
 }
 
+/// Whether the run has ended, so its summary is due: every status but `Running` and
+/// `Interrupted` (an app restart is not the end of a run, and a resumed one reports when it ends).
+fn summary_due(run: &WorkflowRun) -> bool {
+    matches!(
+        run.status,
+        RunStatus::Done | RunStatus::DoneWithFailures | RunStatus::Failed | RunStatus::Stopped
+    ) && run.report_posted_at.is_none()
+}
+
 pub fn next_actions(run: &WorkflowRun) -> Vec<EngineAction> {
+    if summary_due(run) {
+        return vec![EngineAction::PostSummary];
+    }
     if run.status != RunStatus::Running {
         return Vec::new();
     }
@@ -1140,14 +1172,14 @@ pub fn next_actions(run: &WorkflowRun) -> Vec<EngineAction> {
 
         if open_loop(&d.g, r) {
             let spec = d.g.loops[r.node_id.as_str()];
-            if spec.spec.decide != "mono" || f64::from(r.round) >= spec.spec.max_rounds {
+            if !is_ai_decide(&spec.spec.decide) || f64::from(r.round) >= spec.spec.max_rounds {
                 continue;
             }
             let to = d.g.by_id.get(spec.to).copied();
-            actions.push(EngineAction::AskMono {
+            actions.push(EngineAction::Decide {
                 node_id: r.node_id.clone(),
                 branch: r.branch.clone(),
-                purpose: AskPurpose::Loop,
+                purpose: DecidePurpose::Loop,
                 question: format!(
                     "{} finished round {} of {}. Should the work go back to {} for another round, or exit?",
                     describe_node(node),
@@ -1212,25 +1244,15 @@ pub fn next_actions(run: &WorkflowRun) -> Vec<EngineAction> {
                     });
                 }
             }
-            NodeKind::AskMono { question, answers } => {
-                actions.push(EngineAction::AskMono {
-                    node_id: r.node_id.clone(),
-                    branch: r.branch.clone(),
-                    purpose: AskPurpose::AskMono,
-                    question: render_template(question, &scope, false),
-                    answers: answers.clone(),
-                    context: context_for(&d, r, &before),
-                });
-            }
             NodeKind::If {
                 decide: Some(_),
                 question,
                 ..
             } => {
-                actions.push(EngineAction::AskMono {
+                actions.push(EngineAction::Decide {
                     node_id: r.node_id.clone(),
                     branch: r.branch.clone(),
-                    purpose: AskPurpose::If,
+                    purpose: DecidePurpose::If,
                     question: match question.as_deref().filter(|q| !q.is_empty()) {
                         Some(q) => render_template(q, &scope, false),
                         None => format!(
@@ -1250,10 +1272,10 @@ pub fn next_actions(run: &WorkflowRun) -> Vec<EngineAction> {
             } => {
                 let mut answers = cases.clone();
                 answers.push(SWITCH_DEFAULT.to_string());
-                actions.push(EngineAction::AskMono {
+                actions.push(EngineAction::Decide {
                     node_id: r.node_id.clone(),
                     branch: r.branch.clone(),
-                    purpose: AskPurpose::Switch,
+                    purpose: DecidePurpose::Switch,
                     question: match question.as_deref().filter(|q| !q.is_empty()) {
                         Some(q) => render_template(q, &scope, false),
                         None => format!(
@@ -1270,21 +1292,6 @@ pub fn next_actions(run: &WorkflowRun) -> Vec<EngineAction> {
         }
     }
 
-    let report_pending = d
-        .run
-        .nodes
-        .iter()
-        .any(|n| is_report(&d.g, n) && n.status == NodeStatus::Pending);
-    if report_pending
-        && run.report_posted_at.is_none()
-        && !d
-            .run
-            .nodes
-            .iter()
-            .any(|n| !is_report(&d.g, n) && unsettled(&d.g, n))
-    {
-        actions.push(EngineAction::PostReport);
-    }
     actions
 }
 
@@ -1322,6 +1329,14 @@ pub fn apply_event(run: &WorkflowRun, event: &EngineEvent) -> WorkflowRun {
     if let EngineEvent::Stopped { at } = event {
         return stop_run(run, *at);
     }
+    if let EngineEvent::ReportPosted { at } = event {
+        if !summary_due(run) {
+            return run.clone();
+        }
+        let mut out = run.clone();
+        out.report_posted_at = Some(*at);
+        return out;
+    }
     if run.status != RunStatus::Running {
         return run.clone();
     }
@@ -1330,20 +1345,6 @@ pub fn apply_event(run: &WorkflowRun, event: &EngineEvent) -> WorkflowRun {
         &run.definition,
         event.at().unwrap_or_else(|| last_activity(run)),
     );
-
-    if let EngineEvent::ReportPosted { at } = event {
-        let report = d
-            .run
-            .nodes
-            .iter()
-            .position(|n| is_report(&d.g, n) && n.status == NodeStatus::Pending);
-        if let Some(i) = report {
-            finish_node(&mut d, i, None);
-        }
-        d.run.report_posted_at = Some(*at);
-        settle(&mut d);
-        return d.run;
-    }
 
     let (node_id, branch) = match event {
         EngineEvent::NodeStarted {
@@ -1454,23 +1455,6 @@ pub fn apply_event(run: &WorkflowRun, event: &EngineEvent) -> WorkflowRun {
                             finish_node(&mut d, i, None);
                         }
                     }
-                    NodeKind::AskMono { answers, .. } => {
-                        if !answers.contains(value) {
-                            fail_node(
-                                &mut d,
-                                i,
-                                format!(
-                                    "Mono answered \"{value}\", which is not an allowed answer"
-                                ),
-                            );
-                        } else {
-                            let mut output = OrderedMap::new();
-                            output.insert("answer", Json::String(value.clone()));
-                            output
-                                .insert("reason", Json::String(reason.clone().unwrap_or_default()));
-                            finish_node(&mut d, i, Some(output));
-                        }
-                    }
                     _ => return run.clone(),
                 }
             }
@@ -1498,7 +1482,7 @@ pub fn mark_interrupted(run: &WorkflowRun) -> WorkflowRun {
         if g.is_type(&n.node_id, is_for_each_kind) {
             continue;
         }
-        // Waiting on the Mono about a loop: the node itself had finished, only the question is
+        // Waiting on the AI about a loop: the node itself had finished, only the question is
         // lost.
         if is_asking(n) {
             n.status = NodeStatus::Done;

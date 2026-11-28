@@ -18,7 +18,7 @@ pub(in crate::monos) struct Review {
     pub(super) id: String,
     pub(super) intent: ReviewIntent,
     /// Where Back and a finished approval go: the workflow page, or the overview.
-    pub(super) back: Option<Route>,
+    pub(super) back: Option<WfRoute>,
     /// What is on screen is what approving applies to.
     pub(super) shown: Workflow,
     /// The fingerprint of the stored definition last looked at.
@@ -115,7 +115,7 @@ pub(in crate::monos) fn session_detail(preview: &ImportPreview, node: &Node) -> 
         match (model, harness) {
             (Some(model), _) => visible(model),
             (None, Some(_)) => "its default".to_string(),
-            (None, None) => "Mono default".to_string(),
+            (None, None) => "App default".to_string(),
         }
     ));
     if let Some(effort) = effort.as_deref().filter(|e| !e.is_empty()) {
@@ -141,6 +141,26 @@ fn trigger_label(preview: &ImportPreview) -> String {
         }) => schedule.label(),
         Some(_) => "Manual".into(),
     }
+}
+
+/// The two lines of the review that the fingerprint covers beyond the steps: the model for AI
+/// decisions and where the run summary goes. `mono` is the name of the Mono in `reportTo`.
+pub(super) fn summary_and_decisions_text(w: &Workflow, mono: Option<&str>) -> (String, String) {
+    let decisions = match &w.decision_model {
+        Some(model) => {
+            let mut text = format!("{} {}", visible(&model.harness), visible(&model.model));
+            if let Some(effort) = model.effort.as_deref().filter(|e| !e.is_empty()) {
+                text.push_str(&format!(" ({})", visible(effort)));
+            }
+            text
+        }
+        None => "The model of the step before it".to_string(),
+    };
+    let summary_to = match mono {
+        Some(name) => format!("The run page and Mono {}", visible(name)),
+        None => "The run page".to_string(),
+    };
+    (decisions, summary_to)
 }
 
 /// Text exactly as the file has it, in the monospace the app uses for code.
@@ -195,13 +215,13 @@ fn loop_row(preview: &ImportPreview, from: &str, to: &str, rounds: f64, decide: 
             step_name(preview, to),
             monocode_core::mono::workflows::ordered::js_number_text(rounds),
         ),
-        if decide == "mono" {
+        if monocode_core::mono::workflows::parse::is_ai_decide(decide) {
             div()
                 .px_0p5()
                 .text_size(px(12.))
                 .line_height(px(20.))
                 .text_color(content(0.75))
-                .child("The Mono decides each time whether it repeats.")
+                .child("The AI decides each time whether it repeats.")
         } else {
             verbatim(decide)
         },
@@ -418,15 +438,40 @@ impl Monos {
         out
     }
 
+    /// What the fingerprint covers besides the steps: the model that makes the AI decisions and
+    /// who gets the run summary. The summary template itself is listed with the prompts.
+    fn summary_and_decisions(&self, w: &Workflow) -> AnyElement {
+        let mono = w
+            .report_to
+            .as_ref()
+            .and_then(|r| r.mono.as_deref())
+            .filter(|m| !m.is_empty())
+            .map(|id| self.roster.get(id).map_or(id, |m| m.name.as_str()));
+        let (decisions, summary_to) = summary_and_decisions_text(w, mono);
+        section("Summary and decisions", None)
+            .id("mono-workflow-summary-decisions")
+            .debug_selector(|| "mono-workflow-summary-decisions".into())
+            .child(
+                div()
+                    .px_2()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(property("AI decisions use", decisions))
+                    .child(property("Run summary goes to", summary_to)),
+            )
+            .into_any_element()
+    }
+
     /// Opens the review a flagged workflow needs before it can run or be enabled.
     pub(in crate::monos) fn open_workflow_review(
         &mut self,
         id: &str,
         intent: ReviewIntent,
-        back: Option<Route>,
+        back: Option<WfRoute>,
         cx: &mut Context<Self>,
     ) {
-        let Some(workflow) = self.mono_workflow(id).cloned() else {
+        let Some(workflow) = self.global_workflow(id).cloned() else {
             return;
         };
         self.wf.page_notice = None;
@@ -442,7 +487,7 @@ impl Monos {
             busy: false,
             preview: None,
         });
-        self.route = Some(Route::WorkflowReview(id.to_string(), intent));
+        self.wf.route = Some(WfRoute::Review(id.to_string(), intent));
         self.review_preview(cx);
         cx.notify();
     }
@@ -452,7 +497,7 @@ impl Monos {
         let Some(review) = &self.wf.review else {
             return;
         };
-        let Some(stored) = self.mono_workflow(&review.id).cloned() else {
+        let Some(stored) = self.global_workflow(&review.id).cloned() else {
             return;
         };
         let incoming = definition_fingerprint(&stored);
@@ -483,7 +528,7 @@ impl Monos {
         }
         let shown = review.shown.clone();
         let id = review.id.clone();
-        let probe = self.workflow_live.probe();
+        let probe = self.workflow_probes(cx).probe();
         let work = cx.background_executor().spawn(async move {
             let catalog = ModelCatalog::for_harnesses(&harnesses_used(&shown), probe);
             review_of(&shown, &catalog)
@@ -539,8 +584,8 @@ impl Monos {
                 match result {
                     Approval::Done => {
                         this.wf.review = None;
-                        if matches!(this.route, Some(Route::WorkflowReview(..))) {
-                            this.route = back;
+                        if matches!(this.wf.route, Some(WfRoute::Review(..))) {
+                            this.wf.route = back;
                         }
                     }
                     Approval::Changed(stored) => {
@@ -570,12 +615,17 @@ impl Monos {
         let back = review.back.clone();
         let can_approve = !review.busy && review.ready_preview().is_some();
         let notice = review.notice.clone();
+        let shown = review.shown.clone();
         let sections = match review.ready_preview().cloned() {
-            Some(preview) => self.review_sections(
-                &preview,
-                "It cannot be enabled or run until these are fixed.",
-                cx,
-            ),
+            Some(preview) => {
+                let mut sections = self.review_sections(
+                    &preview,
+                    "It cannot be enabled or run until these are fixed.",
+                    cx,
+                );
+                sections.push(self.summary_and_decisions(&shown));
+                sections
+            }
             None => Vec::new(),
         };
         let go_back = back.clone();
@@ -592,7 +642,7 @@ impl Monos {
                         header_button("mono-workflow-review-cancel", "Cancel", false, true)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.wf.review = None;
-                                this.route = go_back.clone();
+                                this.wf.route = go_back.clone();
                                 this.refresh_workflows(cx);
                                 cx.notify();
                             })),

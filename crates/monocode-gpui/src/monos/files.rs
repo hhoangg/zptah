@@ -269,7 +269,6 @@ impl Monos {
         for run in self.running.values().filter(|r| r.mono == id) {
             run.view.update(cx, |v, cx| v.mono_stop(cx));
         }
-        self.stop_workflows_of(id, cx);
         // A reset dialog for it would be asking about a Mono that is gone.
         if self.reset.as_ref().is_some_and(|d| d.mono == id && !d.busy) {
             self.reset = None;

@@ -12,24 +12,30 @@
 //!
 //! Local times in results (`nextRunAt`, `startedAt`, `endedAt`) read `YYYY-MM-DD HH:MM` in the
 //! machine's time zone, where React printed `toLocaleString()`.
+use super::global::WorkflowsDir;
 use super::guide::workflow_guide;
 use super::model::{
-    interrupted_instances, left_instances_text, new_workflow_id, trigger_of, with_run_values, Edge,
-    InputValue, Node, NodeKind, RequirementKind, RunInstance, RunStatus, Workflow, WorkflowRun,
-    WORKFLOWS_MAX, WORKFLOW_DEFINITION_MAX_BYTES, WORKFLOW_DESCRIPTION_MAX, WORKFLOW_NAME_MAX,
+    definition_fingerprint, interrupted_instances, left_instances_text, new_workflow_id,
+    with_run_values, Edge, InputValue, Node, NodeKind, ReportTo, RequirementKind, RunCaller,
+    RunInstance, RunStatus, Workflow, WorkflowRun, WORKFLOWS_MAX, WORKFLOW_DEFINITION_MAX_BYTES,
+    WORKFLOW_DESCRIPTION_MAX, WORKFLOW_NAME_MAX,
 };
 use super::models::{harnesses_used, native_probe, workflow_issues, ModelCatalog, Probe};
 use super::ordered::{js_number_text, Json, OrderedMap};
-use super::parse::{drop_stray_handles, parse_edge, parse_inputs, parse_node, read_requires};
+use super::parse::{
+    drop_stray_handles, parse_decision_model, parse_edge, parse_inputs, parse_node,
+    parse_report_to, read_requires,
+};
 use super::preflight::{likely_clis, native_preflight, union_requires, Preflight};
 use super::store::{
-    clear_runs, load_runs, load_workflows, to_json, update_workflows, workflow_json, MonoDir,
+    clear_runs, load_runs, load_workflows, to_json, update_workflows, workflow_json,
 };
 use super::template::js_trim;
 use super::validate::WorkflowIssue;
 use super::yaml::{
     anchor_node, export_path_problem, export_workflow, finish_import, input_value_problems,
-    preview_import, review_texts, ReviewCommand, ReviewPrompt, WorkflowDraft,
+    preview_import, review_texts, summary_review_prompt, ReviewCommand, ReviewPrompt,
+    WorkflowDraft,
 };
 use crate::mono::habits::Schedule;
 use crate::provider::Kind;
@@ -37,6 +43,7 @@ use chrono::{Local, TimeZone};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -74,7 +81,31 @@ pub trait WorkflowHost: Sized {
     fn account_problem(&mut self, _selector: &str) -> Option<String> {
         None
     }
+    /// The Mono making the call; `None` when the user does (the app's own pages). A Mono reads
+    /// every workflow but only adds, changes and runs those that use its own projects.
+    fn caller(&self) -> Option<&MonoCaller> {
+        None
+    }
+    /// Whether `id` was a workflow of the calling Mono's old per-Mono store (checked by reading
+    /// ids only). Such an id gets a clear error instead of "No workflow with that id".
+    fn is_legacy_id(&mut self, _id: &str) -> bool {
+        false
+    }
 }
+
+/// The Mono that makes a call: who the runs it starts are recorded under, and whose projects
+/// bound what it may add, change and run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MonoCaller {
+    pub id: String,
+    /// The Mono's assigned project paths.
+    pub projects: Vec<String>,
+}
+
+/// The error a Mono gets for the id of a workflow from before workflows were global.
+pub const LEGACY_ID_ERROR: &str =
+    "This workflow was per Mono and is no longer used; recreate it in Workflows";
+const NO_WORKFLOW: &str = "No workflow with that id; run workflows.list";
 
 /// How the app judges an account selector for a cloud step: `None` when it can be used.
 pub type AccountCheck = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
@@ -154,25 +185,28 @@ impl Signals {
     }
 }
 
-/// One Mono's workflows on disk (`workflows.json`, `workflow-runs/`), through `workflows::store`.
+/// The global workflows on disk (`workflows.json`, `runs/`), through `workflows::store`.
 pub struct StoreHost {
-    dir: MonoDir,
+    dir: WorkflowsDir,
     signals: Arc<Signals>,
     probe: fn(Kind) -> Probe,
     preflight: fn(&Workflow) -> Preflight,
-    /// The Mono's assigned projects; None accepts a project value as given.
-    projects: Option<Vec<String>>,
+    /// The calling Mono; None is the user, who may name any project.
+    caller: Option<MonoCaller>,
+    /// Where the Monos' old per-Mono folders are, to recognise an old workflow id.
+    legacy_root: Option<PathBuf>,
     accounts: Option<AccountCheck>,
 }
 
 impl StoreHost {
-    pub fn new(dir: MonoDir, signals: Arc<Signals>) -> Self {
+    pub fn new(dir: WorkflowsDir, signals: Arc<Signals>) -> Self {
         Self {
             dir,
             signals,
             probe: native_probe,
             preflight: native_preflight,
-            projects: None,
+            caller: None,
+            legacy_root: None,
             accounts: None,
         }
     }
@@ -186,9 +220,16 @@ impl StoreHost {
         self.accounts = Some(check);
         self
     }
-    /// The projects assigned to the Mono, which a per-run `project` value must name.
-    pub fn with_projects(mut self, projects: Vec<String>) -> Self {
-        self.projects = Some(projects);
+    /// The Mono that makes the calls: its projects bound what it may add, change and run, and
+    /// the runs it starts record it as their caller.
+    pub fn with_caller(mut self, caller: MonoCaller) -> Self {
+        self.caller = Some(caller);
+        self
+    }
+    /// The folder that holds the Monos' old per-Mono workflow files (`monos/`). They are only
+    /// read, and only for their ids.
+    pub fn with_legacy_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.legacy_root = Some(root.into());
         self
     }
     /// Replaces how a harness is probed (tests must never reach real CLIs).
@@ -231,28 +272,50 @@ impl WorkflowHost for StoreHost {
         (self.preflight)(w)
     }
     fn project_path(&self, input: &str) -> Option<String> {
-        match &self.projects {
+        match &self.caller {
             None => Some(input.to_string()),
-            Some(projects) => crate::mono::resolve_project(projects, input).ok(),
+            Some(caller) => crate::mono::resolve_project(&caller.projects, input).ok(),
         }
     }
     fn account_problem(&mut self, selector: &str) -> Option<String> {
         self.accounts.as_ref().and_then(|check| check(selector))
     }
+    fn caller(&self) -> Option<&MonoCaller> {
+        self.caller.as_ref()
+    }
+    fn is_legacy_id(&mut self, id: &str) -> bool {
+        let (Some(root), Some(caller)) = (&self.legacy_root, &self.caller) else {
+            return false;
+        };
+        // A pure read: the Mono's folder is never created or adopted for this.
+        if !crate::mono::files::valid_id(&caller.id) {
+            return false;
+        }
+        let path = root
+            .join(&caller.id)
+            .join(crate::mono::files::WORKFLOWS_FILE);
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| super::parse::read_workflow_file(&text))
+            .is_some_and(|old| old.workflows.iter().any(|w| w.id == id))
+    }
 }
 
 /// The fields of a workflow definition the CLI accepts; the app owns everything else.
-const DEFINITION_FIELDS: [&str; 7] = [
+const DEFINITION_FIELDS: [&str; 10] = [
     "name",
     "description",
     "inputs",
     "requires",
+    "decisionModel",
+    "summaryTemplate",
+    "reportTo",
     "inputValues",
     "nodes",
     "edges",
 ];
 const NOT_ENABLED: &str = "Resume the workflow before running it.";
-const NEEDS_REVIEW: &str = "This workflow came from a file and the user has not reviewed it yet. Ask the user to review it and enable it in the Workflows panel.";
+const NEEDS_REVIEW: &str = "This workflow came from a file or from a Mono and the user has not reviewed it yet. Ask the user to review it and enable it in Workflows.";
 const RUNS_DEFAULT: f64 = 5.0;
 const RUNS_MAX: f64 = 20.0;
 
@@ -413,9 +476,9 @@ fn add_note(issues: &[WorkflowIssue], from_file: bool) -> String {
         );
     }
     if from_file {
-        "Saved paused. Check the commands and prompts with the user; only the user can enable it, in the Workflows panel.".into()
+        "Saved paused. Check the commands and prompts with the user; only the user can enable it, in Workflows.".into()
     } else {
-        "Saved paused. Tell the user to open it in the Workflows panel and enable it there.".into()
+        "Saved paused. Tell the user to open it in Workflows, review it and enable it there.".into()
     }
 }
 
@@ -430,40 +493,32 @@ fn declared_values(
         .collect()
 }
 
-fn schedule_of(w: &Workflow) -> Option<&Schedule> {
-    match trigger_of(w).map(|n| &n.kind) {
-        Some(NodeKind::Schedule { schedule }) => Some(schedule),
-        _ => None,
-    }
-}
-
-/// The workflow with `nextRunAt` right for its enabled state and schedule.
+/// The workflow with `nextRunAt` right for its enabled state and schedules.
 fn scheduled(w: &Workflow, now: u64) -> Result<Workflow, String> {
-    let mut next = w.clone();
-    next.next_run_at = None;
-    if w.enabled {
-        if let Some(schedule) = schedule_of(w) {
-            next.next_run_at = Some(schedule.next(now)?);
-        }
-    }
-    Ok(next)
+    super::schedule::scheduled(w, now)
 }
 
-fn trigger_view(w: &Workflow) -> Json {
-    match trigger_of(w).map(|n| &n.kind) {
-        None => obj([("type", st("none"))]),
-        Some(NodeKind::Schedule { schedule }) => {
-            obj([("type", st("schedule")), ("schedule", st(schedule.label()))])
-        }
-        Some(_) => obj([("type", st("manual"))]),
+fn trigger_json(node: &super::model::Node) -> Json {
+    match &node.kind {
+        NodeKind::Schedule { schedule } => obj([
+            ("node", st(&node.id)),
+            ("type", st("schedule")),
+            ("schedule", st(schedule.label())),
+        ]),
+        _ => obj([("node", st(&node.id)), ("type", st("manual"))]),
     }
+}
+
+/// The triggers of a workflow: a list, because any of them can start a run.
+fn trigger_view(w: &Workflow) -> Json {
+    Json::Array(w.triggers().into_iter().map(trigger_json).collect())
 }
 
 fn run_summary_fields(run: &WorkflowRun) -> Vec<(&'static str, Json)> {
     let mut fields = vec![
         ("id", st(&run.id)),
         ("status", ser(&run.status)),
-        ("trigger", ser(&run.trigger)),
+        ("caller", ser(&run.caller)),
         ("startedAt", st(stamp(run.started_at))),
     ];
     if let Some(ended) = run.ended_at.filter(|at| *at != 0) {
@@ -528,6 +583,119 @@ fn run_detail(run: &WorkflowRun) -> Json {
     Json::Object(fields.into_iter().collect())
 }
 
+// ---- what a Mono may touch ---------------------------------------------------------------
+
+/// The project paths a workflow uses, and whether some step takes its project from somewhere the
+/// definition does not fix (a previous step). The value of every project input counts, and so
+/// does every literal `project` of a step; a step that names `{{inputs.X}}` is covered by the
+/// value of X.
+pub fn workflow_projects(w: &Workflow) -> (Vec<String>, bool) {
+    let mut projects: Vec<String> = Vec::new();
+    let mut add = |path: &str| {
+        let path = path.trim();
+        if !path.is_empty() && !projects.iter().any(|p| p == path) {
+            projects.push(path.to_string());
+        }
+    };
+    for (name, input) in w.inputs.iter() {
+        if input.ty != super::model::InputType::Project && !used_as_project(w, name) {
+            continue;
+        }
+        if let Some(InputValue::String(value)) = w.input_values.get(name) {
+            add(value);
+        }
+    }
+    let mut dynamic = false;
+    for node in &w.nodes {
+        let project = match &node.kind {
+            NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => project,
+            _ => continue,
+        };
+        let project = project.trim();
+        match project
+            .strip_prefix("{{")
+            .and_then(|rest| rest.strip_suffix("}}"))
+            .map(str::trim)
+        {
+            Some(reference) if reference.starts_with("inputs.") => {}
+            Some(_) => dynamic = true,
+            None if project.contains("{{") => dynamic = true,
+            None => add(project),
+        }
+    }
+    (projects, dynamic)
+}
+
+/// Whether a step names `{{inputs.<name>}}` as its `project`, whatever the input's declared type.
+fn used_as_project(w: &Workflow, name: &str) -> bool {
+    w.nodes.iter().any(|node| match &node.kind {
+        NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => {
+            project
+                .trim()
+                .strip_prefix("{{")
+                .and_then(|rest| rest.strip_suffix("}}"))
+                .map(str::trim)
+                .and_then(|r| r.strip_prefix("inputs."))
+                == Some(name)
+        }
+        _ => false,
+    })
+}
+
+/// Why the calling Mono may not add, change or run `w`, if it may not. The user is never limited.
+fn scope_problem(caller: Option<&MonoCaller>, w: &Workflow) -> Option<String> {
+    let caller = caller?;
+    let (projects, dynamic) = workflow_projects(w);
+    let outside: Vec<String> = projects
+        .into_iter()
+        .filter(|p| crate::mono::resolve_project(&caller.projects, p).is_err())
+        .collect();
+    if !outside.is_empty() {
+        return Some(format!(
+            "This workflow uses projects that are not this Mono's: {}. A Mono only adds, changes and runs workflows whose projects are all its own",
+            outside.join(", ")
+        ));
+    }
+    dynamic.then(|| "A step takes its project from a previous step, so it cannot be checked against this Mono's projects. A Mono only adds, changes and runs workflows whose projects are fixed and its own".to_string())
+}
+
+fn check_scope(caller: Option<&MonoCaller>, w: &Workflow) -> Result<(), String> {
+    scope_problem(caller, w).map_or(Ok(()), Err)
+}
+
+/// A Mono may name only itself in `reportTo`; the user may name any Mono.
+fn check_report_to(
+    caller: Option<&MonoCaller>,
+    report_to: Option<&ReportTo>,
+) -> Result<(), String> {
+    let (Some(caller), Some(named)) = (caller, report_to.and_then(|r| r.mono.as_deref())) else {
+        return Ok(());
+    };
+    if named == caller.id {
+        return Ok(());
+    }
+    Err(format!(
+        "reportTo.mono can only be this Mono (\"{}\"): a Mono cannot send summaries to another Mono",
+        caller.id
+    ))
+}
+
+/// Who a run asked for through this host is recorded as: the calling Mono, through the
+/// workflow's manual trigger (or its first one). The user's runs have no recorded caller and
+/// start as manual.
+fn run_caller_of(caller: Option<&MonoCaller>, w: &Workflow) -> Option<RunCaller> {
+    let caller = caller?;
+    let node = w
+        .nodes
+        .iter()
+        .find(|n| n.parent.is_none() && matches!(n.kind, NodeKind::Manual))
+        .or_else(|| w.first_trigger());
+    Some(RunCaller::mono(
+        caller.id.clone(),
+        node.map_or("", |n| n.id.as_str()),
+    ))
+}
+
 // ---- reading a definition ---------------------------------------------------------------
 
 /// A schedule node may be written like a habit's schedule (`{"kind":"daily"}`) or as stored.
@@ -569,11 +737,20 @@ fn input_values(value: Option<&Json>, name: &str) -> Result<OrderedMap<InputValu
 
 struct Parsed {
     definition: WorkflowDraft,
+    report_to: Option<ReportTo>,
     values: Option<OrderedMap<InputValue>>,
     /// Whether the definition said anything about `requires`; an update that does not keeps the
     /// stored list.
     requires_given: bool,
+    /// Whether the definition said anything about `decisionModel` or `summaryTemplate`; an
+    /// update that does not keeps the stored ones.
+    decision_model_given: bool,
+    summary_template_given: bool,
+    report_to_given: bool,
 }
+
+/// The longest `summaryTemplate` the CLI takes.
+const SUMMARY_TEMPLATE_MAX: usize = 20_000;
 
 fn definition_from(raw: Option<&Json>, now: u64, allowed: &[&str]) -> Result<Parsed, String> {
     let Some(raw @ Json::Object(map)) = raw else {
@@ -665,17 +842,42 @@ fn definition_from(raw: Option<&Json>, now: u64, allowed: &[&str]) -> Result<Par
         None => None,
         some => Some(input_values(some, "workflow.inputValues")?),
     };
+    let decision_model = match map.get("decisionModel") {
+        None | Some(Json::Null) => None,
+        some => match parse_decision_model(some) {
+            Some(model) => model,
+            None => return Err("workflow.decisionModel must be {\"harness\": ..., \"model\": ..., \"effort\"?: ...}".into()),
+        },
+    };
+    let summary_template = match map.get("summaryTemplate") {
+        None | Some(Json::Null) => None,
+        some => Some(text(
+            some,
+            "workflow.summaryTemplate",
+            SUMMARY_TEMPLATE_MAX,
+        )?),
+    };
+    let report_to = match parse_report_to(map.get("reportTo")) {
+        Some(report_to) => report_to,
+        None => return Err("workflow.reportTo must be {\"mono\": \"<Mono id>\"}".into()),
+    };
     Ok(Parsed {
+        report_to,
         definition: WorkflowDraft {
             name,
             description,
             inputs,
             requires,
+            decision_model,
+            summary_template,
             nodes,
             edges,
         },
         values,
         requires_given: map.contains_key("requires"),
+        decision_model_given: map.contains_key("decisionModel"),
+        summary_template_given: map.contains_key("summaryTemplate"),
+        report_to_given: map.contains_key("reportTo"),
     })
 }
 
@@ -683,16 +885,27 @@ fn definition_from(raw: Option<&Json>, now: u64, allowed: &[&str]) -> Result<Par
 struct Review {
     commands: Vec<ReviewCommand>,
     prompts: Vec<ReviewPrompt>,
+    /// What the import changed to fit this app.
+    warnings: Vec<String>,
+}
+
+fn warnings_json(warnings: &[String]) -> Json {
+    Json::Array(warnings.iter().map(st).collect())
 }
 
 /// The definition a `workflows.add` or `workflows.validate` call describes, from a JSON
 /// `workflow` or a YAML file. Both actions parse through here so they cannot disagree.
-fn new_workflow_from(input: &Json, now: u64) -> Result<(Workflow, Option<Review>), String> {
+fn new_workflow_from(
+    input: &Json,
+    now: u64,
+    caller: Option<&MonoCaller>,
+) -> Result<(Workflow, Option<Review>), String> {
     if input.get("workflow").is_none() == input.get("yaml").is_none() {
         return Err("Pass either workflow (an object) or yaml (text), not both".into());
     }
     let from_yaml = input.get("yaml").is_some();
     let (definition, values, review);
+    let mut report_to = None;
     if !from_yaml {
         if input.get("values").is_some() {
             return Err("values goes with yaml; put inputValues in the workflow".into());
@@ -700,6 +913,7 @@ fn new_workflow_from(input: &Json, now: u64) -> Result<(Workflow, Option<Review>
         let parsed = definition_from(input.get("workflow"), now, &DEFINITION_FIELDS)?;
         definition = parsed.definition;
         values = parsed.values.unwrap_or_default();
+        report_to = parsed.report_to;
         review = None;
     } else {
         let yaml = text(input.get("yaml"), "yaml", WORKFLOW_DEFINITION_MAX_BYTES)?;
@@ -720,19 +934,24 @@ fn new_workflow_from(input: &Json, now: u64) -> Result<(Workflow, Option<Review>
         review = Some(Review {
             commands: preview.commands,
             prompts: preview.prompts,
+            warnings: preview.warnings,
         });
     }
-    // Always paused: only the user, in the Workflows panel, enables what the CLI creates.
+    check_report_to(caller, report_to.as_ref())?;
+    // Always paused: only the user, in Workflows, enables what the CLI creates.
     let mut draft = Workflow::new(new_workflow_id(), definition.name);
     draft.description = definition.description;
     draft.inputs = definition.inputs;
     draft.requires = definition.requires;
+    draft.decision_model = definition.decision_model;
+    draft.summary_template = definition.summary_template;
+    draft.report_to = report_to;
     draft.input_values = values;
     draft.nodes = definition.nodes;
     draft.edges = definition.edges;
     draft.created_at = now;
-    // Only the user, in the panel, may enable what came from a file.
-    draft.needs_review = from_yaml;
+    // Only the user may enable what came from a file or from a Mono.
+    draft.needs_review = from_yaml || caller.is_some();
     Ok((draft, review))
 }
 
@@ -755,7 +974,7 @@ pub fn handle<H: WorkflowHost>(action: &str, input: &Json, host: &mut H) -> Resu
         return Err(format!("Unknown {action} fields: {}", unknown.join(", ")));
     }
     let now = host.now();
-    match action {
+    let outcome = match action {
         "workflows.list" => list(host),
         "workflows.get" => get(host, input),
         "workflows.add" => add(host, input, now),
@@ -772,7 +991,20 @@ pub fn handle<H: WorkflowHost>(action: &str, input: &Json, host: &mut H) -> Resu
         "workflows.export" => export(host, input),
         "workflows.import" => import(host, input, now),
         _ => runs(host, input),
-    }
+    };
+    outcome.map_err(|error| {
+        // An id from before workflows were global gets its own answer.
+        let old = error == NO_WORKFLOW
+            && input
+                .get("id")
+                .and_then(Json::as_str)
+                .is_some_and(|id| host.is_legacy_id(id));
+        if old {
+            LEGACY_ID_ERROR.to_string()
+        } else {
+            error
+        }
+    })
 }
 
 /// `handle` over serde_json values, for the app's bridge.
@@ -793,7 +1025,7 @@ fn list<H: WorkflowHost>(host: &mut H) -> Result<Json, String> {
             ("id", st(&w.id)),
             ("name", st(&w.name)),
             ("enabled", Json::Bool(w.enabled)),
-            ("trigger", trigger_view(w)),
+            ("triggers", trigger_view(w)),
             (
                 "nextRunAt",
                 match w.next_run_at {
@@ -851,7 +1083,7 @@ fn get<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         out.push(("description", st(description)));
     }
     out.push(("enabled", Json::Bool(w.enabled)));
-    out.push(("trigger", trigger_view(w)));
+    out.push(("triggers", trigger_view(w)));
     out.push(("running", Json::Bool(host.is_running(&w.id))));
     out.push(("inputs", part("inputs")));
     out.push(("inputValues", part("inputValues")));
@@ -859,6 +1091,11 @@ fn get<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         out.push(("requires", part("requires")));
         let check = host.preflight(w);
         out.push(("requiresStatus", requires_status(&check)));
+    }
+    for key in ["decisionModel", "reportTo", "summaryTemplate"] {
+        if !matches!(part(key), Json::Null) {
+            out.push((key, part(key)));
+        }
     }
     out.push(("nodes", part("nodes")));
     out.push(("edges", part("edges")));
@@ -884,13 +1121,14 @@ fn get<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
 }
 
 fn add<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json, String> {
-    let (draft, review) = new_workflow_from(input, now)?;
+    let (draft, review) = new_workflow_from(input, now, host.caller())?;
+    check_scope(host.caller(), &draft)?;
     // Judged before the save: a cold model probe can take a while and must not sit inside the
     // hash-checked edit.
     let issues = problems(host, &draft);
     host.update(|_, mut list| {
         if list.len() >= WORKFLOWS_MAX {
-            return Err(format!("A Mono can have at most {WORKFLOWS_MAX} workflows"));
+            return Err(format!("At most {WORKFLOWS_MAX} workflows can exist"));
         }
         let mut result = vec![
             ("id", st(&draft.id)),
@@ -901,6 +1139,9 @@ fn add<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json, St
         if let Some(review) = &review {
             result.push(("commands", commands_json(&review.commands)));
             result.push(("prompts", prompts_json(&review.prompts)));
+            if !review.warnings.is_empty() {
+                result.push(("importWarnings", warnings_json(&review.warnings)));
+            }
         }
         list.push(draft.clone());
         Ok((list, Json::Object(result.into_iter().collect())))
@@ -940,7 +1181,7 @@ fn undeclared_cli_warnings(w: &Workflow) -> Json {
 
 fn validate<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json, String> {
     // The same parse and checks as workflows.add, without saving anything.
-    let (parsed, _) = new_workflow_from(input, now)?;
+    let (parsed, review) = new_workflow_from(input, now, host.caller())?;
     let list = host.load()?;
     let existing = match input.get("id") {
         None => None,
@@ -976,16 +1217,27 @@ fn validate<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Jso
         issues.push(WorkflowIssue {
             node_id: None,
             message: format!(
-                "A Mono can have at most {WORKFLOWS_MAX} workflows; remove one before adding another"
+                "At most {WORKFLOWS_MAX} workflows can exist; remove one before adding another"
             ),
         });
     }
-    let (commands, prompts) = review_texts(&draft.nodes);
+    if let Some(problem) = scope_problem(host.caller(), &draft) {
+        issues.push(WorkflowIssue {
+            node_id: None,
+            message: problem,
+        });
+    }
+    let (commands, mut prompts) = review_texts(&draft.nodes);
+    prompts.extend(summary_review_prompt(draft.summary_template.as_deref()));
     Ok(obj([
         ("issues", issues_json(&issues)),
         ("warnings", undeclared_cli_warnings(&draft)),
         ("commands", commands_json(&commands)),
         ("prompts", prompts_json(&prompts)),
+        (
+            "importWarnings",
+            warnings_json(&review.map(|r| r.warnings).unwrap_or_default()),
+        ),
     ]))
 }
 
@@ -998,11 +1250,13 @@ fn update<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
         Some(Json::Bool(b)) => Some(*b),
         Some(_) => return Err("enabled must be true or false".into()),
     };
+    check_report_to(host.caller(), parsed.report_to.as_ref())?;
     host.update(|host, list| {
         let current = find(&list, input)?.clone();
         if current.needs_review && wanted == Some(true) {
             return Err(NEEDS_REVIEW.into());
         }
+        check_scope(host.caller(), &current)?;
         // Only the definition is replaced; the id, creation time and run state stay.
         let mut draft = current.clone();
         draft.name = parsed.definition.name.clone();
@@ -1010,6 +1264,15 @@ fn update<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
         draft.inputs = parsed.definition.inputs.clone();
         if parsed.requires_given {
             draft.requires = parsed.definition.requires.clone();
+        }
+        if parsed.decision_model_given {
+            draft.decision_model = parsed.definition.decision_model.clone();
+        }
+        if parsed.summary_template_given {
+            draft.summary_template = parsed.definition.summary_template.clone();
+        }
+        if parsed.report_to_given {
+            draft.report_to = parsed.report_to.clone();
         }
         draft.nodes = parsed.definition.nodes.clone();
         draft.edges = parsed.definition.edges.clone();
@@ -1019,11 +1282,25 @@ fn update<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
             None => declared_values(&draft.inputs, &current.input_values),
         };
         draft.enabled = wanted.unwrap_or(current.enabled);
+        check_scope(host.caller(), &draft)?;
+        // A Mono that changes what the workflow does hands it back to the user to approve.
+        let redefined = host.caller().is_some()
+            && definition_fingerprint(&draft) != definition_fingerprint(&current);
+        if redefined {
+            draft.needs_review = true;
+            draft.enabled = false;
+        }
         let issues = problems(host, &draft);
         // A workflow that cannot run is paused rather than left to fail on its schedule.
         let enabled = draft.enabled && issues.is_empty();
         draft.enabled = enabled;
-        let same_schedule = schedule_of(&current) == schedule_of(&draft);
+        let schedules = |w: &Workflow| -> Vec<(String, Schedule)> {
+            super::schedule::schedule_triggers(w)
+                .into_iter()
+                .map(|(node, schedule)| (node.id.clone(), schedule.clone()))
+                .collect()
+        };
+        let same_schedule = schedules(&current) == schedules(&draft);
         // A new schedule, or turning it back on, counts from now; otherwise the time stands.
         let next =
             if enabled && (!current.enabled || !same_schedule || current.next_run_at.is_none()) {
@@ -1031,11 +1308,14 @@ fn update<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
             } else {
                 draft
             };
-        let result = obj([
+        let mut result = obj([
             ("id", st(&next.id)),
             ("enabled", Json::Bool(enabled)),
             ("issues", issues_json(&issues)),
         ]);
+        if let (true, Json::Object(map)) = (redefined, &mut result) {
+            map.insert("needsReview", Json::Bool(true));
+        }
         Ok((replace(list, next), result))
     })
 }
@@ -1062,10 +1342,12 @@ fn set_inputs<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, Strin
                 }
             ));
         }
+        check_scope(host.caller(), &current)?;
         let mut next = current;
         for (key, value) in values.iter() {
             next.input_values.insert(key.clone(), value.clone());
         }
+        check_scope(host.caller(), &next)?;
         let result = obj([
             ("id", st(&next.id)),
             ("inputValues", ser(&next.input_values)),
@@ -1143,14 +1425,13 @@ fn run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         return Err(NEEDS_REVIEW.into());
     }
     if host.is_running(&current.id) {
-        return Err(
-            "That workflow is already running; its report is posted to the Mono's chat when it ends".into(),
-        );
+        return Err("That workflow is already running; its summary arrives when it ends".into());
     }
     let values = run_values(host, &current, input)?;
     let mut asked = current.clone();
     asked.run_values = Some(values.clone());
     let effective = with_run_values(&asked);
+    check_scope(host.caller(), &effective)?;
     let issues = problems(host, &effective);
     if !issues.is_empty() {
         return Err(format!(
@@ -1169,6 +1450,7 @@ fn run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
             return Err(missing_requirements(&check));
         }
     }
+    let caller = host.caller().cloned();
     host.update(|_, list| {
         let mut latest = find(&list, input)?.clone();
         if latest.needs_review {
@@ -1178,23 +1460,24 @@ fn run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
             return Err(NOT_ENABLED.into());
         }
         latest.run_requested = true;
+        latest.run_caller = run_caller_of(caller.as_ref(), &latest);
         // Only for the run that is about to start; never written to the stored input values.
         latest.run_values = (!values.is_empty()).then(|| values.clone());
         Ok((replace(list, latest), ()))
     })?;
     host.request_check_now();
-    Ok(obj([
-        ("id", st(&current.id)),
-        (
-            "note",
-            st("It starts now, on its own. Its report is posted to the Mono's chat when it finishes."),
-        ),
-    ]))
+    let note = if host.caller().is_some() {
+        "It starts now, on its own. Its summary is posted to your chat when it finishes."
+    } else {
+        "It starts now, on its own."
+    };
+    Ok(obj([("id", st(&current.id)), ("note", st(note))]))
 }
 
 fn stop<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
     let workflows = host.load()?;
     let current = find(&workflows, input)?.clone();
+    check_scope(host.caller(), &current)?;
     if !host.is_running(&current.id) {
         return Err("That workflow is not running".into());
     }
@@ -1231,8 +1514,9 @@ fn stop<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
 }
 
 fn pause<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
-    host.update(|_, list| {
+    host.update(|host, list| {
         let mut next = find(&list, input)?.clone();
+        check_scope(host.caller(), &next)?;
         next.enabled = false;
         let result = obj([("id", st(&next.id)), ("enabled", Json::Bool(false))]);
         Ok((replace(list, next), result))
@@ -1245,6 +1529,7 @@ fn resume<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
         if current.needs_review {
             return Err(NEEDS_REVIEW.into());
         }
+        check_scope(host.caller(), &current)?;
         let issues = problems(host, &current);
         if !issues.is_empty() {
             return Err(format!(
@@ -1266,6 +1551,7 @@ fn resume_run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, Strin
     if current.needs_review {
         return Err(NEEDS_REVIEW.into());
     }
+    check_scope(host.caller(), &current)?;
     if host.is_running(&current.id) {
         return Err("That workflow is already running".into());
     }
@@ -1282,6 +1568,8 @@ fn resume_run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, Strin
         ));
     }
     // What the run was made with and what the workflow asks now both have to be there.
+    // The run executes its own snapshot with its effective values, so that is what is checked.
+    check_scope(host.caller(), &with_run_values(&run.definition))?;
     let mut stored = run.definition.clone();
     stored.requires = union_requires(&run.definition.requires, &current.requires);
     if !stored.requires.is_empty() {
@@ -1313,6 +1601,7 @@ fn resume_run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, Strin
 fn remove<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
     let workflows = host.load()?;
     let current = find(&workflows, input)?.clone();
+    check_scope(host.caller(), &current)?;
     if host.is_running(&current.id) {
         return Err("Stop the workflow before removing it".into());
     }
@@ -1363,11 +1652,12 @@ fn import<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
         .into_iter()
         .map(|node| anchor_node(node, now))
         .collect();
-    // Only the user, in the panel, may enable what came from a file.
+    // Only the user may enable what came from a file.
     created.needs_review = true;
+    check_scope(host.caller(), &created)?;
     host.update(|_, mut list| {
         if list.len() >= WORKFLOWS_MAX {
-            return Err(format!("A Mono can have at most {WORKFLOWS_MAX} workflows"));
+            return Err(format!("At most {WORKFLOWS_MAX} workflows can exist"));
         }
         list.push(created.clone());
         Ok((list, ()))
@@ -1379,9 +1669,10 @@ fn import<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
         ("issues", issues_json(&problems(host, &created))),
         ("commands", commands_json(&preview.commands)),
         ("prompts", prompts_json(&preview.prompts)),
+        ("importWarnings", warnings_json(&preview.warnings)),
         (
             "note",
-            st("Saved paused. Check the commands and prompts with the user; only the user can enable it, in the Workflows panel."),
+            st("Saved paused. Check the commands and prompts with the user; only the user can enable it, in Workflows."),
         ),
     ]))
 }

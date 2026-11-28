@@ -1,9 +1,9 @@
 //! Lenient reading of workflow files. A node or edge that cannot be read could not run, and
 //! dropping it quietly would change what the workflow does, so the whole entry is left out.
 use super::model::{
-    Checkout, Cwd, Decide, Edge, Handle, InputType, InputValue, LoopSpec, Node, NodeKind,
-    OutputField, OutputFieldType, Requirement, RequirementKind, SessionTarget, TargetInstance, Ui,
-    Workflow, WorkflowInput, NODE_TYPES,
+    CallerKind, Checkout, Cwd, Decide, DecisionModel, Edge, Handle, InputType, InputValue,
+    LoopSpec, Node, NodeKind, OutputField, OutputFieldType, ReportTo, Requirement, RequirementKind,
+    RunCaller, SessionTarget, TargetInstance, Ui, Workflow, WorkflowInput, DECIDE_AI, NODE_TYPES,
 };
 use super::ordered::{Json, OrderedMap};
 use crate::mono::habits::Schedule;
@@ -146,6 +146,17 @@ fn parse_output(raw: Option<&Json>) -> Option<OrderedMap<OutputField>> {
     Some(output)
 }
 
+/// Whether `value` asks the AI to decide. "mono" is what files from before AI decisions wrote.
+pub fn is_ai_decide(value: &str) -> bool {
+    value == DECIDE_AI || value == "mono"
+}
+
+fn parse_decide(raw: &Json) -> Option<Decide> {
+    str_of(raw, "decide")
+        .is_some_and(|d| is_ai_decide(&d))
+        .then_some(Decide::Ai)
+}
+
 pub fn parse_node(raw: &Json) -> Option<Node> {
     if !is_rec(raw) {
         return None;
@@ -190,18 +201,9 @@ pub fn parse_node(raw: &Json) -> Option<Node> {
             },
             timeout_minutes: num_of(raw, "timeoutMinutes"),
         },
-        "askMono" => NodeKind::AskMono {
-            question: str_of(raw, "question")?,
-            answers: raw
-                .get("answers")?
-                .as_array()?
-                .iter()
-                .filter_map(|a| a.as_str().map(str::to_string))
-                .collect(),
-        },
         "if" => NodeKind::If {
             condition: str_of(raw, "condition"),
-            decide: (str_of(raw, "decide").as_deref() == Some("mono")).then_some(Decide::Mono),
+            decide: parse_decide(raw),
             question: str_of(raw, "question"),
         },
         "switch" => NodeKind::Switch {
@@ -216,7 +218,7 @@ pub fn parse_node(raw: &Json) -> Option<Node> {
                         .collect()
                 })
                 .unwrap_or_default(),
-            decide: (str_of(raw, "decide").as_deref() == Some("mono")).then_some(Decide::Mono),
+            decide: parse_decide(raw),
             question: str_of(raw, "question"),
         },
         "forEach" => NodeKind::ForEach {
@@ -224,9 +226,7 @@ pub fn parse_node(raw: &Json) -> Option<Node> {
             item: str_of(raw, "as"),
             max_parallel: num_of(raw, "maxParallel"),
         },
-        _ => NodeKind::Report {
-            template: str_of(raw, "template"),
-        },
+        _ => return None,
     };
     Some(Node {
         id,
@@ -247,7 +247,14 @@ pub fn parse_edge(raw: &Json) -> Option<Edge> {
         None => None,
         Some(l) if is_rec(l) => Some(LoopSpec {
             max_rounds: num_of(l, "maxRounds")?,
-            decide: str_of(l, "decide")?,
+            decide: {
+                let decide = str_of(l, "decide")?;
+                if is_ai_decide(&decide) {
+                    DECIDE_AI.to_string()
+                } else {
+                    decide
+                }
+            },
         }),
         Some(_) => return None,
     };
@@ -381,6 +388,62 @@ pub fn read_requires(raw: Option<&Json>) -> Result<Vec<Requirement>, String> {
     Ok(out)
 }
 
+/// `Some(None)` when there is no decision model, `None` when it is there but unreadable: dropping
+/// it would run the decisions on another model, so the whole entry is left out instead.
+pub(crate) fn parse_decision_model(raw: Option<&Json>) -> Option<Option<DecisionModel>> {
+    let raw = match raw {
+        None | Some(Json::Null) => return Some(None),
+        Some(raw) if is_rec(raw) => raw,
+        Some(_) => return None,
+    };
+    let effort = match raw.get("effort") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(effort)) => Some(effort.clone()),
+        Some(_) => return None,
+    };
+    Some(Some(DecisionModel {
+        harness: str_of(raw, "harness").filter(|h| !h.is_empty())?,
+        model: str_of(raw, "model").filter(|m| !m.is_empty())?,
+        effort,
+    }))
+}
+
+/// `Some(None)` when there is no `reportTo`, `None` when it is there but unreadable (it decides
+/// who is told about a run, so it is never dropped quietly).
+pub(crate) fn parse_report_to(raw: Option<&Json>) -> Option<Option<ReportTo>> {
+    let raw = match raw {
+        None | Some(Json::Null) => return Some(None),
+        Some(raw) if is_rec(raw) => raw,
+        Some(_) => return None,
+    };
+    let mono = match raw.get("mono") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(mono)) if !mono.is_empty() => Some(mono.clone()),
+        Some(_) => return None,
+    };
+    Some(Some(ReportTo { mono }))
+}
+
+/// The `caller` of a run or the `runCaller` of a workflow. None when it cannot be read.
+pub fn parse_caller(raw: &Json) -> Option<RunCaller> {
+    if !is_rec(raw) {
+        return None;
+    }
+    let kind = match str_of(raw, "kind")?.as_str() {
+        "manual" => CallerKind::Manual,
+        "schedule" => CallerKind::Schedule,
+        "event" => CallerKind::Event,
+        "mono" => CallerKind::Mono,
+        _ => return None,
+    };
+    Some(RunCaller {
+        kind,
+        mono_id: str_of(raw, "monoId"),
+        trigger_node: str_of(raw, "triggerNode")?,
+        item: raw.get("item").filter(|i| is_rec(i)).cloned(),
+    })
+}
+
 pub fn parse_workflow(raw: &Json) -> Option<Workflow> {
     if !is_rec(raw) {
         return None;
@@ -399,6 +462,8 @@ pub fn parse_workflow(raw: &Json) -> Option<Workflow> {
     let (nodes, mut edges) = (nodes?, edges?);
     let requires = read_requires(raw.get("requires")).ok()?;
     drop_stray_handles(&nodes, &mut edges);
+    let decision_model = parse_decision_model(raw.get("decisionModel"))?;
+    let report_to = parse_report_to(raw.get("reportTo"))?;
     let flag = |key: &str| raw.get(key) == Some(&Json::Bool(true));
     Some(Workflow {
         id,
@@ -417,12 +482,26 @@ pub fn parse_workflow(raw: &Json) -> Option<Workflow> {
         enabled: flag("enabled"),
         created_at: num_of(raw, "createdAt").unwrap_or(0.0) as u64,
         next_run_at: num_of(raw, "nextRunAt").map(|n| n as u64),
+        next_run_at_by_node: raw
+            .get("nextRunAtByNode")
+            .and_then(Json::as_object)
+            .map(|times| {
+                times
+                    .iter()
+                    .filter_map(|(id, at)| Some((id.clone(), at.as_f64()? as u64)))
+                    .collect()
+            })
+            .unwrap_or_default(),
         run_requested: flag("runRequested"),
         stop_requested: flag("stopRequested"),
         resume_run_id: str_of(raw, "resumeRunId"),
         last_run_id: str_of(raw, "lastRunId"),
         imported_from: str_of(raw, "importedFrom"),
         needs_review: flag("needsReview"),
+        decision_model,
+        report_to,
+        summary_template: str_of(raw, "summaryTemplate"),
+        run_caller: raw.get("runCaller").and_then(parse_caller),
     })
 }
 

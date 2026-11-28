@@ -1,5 +1,5 @@
-//! Pages that slide away, the clock of a hidden panel, and what a page leaves behind when the
-//! Mono changes.
+//! Pages drawn again and again, the clock of a hidden view, and what a page leaves behind when
+//! the view is left.
 use super::board::BoardField;
 use super::board_tests::{do_with, on_board, open_board, ticket};
 use super::run_model_tests::{linear, nr, run_of};
@@ -12,18 +12,16 @@ use serde_json::json;
 use std::time::Instant;
 
 #[gpui::test]
-fn the_board_that_was_left_is_not_built_again_while_its_page_slides_away(cx: &mut TestAppContext) {
+fn the_board_that_was_left_is_not_built_again_by_later_frames(cx: &mut TestAppContext) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
-    // With motion on, the page that was left stays drawn while it slides out.
-    visual.update(|_, cx| cx.set_reduce_motion(false));
     click(visual, "mono-page-back");
     assert_eq!(
-        s.manager.read_with(visual, |m, _| m.route.clone()),
-        Some(Route::Workflow(A.into()))
+        s.manager.read_with(visual, |m, _| m.wf.route.clone()),
+        Some(WfRoute::Workflow(A.into()))
     );
-    // The page is still drawn while it slides out; drawing it must not make a board.
+    // Drawing the page again must not make a board.
     for _ in 0..3 {
         frame(&s, visual);
     }
@@ -49,7 +47,7 @@ fn the_board_drops_its_field_subscriptions_with_it(cx: &mut TestAppContext) {
     let before = s.manager.read_with(visual, |m, _| m.observation_count());
     for _ in 0..2 {
         s.manager.update(visual, |m, cx| {
-            m.open_workflow_route(Route::WorkflowBoard(A.into()), cx)
+            m.open_workflow_route(WfRoute::Board(A.into()), cx)
         });
         visual.run_until_parked();
         click(visual, "mono-page-back");
@@ -61,12 +59,8 @@ fn the_board_drops_its_field_subscriptions_with_it(cx: &mut TestAppContext) {
     );
 }
 
-/// One frame, drawn 50 ms into the slide: the pages sliding in or out are drawn with it.
+/// One more frame of the page.
 fn frame(s: &crate::monos::tests::Setup, visual: &mut VisualTestContext) {
-    let details = s.manager.read_with(visual, |m, _| m.details.clone());
-    details.update(visual, |d, cx| {
-        d.elapsed(std::time::Duration::from_millis(50), cx)
-    });
     visual
         .update_window(s.window.into(), |_, w, cx| {
             w.simulate_next_frame(cx);
@@ -82,19 +76,19 @@ fn two_runs(s: &crate::monos::tests::Setup) {
             &linear(),
             "done",
             json!({}),
-            json!([nr("trigger", "", "done", json!({}))]),
+            json!([nr("start", "", "done", json!({}))]),
         );
         r.id = id.into();
         r
     };
-    update_runs(&MonoDir::new(&s.root, &s.id), A, |_| {
+    update_runs(&s.workflows_dir(), A, |_| {
         Ok((vec![run("run-2"), run("run-1")], ()))
     })
     .unwrap();
 }
 
 #[gpui::test]
-fn opening_a_second_run_page_while_the_first_slides_away_keeps_one_canvas(cx: &mut TestAppContext) {
+fn opening_a_second_run_page_after_the_first_keeps_one_canvas(cx: &mut TestAppContext) {
     let s = setup(cx);
     put(&s, vec![ticket_free()]);
     two_runs(&s);
@@ -102,27 +96,25 @@ fn opening_a_second_run_page_while_the_first_slides_away_keeps_one_canvas(cx: &m
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     s.manager.update(visual, |m, cx| {
-        m.open_workflow_route(Route::WorkflowRun(A.into(), "run-1".into()), cx)
+        m.open_workflow_route(WfRoute::Run(A.into(), "run-1".into()), cx)
     });
     visual.run_until_parked();
-    visual.update(|_, cx| cx.set_reduce_motion(false));
-    visual.update(|_, cx| cx.set_reduce_motion(false));
     s.manager.update(visual, |m, cx| {
-        m.open_workflow_route(Route::WorkflowRun(A.into(), "run-2".into()), cx)
+        m.open_workflow_route(WfRoute::Run(A.into(), "run-2".into()), cx)
     });
     visual.run_until_parked();
-    // Both pages are drawn for a while (one in, one out): the state stays the new run's.
+    // The page is drawn for a while: the state stays the new run's.
     let opens = s.manager.read_with(visual, |m, _| m.wf.run_opens);
     for _ in 0..4 {
         frame(&s, visual);
     }
-    // One build for each run page opened, however many frames drew the page sliding away.
+    // One build for each run page opened, however many frames drew the page.
     assert_eq!(
         s.manager.read_with(visual, |m, _| m.wf.run_opens),
         opens,
-        "a page sliding away rebuilt the run page"
+        "drawing the run page rebuilt it"
     );
-    assert_eq!(opens, 2, "a page sliding away rebuilt the run page");
+    assert_eq!(opens, 2, "each run page opened built its state once");
     let key = s.manager.read_with(visual, |m, _| m.wf.run.key.clone());
     assert_eq!(key, Some((A.to_string(), "run-2".to_string())));
 }
@@ -132,9 +124,7 @@ fn ticket_free() -> Workflow {
 }
 
 #[gpui::test]
-fn the_clock_stops_when_the_panel_is_not_drawn_and_starts_again_when_it_is(
-    cx: &mut TestAppContext,
-) {
+fn the_clock_stops_when_the_view_is_not_drawn_and_starts_again_when_it_is(cx: &mut TestAppContext) {
     let s = setup(cx);
     put(&s, vec![ticket_free()]);
     open_tab(&s, cx);
@@ -143,7 +133,7 @@ fn the_clock_stops_when_the_panel_is_not_drawn_and_starts_again_when_it_is(
     assert!(s.manager.read_with(visual, |m, _| m.wf.poll.is_some()));
     // Drawn a moment ago: the clock goes on.
     do_with_manager(&s, visual, |m, cx| assert!(m.workflows_poll(cx)));
-    // Not drawn for a long while (the right panel is closed): it stops and reads nothing.
+    // Not drawn for a long while (the view is hidden): it stops and reads nothing.
     do_with_manager(&s, visual, |m, cx| {
         m.wf.last_drawn = Some(Instant::now() - std::time::Duration::from_secs(30));
         assert!(!m.workflows_poll(cx));
@@ -202,7 +192,7 @@ fn a_board_does_not_ask_about_an_edit_while_its_own_save_is_going(cx: &mut TestA
 }
 
 #[gpui::test]
-fn changing_the_mono_leaves_no_board_or_notice_behind(cx: &mut TestAppContext) {
+fn opening_a_mono_closes_the_view_and_leaves_no_board_or_notice_behind(cx: &mut TestAppContext) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;

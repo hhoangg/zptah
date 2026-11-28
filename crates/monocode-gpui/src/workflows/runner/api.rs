@@ -10,8 +10,8 @@ use monocode_core::mono::{
 pub(crate) struct Limits {
     /// How often a watched turn is looked at.
     pub poll_ms: u64,
-    /// How long the Mono has to answer a decision request.
-    pub ask_timeout_ms: u64,
+    /// How long an AI decision may take.
+    pub decision_timeout_ms: u64,
     /// How long a node's session may wait for an approval.
     pub approval_wait_ms: u64,
 }
@@ -20,7 +20,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             poll_ms: 2_000,
-            ask_timeout_ms: 10 * 60_000,
+            decision_timeout_ms: 3 * 60_000,
             approval_wait_ms: habits::APPROVAL_WAIT_MS,
         }
     }
@@ -68,7 +68,7 @@ impl Outcome {
 /// A session a node asks for (`SessionRequest`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SessionRequest {
-    /// One of the Mono's project paths.
+    /// One of the app's project paths.
     pub project: String,
     pub prompt: String,
     pub harness: Option<String>,
@@ -78,7 +78,8 @@ pub(crate) struct SessionRequest {
     pub new_worktree: bool,
     pub worktree_cwd: Option<String>,
     pub parent_session_id: Option<String>,
-    pub folder_id: Option<String>,
+    /// The sidebar folder the session is filed in: the workflow's own, made on demand and shared
+    /// by all its runs.
     pub folder_name: Option<String>,
     /// `Some` for a cloud step: the session runs in a codespace or sandbox instead of here.
     pub target: Option<CloudRequest>,
@@ -119,64 +120,62 @@ pub(crate) struct CloudInstanceInfo {
 pub(crate) struct StartedSession {
     /// The persisted session id, as run files store it.
     pub session_id: String,
-    pub folder_id: Option<String>,
     /// Resolves when the first turn settles.
     pub settled: Fut<Outcome>,
 }
 
-/// A session the report lists.
+/// A session the summary lists.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SessionInfo {
     pub session_id: String,
+    /// The app's own id of the session, when it is known to this app.
+    pub local_id: Option<i64>,
     pub cwd: String,
     pub title: String,
     pub harness: String,
     pub model: Option<String>,
 }
 
-/// An approval a node's session is waiting on.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ApprovalAsk {
-    pub mono_id: String,
-    pub workflow_id: String,
-    pub workflow_name: String,
-    pub run_id: String,
-    pub session_id: String,
-}
-
-/// A run's report for the Mono's chat.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Posted {
-    pub mono_id: String,
-    pub workflow_id: String,
-    pub workflow_name: String,
-    pub run_id: String,
+/// A run's summary, handed to the app to deliver: a notification attached to the run's last
+/// session, and the chats of the Monos that asked for it (`reportTo`, the Mono that started the
+/// run). The run record itself already holds it (`WorkflowRun::summary`).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Summary {
+    /// The run as it ended, with its summary set.
+    pub run: WorkflowRun,
     pub title: String,
     pub text: String,
     /// The sessions the run started, in the order of its nodes.
     pub launches: Vec<SessionInfo>,
 }
 
+/// An AI decision (If, Switch or loop edge) asked of a one-shot, no-tools call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DecisionRequest {
+    /// What `decision_model_for` found. A part it leaves unset (a session node that used the app's
+    /// defaults) is the app's default for a new session, filled in by the host.
+    pub harness: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// An app project to run in and to pick the account from, when the run has one.
+    pub project: Option<String>,
+    pub prompt: String,
+    pub timeout_ms: u64,
+}
+
 /// Everything a run needs from the app (`MonoWorkflowHost`).
 pub(crate) trait WorkflowHost {
-    /// Starts a visible project session owned by the Mono, like `sessions.start`, without a
-    /// completion report to the Mono.
-    fn start_session(
-        &self,
-        mono_id: &str,
-        req: SessionRequest,
-    ) -> Fut<Result<StartedSession, String>>;
+    /// Starts a visible session in an app project, filed in the workflow's sidebar folder, with
+    /// no Mono involved.
+    fn start_session(&self, req: SessionRequest) -> Fut<Result<StartedSession, String>>;
     /// Sends a follow-up turn to an existing session; resolves when it settles.
     fn send(&self, session_id: &str, prompt: String) -> Fut<Outcome>;
     fn stop(&self, session_id: &str) -> Fut<Result<(), String>>;
     /// The last thing the session said this turn (empty when it said nothing).
     fn final_reply(&self, session_id: &str) -> String;
-    /// Whether the session is waiting on the user (an approval or a question).
+    /// Whether the session is waiting on the user (an approval or a question). The session itself
+    /// shows it, and the app raises its usual notices.
     fn waiting_approval(&self, session_id: &str) -> bool;
-    /// Shows what the session waits on to the user. Called again while it waits.
-    fn ask_approval(&self, ask: ApprovalAsk);
-    /// Stops showing a session's approvals.
-    fn end_approvals(&self, session_id: &str);
     /// The run is done with the session: whatever the host kept to watch it can go.
     fn release_session(&self, session_id: &str);
     fn session_info(&self, session_id: &str) -> Option<SessionInfo>;
@@ -195,13 +194,15 @@ pub(crate) trait WorkflowHost {
     ) -> Fut<Result<CommandResult, String>>;
     /// Kills the running command `id`; false when no such command runs (yet).
     fn cancel_command(&self, id: &str) -> Fut<Result<bool, String>>;
-    /// A hidden Mono-context turn; resolves with its final reply.
-    fn ask_mono(&self, mono_id: &str, prompt: String) -> Fut<Result<String, String>>;
-    fn post(&self, report: Posted);
-    /// Resolves a `{{inputs.x}}` value to one of the Mono's project paths.
-    fn project_path(&self, mono_id: &str, input: &str) -> Option<String>;
+    /// A hidden one-shot, no-tools model call; resolves with its reply. Dropping the future
+    /// cancels the call.
+    fn decide(&self, request: DecisionRequest) -> Fut<Result<String, String>>;
+    /// Delivers the summary of a run (see `Summary`).
+    fn post(&self, summary: Summary);
+    /// Resolves a `{{inputs.x}}` value to one of the app's project paths.
+    fn project_path(&self, input: &str) -> Option<String>;
     /// The working directory of a session (its worktree, else its project).
     fn worktree_of(&self, session_id: &str) -> Option<String>;
     /// Writes the run into the workflow's run history.
-    fn save_run(&self, mono_id: &str, run: WorkflowRun) -> Fut<Result<(), String>>;
+    fn save_run(&self, run: WorkflowRun) -> Fut<Result<(), String>>;
 }

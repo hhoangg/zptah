@@ -1,5 +1,5 @@
 //! Pure text helpers of a run: UTF-16 slicing (lengths count like JS), the output and error caps
-//! and the run folder name.
+//! and the workflow folder name.
 use monocode_core::mono::workflows::{
     ordered::{Json, OrderedMap},
     template::js_space,
@@ -84,15 +84,9 @@ pub(super) fn clip(text: &str) -> String {
     }
 }
 
-/// "<workflow name> · 2026-10-22 14:05", within the folder name limit.
-pub(super) fn run_folder_name(workflow_name: &str, at: u64) -> String {
-    use chrono::{Local, TimeZone};
-    let stamp = Local
-        .timestamp_millis_opt(at as i64)
-        .single()
-        .map(|time| time.format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_default();
-    let suffix = format!(" · {stamp}");
+/// The sidebar folder every session of a workflow is filed in: its name with whitespace
+/// collapsed, within the folder name limit.
+pub(super) fn workflow_folder_name(workflow_name: &str) -> String {
     let mut name = String::new();
     let mut gap = false;
     for c in workflow_name.chars() {
@@ -109,6 +103,5 @@ pub(super) fn run_folder_name(workflow_name: &str, at: u64) -> String {
     if name.is_empty() {
         name = "Workflow".into();
     }
-    let room = 100usize.saturating_sub(utf16_len(&suffix));
-    format!("{}{suffix}", utf16_head(&name, room))
+    utf16_head(&name, 100).to_string()
 }

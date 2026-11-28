@@ -408,7 +408,7 @@ pub(super) fn details_of(run: &WorkflowRun, key: &str) -> Option<Details> {
         kind: def.map_or("Node", |d| node_label(&d.kind)),
         status,
         status_label: if asking {
-            "Asking the Mono"
+            "Asking the AI"
         } else {
             status_label(status)
         },

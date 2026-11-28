@@ -14,7 +14,7 @@ use super::run_model::*;
 use super::view::{alert, notice_line};
 use gpui::Div;
 use monocode_core::mono::workflows::{
-    model::{RunStatus, WorkflowRun},
+    model::{CallerKind, RunStatus, WorkflowRun},
     run_graph_model::{
         Pick, Picks, RunView, VIEW_KEY, chosen_view, default_run_view, definition_changed,
         has_for_each,
@@ -61,8 +61,6 @@ pub(super) struct RunPage {
     pub(super) show_all: HashSet<String>,
     pub(super) canvas: Option<Entity<GraphCanvas>>,
     _events: Option<Subscription>,
-    /// Where Back from an opened session goes: the session, the page and the tab it came from.
-    pub(super) session_back: Option<(i64, Route)>,
 }
 
 impl RunPage {
@@ -70,6 +68,31 @@ impl RunPage {
     pub(super) fn view(&self) -> Option<RunView> {
         let run = self.run.as_ref()?;
         Some(self.chosen.unwrap_or_else(|| default_run_view(run)))
+    }
+}
+
+/// `mono` is the name of the Mono that started the run, when it is known.
+pub(super) fn caller_text(run: &WorkflowRun, mono: Option<&str>) -> String {
+    let caller = &run.caller;
+    let node = run
+        .definition
+        .nodes
+        .iter()
+        .find(|n| n.id == caller.trigger_node)
+        .map(|n| n.title.clone().unwrap_or_else(|| n.id.clone()))
+        .filter(|title| !title.is_empty());
+    let with_node = |kind: &str| match &node {
+        Some(node) => format!("{kind} ({node})"),
+        None => kind.to_string(),
+    };
+    match caller.kind {
+        CallerKind::Manual => "Manual".into(),
+        CallerKind::Schedule => with_node("Schedule"),
+        CallerKind::Event => with_node("Event"),
+        CallerKind::Mono => match mono.filter(|name| !name.is_empty()) {
+            Some(name) => format!("Mono {name}"),
+            None => "Mono".into(),
+        },
     }
 }
 
@@ -92,7 +115,7 @@ fn meta(label: &'static str, value: impl IntoElement) -> Div {
 
 impl Monos {
     /// Opens the state for a run the first time its page is drawn.
-    fn run_page_open(&mut self, mono: &Mono, workflow: &str, run: &str, cx: &mut Context<Self>) {
+    fn run_page_open(&mut self, scope: &Scope, workflow: &str, run: &str, cx: &mut Context<Self>) {
         let key = (workflow.to_string(), run.to_string());
         if self.wf.run.key.as_ref() == Some(&key) {
             return;
@@ -101,16 +124,14 @@ impl Monos {
         {
             self.wf.run_opens += 1;
         }
-        let canvas = cx.new(|_| GraphCanvas::new(mono.color));
+        let canvas = cx.new(|_| GraphCanvas::new(scope.color));
         let events = cx.subscribe(&canvas, |this, _, event: &GraphEvent, cx| {
             this.run_graph_event(event, cx)
         });
-        let session_back = self.wf.run.session_back.take();
         self.wf.run = RunPage {
             key: Some(key),
             canvas: Some(canvas),
             _events: Some(events),
-            session_back,
             ..RunPage::default()
         };
         self.run_view_read(workflow, cx);
@@ -164,7 +185,7 @@ impl Monos {
             (None, Some(runs)) => (runs.iter().find(|r| r.id == run_id).cloned(), true),
             (None, None) => (None, false),
         };
-        let changed = match (&next, self.mono_workflow(&workflow)) {
+        let changed = match (&next, self.global_workflow(&workflow)) {
             (Some(run), Some(current)) => definition_changed(run, current),
             _ => false,
         };
@@ -273,45 +294,18 @@ impl Monos {
         );
     }
 
-    /// Shows a session the run used, in the Mono's panel.
+    /// Opens a session the run used, as the app opens any session.
     pub(super) fn open_run_session(&mut self, session: &str, cx: &mut Context<Self>) {
         self.workflow_said(None, true, cx);
-        let opened = session.parse::<i64>().ok().filter(|id| {
-            self.owner
-                .upgrade()
-                .and_then(|owner| owner.update(cx, |owner, cx| owner.mono_ensure_session(*id, cx)))
-                .is_some()
-        });
-        let Some(id) = opened else {
-            self.workflow_said(Some("Could not open this session.".into()), true, cx);
-            return;
-        };
-        if let Some(back) = self.route.clone() {
-            self.wf.run.session_back = Some((id, back));
-        }
-        self.route = Some(Route::Session(id));
-        self.overview_tab = OverviewTab::Sessions;
-        self.show_overview(cx);
-        cx.notify();
-    }
-
-    /// Where Back goes from the session page: the run page it was opened from, else the overview.
-    pub(in crate::monos) fn wf_session_back(&mut self) -> Option<Route> {
-        let Some(Route::Session(id)) = self.route else {
-            return None;
-        };
-        match self.wf.run.session_back.take() {
-            Some((session, back)) if session == id => {
-                self.overview_tab = OverviewTab::Workflows;
-                Some(back)
-            }
-            _ => None,
+        match session.parse::<i64>() {
+            Ok(id) => cx.emit(OpenWorkflowSession(id)),
+            Err(_) => self.workflow_said(Some("Could not open this session.".into()), true, cx),
         }
     }
 
     pub(in crate::monos) fn workflow_run_page(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         workflow: &str,
         run_id: &str,
         window: &mut Window,
@@ -320,12 +314,12 @@ impl Monos {
         self.ensure_workflows(cx);
         // A page sliding away while another run opens must not take the state back from it.
         let current =
-            matches!(&self.route, Some(Route::WorkflowRun(w, r)) if w == workflow && r == run_id);
+            matches!(&self.wf.route, Some(WfRoute::Run(w, r)) if w == workflow && r == run_id);
         let shown = self.wf.run.key.as_ref() == Some(&(workflow.to_string(), run_id.to_string()));
         if !current && !shown {
             return div().size_full().into_any_element();
         }
-        self.run_page_open(mono, workflow, run_id, cx);
+        self.run_page_open(scope, workflow, run_id, cx);
         let name = self
             .wf
             .run
@@ -333,7 +327,7 @@ impl Monos {
             .as_ref()
             .map_or_else(|| "Run".to_string(), |r| r.definition.name.clone());
         let mut header =
-            self.workflow_header(&name, Some(Route::Workflow(workflow.to_string())), cx);
+            self.workflow_header(&name, Some(WfRoute::Workflow(workflow.to_string())), cx);
         let run = self.wf.run.run.clone();
         if let Some(run) = &run {
             if has_for_each(run) {
@@ -387,7 +381,8 @@ impl Monos {
             ));
         let body = match &run {
             Some(run) => body
-                .child(self.run_meta(run, mono.color))
+                .child(self.run_meta(run, scope.color))
+                .children(self.run_summary(run))
                 .when(self.wf.run.changed, |d| {
                     d.child(
                         div()
@@ -428,7 +423,7 @@ impl Monos {
                         .min_h(px(320.))
                         .children(self.wf.run.canvas.clone()),
                 )
-                .child(self.run_details(window, mono.color, cx)),
+                .child(self.run_details(window, scope.color, cx)),
             None if self.wf.run.loaded => body.child(
                 div()
                     .debug_selector(|| "wf-run-gone".into())
@@ -441,7 +436,7 @@ impl Monos {
             ),
             None => body,
         };
-        let gate = self.run_gate_dialog(mono, window, cx);
+        let gate = self.run_gate_dialog(scope, window, cx);
         div()
             .size_full()
             .min_w_0()
@@ -506,5 +501,71 @@ impl Monos {
                 "Took",
                 div().debug_selector(|| "wf-run-took".into()).child(took),
             ))
+            .child(meta(
+                "Started by",
+                div()
+                    .debug_selector(|| "wf-run-caller".into())
+                    .child(self.caller_label(run)),
+            ))
+    }
+
+    /// Who started the run: Manual, Schedule (trigger node), Event or Mono <name>.
+    fn caller_label(&self, run: &WorkflowRun) -> String {
+        let mono = run
+            .caller
+            .mono_id
+            .as_deref()
+            .map(|id| self.roster.get(id).map_or(id, |mono| mono.name.as_str()));
+        caller_text(run, mono)
+    }
+
+    /// The summary the run ended with: its title and its Markdown text.
+    fn run_summary(&self, run: &WorkflowRun) -> Option<AnyElement> {
+        let summary = run.summary.as_ref()?;
+        let mut body = div()
+            .debug_selector(|| "wf-run-summary-text".into())
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .text_size(px(12.))
+            .line_height(px(20.));
+        for (ix, mut row) in crate::markdown_model::parse_full(&summary.text)
+            .blocks
+            .iter()
+            .flat_map(|b| crate::markdown::rows(&b.block))
+            .enumerate()
+        {
+            crate::markdown::resolve_file_links(&mut row, "");
+            body = body.child(div().w_full().min_w_0().flex_shrink_0().child(
+                crate::markdown::body(
+                    &row,
+                    format!("wf-run-summary-{}-{ix}", run.id).into(),
+                    crate::markdown::Tone::Normal,
+                    None,
+                    std::time::Instant::now(),
+                ),
+            ));
+        }
+        Some(
+            div()
+                .id("wf-run-summary")
+                .debug_selector(|| "wf-run-summary".into())
+                .flex_shrink_0()
+                .px_4()
+                .pb_3()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .debug_selector(|| "wf-run-summary-title".into())
+                        .text_size(px(12.))
+                        .text_color(content(0.85))
+                        .child(summary.title.clone()),
+                )
+                .child(body)
+                .into_any_element(),
+        )
     }
 }

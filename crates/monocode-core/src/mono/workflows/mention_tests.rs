@@ -188,8 +188,10 @@ fn attaches_context_fields() {
     );
     assert_eq!(j.get("enabled"), Some(&Json::Bool(true)));
     assert_eq!(j.get("needsReview"), Some(&Json::Bool(true)));
+    let triggers = j.get("triggers").unwrap().as_array().unwrap();
+    assert_eq!(triggers.len(), 1);
     assert_eq!(
-        j.get("trigger").unwrap().get("type"),
+        triggers[0].get("type"),
         Some(&Json::String("manual".into()))
     );
     assert_eq!(
@@ -296,5 +298,30 @@ fn an_unreadable_history_is_unknown_not_never_ran() {
     assert_eq!(
         context(&out).get("lastRun").unwrap().stringify(false),
         r#"{"status":"unknown"}"#
+    );
+}
+
+#[test]
+fn lists_every_trigger_of_a_workflow() {
+    let mut w = wf("wf-1", "Deploy");
+    w.nodes.push(Node::new("hand", NodeKind::Manual));
+    w.nodes.push(
+        super::fixtures::node(
+            r#"{"id":"daily","type":"schedule","schedule":{"scheduleKind":"daily","time":"09:00","minute":0,"dayOfWeek":1}}"#,
+        ),
+    );
+    let out = attach("@workflow/deploy", &[w]);
+    let triggers = context(&out).get("triggers").unwrap().clone();
+    let kinds: Vec<String> = triggers
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t.get("type").and_then(Json::as_str).unwrap().to_string())
+        .collect();
+    assert_eq!(kinds, ["manual", "schedule"]);
+    let out = attach("@workflow/empty", &[wf("wf-2", "Empty")]);
+    assert_eq!(
+        context(&out).get("triggers").unwrap().stringify(false),
+        "[]"
     );
 }

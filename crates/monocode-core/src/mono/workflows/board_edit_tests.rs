@@ -41,42 +41,68 @@ mod add {
     use super::*;
 
     #[test]
-    fn a_command_goes_before_the_report_which_moves_down_with_the_edge_into_it() {
+    fn a_command_goes_under_the_lowest_node_and_is_wired_after_it() {
         let mut w = ticket_workflow();
         w.nodes
             .retain(|n| !matches!(n.id.as_str(), "each" | "dev" | "review"));
         w.edges = vec![
-            edge(r#"{"from": "trigger", "to": "fetch"}"#),
+            edge(r#"{"from": "start", "to": "fetch"}"#),
             edge(r#"{"from": "fetch", "to": "report"}"#),
         ];
         let (flow, current) = board(&w);
-        let report_y = node(&flow, "report").position.y;
         let (out, id) = add_node(&flow, &current, NodeType::Command);
         assert_eq!(id, "command");
-        assert!(has_edge(&out, "fetch", "command"));
-        assert!(has_edge(&out, "command", "report"));
-        assert!(!has_edge(&out, "fetch", "report"));
-        assert!(node(&out, "report").position.y > report_y);
-        assert!(node(&out, "command").position.y < node(&out, "report").position.y);
+        // `report` hangs lowest and leads nowhere, so the command follows it.
+        assert!(has_edge(&out, "report", "command"));
+        assert!(!has_edge(&out, "fetch", "command"));
+        assert!(node(&out, "command").position.y > node(&out, "report").position.y);
         assert!(node(&out, "command").selected);
     }
 
     #[test]
-    fn a_for_each_before_the_report_leaves_room_for_its_frame() {
+    fn a_for_each_goes_below_the_last_node_with_room_for_its_frame() {
         let (flow, current) = board(&workflow());
         let (out, id) = add_node(&flow, &current, NodeType::ForEach);
         let each = node(&out, &id);
         assert_eq!(each.kind, FlowKind::Group);
         assert_eq!(each.height, EMPTY_GROUP_H);
-        assert!(each.position.y + each.height <= node(&out, "report").position.y);
-        assert!(has_edge(&out, "trigger", &id));
+        assert!(each.position.y >= node(&out, "report").position.y + NODE_H);
+        assert!(has_edge(&out, "report", &id));
+    }
+
+    #[test]
+    fn a_new_trigger_leads_to_the_same_first_step_as_the_others() {
+        let (flow, current) = board(&workflow());
+        let (out, id) = add_node(&flow, &current, NodeType::Schedule);
         assert!(has_edge(&out, &id, "report"));
+        assert!(has_edge(&out, "start", "report"));
+        let wired = from_flow(&current, &out.nodes, &out.edges);
+        assert_eq!(wired.triggers().len(), 2);
+        // The fixture's `report` step names a project input it does not declare; nothing is said
+        // about the triggers.
+        assert!(super::super::validate::validate_workflow(&wired)
+            .iter()
+            .all(|i| !i.message.to_lowercase().contains("start")));
+    }
+
+    #[test]
+    fn a_step_added_first_is_fed_by_every_loose_trigger() {
+        let mut w = workflow();
+        w.nodes.retain(|n| n.id != "report");
+        w.edges.clear();
+        w.nodes.push(n(
+            json!({"id": "second", "type": "manual", "ui": {"x": 0, "y": -90}}),
+        ));
+        let (flow, current) = board(&w);
+        let (out, id) = add_node(&flow, &current, NodeType::Command);
+        assert!(has_edge(&out, "start", &id));
+        assert!(has_edge(&out, "second", &id));
     }
 
     #[test]
     fn a_trigger_goes_above_everything() {
         let mut w = workflow();
-        w.nodes.retain(|n| n.id != "trigger");
+        w.nodes.retain(|n| n.id != "start");
         w.edges.clear();
         let (flow, current) = board(&w);
         let top = flow.nodes.iter().map(|n| n.position.y).fold(0., f32::min);
@@ -97,12 +123,12 @@ mod add {
     #[test]
     fn a_node_added_with_a_child_selected_joins_its_frame() {
         let (flow, current) = board(&ticket_workflow());
-        let (out, id) = add_node(&selected(&flow, "dev"), &current, NodeType::AskMono);
+        let (out, id) = add_node(&selected(&flow, "dev"), &current, NodeType::Switch);
         assert_eq!(node(&out, &id).parent_id.as_deref(), Some("each"));
     }
 
     #[test]
-    fn a_for_each_or_report_never_goes_inside_a_frame() {
+    fn a_for_each_never_goes_inside_a_frame() {
         let (flow, current) = board(&ticket_workflow());
         let (out, id) = add_node(&selected(&flow, "each"), &current, NodeType::ForEach);
         assert_eq!(node(&out, &id).parent_id, None);
@@ -122,11 +148,11 @@ mod add {
     }
 
     #[test]
-    fn an_if_or_a_report_is_not_wired_after() {
+    fn an_if_is_not_wired_after() {
         let mut w = ticket_workflow();
         w.nodes
             .retain(|n| !matches!(n.id.as_str(), "each" | "dev" | "review" | "report"));
-        w.edges = vec![edge(r#"{"from": "trigger", "to": "fetch"}"#)];
+        w.edges = vec![edge(r#"{"from": "start", "to": "fetch"}"#)];
         let (flow, current) = board(&w);
         let (out, id) = add_node(&flow, &current, NodeType::If);
         // fetch leads nowhere, so it feeds the If.
@@ -147,7 +173,7 @@ mod add {
     fn a_node_is_not_wired_after_a_node_that_already_leads_somewhere() {
         let (flow, current) = board(&workflow());
         // trigger -> report: the trigger leads on already.
-        let (out, id) = add_node(&selected(&flow, "trigger"), &current, NodeType::Schedule);
+        let (out, id) = add_node(&selected(&flow, "start"), &current, NodeType::Schedule);
         assert!(!out.edges.iter().any(|e| e.target == id));
     }
 }
@@ -172,7 +198,7 @@ mod connecting {
     fn an_invalid_connection_changes_nothing() {
         let (flow, current) = board(&ticket_workflow());
         assert!(matches!(
-            connect(&flow, &current, "fetch", "trigger", None),
+            connect(&flow, &current, "fetch", "start", None),
             Connected::Invalid
         ));
         assert!(matches!(
@@ -213,15 +239,17 @@ mod connecting {
     fn an_if_sends_true_and_false_to_one_place_each() {
         let mut w = workflow();
         w.nodes = vec![
-            n(json!({"id": "trigger", "type": "manual", "ui": {"x": 0, "y": 0}})),
-            n(json!({"id": "check", "type": "if", "decide": "mono", "ui": {"x": 0, "y": 80}})),
-            n(json!({"id": "a", "type": "report", "ui": {"x": 0, "y": 160}})),
+            n(json!({"id": "start", "type": "manual", "ui": {"x": 0, "y": 0}})),
+            n(json!({"id": "check", "type": "if", "decide": "ai", "ui": {"x": 0, "y": 80}})),
+            n(
+                json!({"id": "a", "type": "command", "project": "x", "command": "ls", "ui": {"x": 0, "y": 160}}),
+            ),
             n(
                 json!({"id": "b", "type": "command", "project": "x", "command": "ls", "ui": {"x": 300, "y": 160}}),
             ),
         ];
         w.edges = vec![
-            edge(r#"{"from": "trigger", "to": "check"}"#),
+            edge(r#"{"from": "start", "to": "check"}"#),
             edge(r#"{"from": "check", "to": "a", "handle": "true"}"#),
         ];
         let (flow, current) = board(&w);
@@ -281,12 +309,12 @@ mod connecting {
     }
 
     #[test]
-    fn the_default_loop_is_three_rounds_decided_by_the_mono() {
+    fn the_default_loop_is_three_rounds_decided_by_the_ai() {
         assert_eq!(
             default_loop(),
             LoopSpec {
                 max_rounds: 3.0,
-                decide: "mono".into()
+                decide: "ai".into()
             }
         );
     }
@@ -296,7 +324,7 @@ mod connecting {
         let (flow, _) = board(&ticket_workflow());
         let spec = LoopSpec {
             max_rounds: 7.0,
-            decide: "mono".into(),
+            decide: "ai".into(),
         };
         let out = set_loop(&flow, "review", Some(spec.clone()));
         let looped = out.edges.iter().find(|e| e.loop_spec.is_some()).unwrap();
@@ -332,7 +360,7 @@ mod dragging {
         let out = drag_stop(&over, "fetch");
         assert_eq!(node(&out, "fetch").parent_id.as_deref(), Some("each"));
         // trigger -> fetch is across the frame now; fetch -> each is a wire into its own frame.
-        assert!(!has_edge(&out, "trigger", "fetch"));
+        assert!(!has_edge(&out, "start", "fetch"));
         assert!(!has_edge(&out, "fetch", "each"));
     }
 
@@ -356,16 +384,16 @@ mod dragging {
     }
 
     #[test]
-    fn a_trigger_or_report_dropped_over_a_frame_stays_out() {
+    fn a_trigger_or_a_for_each_dropped_over_a_frame_stays_out() {
         let (flow, _) = board(&ticket_workflow());
         let group = node(&flow, "each");
         let over = moved(
             &flow,
-            "report",
+            "start",
             group.position.x + 40.,
             group.position.y + 40.,
         );
-        assert_eq!(node(&drag_stop(&over, "report"), "report").parent_id, None);
+        assert_eq!(node(&drag_stop(&over, "start"), "start").parent_id, None);
     }
 }
 
@@ -416,14 +444,14 @@ mod deleting {
         let id = flow
             .edges
             .iter()
-            .find(|e| e.source == "trigger")
+            .find(|e| e.source == "start")
             .unwrap()
             .id
             .clone();
         let out = delete_selected(&select(&flow, None, Some(&id)));
         assert_eq!(out.nodes.len(), flow.nodes.len());
         assert_eq!(out.edges.len(), flow.edges.len() - 1);
-        assert!(!has_edge(&out, "trigger", "fetch"));
+        assert!(!has_edge(&out, "start", "fetch"));
     }
 
     #[test]
@@ -576,7 +604,7 @@ mod save {
     }
 
     #[test]
-    fn a_new_workflow_is_appended_and_the_twenty_first_is_refused() {
+    fn a_new_workflow_is_appended_and_the_hundred_and_first_is_refused() {
         let w = blank_workflow(5);
         let (list, saved) = save_into(vec![], &w, false, "", 1_000).unwrap();
         assert_eq!(list.len(), 1);
@@ -590,7 +618,7 @@ mod save {
             })
             .collect();
         let refused = save_into(full, &w, false, "", 1_000);
-        assert!(matches!(refused, Err(SaveRefusal::Message(m)) if m == "At most 20 workflows."));
+        assert!(matches!(refused, Err(SaveRefusal::Message(m)) if m == "At most 100 workflows."));
     }
 
     #[test]
@@ -616,7 +644,7 @@ mod save {
             1_700_000_000_000,
         )
         .unwrap();
-        let Some(NodeKind::Schedule { schedule }) = trigger_of(&saved).map(|n| &n.kind) else {
+        let Some(NodeKind::Schedule { schedule }) = saved.first_trigger().map(|n| &n.kind) else {
             panic!("a schedule")
         };
         assert!(schedule.interval_from.is_some());
@@ -713,41 +741,36 @@ mod picker {
     use super::*;
 
     #[test]
-    fn groups_are_trigger_action_flow_end() {
+    fn groups_are_trigger_action_flow() {
         let titles: Vec<&str> = picker_groups().iter().map(|g| g.title).collect();
-        assert_eq!(titles, vec!["Trigger", "Action", "Flow", "End"]);
+        assert_eq!(titles, vec!["Trigger", "Action", "Flow"]);
         let types: Vec<NodeType> = picker_groups()
             .iter()
             .flat_map(|g| g.items.iter().map(|(ty, _)| *ty))
             .collect();
-        assert_eq!(types.len(), 9);
+        assert_eq!(types.len(), 7);
         for ty in NodeType::ALL {
             assert!(types.contains(&ty));
         }
     }
 
     #[test]
-    fn a_second_trigger_or_report_says_why_not() {
+    fn a_sixth_trigger_says_why_not() {
         assert_eq!(
-            picker_unavailable(NodeType::Schedule, true, false),
-            Some("A workflow has one trigger")
+            picker_unavailable(NodeType::Schedule, 5),
+            Some("A workflow has at most 5 triggers")
         );
         assert_eq!(
-            picker_unavailable(NodeType::Manual, true, false),
-            Some("A workflow has one trigger")
+            picker_unavailable(NodeType::Manual, 5),
+            Some("A workflow has at most 5 triggers")
         );
-        assert_eq!(
-            picker_unavailable(NodeType::Report, false, true),
-            Some("A workflow has one Report node")
-        );
-        assert_eq!(picker_unavailable(NodeType::Command, true, true), None);
-        assert_eq!(picker_unavailable(NodeType::Schedule, false, true), None);
+        assert_eq!(picker_unavailable(NodeType::Schedule, 1), None);
+        assert_eq!(picker_unavailable(NodeType::Manual, 4), None);
+        assert_eq!(picker_unavailable(NodeType::Command, 5), None);
     }
 
     #[test]
     fn every_type_has_its_label() {
-        assert_eq!(type_label(NodeType::Report), "Report to Mono");
-        assert_eq!(type_label(NodeType::AskMono), "Ask Mono");
         assert_eq!(type_label(NodeType::ForEach), "For each");
     }
 }
@@ -813,11 +836,11 @@ mod fields {
     fn an_input_a_step_leaves_goes_when_nothing_else_mentions_it() {
         let mut w = workflow();
         w.nodes = vec![
-            n(json!({"id": "trigger", "type": "manual"})),
+            n(json!({"id": "start", "type": "manual"})),
             n(
                 json!({"id": "dev", "type": "command", "project": "{{inputs.old}}", "command": "ls"}),
             ),
-            n(json!({"id": "report", "type": "report"})),
+            n(json!({"id": "report", "type": "command", "project": "x", "command": "ls"})),
         ];
         w.inputs
             .insert("old", WorkflowInput::new(InputType::Project));
@@ -841,7 +864,7 @@ mod fields {
             project_path(&w, w.node("fetch").unwrap()).as_deref(),
             Some("/work/api")
         );
-        assert_eq!(project_path(&w, w.node("report").unwrap()), None);
+        assert_eq!(project_path(&w, w.node("start").unwrap()), None);
     }
 
     #[test]
@@ -924,7 +947,7 @@ mod fields {
     }
 
     #[test]
-    fn an_if_decided_by_the_mono_drops_its_condition_and_back() {
+    fn an_if_decided_by_the_ai_drops_its_condition_and_back() {
         let mut check = n(json!({"id": "check", "type": "if", "condition": "{{a.b}} == 1"}));
         check = if_decided_by(&check, true);
         let NodeKind::If {
@@ -933,7 +956,7 @@ mod fields {
         else {
             panic!("an if")
         };
-        assert_eq!((condition.as_deref(), *decide), (None, Some(Decide::Mono)));
+        assert_eq!((condition.as_deref(), *decide), (None, Some(Decide::Ai)));
         check = if_decided_by(&check, false);
         let NodeKind::If {
             condition, decide, ..
@@ -948,7 +971,7 @@ mod fields {
     fn a_loop_decided_by_a_condition_remembers_nothing_of_mono() {
         let spec = LoopSpec {
             max_rounds: 3.0,
-            decide: "mono".into(),
+            decide: "ai".into(),
         };
         assert_eq!(loop_decided_by(&spec, false).decide, "");
         let cond = LoopSpec {
@@ -956,7 +979,7 @@ mod fields {
             decide: "x == 1".into(),
         };
         assert_eq!(loop_decided_by(&cond, false).decide, "x == 1");
-        assert_eq!(loop_decided_by(&cond, true).decide, "mono");
+        assert_eq!(loop_decided_by(&cond, true).decide, "ai");
     }
 
     #[test]
@@ -986,7 +1009,7 @@ mod switch {
     fn routed() -> Workflow {
         let mut w = workflow();
         w.nodes = vec![
-            n(json!({"id": "trigger", "type": "manual", "ui": {"x": 0, "y": 0}})),
+            n(json!({"id": "start", "type": "manual", "ui": {"x": 0, "y": 0}})),
             n(
                 json!({"id": "route", "type": "switch", "value": "{{inputs.x}}",
                 "cases": ["bug", "feature"], "ui": {"x": 0, "y": 80}}),
@@ -997,10 +1020,12 @@ mod switch {
             n(
                 json!({"id": "b", "type": "command", "project": "x", "command": "ls", "ui": {"x": 300, "y": 160}}),
             ),
-            n(json!({"id": "report", "type": "report", "ui": {"x": 0, "y": 240}})),
+            n(
+                json!({"id": "report", "type": "command", "project": "x", "command": "ls", "ui": {"x": 0, "y": 240}}),
+            ),
         ];
         w.edges = vec![
-            edge(r#"{"from": "trigger", "to": "route"}"#),
+            edge(r#"{"from": "start", "to": "route"}"#),
             edge(r#"{"from": "route", "to": "a", "handle": "bug"}"#),
             edge(r#"{"from": "route", "to": "b", "handle": "feature"}"#),
             edge(r#"{"from": "route", "to": "report", "handle": "default"}"#),
@@ -1079,7 +1104,7 @@ mod switch {
             "route.defect->a"
         );
         // Edges of other nodes are untouched, and the result is a valid workflow.
-        assert!(has_edge(&out, "trigger", "route"));
+        assert!(has_edge(&out, "start", "route"));
         let w = from_flow(&routed(), &out.nodes, &out.edges);
         assert_eq!(
             crate::mono::workflows::validate::validate_workflow(&w)
@@ -1130,11 +1155,11 @@ mod switch {
         let (flow, _) = board(&routed());
         assert_eq!(rename_switch_case(&flow, "a", "bug", "x"), flow);
         assert_eq!(remove_switch_case(&flow, "missing", "bug"), flow);
-        assert_eq!(add_switch_case(&flow, "trigger", "x"), flow);
+        assert_eq!(add_switch_case(&flow, "start", "x"), flow);
     }
 
     #[test]
-    fn a_switch_decides_by_the_mono_or_by_a_value() {
+    fn a_switch_decides_by_the_ai_or_by_a_value() {
         let w = routed();
         let route = w.node("route").unwrap();
         let mono = switch_decided_by(route, true);
@@ -1142,7 +1167,7 @@ mod switch {
             &mono.kind,
             NodeKind::Switch {
                 value: None,
-                decide: Some(Decide::Mono),
+                decide: Some(Decide::Ai),
                 ..
             }
         ));
@@ -1161,7 +1186,7 @@ mod switch {
     #[test]
     fn a_node_added_after_a_switch_is_not_wired_to_it() {
         let mut w = routed();
-        w.edges.retain(|e| e.from == "trigger");
+        w.edges.retain(|e| e.from == "start");
         w.nodes
             .retain(|n| n.id != "a" && n.id != "b" && n.id != "report");
         w.nodes.last_mut().unwrap().ui = Some(Ui { x: 0.0, y: 80.0 });

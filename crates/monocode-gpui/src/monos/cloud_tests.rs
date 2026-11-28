@@ -8,7 +8,7 @@ use gpui::TestAppContext;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-pub(in crate::monos) type CloudSetup = (
+pub(crate) type CloudSetup = (
     Setup,
     Arc<Gh>,
     Arc<FakeHost>,
@@ -31,7 +31,7 @@ fn git_project(s: &Setup) {
     }
 }
 /// A Mono whose project is a git repo with a GitHub origin, over fake gh and host.
-pub(in crate::monos) fn cloud_setup(cx: &mut TestAppContext, state: &'static str) -> CloudSetup {
+pub(crate) fn cloud_setup(cx: &mut TestAppContext, state: &'static str) -> CloudSetup {
     let guard = serial();
     let s = setup(cx);
     git_project(&s);
@@ -76,7 +76,7 @@ fn show(s: &Setup, summary: monocode_core::store::Session, cx: &mut TestAppConte
     id
 }
 /// A cloud session of the Mono's project on the fake codespace, shown in the shell.
-pub(in crate::monos) fn cloud_session(s: &Setup, cx: &mut TestAppContext) -> i64 {
+pub(crate) fn cloud_session(s: &Setup, cx: &mut TestAppContext) -> i64 {
     use monocode_core::cloud_sessions::CloudBackendKind;
     use monocode_core::mono::cloud_api::{CloudTarget, InstanceChoice};
     let api = monocode_core::mono::cloud_api::CloudApi::shared(&s.store).unwrap();
@@ -571,7 +571,7 @@ fn a_mono_start_with_an_account_is_refused_before_any_cloud_call_unless_it_is_us
 }
 
 /// Adds a Claude account to the window's accounts and the store, with or without a setup token.
-pub(in crate::monos) fn claude_account(
+pub(crate) fn claude_account(
     s: &Setup,
     label: &str,
     token: Option<&str>,

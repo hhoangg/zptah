@@ -9,7 +9,7 @@
       "inputValues": {},
       "nodes": [
         {
-          "id": "trigger",
+          "id": "start",
           "type": "manual"
         },
         {
@@ -23,20 +23,12 @@
               "type": "string"
             }
           }
-        },
-        {
-          "id": "report",
-          "type": "report"
         }
       ],
       "edges": [
         {
-          "from": "trigger",
+          "from": "start",
           "to": "dev"
-        },
-        {
-          "from": "dev",
-          "to": "report"
         }
       ],
       "enabled": true,
@@ -45,8 +37,10 @@
     "status": "done",
     "startedAt": 1700000100000,
     "endedAt": 1700000200000,
-    "trigger": "manual",
-    "folderId": "f1",
+    "caller": {
+      "kind": "manual",
+      "triggerNode": "start"
+    },
     "items": {
       "each": [
         "a",
@@ -58,7 +52,7 @@
     },
     "nodes": [
       {
-        "nodeId": "trigger",
+        "nodeId": "start",
         "branch": "",
         "status": "done",
         "round": 1
@@ -106,7 +100,7 @@
       "inputValues": {},
       "nodes": [
         {
-          "id": "trigger",
+          "id": "start",
           "type": "manual"
         },
         {
@@ -120,20 +114,12 @@
               "type": "string"
             }
           }
-        },
-        {
-          "id": "report",
-          "type": "report"
         }
       ],
       "edges": [
         {
-          "from": "trigger",
+          "from": "start",
           "to": "dev"
-        },
-        {
-          "from": "dev",
-          "to": "report"
         }
       ],
       "enabled": true,
@@ -141,7 +127,10 @@
     },
     "status": "failed",
     "startedAt": 1700000000000,
-    "trigger": "schedule",
+    "caller": {
+      "kind": "schedule",
+      "triggerNode": "start"
+    },
     "items": {},
     "nodes": [
       {

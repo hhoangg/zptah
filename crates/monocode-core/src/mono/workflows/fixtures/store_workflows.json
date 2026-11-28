@@ -19,7 +19,7 @@
     },
     "nodes": [
       {
-        "id": "trigger",
+        "id": "start",
         "ui": {
           "x": 10,
           "y": 20.5
@@ -59,12 +59,13 @@
       },
       {
         "id": "ask",
-        "type": "askMono",
-        "question": "ok?",
-        "answers": [
+        "type": "switch",
+        "cases": [
           "yes",
           "no"
-        ]
+        ],
+        "decide": "ai",
+        "question": "ok?"
       },
       {
         "id": "gate",
@@ -77,16 +78,11 @@
         "in": "fetch.items",
         "as": "item",
         "maxParallel": 2
-      },
-      {
-        "id": "report",
-        "type": "report",
-        "template": "Done {{run.id}}"
       }
     ],
     "edges": [
       {
-        "from": "trigger",
+        "from": "start",
         "to": "fetch"
       },
       {
@@ -100,7 +96,7 @@
       },
       {
         "from": "dev",
-        "to": "report",
+        "to": "gate",
         "loop": {
           "maxRounds": 3,
           "decide": "enough?"
@@ -112,7 +108,8 @@
     "nextRunAt": 1700003600000,
     "runRequested": true,
     "lastRunId": "r1",
-    "needsReview": true
+    "needsReview": true,
+    "summaryTemplate": "Done {{run.id}}"
   },
   3,
   {

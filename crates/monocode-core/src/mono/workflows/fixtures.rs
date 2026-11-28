@@ -75,7 +75,7 @@ pub const SINK_JSON: &str = r###"{
   },
   "inputValues": { "project": "/x", "count": 2.5, "flag": true },
   "nodes": [
-    { "id": "trigger", "type": "schedule", "title": "Every 4h",
+    { "id": "start", "type": "schedule", "title": "Every 4h",
       "schedule": { "scheduleKind": "interval", "time": "09:00", "minute": 0, "dayOfWeek": 1, "intervalHours": 4, "intervalFrom": "2026-01-01" },
       "ui": { "x": -16.5, "y": 10 } },
     { "id": "fetch", "type": "session", "project": "{{inputs.project}}", "prompt": "Say \"hi\" é\n/api/users",
@@ -83,35 +83,36 @@ pub const SINK_JSON: &str = r###"{
       "harness": "claude", "model": "sonnet", "effort": "high", "reuseSession": false, "timeoutMinutes": 30 },
     { "id": "build", "type": "command", "project": "{{inputs.project}}", "command": "npm test {{inputs.zeta}}",
       "cwd": { "worktreeOf": "fetch" }, "timeoutMinutes": 1.5 },
-    { "id": "ask", "type": "askMono", "question": "ok?", "answers": ["yes", "no"] },
-    { "id": "gate", "type": "if", "condition": "{{ask.answer}} == \"yes\"" },
-    { "id": "gate2", "type": "if", "decide": "mono", "question": "really?" },
+    { "id": "ask", "type": "switch", "decide": "ai", "question": "ok?", "cases": ["yes", "no"] },
+    { "id": "gate", "type": "if", "condition": "{{fetch.a}} == \"yes\"" },
+    { "id": "gate2", "type": "if", "decide": "ai", "question": "really?" },
     { "id": "each", "type": "forEach", "in": "{{fetch.b}}", "as": "row", "maxParallel": 2 },
     { "id": "inner", "type": "session", "parent": "each", "project": "{{inputs.project}}", "prompt": "p",
       "checkout": { "worktreeOf": "fetch" }, "nestUnder": "fetch", "output": {} },
-    { "id": "report", "type": "report", "template": "{{results}}" }
+    { "id": "report", "type": "command", "project": "{{inputs.project}}", "command": "echo {{fetch.a}}" }
   ],
   "edges": [
-    { "from": "trigger", "to": "fetch" },
+    { "from": "start", "to": "fetch" },
     { "from": "fetch", "to": "build" },
     { "from": "build", "to": "ask" },
-    { "from": "ask", "to": "gate" },
+    { "from": "ask", "to": "gate", "handle": "yes" },
     { "from": "gate", "to": "gate2", "handle": "true" },
     { "from": "gate", "to": "report", "handle": "false" },
     { "from": "gate2", "to": "each", "handle": "true" },
     { "from": "gate2", "to": "report", "handle": "false" },
     { "from": "each", "to": "report" },
-    { "from": "ask", "to": "build", "loop": { "maxRounds": 2, "decide": "{{ask.answer}} == \"no\"" } }
+    { "from": "build", "to": "fetch", "loop": { "maxRounds": 2, "decide": "{{build.stdout}} contains \"FAIL\"" } }
   ],
   "enabled": true,
   "createdAt": 1700000000000
 }
 "###;
 
-// Produced by running the React `definitionFingerprint` over the same JSON.
-pub const SINK_FINGERPRINT: &str = r###"{"description":"line1\nline2\ttab","edges":[{"from":"trigger","to":"fetch"},{"from":"fetch","to":"build"},{"from":"build","to":"ask"},{"from":"ask","to":"gate"},{"from":"gate","handle":"true","to":"gate2"},{"from":"gate","handle":"false","to":"report"},{"from":"gate2","handle":"true","to":"each"},{"from":"gate2","handle":"false","to":"report"},{"from":"each","to":"report"},{"from":"ask","loop":{"decide":"{{ask.answer}} == \"no\"","maxRounds":2},"to":"build"}],"inputs":{"count":{"type":"number"},"flag":{"type":"boolean"},"project":{"type":"project"},"zeta":{"description":"last alphabetically, first declared","type":"string"}},"name":"Sink \"quoted\" \\ é 日本 \u0001","nodes":[{"id":"trigger","schedule":{"dayOfWeek":1,"intervalFrom":"2026-01-01","intervalHours":4,"minute":0,"scheduleKind":"interval","time":"09:00"},"title":"Every 4h","type":"schedule"},{"checkout":"root","effort":"high","harness":"claude","id":"fetch","model":"sonnet","output":{"a":{"type":"string"},"b":{"description":"b first","inReport":true,"type":"list"}},"project":"{{inputs.project}}","prompt":"Say \"hi\" é\n/api/users","reuseSession":false,"timeoutMinutes":30,"type":"session"},{"command":"npm test {{inputs.zeta}}","cwd":{"worktreeOf":"fetch"},"id":"build","project":"{{inputs.project}}","timeoutMinutes":1.5,"type":"command"},{"answers":["yes","no"],"id":"ask","question":"ok?","type":"askMono"},{"condition":"{{ask.answer}} == \"yes\"","id":"gate","type":"if"},{"decide":"mono","id":"gate2","question":"really?","type":"if"},{"as":"row","id":"each","in":"{{fetch.b}}","maxParallel":2,"type":"forEach"},{"checkout":{"worktreeOf":"fetch"},"id":"inner","nestUnder":"fetch","output":{},"parent":"each","project":"{{inputs.project}}","prompt":"p","type":"session"},{"id":"report","template":"{{results}}","type":"report"}]}"###;
-pub const EXAMPLE_FINGERPRINT: &str = r###"{"description":"Pull my ClickUp tickets, implement each, review up to 3 rounds.","edges":[{"from":"trigger","to":"fetch"},{"from":"fetch","to":"each"},{"from":"dev","to":"review"},{"from":"each","to":"report"},{"from":"review","loop":{"decide":"mono","maxRounds":3},"to":"dev"}],"inputs":{"clickupList":{"description":"ClickUp list to pull from","type":"string"},"project":{"type":"project"}},"name":"ClickUp -> Dev -> Review","nodes":[{"id":"trigger","schedule":{"dayOfWeek":1,"minute":0,"scheduleKind":"weekdays","time":"09:00"},"type":"schedule"},{"checkout":"root","id":"fetch","model":"sonnet","output":{"tickets":{"type":"list"}},"project":"{{inputs.project}}","prompt":"List open tickets assigned to me in {{inputs.clickupList}}.","type":"session"},{"as":"item","id":"each","in":"{{fetch.tickets}}","maxParallel":3,"type":"forEach"},{"checkout":"newWorktree","id":"dev","model":"sonnet","output":{"pr_url":{"type":"string"},"summary":{"type":"string"}},"parent":"each","project":"{{inputs.project}}","prompt":"Implement {{item.title}} ({{item.url}}) and open a PR.\n{{#if review}}Fix these review issues: {{review.issues}}{{/if}}","type":"session"},{"checkout":{"worktreeOf":"dev"},"id":"review","model":"opus","nestUnder":"dev","output":{"issues":{"type":"list"},"verdict":{"type":"string"}},"parent":"each","project":"{{inputs.project}}","prompt":"Review {{dev.pr_url}}. List blocking issues only.","type":"session"},{"id":"report","type":"report"}]}"###;
-pub const TICKET_FINGERPRINT: &str = r###"{"description":"Pull my ClickUp tickets, implement each, review up to 3 rounds.","edges":[{"from":"trigger","to":"fetch"},{"from":"fetch","to":"each"},{"from":"dev","to":"review"},{"from":"each","to":"report"},{"from":"review","loop":{"decide":"mono","maxRounds":3},"to":"dev"}],"inputs":{"clickupList":{"description":"ClickUp list to pull from","type":"string"},"project":{"type":"project"}},"name":"ClickUp -> Dev -> Review","nodes":[{"id":"trigger","schedule":{"dayOfWeek":1,"minute":0,"scheduleKind":"weekdays","time":"09:00"},"title":"Weekdays","type":"schedule"},{"checkout":"root","id":"fetch","model":"claude:sonnet-5","output":{"tickets":{"type":"list"}},"project":"{{inputs.project}}","prompt":"List open tickets assigned to me in {{inputs.clickupList}}.","title":"Fetch tickets","type":"session"},{"as":"item","id":"each","in":"{{fetch.tickets}}","maxParallel":3,"title":"Each ticket","type":"forEach"},{"checkout":"newWorktree","id":"dev","model":"claude:sonnet-5","output":{"pr_url":{"type":"string"},"summary":{"type":"string"}},"parent":"each","project":"{{inputs.project}}","prompt":"Implement {{item.title}} ({{item.url}}) and open a PR.\n{{#if review}}Fix these review issues: {{review.issues}}{{/if}}","title":"Dev","type":"session"},{"checkout":{"worktreeOf":"dev"},"id":"review","model":"claude:opus-5","nestUnder":"dev","output":{"issues":{"type":"list"},"verdict":{"type":"string"}},"parent":"each","project":"{{inputs.project}}","prompt":"Review {{dev.pr_url}}. List blocking issues only.","title":"Review","type":"session"},{"id":"report","title":"Report to Mono","type":"report"}]}"###;
+// These pin the Rust `definition_fingerprint` output for the same JSON (regenerated when the
+// definition gained fields); they no longer come from the React app.
+pub const SINK_FINGERPRINT: &str = r###"{"description":"line1\nline2\ttab","edges":[{"from":"start","to":"fetch"},{"from":"fetch","to":"build"},{"from":"build","to":"ask"},{"from":"ask","handle":"yes","to":"gate"},{"from":"gate","handle":"true","to":"gate2"},{"from":"gate","handle":"false","to":"report"},{"from":"gate2","handle":"true","to":"each"},{"from":"gate2","handle":"false","to":"report"},{"from":"each","to":"report"},{"from":"build","loop":{"decide":"{{build.stdout}} contains \"FAIL\"","maxRounds":2},"to":"fetch"}],"inputs":{"count":{"type":"number"},"flag":{"type":"boolean"},"project":{"type":"project"},"zeta":{"description":"last alphabetically, first declared","type":"string"}},"name":"Sink \"quoted\" \\ é 日本 \u0001","nodes":[{"id":"start","schedule":{"dayOfWeek":1,"intervalFrom":"2026-01-01","intervalHours":4,"minute":0,"scheduleKind":"interval","time":"09:00"},"title":"Every 4h","type":"schedule"},{"checkout":"root","effort":"high","harness":"claude","id":"fetch","model":"sonnet","output":{"a":{"type":"string"},"b":{"description":"b first","inReport":true,"type":"list"}},"project":"{{inputs.project}}","prompt":"Say \"hi\" é\n/api/users","reuseSession":false,"timeoutMinutes":30,"type":"session"},{"command":"npm test {{inputs.zeta}}","cwd":{"worktreeOf":"fetch"},"id":"build","project":"{{inputs.project}}","timeoutMinutes":1.5,"type":"command"},{"cases":["yes","no"],"decide":"ai","id":"ask","question":"ok?","type":"switch"},{"condition":"{{fetch.a}} == \"yes\"","id":"gate","type":"if"},{"decide":"ai","id":"gate2","question":"really?","type":"if"},{"as":"row","id":"each","in":"{{fetch.b}}","maxParallel":2,"type":"forEach"},{"checkout":{"worktreeOf":"fetch"},"id":"inner","nestUnder":"fetch","output":{},"parent":"each","project":"{{inputs.project}}","prompt":"p","type":"session"},{"command":"echo {{fetch.a}}","id":"report","project":"{{inputs.project}}","type":"command"}]}"###;
+pub const EXAMPLE_FINGERPRINT: &str = r###"{"description":"Pull my ClickUp tickets, implement each, review up to 3 rounds.","edges":[{"from":"start","to":"fetch"},{"from":"fetch","to":"each"},{"from":"dev","to":"review"},{"from":"each","to":"report"},{"from":"review","loop":{"decide":"ai","maxRounds":3},"to":"dev"}],"inputs":{"clickupList":{"description":"ClickUp list to pull from","type":"string"},"project":{"type":"project"}},"name":"ClickUp -> Dev -> Review","nodes":[{"id":"start","schedule":{"dayOfWeek":1,"minute":0,"scheduleKind":"weekdays","time":"09:00"},"type":"schedule"},{"checkout":"root","id":"fetch","model":"sonnet","output":{"tickets":{"type":"list"}},"project":"{{inputs.project}}","prompt":"List open tickets assigned to me in {{inputs.clickupList}}.","type":"session"},{"as":"item","id":"each","in":"{{fetch.tickets}}","maxParallel":3,"type":"forEach"},{"checkout":"newWorktree","id":"dev","model":"sonnet","output":{"pr_url":{"type":"string"},"summary":{"type":"string"}},"parent":"each","project":"{{inputs.project}}","prompt":"Implement {{item.title}} ({{item.url}}) and open a PR.\n{{#if review}}Fix these review issues: {{review.issues}}{{/if}}","type":"session"},{"checkout":{"worktreeOf":"dev"},"id":"review","model":"opus","nestUnder":"dev","output":{"issues":{"type":"list"},"verdict":{"type":"string"}},"parent":"each","project":"{{inputs.project}}","prompt":"Review {{dev.pr_url}}. List blocking issues only.","type":"session"},{"command":"echo done","id":"report","project":"{{inputs.project}}","type":"command"}]}"###;
+pub const TICKET_FINGERPRINT: &str = r###"{"description":"Pull my ClickUp tickets, implement each, review up to 3 rounds.","edges":[{"from":"start","to":"fetch"},{"from":"fetch","to":"each"},{"from":"dev","to":"review"},{"from":"each","to":"report"},{"from":"review","loop":{"decide":"ai","maxRounds":3},"to":"dev"}],"inputs":{"clickupList":{"description":"ClickUp list to pull from","type":"string"},"project":{"type":"project"}},"name":"ClickUp -> Dev -> Review","nodes":[{"id":"start","schedule":{"dayOfWeek":1,"minute":0,"scheduleKind":"weekdays","time":"09:00"},"title":"Weekdays","type":"schedule"},{"checkout":"root","id":"fetch","model":"claude:sonnet-5","output":{"tickets":{"type":"list"}},"project":"{{inputs.project}}","prompt":"List open tickets assigned to me in {{inputs.clickupList}}.","title":"Fetch tickets","type":"session"},{"as":"item","id":"each","in":"{{fetch.tickets}}","maxParallel":3,"title":"Each ticket","type":"forEach"},{"checkout":"newWorktree","id":"dev","model":"claude:sonnet-5","output":{"pr_url":{"type":"string"},"summary":{"type":"string"}},"parent":"each","project":"{{inputs.project}}","prompt":"Implement {{item.title}} ({{item.url}}) and open a PR.\n{{#if review}}Fix these review issues: {{review.issues}}{{/if}}","title":"Dev","type":"session"},{"checkout":{"worktreeOf":"dev"},"id":"review","model":"claude:opus-5","nestUnder":"dev","output":{"issues":{"type":"list"},"verdict":{"type":"string"}},"parent":"each","project":"{{inputs.project}}","prompt":"Review {{dev.pr_url}}. List blocking issues only.","title":"Review","type":"session"},{"command":"echo done","id":"report","project":"{{inputs.project}}","title":"Report","type":"command"}]}"###;
 
 pub const EXAMPLE_JSON: &str = r#"{
   "id": "wf-abcd1234",
@@ -123,7 +124,7 @@ pub const EXAMPLE_JSON: &str = r#"{
   },
   "inputValues": { "project": "/Users/x/repo", "clickupList": "Sprint" },
   "nodes": [
-    { "id": "trigger", "type": "schedule",
+    { "id": "start", "type": "schedule",
       "schedule": { "scheduleKind": "weekdays", "time": "09:00", "minute": 0, "dayOfWeek": 1 },
       "ui": { "x": 0, "y": 0 } },
     { "id": "fetch", "type": "session", "project": "{{inputs.project}}", "model": "sonnet",
@@ -139,14 +140,14 @@ pub const EXAMPLE_JSON: &str = r#"{
       "model": "opus", "checkout": { "worktreeOf": "dev" }, "nestUnder": "dev",
       "prompt": "Review {{dev.pr_url}}. List blocking issues only.",
       "output": { "verdict": { "type": "string" }, "issues": { "type": "list" } } },
-    { "id": "report", "type": "report" }
+    { "id": "report", "type": "command", "project": "{{inputs.project}}", "command": "echo done" }
   ],
   "edges": [
-    { "from": "trigger", "to": "fetch" },
+    { "from": "start", "to": "fetch" },
     { "from": "fetch", "to": "each" },
     { "from": "dev", "to": "review" },
     { "from": "each", "to": "report" },
-    { "from": "review", "to": "dev", "loop": { "maxRounds": 3, "decide": "mono" } }
+    { "from": "review", "to": "dev", "loop": { "maxRounds": 3, "decide": "ai" } }
   ],
   "enabled": true,
   "createdAt": 1700000000000
@@ -162,7 +163,7 @@ pub const TICKET_JSON: &str = r#"{
   },
   "inputValues": { "project": "/work/api", "clickupList": "Sprint" },
   "nodes": [
-    { "id": "trigger", "type": "schedule", "title": "Weekdays",
+    { "id": "start", "type": "schedule", "title": "Weekdays",
       "schedule": { "scheduleKind": "weekdays", "time": "09:00", "minute": 0, "dayOfWeek": 1 },
       "ui": { "x": 0, "y": 0 } },
     { "id": "fetch", "type": "session", "title": "Fetch tickets", "project": "{{inputs.project}}",
@@ -182,14 +183,15 @@ pub const TICKET_JSON: &str = r#"{
       "prompt": "Review {{dev.pr_url}}. List blocking issues only.",
       "output": { "verdict": { "type": "string" }, "issues": { "type": "list" } },
       "ui": { "x": 16, "y": 130 } },
-    { "id": "report", "type": "report", "title": "Report to Mono", "ui": { "x": 0, "y": 480 } }
+    { "id": "report", "type": "command", "title": "Report", "project": "{{inputs.project}}",
+      "command": "echo done", "ui": { "x": 0, "y": 480 } }
   ],
   "edges": [
-    { "from": "trigger", "to": "fetch" },
+    { "from": "start", "to": "fetch" },
     { "from": "fetch", "to": "each" },
     { "from": "dev", "to": "review" },
     { "from": "each", "to": "report" },
-    { "from": "review", "to": "dev", "loop": { "maxRounds": 3, "decide": "mono" } }
+    { "from": "review", "to": "dev", "loop": { "maxRounds": 3, "decide": "ai" } }
   ],
   "enabled": true,
   "createdAt": 1

@@ -1,5 +1,6 @@
 //! Mono workspaces: one runtime per identity, shared by the rail, title tabs,
 //! overview, settings and floating windows.
+mod ask_sweep;
 pub(crate) mod avatar;
 mod browser_approval;
 #[cfg(test)]
@@ -14,7 +15,7 @@ mod browser_ui;
 pub(crate) mod cards;
 mod changes;
 #[cfg(test)]
-mod cloud_tests;
+pub(crate) mod cloud_tests;
 pub(crate) mod color_picker;
 mod dashboard;
 #[cfg(test)]
@@ -45,11 +46,10 @@ mod search;
 #[cfg(all(target_os = "macos", not(test)))]
 mod status;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod today_bridge;
 mod work;
-mod workflow_runner;
-mod workflow_schedule;
+mod workflow_link;
 mod workflows_ui;
 use crate::{
     conversation::{Conversation, MonoSubmitted, SessionChanged},
@@ -82,6 +82,10 @@ use std::{
 pub(crate) struct Changed;
 pub(crate) struct TabOpened(pub String);
 pub(crate) struct ShowDetails(pub String);
+/// A workflow run page asked to open a session the run used (its id).
+pub(crate) struct OpenWorkflowSession(pub i64);
+/// "Ask Mono to build a workflow" picked a Mono (its id): open it and start the sentence.
+pub(crate) struct AskMonoForWorkflow(pub String);
 /// The Mono's emoji settings asked for the shared library: Settings > Monos > Emoji.
 pub(crate) struct ShowEmojiLibrary;
 /// The Browser tab saved a new path for npx (empty is automatic): the shell keeps it in the
@@ -89,14 +93,16 @@ pub(crate) struct ShowEmojiLibrary;
 pub(crate) struct NodePathChanged(pub String);
 /// A Mono's chat has opened, so a paired phone can follow it.
 pub(crate) struct ChatOpened;
+pub(crate) use host::{CLOUD_ACCOUNT_NEEDS_TOKEN, workflow_account_check};
 pub(crate) use notifications::{NotificationChanged, NotificationFinished, NotificationPosted};
-pub(crate) use workflow_schedule::begin_quit;
+pub(crate) use workflows_ui::WorkflowsPage;
+use workflows_ui::{Scope, WfRoute};
 #[derive(Clone, PartialEq)]
 pub(crate) struct OverviewChrome {
     active: Option<String>,
     tab: OverviewTab,
     routed: bool,
-    counts: (usize, usize, usize, usize, usize),
+    counts: (usize, usize, usize, usize),
 }
 struct RunningHabit {
     mono: String,
@@ -253,11 +259,16 @@ pub(crate) struct Monos {
     /// installed, so a `run`, `stop` or `resumeRun` request is acted on at once; the runner calls
     /// `set_running` when a run starts and ends.
     pub(crate) workflow_signals: std::sync::Arc<mono::workflows::cli::Signals>,
-    /// The live workflow runs, one per workflow.
-    workflows: workflow_runner::WorkflowRunner,
-    workflow_live: workflow_runner::Live,
-    workflow_checks: workflow_schedule::Checks,
-    /// The Workflows tab and its pages.
+    /// The live workflow runs, one per workflow (shared with the `Workflows` entity that drives
+    /// them).
+    pub(crate) workflows: crate::workflows::WorkflowRunner,
+    /// The `Workflows` entity (made after this one), which owns how workflows are judged.
+    pub(crate) workflows_entity: Option<WeakEntity<crate::workflows::Workflows>>,
+    /// The Mono open last, which "Ask Mono to build a workflow" offers first.
+    last_active: Option<String>,
+    /// The global workflow files.
+    pub(crate) workflow_dir: mono::workflows::global::WorkflowsDir,
+    /// The Workflows view and its pages.
     wf: workflows_ui::WorkflowsUi,
     /// The Today page's view of the Monos: its revision and every Mono's habits.
     today: today_bridge::Bridge,
@@ -265,25 +276,11 @@ pub(crate) struct Monos {
 impl EventEmitter<Changed> for Monos {}
 impl EventEmitter<TabOpened> for Monos {}
 impl EventEmitter<ShowDetails> for Monos {}
+impl EventEmitter<OpenWorkflowSession> for Monos {}
+impl EventEmitter<AskMonoForWorkflow> for Monos {}
 impl EventEmitter<ShowEmojiLibrary> for Monos {}
 impl EventEmitter<NodePathChanged> for Monos {}
 impl EventEmitter<ChatOpened> for Monos {}
-impl Monos {
-    /// Workflow runs going now, as `(run id, workflow name)`.
-    pub(crate) fn running_workflows(&self) -> Vec<(String, String)> {
-        self.workflows
-            .running()
-            .into_iter()
-            .map(|(workflow, run)| {
-                let name = self
-                    .workflows
-                    .with_run(&workflow, |run| run.definition.name.clone())
-                    .unwrap_or(workflow);
-                (run, name)
-            })
-            .collect()
-    }
-}
 impl Monos {
     #[cfg(test)]
     pub(crate) fn observation_count(&self) -> usize {
@@ -566,6 +563,15 @@ impl Monos {
         let manager = cx.entity();
         let details = cx.new(|cx| overview::Overview::new(manager, cx));
         let signals = std::sync::Arc::<mono::workflows::cli::Signals>::default();
+        let workflow_dir = match locked(&store) {
+            Ok(db) => mono::workflows::global::WorkflowsDir::for_store(&db),
+            // `root` is `<app data>/monos`; the global workflows sit next to it, as `workflows_root` has them.
+            Err(_) => mono::workflows::global::WorkflowsDir::new(
+                root.parent()
+                    .unwrap_or(&root)
+                    .join(mono::workflows::global::WORKFLOWS_DIR),
+            ),
+        };
         let mut this = Self {
             #[cfg(all(target_os = "macos", not(test)))]
             status: None,
@@ -672,15 +678,15 @@ impl Monos {
             app_results: HashMap::new(),
             app_pending: HashSet::new(),
             workflow_signals: signals.clone(),
-            workflows: workflow_runner::WorkflowRunner::new(signals),
-            workflow_live: workflow_runner::Live::new(),
-            workflow_checks: Default::default(),
+            workflows: crate::workflows::WorkflowRunner::new(signals),
+            workflows_entity: None,
+            last_active: active.clone(),
+            workflow_dir,
             wf: Default::default(),
             today: Default::default(),
         };
-        cx.set_global(workflow_schedule::QuitTarget(this.workflows.clone()));
         this.watch_emoji_library(cx);
-        this.start_workflow_checks(cx);
+        this.sweep_asks(cx);
         this.browser_approval_start(cx);
         if let Some(rx) = rx {
             this._bridge_task = Some(cx.spawn(async move |this, cx| {
@@ -773,12 +779,11 @@ impl Monos {
         }
     }
     pub(crate) fn overview_chrome(&self) -> OverviewChrome {
-        let counts = self.current().map_or((0, 0, 0, 0, 0), |mono| {
+        let counts = self.current().map_or((0, 0, 0, 0), |mono| {
             (
                 mono.launches.len(),
                 mono.documents.len(),
                 self.habits.len(),
-                self.workflow_count().unwrap_or(0),
                 self.project_changes.count(&mono.id),
             )
         });
@@ -1484,9 +1489,6 @@ impl Monos {
         if self.active.as_deref() != Some(id) {
             self.save_open_file(cx);
             self.pause_changes(cx);
-            // What a page of the old Mono kept (notices, a board, a run's way back) stays there.
-            self.wf_leave_tab();
-            self.wf_leave_page();
             self.route = None;
             self.details.update(cx, |details, cx| details.reset(cx));
             self.fields.retain(|k, _| k.starts_with("file:"));
@@ -1497,6 +1499,7 @@ impl Monos {
             self.settings = None;
         }
         self.active = Some(id.into());
+        self.last_active = Some(id.into());
         self.ensure_chat(id, cx);
         self.reload_files(id, cx);
         cx.emit(TabOpened(id.into()));
@@ -1541,6 +1544,11 @@ impl Monos {
             if let Some(chat) = self.chat() {
                 window.focus(&chat.read(cx).input.focus_handle(cx), cx);
             }
+            return true;
+        }
+        // Escape on the workflow board asks what to do with unsaved edits, like Back does.
+        if self.wf_board_open() {
+            self.wf_board_back(cx);
             return true;
         }
         if self.settings.take().is_none() {
@@ -1593,7 +1601,7 @@ impl Monos {
                             this.files = Some(files);
                             this.habits = habits;
                             // The app's own workflows.* actions save through here too.
-                            if this.workflows_requested(&id) {
+                            if this.workflows_requested() {
                                 this.refresh_workflows(cx);
                             }
                         }
@@ -2065,7 +2073,6 @@ impl gpui::Render for Monos {
                     .children(
                         self.attention_views(&mono.id, cx)
                             .into_iter()
-                            .chain(self.workflow_attention_views(&mono.id, cx))
                             .map(|view| view.update(cx, |v, cx| v.mono_attention(window, cx))),
                     )
                     .map(|d| {

@@ -50,14 +50,11 @@ impl Monos {
         (!w.requires.is_empty() && *made_for == cache_key(w) && !check.all_met()).then_some(check)
     }
 
-    /// Looks again, off the UI thread, at the active Mono's workflows that declare requirements
+    /// Looks again, off the UI thread, at the workflows that declare requirements
     /// and were not looked at in this definition (and with these projects) or for a minute. One
     /// task checks them one after the other.
     pub(super) fn refresh_preflights(&mut self, cx: &mut Context<Self>) {
-        let Some(mono) = self.active.clone() else {
-            return;
-        };
-        let Some(workflows) = self.wf.loaded.get(&mono) else {
+        let Some(workflows) = self.wf.loaded.as_ref() else {
             return;
         };
         let ids: Vec<&str> = workflows.iter().map(|w| w.id.as_str()).collect();
@@ -79,7 +76,7 @@ impl Monos {
         for (w, _) in &due {
             self.wf.preflighting.insert(w.id.clone());
         }
-        let mut host = self.workflow_store(&mono);
+        let mut host = self.workflow_store(cx);
         let task = cx.background_executor().spawn(async move {
             due.into_iter()
                 .map(|(w, key)| {

@@ -3,9 +3,11 @@
 //! and a stop leaves the instance alone. No codespace or sandbox is ever created for real.
 use super::*;
 use crate::monos::cloud_tests::cloud_setup;
+use crate::runtime::locked;
 use monocode_core::cloud_sessions::{
     StepKind, queued_start_message, start_record, startup::save_start_record,
 };
+use monocode_core::mono::workflows::model::{NodeStatus, RunStatus};
 
 fn target(instance: CloudInstance, options: Value) -> Option<CloudRequest> {
     let mut options = options.as_object().cloned().unwrap_or_default();
@@ -42,13 +44,22 @@ fn begin_cloud(
     req: SessionRequest,
 ) -> Result<StartedSession, String> {
     let (tx, rx) = async_channel::bounded(1);
-    let asked = cx.update(|cx| {
-        s.manager
-            .update(cx, |m, cx| m.workflow_session(&s.id, req, false, tx, cx))
-    });
-    assert!(asked?, "the Mono's chat is loaded");
+    ask_session(s, cx, req, false, tx)?;
     cx.run_until_parked();
     rx.try_recv().expect("the start answered")
+}
+
+/// The local id of the session a run's node started.
+fn made_of_node(s: &Setup, cx: &mut TestAppContext, run: &WorkflowRun, node_id: &str) -> i64 {
+    let persisted = run
+        .nodes
+        .iter()
+        .find(|n| n.node_id == node_id)
+        .and_then(|n| n.session_id.clone())
+        .expect("the node started a session");
+    let workflows = workflows_of(s, cx);
+    cx.update(|cx| workflows.update(cx, |w, _| w.workflow_local_id(&persisted)))
+        .expect("the session is known")
 }
 
 fn creates(gh: &crate::cloud_wake::fakes::Gh) -> usize {
@@ -80,10 +91,15 @@ fn instance_untouched(
     assert!(host.0.lock().unwrap().is_empty());
 }
 
-/// The newest launch of the Mono: the local id and the harness of the session a start made.
-fn newest(s: &Setup, cx: &mut TestAppContext) -> (i64, String) {
-    let launch = launches_of(s, cx).pop().expect("a launch");
-    (launch.session_id, launch.harness)
+/// The local id and the harness of the session a start made.
+fn made(s: &Setup, cx: &mut TestAppContext, started: &StartedSession) -> (i64, String) {
+    let workflows = workflows_of(s, cx);
+    let id = cx
+        .update(|cx| workflows.update(cx, |w, _| w.workflow_local_id(&started.session_id)))
+        .expect("the session is known");
+    let view = view_of(s, cx, id);
+    let harness = cx.update(|cx| view.read(cx).summary.provider.clone());
+    (id, harness)
 }
 
 fn project_worktrees(s: &Setup) -> usize {
@@ -108,7 +124,7 @@ fn a_cloud_step_starts_through_the_sessions_start_path_in_claude_without_a_workt
     )
     .unwrap();
     assert_eq!(creates(&gh), 1, "one codespace is created");
-    let (id, harness) = newest(&s, cx);
+    let (id, harness) = made(&s, cx, &started);
     assert!(id < 0, "a cloud session has a negative local id");
     assert_eq!(harness, "claude");
     assert_eq!(project_worktrees(&s), 1, "no worktree was made");
@@ -143,7 +159,7 @@ fn a_same_as_step_starts_on_the_instance_of_an_earlier_session_without_creating_
     .unwrap();
     assert_eq!(creates(&gh), 0, "no create");
     assert_ne!(persisted, second.session_id);
-    let (id, harness) = newest(&s, cx);
+    let (id, harness) = made(&s, cx, &second);
     assert_eq!(harness, "claude");
     let store = locked(&s.store).unwrap();
     let on = |id: i64| store.remote_session(id).unwrap().unwrap().project.cloud();
@@ -197,17 +213,13 @@ fn a_target_the_mono_api_would_refuse_is_refused_before_anything_is_created(
 
     // A draft is a prompt left in the composer, which a cloud session has no use for.
     let (tx, _rx) = async_channel::bounded(1);
-    let draft = cx.update(|cx| {
-        s.manager.update(cx, |m, cx| {
-            m.workflow_session(
-                &s.id,
-                cloud_request(&s, CloudInstance::New, json!({})),
-                true,
-                tx,
-                cx,
-            )
-        })
-    });
+    let draft = ask_session(
+        &s,
+        cx,
+        cloud_request(&s, CloudInstance::New, json!({})),
+        true,
+        tx,
+    );
     assert!(draft.unwrap_err().contains("draft"));
 
     // Only the one session that was made on purpose exists on top of the local one.
@@ -242,7 +254,7 @@ fn a_session_whose_instance_is_still_starting_is_waited_for_and_never_given_up(
 fn a_start_that_fails_ends_the_wait_with_its_error(cx: &mut TestAppContext) {
     let (s, gh, host, _guard) = cloud_setup(cx, "Failed");
     let started = begin_cloud(&s, cx, cloud_request(&s, CloudInstance::New, json!({}))).unwrap();
-    let (id, _) = newest(&s, cx);
+    let (id, _) = made(&s, cx, &started);
     let waiting = collect(cx, started.settled);
     cx.run_until_parked();
     assert!(waiting.borrow().is_none());
@@ -270,11 +282,8 @@ fn stopping_a_session_that_is_still_starting_drops_its_queued_prompt_and_leaves_
 ) {
     let (s, gh, host, _guard) = cloud_setup(cx, "Failed");
     let started = begin_cloud(&s, cx, cloud_request(&s, CloudInstance::New, json!({}))).unwrap();
-    let (id, _) = newest(&s, cx);
-    let owner = cx.update(|cx| s.manager.read(cx).owner.upgrade().unwrap());
-    let view = cx
-        .update(|cx| owner.update(cx, |o, _| o.mono_session_entity(id)))
-        .unwrap();
+    let (id, _) = made(&s, cx, &started);
+    let view = view_of(&s, cx, id);
     cx.update(|cx| {
         assert_eq!(view.read(cx).cloud_queued(), Some("Do it"));
     });
@@ -311,11 +320,8 @@ fn stopping_a_local_session_is_never_a_cloud_stop(cx: &mut TestAppContext) {
     let stopped = collect(cx, stop);
     cx.run_until_parked();
     assert_eq!(stopped.borrow().clone(), Some(Ok(())));
-    let owner = cx.update(|cx| s.manager.read(cx).owner.upgrade().unwrap());
-    cx.update(|cx| {
-        let view = owner.read(cx).mono_session_entity(id).unwrap();
-        assert!(!view.read(cx).is_cloud_session());
-    });
+    let view = view_of(&s, cx, id);
+    cx.update(|cx| assert!(!view.read(cx).is_cloud_session()));
 }
 
 // --- whole runs ------------------------------------------------------------------------------
@@ -334,31 +340,32 @@ fn cloud_workflow(s: &Setup) -> Workflow {
                 json!({}),
                 json!({"target": {"kind": "codespace", "instance": {"sameAs": "build"}}}),
             ),
-            report(),
         ],
-        vec![
-            edge("trigger", "build"),
-            edge("build", "check"),
-            edge("check", "report"),
-        ],
+        vec![edge("start", "build"), edge("build", "check")],
         json!({"repo": s.project, "lib": s.project}),
     )
 }
 
 fn start_cloud_run(s: &Setup, cx: &mut TestAppContext) {
-    let run = start_run(&cloud_workflow(s), RunTrigger::Manual, 1_000, "run-1");
-    let started = cx.update(|cx| {
-        s.manager
-            .update(cx, |m, cx| m.start_workflow_run(&s.id, run, cx))
-    });
+    let run = start_run(
+        &cloud_workflow(s),
+        RunCaller::new(CallerKind::Manual, "start"),
+        1_000,
+        "run-1",
+    );
+    let workflows = workflows_of(s, cx);
+    let started = cx.update(|cx| workflows.update(cx, |w, cx| w.start_run(run, cx)));
     assert!(started);
     cx.run_until_parked();
 }
 
-fn stored_run(s: &Setup) -> WorkflowRun {
-    load_runs(&MonoDir::new(&s.root, &s.id), WF)
-        .unwrap()
-        .remove(0)
+fn stored_run(s: &Setup, cx: &mut TestAppContext) -> WorkflowRun {
+    load_runs(&global_dir(s, cx), WF).unwrap().remove(0)
+}
+
+fn stop_run(s: &Setup, cx: &mut TestAppContext) -> bool {
+    let workflows = workflows_of(s, cx);
+    cx.update(|cx| workflows.update(cx, |w, _| w.stop_run(WF)))
 }
 
 #[gpui::test]
@@ -368,7 +375,12 @@ fn a_run_waits_through_the_start_of_its_instance_and_a_stop_leaves_the_instance_
     let (s, gh, host, _guard) = cloud_setup(cx, "Failed");
     start_cloud_run(&s, cx);
     assert_eq!(creates(&gh), 1, "the first step created its codespace");
-    let (id, harness) = newest(&s, cx);
+    let run = stored_run(&s, cx);
+    let id = made_of_node(&s, cx, &run, "build");
+    let harness = {
+        let view = view_of(&s, cx, id);
+        cx.update(|cx| view.read(cx).summary.provider.clone())
+    };
     assert_eq!(harness, "claude");
     assert_eq!(project_worktrees(&s), 1);
     // Minutes pass while the instance starts: the node goes on waiting.
@@ -376,28 +388,25 @@ fn a_run_waits_through_the_start_of_its_instance_and_a_stop_leaves_the_instance_
         cx.executor().advance_clock(Duration::from_secs(10));
         cx.run_until_parked();
     }
-    let run = stored_run(&s);
+    let run = stored_run(&s, cx);
     assert_eq!(run.status, RunStatus::Running);
     assert_eq!(node(&run, "build").status, NodeStatus::Running);
-    assert_eq!(
-        launches_of(&s, cx).len(),
-        1,
+    assert_ne!(
+        node(&run, "check").status,
+        NodeStatus::Running,
         "the second step waits for the first"
     );
 
-    let stopped = cx.update(|cx| s.manager.update(cx, |m, _| m.stop_workflow_run(WF)));
-    assert!(stopped);
+    assert!(stop_run(&s, cx));
     cx.run_until_parked();
-    assert_eq!(stored_run(&s).status, RunStatus::Stopped);
+    assert_eq!(stored_run(&s, cx).status, RunStatus::Stopped);
     assert_eq!(queued_start_message(&locked(&s.store).unwrap(), id), None);
     instance_untouched(&gh, &host);
     assert_eq!(creates(&gh), 1);
-    // The report in the Mono's chat lists the instance and says it was left alone.
-    let rows = chat_rows(&s);
-    let report = rows
-        .iter()
-        .find(|r| r.starts_with("## Ship it · stopped"))
-        .unwrap_or_else(|| panic!("{rows:?}"));
+    // The summary on the run lists the instance and says it was left alone.
+    let summary = stored_run(&s, cx).summary.expect("a summary");
+    let report = &summary.text;
+    assert!(summary.title.starts_with("Ship it · stopped"));
     assert!(report.contains("Cloud instances this run used"), "{report}");
     assert!(report.contains("Codespace"), "{report}");
     assert!(
@@ -411,7 +420,8 @@ fn a_run_waits_through_the_start_of_its_instance_and_a_stop_leaves_the_instance_
 fn a_run_whose_instance_fails_to_start_fails_the_node_with_the_error(cx: &mut TestAppContext) {
     let (s, gh, host, _guard) = cloud_setup(cx, "Failed");
     start_cloud_run(&s, cx);
-    let (id, _) = newest(&s, cx);
+    let run = stored_run(&s, cx);
+    let id = made_of_node(&s, cx, &run, "build");
     {
         let store = locked(&s.store).unwrap();
         let mut record = start_record(&store, id).unwrap();
@@ -421,7 +431,7 @@ fn a_run_whose_instance_fails_to_start_fails_the_node_with_the_error(cx: &mut Te
     }
     cx.executor().advance_clock(Duration::from_secs(4));
     cx.run_until_parked();
-    let run = stored_run(&s);
+    let run = stored_run(&s, cx);
     assert_eq!(run.status, RunStatus::Failed);
     let build = node(&run, "build");
     assert_eq!(build.status, NodeStatus::Failed);
@@ -435,12 +445,12 @@ fn a_run_whose_instance_fails_to_start_fails_the_node_with_the_error(cx: &mut Te
     assert_eq!(queued_start_message(&locked(&s.store).unwrap(), id), None);
     assert_eq!(creates(&gh), 1);
     instance_untouched(&gh, &host);
-    // Not stopped or deleted at the end of a failed run either, and the report says where it is.
-    let rows = chat_rows(&s);
+    // Not stopped or deleted at the end of a failed run either, and the summary says where it is.
+    let summary = run.summary.expect("a summary");
     assert!(
-        rows.iter()
-            .any(|r| r.contains("Cloud instances this run used")),
-        "{rows:?}"
+        summary.text.contains("Cloud instances this run used"),
+        "{}",
+        summary.text
     );
 }
 
@@ -498,11 +508,7 @@ fn an_account_that_cannot_be_used_is_refused_before_any_instance_is_created(
             account,
         );
         let error = begin_cloud(&s, cx, request).err().unwrap();
-        assert_eq!(
-            error,
-            crate::monos::host::CLOUD_ACCOUNT_NEEDS_TOKEN,
-            "{account}"
-        );
+        assert_eq!(error, crate::monos::CLOUD_ACCOUNT_NEEDS_TOKEN, "{account}");
     }
     // An account that does not exist.
     let request = with_account(
@@ -510,11 +516,7 @@ fn an_account_that_cannot_be_used_is_refused_before_any_instance_is_created(
         "Nobody",
     );
     let error = begin_cloud(&s, cx, request).err().unwrap();
-    assert_ne!(
-        error,
-        crate::monos::host::CLOUD_ACCOUNT_NEEDS_TOKEN,
-        "{error}"
-    );
+    assert_ne!(error, crate::monos::CLOUD_ACCOUNT_NEEDS_TOKEN, "{error}");
     assert!(!error.is_empty());
     // The refusals so far never reached the machine host.
     assert!(host.0.lock().unwrap().is_empty());
@@ -551,7 +553,7 @@ fn the_run_record_names_the_instance_its_first_step_created(cx: &mut TestAppCont
     start_cloud_run(&s, cx);
     assert_eq!(creates(&gh), 1);
     // Saved while the step is still working, so a run the app never gets to finish keeps it.
-    let run = stored_run(&s);
+    let run = stored_run(&s, cx);
     assert_eq!(run.status, RunStatus::Running);
     let [instance] = run.cloud_instances.as_slice() else {
         panic!("{:?}", run.cloud_instances)

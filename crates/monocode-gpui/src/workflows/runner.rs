@@ -1,8 +1,8 @@
-//! Drives Mono workflow runs: the TS `executeRun` (`workflowRunner.ts`) on the pure engine.
+//! Drives workflow runs: the TS `executeRun` (`workflowRunner.ts`) on the pure engine.
 //!
 //! A run is one async task on the foreground executor. It asks the engine what is ready
-//! (`next_actions`), executes it through a `WorkflowHost` (sessions, commands, the Mono, the
-//! chat), feeds the results back (`apply_event`) and writes the newest state after every
+//! (`next_actions`), executes it through a `WorkflowHost` (sessions, commands, AI decisions, the
+//! summary), feeds the results back (`apply_event`) and writes the newest state after every
 //! event, until the engine says the run is over. It never panics: whatever goes wrong becomes
 //! a failed node or a failed run.
 //!
@@ -18,13 +18,14 @@ use monocode_core::mono::workflows::{
     },
     model::{
         Checkout, Cwd, DEFAULT_COMMAND_TIMEOUT_MINUTES, DEFAULT_SESSION_TIMEOUT_MINUTES, Node,
-        NodeKind, NodeRun, NodeStatus, RunInstance, RunStatus, SessionTarget,
+        NodeKind, NodeRun, NodeStatus, RunInstance, RunStatus, RunSummary, SessionTarget,
         TEMPLATABLE_TARGET_OPTIONS, TargetInstance, WorkflowRun,
     },
     ordered::{Json, OrderedMap, js_number_text},
     output::{output_reask, parse_workflow_output},
-    report::{ask_mono_prompt, compose_report, parse_mono_decision},
+    report::{compose_report, decision_prompt, parse_decision},
     template::render_template,
+    validate::{DecisionModelSource, decision_model_for},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -46,8 +47,11 @@ mod tests;
 mod text;
 
 pub(crate) use api::*;
-pub(super) use host::Live;
-use text::{cap_map, cap_string, clip, run_folder_name, utf16_tail};
+pub(crate) use host::Live;
+pub(in crate::workflows) use host::model_harness;
+#[cfg(test)]
+pub(crate) use host::{trusting_preflight, trusting_probe};
+use text::{cap_map, cap_string, clip, utf16_tail, workflow_folder_name};
 
 pub(crate) type Fut<T> = Pin<Box<dyn Future<Output = T>>>;
 
@@ -69,8 +73,6 @@ struct State {
     command_seq: u32,
     /// Ids of the commands this run has started and not yet heard back from.
     commands: BTreeSet<String>,
-    /// The run's folder in each project it has started a session in.
-    folders: HashMap<String, String>,
     dirty: bool,
     writing: bool,
 }
@@ -78,7 +80,6 @@ struct State {
 struct Exec {
     host: Rc<dyn WorkflowHost>,
     cx: AsyncApp,
-    mono_id: String,
     workflow_id: String,
     limits: Limits,
     /// Tells this execution's command ids from those of an earlier one of the same run.
@@ -154,7 +155,7 @@ impl Exec {
                 state.run.clone()
             };
             let id = latest.id.clone();
-            if let Err(error) = self.host.save_run(&self.mono_id, latest).await {
+            if let Err(error) = self.host.save_run(latest).await {
                 eprintln!("Could not save workflow run {id}: {error}");
                 // The run goes on in memory; the record says its history is incomplete.
                 let mut state = self.state.borrow_mut();
@@ -253,7 +254,7 @@ impl Exec {
                 false,
             )
         };
-        self.host.project_path(&self.mono_id, &rendered)
+        self.host.project_path(&rendered)
     }
 
     /// The instance a cloud step asks for, resolved against this run, or why it cannot be.
@@ -485,24 +486,20 @@ impl Exec {
             self.record_instance(node_id, session_id, created);
         }
         let _ = self.host.stop(session_id).await;
-        self.host.end_approvals(session_id);
         if cloud.is_some() {
             let run = self.state.borrow().run.clone();
             if run.report_posted_at.is_some()
                 && let Some(listing) =
                     instances::report_section(&run, |id| self.host.cloud_instance(id))
             {
-                self.host.post(Posted {
-                    mono_id: self.mono_id.clone(),
-                    workflow_id: run.workflow_id.clone(),
-                    workflow_name: run.definition.name.clone(),
-                    run_id: run.id.clone(),
+                self.host.post(Summary {
                     title: format!("{} \u{b7} cloud instance left running", run.definition.name),
                     text: format!(
                         "**{}**\n\nA cloud step was still starting when the run was stopped, and its instance came up afterwards.\n\n{listing}",
                         run.definition.name
                     ),
                     launches: Vec::new(),
+                    run,
                 });
             }
         }
@@ -534,23 +531,6 @@ impl Exec {
                 break Outcome::cancelled(STOPPED_BY_USER);
             }
             let pending = self.host.waiting_approval(session_id);
-            if pending {
-                let (workflow_id, workflow_name, run_id) = {
-                    let state = self.state.borrow();
-                    (
-                        state.run.workflow_id.clone(),
-                        state.run.definition.name.clone(),
-                        state.run.id.clone(),
-                    )
-                };
-                self.host.ask_approval(ApprovalAsk {
-                    mono_id: self.mono_id.clone(),
-                    workflow_id,
-                    workflow_name,
-                    run_id,
-                    session_id: session_id.into(),
-                });
-            }
             if pending != asking {
                 asking = pending;
                 self.apply(EngineEvent::WaitingApproval {
@@ -586,7 +566,6 @@ impl Exec {
                 waiting: false,
             });
         }
-        self.host.end_approvals(session_id);
         result
     }
 
@@ -623,7 +602,7 @@ impl Exec {
             return self.fail(
                 &node_id,
                 &branch,
-                format!("\"{project}\" is not one of the Mono's projects"),
+                format!("\"{project}\" is not one of the app's projects"),
             );
         };
         let timeout_ms =
@@ -659,17 +638,7 @@ impl Exec {
             let parent_session_id = nest_under
                 .as_ref()
                 .and_then(|parent| self.session_of(parent, &branch));
-            let (folder_id, folder_name) = {
-                let state = self.state.borrow();
-                (
-                    state
-                        .folders
-                        .get(&project_path)
-                        .cloned()
-                        .or_else(|| state.run.folder_id.clone()),
-                    run_folder_name(&state.run.definition.name, state.run.started_at),
-                )
-            };
+            let folder_name = workflow_folder_name(&self.state.borrow().run.definition.name);
             let is_cloud = cloud.is_some();
             // Only a step that asks for a new instance creates one: a later round or a resumed
             // step goes on in an instance that exists.
@@ -682,7 +651,6 @@ impl Exec {
             if cloud.is_some() {
                 for old in self.interrupted_of(&node_id, &branch) {
                     let _ = self.host.stop(&old).await;
-                    self.host.end_approvals(&old);
                 }
             }
             let request = SessionRequest {
@@ -694,7 +662,6 @@ impl Exec {
                 new_worktree: checkout == Checkout::NewWorktree,
                 worktree_cwd,
                 parent_session_id,
-                folder_id,
                 folder_name: Some(folder_name),
                 target: cloud,
             };
@@ -706,10 +673,7 @@ impl Exec {
                     let _turn = this.starts.turn().await;
                     // Starts queued behind another one wait here; a stopped run must not launch them.
                     let result = if this.live() {
-                        this.host
-                            .start_session(&this.mono_id, request)
-                            .await
-                            .map(Some)
+                        this.host.start_session(request).await.map(Some)
                     } else {
                         Ok(None)
                     };
@@ -756,15 +720,6 @@ impl Exec {
                 }
                 Either::Left(Ok(Ok(Some(started)))) => started,
             };
-            if let Some(folder) = started.folder_id {
-                let mut state = self.state.borrow_mut();
-                state.folders.insert(project_path.clone(), folder.clone());
-                if state.run.folder_id.is_none() {
-                    state.run.folder_id = Some(folder);
-                    drop(state);
-                    self.save();
-                }
-            }
             if !self.live() {
                 // Stopped while it was starting: nothing else knows this session yet.
                 self.settle_late_session(
@@ -798,7 +753,6 @@ impl Exec {
             // instance is left alone.
             if target.is_some() {
                 let _ = self.host.stop(&session_id).await;
-                self.host.end_approvals(&session_id);
             }
             return self.fail(
                 &node_id,
@@ -878,7 +832,7 @@ impl Exec {
             return self.fail(
                 &node_id,
                 &branch,
-                format!("\"{project}\" is not one of the Mono's projects"),
+                format!("\"{project}\" is not one of the app's projects"),
             );
         };
         if let Some(Cwd::WorktreeOf(source_node)) = &cwd {
@@ -963,8 +917,32 @@ impl Exec {
         });
     }
 
-    async fn run_ask(self: &Rc<Self>, action: &EngineAction) {
-        let EngineAction::AskMono {
+    /// The app project an AI decision runs in and takes its account from: the project of the
+    /// session node the model came from, else the first project of any session node that
+    /// resolves. `None` when the run has none (the host then uses the account default).
+    fn decision_project(&self, source: Option<&str>, branch: &str) -> Option<String> {
+        let nodes = self.state.borrow().run.definition.nodes.clone();
+        let project_of = |node: &Node| match &node.kind {
+            NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => {
+                self.project_for(project, &node.id, branch)
+            }
+            _ => None,
+        };
+        source
+            .and_then(|id| nodes.iter().find(|n| n.id == id))
+            .and_then(project_of)
+            .or_else(|| {
+                nodes
+                    .iter()
+                    .filter(|n| matches!(n.kind, NodeKind::Session { .. }))
+                    .find_map(project_of)
+            })
+    }
+
+    /// An AI decision (If, Switch or loop edge): a one-shot call with no tools on the model of
+    /// `decision_model_for`. A reply that is not one of the answers is put back once.
+    async fn run_decide(self: &Rc<Self>, action: &EngineAction) {
+        let EngineAction::Decide {
             node_id,
             branch,
             answers,
@@ -973,28 +951,66 @@ impl Exec {
         else {
             return;
         };
-        let name = self.state.borrow().run.definition.name.clone();
-        let prompt = ask_mono_prompt(action, &name).unwrap_or_default();
-        let asking = self.host.ask_mono(&self.mono_id, prompt);
-        let deadline = self.sleep(self.limits.ask_timeout_ms);
-        // Stop abandons the question (its hidden session ends on its own).
-        let reply = match race(race(asking, deadline), self.stop.wait()).await {
-            Either::Right(()) => return,
-            Either::Left(Either::Right(())) => Err("The Mono did not answer in time".to_string()),
-            Either::Left(Either::Left(reply)) => reply,
-        };
         if !self.live() {
             return;
         }
-        match reply.and_then(|reply| parse_mono_decision(&reply, answers)) {
-            Err(error) => self.fail(node_id, branch, error),
-            Ok(decision) => self.apply(EngineEvent::Decided {
-                node_id: node_id.clone(),
-                branch: branch.clone(),
-                value: decision.value,
-                reason: decision.reason.map(|reason| cap_string(&reason)),
-                at: now(),
-            }),
+        let definition = self.state.borrow().run.definition.clone();
+        let Some(prompt) = decision_prompt(action, &definition.name) else {
+            return;
+        };
+        let Some(model) = decision_model_for(&definition, node_id) else {
+            return self.fail(
+                node_id,
+                branch,
+                "This decision has no model: set the workflow's decisionModel or put it after a session step",
+            );
+        };
+        let source = match &model.source {
+            DecisionModelSource::Session(id) => Some(id.as_str()),
+            DecisionModelSource::Workflow => None,
+        };
+        let project = self.decision_project(source, branch);
+        let mut asked = prompt.clone();
+        for attempt in 0..2 {
+            let call = self.host.decide(DecisionRequest {
+                harness: model.harness.clone(),
+                model: model.model.clone(),
+                effort: model.effort.clone(),
+                project: project.clone(),
+                prompt: asked.clone(),
+                timeout_ms: self.limits.decision_timeout_ms,
+            });
+            let reply = match race(call, self.stop.wait()).await {
+                Either::Right(()) => return,
+                Either::Left(Err(error)) => return self.fail(node_id, branch, error),
+                Either::Left(Ok(reply)) => reply,
+            };
+            if !self.live() {
+                return;
+            }
+            match parse_decision(&reply, answers) {
+                Ok(decision) => {
+                    return self.apply(EngineEvent::Decided {
+                        node_id: node_id.clone(),
+                        branch: branch.clone(),
+                        value: decision.value,
+                        reason: decision.reason.map(|reason| cap_string(&reason)),
+                        at: now(),
+                    });
+                }
+                Err(problem) if attempt == 1 => {
+                    return self.fail(
+                        node_id,
+                        branch,
+                        format!("The AI did not give a usable answer. {problem}"),
+                    );
+                }
+                Err(problem) => {
+                    asked = format!(
+                        "{prompt}\n\nYour previous reply could not be used: {problem}\nAnswer again with only the JSON object."
+                    );
+                }
+            }
         }
     }
 
@@ -1048,8 +1064,8 @@ impl Exec {
                         branch,
                         command,
                     } => this.run_command(node_id, branch, command).await,
-                    ref ask @ EngineAction::AskMono { .. } => this.run_ask(ask).await,
-                    EngineAction::PostReport => {}
+                    ref decide @ EngineAction::Decide { .. } => this.run_decide(decide).await,
+                    EngineAction::PostSummary => {}
                 }
                 this.active.set(this.active.get() - 1);
                 this.nudge.nudge();
@@ -1072,7 +1088,9 @@ impl Exec {
         launches
     }
 
-    fn post_text(&self, finished: &WorkflowRun) {
+    /// The summary of a finished run: what `compose_report` makes of it, and the instances it
+    /// left running.
+    fn summary_of(&self, finished: &WorkflowRun) -> RunSummary {
         let report = compose_report(finished);
         let mut text = report.text;
         if let Some(listing) =
@@ -1081,18 +1099,31 @@ impl Exec {
             text.push_str("\n\n");
             text.push_str(&listing);
         }
-        self.host.post(Posted {
-            mono_id: self.mono_id.clone(),
-            workflow_id: finished.workflow_id.clone(),
-            workflow_name: finished.definition.name.clone(),
-            run_id: finished.id.clone(),
+        RunSummary {
             title: report.title,
             text,
-            launches: self.launches_of(finished),
+        }
+    }
+
+    /// Keeps the summary on the run (for the run page) and hands it to the app to deliver.
+    fn deliver_summary(self: &Rc<Self>, finished: WorkflowRun) {
+        let summary = self.summary_of(&finished);
+        let run = {
+            let mut state = self.state.borrow_mut();
+            state.run.summary = Some(summary.clone());
+            state.run.clone()
+        };
+        self.save();
+        let launches = self.launches_of(&finished);
+        self.host.post(Summary {
+            run,
+            title: summary.title,
+            text: summary.text,
+            launches,
         });
     }
 
-    /// Posts the report. The run's final status is known once the report counts as posted.
+    /// Posts the summary. The run's final status is known once the summary counts as posted.
     fn post_report(self: &Rc<Self>) -> bool {
         let posted = {
             let mut state = self.state.borrow_mut();
@@ -1103,8 +1134,7 @@ impl Exec {
             state.run = posted.clone();
             posted
         };
-        self.save();
-        self.post_text(&posted);
+        self.deliver_summary(posted);
         true
     }
 
@@ -1120,7 +1150,7 @@ impl Exec {
             };
             let Some(action) = action else { return };
             let (node_id, branch, session_id) = match &action {
-                EngineAction::PostReport => {
+                EngineAction::PostSummary => {
                     if !self.post_report() {
                         return;
                     }
@@ -1135,7 +1165,7 @@ impl Exec {
                 EngineAction::RunCommand {
                     node_id, branch, ..
                 }
-                | EngineAction::AskMono {
+                | EngineAction::Decide {
                     node_id, branch, ..
                 } => (node_id, branch, None),
             };
@@ -1203,7 +1233,6 @@ impl Exec {
                 if let Err(error) = this.host.stop(&id).await {
                     eprintln!("Could not stop session {id}: {error}");
                 }
-                this.host.end_approvals(&id);
             }));
         }
         join_all(work).await;
@@ -1218,8 +1247,7 @@ impl Exec {
             }
         };
         if let Some(run) = report {
-            self.save();
-            self.post_text(&run);
+            self.deliver_summary(run);
         }
     }
 
@@ -1251,8 +1279,12 @@ impl Exec {
             }
             self.nudge.wait().await;
         }
+        // The run has ended on its own: deliver its summary once (a stop posts its own).
+        if !self.stopping.get() && !self.quitting.get() {
+            self.post_report();
+        }
         // Stop ends commands and sessions at once, a session notices within a poll and a command
-        // has its node timeout. A question to the Mono and a start that has not returned are
+        // has its node timeout. A decision and a start that has not returned are
         // abandoned on Stop, so they do not hold the run; a run that ended some other way waits
         // for them. Then the workflow is not seen as idle (and a scheduled run does not start in
         // the same directory) while something of this run is still alive.
@@ -1279,7 +1311,6 @@ impl Exec {
             }
         }
         for id in sessions {
-            self.host.end_approvals(id);
             self.host.release_session(id);
         }
         self.signals.set_running(&self.workflow_id, false);
@@ -1291,7 +1322,7 @@ impl Exec {
 // --- the runner ---------------------------------------------------------------------------------
 
 /// The live runs of the app, one per workflow. Clones share the runs: the quit path keeps one so
-/// it can reach the runner without updating `Monos`.
+/// it can reach the runner without updating the app's entities.
 #[derive(Clone)]
 pub(crate) struct WorkflowRunner {
     live: Registry,
@@ -1341,13 +1372,12 @@ impl WorkflowRunner {
             .collect()
     }
 
-    /// Runs `run` (made by the engine's `start_run` or `resume_run`) for the Mono. False when the
-    /// workflow already has a run going; a run that is already over is only written.
+    /// Runs `run` (made by the engine's `start_run` or `resume_run`). False when the workflow
+    /// already has a run going; a run that is already over is only written.
     pub(crate) fn start(
         &self,
         host: Rc<dyn WorkflowHost>,
         cx: &AsyncApp,
-        mono_id: &str,
         run: WorkflowRun,
     ) -> bool {
         let workflow_id = run.workflow_id.clone();
@@ -1357,7 +1387,6 @@ impl WorkflowRunner {
         let exec = Rc::new(Exec {
             host,
             cx: cx.clone(),
-            mono_id: mono_id.into(),
             workflow_id: workflow_id.clone(),
             limits: self.limits,
             nonce: monocode_core::mono::new_id().chars().take(6).collect(),
@@ -1365,7 +1394,6 @@ impl WorkflowRunner {
                 run,
                 command_seq: 0,
                 commands: BTreeSet::new(),
-                folders: HashMap::new(),
                 dirty: false,
                 writing: false,
             }),
@@ -1397,29 +1425,15 @@ impl WorkflowRunner {
         &self,
         host: Rc<dyn WorkflowHost>,
         cx: &AsyncApp,
-        mono_id: &str,
         stored: &WorkflowRun,
     ) -> bool {
-        stored.status == RunStatus::Interrupted && self.start(host, cx, mono_id, resume_run(stored))
+        stored.status == RunStatus::Interrupted && self.start(host, cx, resume_run(stored))
     }
 
     /// Stops the workflow's run. False when none is going or it is already stopping.
     pub(crate) fn stop(&self, workflow_id: &str) -> bool {
         let exec = self.live.borrow().get(workflow_id).cloned();
         exec.is_some_and(|exec| exec.request_stop())
-    }
-
-    /// Stops the runs of a Mono (it was deleted) like the user's Stop does: they end as stopped
-    /// and their sessions and commands are stopped. Returns how many were asked to stop.
-    pub(crate) fn stop_mono(&self, mono_id: &str) -> usize {
-        let of_mono: Vec<_> = self
-            .live
-            .borrow()
-            .values()
-            .filter(|exec| exec.mono_id == mono_id)
-            .cloned()
-            .collect();
-        of_mono.iter().filter(|exec| exec.request_stop()).count()
     }
 
     /// The app is quitting. Every run lets go at once and writes nothing more: its file keeps
@@ -1436,52 +1450,5 @@ impl WorkflowRunner {
 
     pub(crate) fn is_quitting(&self) -> bool {
         self.quitting.get()
-    }
-}
-
-// --- what the scheduler calls -------------------------------------------------------------------
-
-impl super::Monos {
-    /// The Mono is deleted: its workflow runs stop (as Stop does) and so do its questions to it.
-    pub(super) fn stop_workflows_of(&mut self, mono_id: &str, cx: &mut gpui::Context<Self>) {
-        self.workflows.stop_mono(mono_id);
-        let asks: Vec<i64> = self
-            .workflow_live
-            .asks
-            .keys()
-            .copied()
-            .filter(|&session| self.workflow_live.asked_by(session) == Some(mono_id))
-            .collect();
-        for session in asks {
-            self.workflow_ask_end(session, Err("The Mono was deleted".into()), cx);
-        }
-    }
-
-    /// Runs `run` for the Mono. False when the workflow already has a run going.
-    pub(super) fn start_workflow_run(
-        &mut self,
-        mono_id: &str,
-        run: WorkflowRun,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let host = self.workflow_host(cx);
-        self.workflows.start(host, &cx.to_async(), mono_id, run)
-    }
-
-    /// Continues an interrupted run. False when the workflow is running or the run was not
-    /// interrupted.
-    pub(super) fn resume_workflow_run(
-        &mut self,
-        mono_id: &str,
-        stored: &WorkflowRun,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let host = self.workflow_host(cx);
-        self.workflows.resume(host, &cx.to_async(), mono_id, stored)
-    }
-
-    /// Stops the workflow's run. False when none is going.
-    pub(super) fn stop_workflow_run(&mut self, workflow_id: &str) -> bool {
-        self.workflows.stop(workflow_id)
     }
 }

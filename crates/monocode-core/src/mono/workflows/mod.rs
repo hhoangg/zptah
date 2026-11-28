@@ -1,4 +1,4 @@
-//! Mono workflows: a graph of session, command, Ask Mono, If, For each and Report nodes.
+//! Workflows: a graph of trigger, session, command, If, Switch and For each nodes.
 //! The definition, lenient parsing and validation are pure; files and running come later.
 pub mod board_edit;
 #[cfg(test)]
@@ -18,6 +18,9 @@ pub mod engine;
 mod engine_tests;
 #[cfg(test)]
 mod fixtures;
+pub mod global;
+#[cfg(test)]
+mod global_tests;
 pub mod guide;
 pub mod mention;
 #[cfg(test)]

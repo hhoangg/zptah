@@ -159,7 +159,7 @@ impl Monos {
     pub(in crate::monos) fn workflow_header(
         &self,
         title: &str,
-        back: Option<Route>,
+        back: Option<WfRoute>,
         cx: &mut Context<Self>,
     ) -> Div {
         div()
@@ -178,10 +178,10 @@ impl Monos {
                     .debug_selector(|| "mono-page-back".into())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         // A closed review is not kept (nor probed again).
-                        if matches!(this.route, Some(Route::WorkflowReview(..))) {
+                        if matches!(this.wf.route, Some(WfRoute::Review(..))) {
                             this.wf.review = None;
                         }
-                        this.route = back.clone();
+                        this.wf.route = back.clone();
                         this.refresh_workflows(cx);
                         cx.notify();
                     })),

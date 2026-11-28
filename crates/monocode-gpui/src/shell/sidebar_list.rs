@@ -592,7 +592,7 @@ impl Shell {
                 .disabled(!self.workspace.preferences.notes)
                 .into(),
             MenuAction::new("sidebar-automations", "Automations")
-                .icon("zap")
+                .icon("refresh-cw")
                 .toggle(self.workspace.sidebar_automations_visible)
                 .into(),
             MenuAction::new("sidebar-inbox", "Inbox")
@@ -740,7 +740,8 @@ impl Shell {
                     ("New", "square-plus"),
                     ("Inbox", "inbox"),
                     ("Notes", "note"),
-                    ("Automations", "zap"),
+                    ("Workflows", "zap"),
+                    ("Automations", "refresh-cw"),
                     ("Contributors", "chart-square"),
                 ]
                 .into_iter()
@@ -860,6 +861,7 @@ impl Shell {
                             "Inbox" => this.open_inbox(window, cx),
                             "Notes" => this.open_notes(window, cx),
                             "Automations" => this.open_automations(window, cx),
+                            "Workflows" => this.open_workflows(window, cx),
                             "Contributors" => this.open_contributors(None, None, window, cx),
                             _ => (),
                         }))

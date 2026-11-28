@@ -235,7 +235,7 @@ pub(in crate::monos) fn preview_later<T: Send + 'static>(
 }
 
 fn limit_message() -> String {
-    format!("A Mono can have at most {WORKFLOWS_MAX} workflows")
+    format!("You can have at most {WORKFLOWS_MAX} workflows")
 }
 
 impl Monos {
@@ -249,7 +249,7 @@ impl Monos {
             debounce,
             ..Default::default()
         };
-        self.open_workflow_route(Route::ImportWorkflow, cx);
+        self.open_workflow_route(WfRoute::Import, cx);
     }
 
     fn import_text_field(&mut self, cx: &mut Context<Self>) -> Entity<Input> {
@@ -283,7 +283,7 @@ impl Monos {
             return;
         }
         let pause = imp.debounce;
-        let probe = self.workflow_live.probe();
+        let probe = self.workflow_probes(cx).probe();
         cx.notify();
         preview_later(
             pause,
@@ -364,7 +364,7 @@ impl Monos {
 
     fn import_input_field(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         name: &str,
         input: &WorkflowInput,
         cx: &mut Context<Self>,
@@ -379,7 +379,7 @@ impl Monos {
                     Some(Entered::Project(path)) => path.clone(),
                     _ => String::new(),
                 };
-                let choices: Vec<(String, String)> = mono
+                let choices: Vec<(String, String)> = scope
                     .projects
                     .iter()
                     .map(|path| (path.clone(), super::page::basename(path)))
@@ -457,7 +457,7 @@ impl Monos {
 
     pub(in crate::monos) fn import_workflow_page(
         &mut self,
-        mono: &Mono,
+        scope: &Scope,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.ensure_workflows(cx);
@@ -477,8 +477,8 @@ impl Monos {
         };
         let full = self.workflow_count().is_some_and(|n| n >= WORKFLOWS_MAX);
         let limit = limit_message();
-        let no_project =
-            mono.projects.is_empty() && inputs.values().any(|input| input.ty == InputType::Project);
+        let no_project = scope.projects.is_empty()
+            && inputs.values().any(|input| input.ty == InputType::Project);
         let imp = &self.wf.import;
         // The preview must be of the text in the box, not of what it said a moment ago.
         let ready = preview.is_some()
@@ -497,7 +497,7 @@ impl Monos {
                 if !inputs.is_empty() {
                     let mut fields = Vec::new();
                     for (name, input) in inputs.iter() {
-                        let field = self.import_input_field(mono, name, input, cx);
+                        let field = self.import_input_field(scope, name, input, cx);
                         let described = input.description.as_deref().map(visible);
                         fields.push(property(
                             visible(name),
@@ -547,7 +547,7 @@ impl Monos {
                             d.child(hint(format!("{limit}. Remove one to import this.")))
                         })
                         .when(!full && no_project, |d| {
-                            d.child(hint("Add a project to this Mono first, to choose it here."))
+                            d.child(hint("Add a project to the app first, to choose it here."))
                         })
                         .when(!full && !no_project && !problems.is_empty(), |d| {
                             d.child(hint(format!(
@@ -633,8 +633,6 @@ impl Monos {
         let now = now_ms();
         let limit = limit_message();
         let task_limit = limit.clone();
-        // The Mono the import was started for, whichever is open when it ends.
-        let mono = self.active.clone();
         self.workflow_task(
             move |host| -> Result<Workflow, String> {
                 let finished = finish_import(&preview, &values, now)?;
@@ -661,13 +659,11 @@ impl Monos {
                 match saved {
                     Ok(workflow) => {
                         let id = workflow.id.clone();
-                        if let Some(mono) = mono.clone() {
-                            this.wf.loaded.entry(mono).or_default().push(workflow);
-                        }
+                        this.wf.loaded.get_or_insert_with(Vec::new).push(workflow);
                         // The import page is replaced by the new workflow's page.
-                        if this.route == Some(Route::ImportWorkflow) && this.active == mono {
+                        if this.wf.route == Some(WfRoute::Import) {
                             this.wf.page_notice = None;
-                            this.route = Some(Route::Workflow(id));
+                            this.wf.route = Some(WfRoute::Workflow(id));
                         }
                         this.changed(cx);
                     }
