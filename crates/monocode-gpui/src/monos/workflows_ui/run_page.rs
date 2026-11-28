@@ -720,6 +720,17 @@ impl Monos {
     /// The run's worktree: its branch, and a button to remove it when nothing uses it.
     fn worktree_meta(&self, run: &WorkflowRun, cx: &mut Context<Self>) -> Option<Div> {
         let tree = run.worktree.as_ref()?;
+        if tree.is_removed() {
+            return Some(meta(
+                "Worktree",
+                div()
+                    .id("wf-run-worktree")
+                    .debug_selector(|| "wf-run-worktree".into())
+                    .max_w(px(420.))
+                    .truncate()
+                    .child(format!("Worktree removed ({})", tree.branch)),
+            ));
+        }
         let remove = super::run_tree_dialog::can_remove(run);
         Some(meta(
             "Worktree",

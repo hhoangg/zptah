@@ -380,6 +380,7 @@ fn run_worktree_and_run_branch_are_run_variables() {
         path: "/wt/run".into(),
         branch: "wf/spaces-1".into(),
         base: "abc".into(),
+        removed_at: None,
     });
     assert_eq!(text(&run, ""), "/wt/run|wf/spaces-1");
     run.branch_worktrees.insert(
@@ -388,6 +389,7 @@ fn run_worktree_and_run_branch_are_run_variables() {
             path: "/wt/run-each-1".into(),
             branch: "wf/spaces-1-each-1".into(),
             base: "def".into(),
+            removed_at: None,
         },
     );
     assert_eq!(text(&run, "each#1"), "/wt/run-each-1|wf/spaces-1-each-1");
@@ -576,6 +578,21 @@ fn without_a_run_worktree_runs_that_go_at_once_write_into_the_project_folder() {
         chain(&["gate"]),
     );
     assert_eq!(warnings(&none_without_writers), Vec::<String>::new());
+}
+
+#[test]
+fn per_run_with_no_workspace_project_warns_too_since_no_run_worktree_is_made() {
+    // D46: the default mode is perRun, but without a project there is nothing to make a worktree of.
+    let mut w = flow(
+        json!({"workspace": {"mode": "perRun"}}),
+        vec![session("a", json!({}))],
+        chain(&["a"]),
+    );
+    let found = warnings(&w);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("no workspace project"), "{found:?}");
+    w.concurrency = Concurrency { max: 1.0 };
+    assert_eq!(warnings(&w), Vec::<String>::new());
 }
 
 #[test]

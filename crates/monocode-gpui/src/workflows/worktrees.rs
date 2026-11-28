@@ -12,8 +12,8 @@ use monocode_core::mono::workflows::{
 use std::path::Path;
 
 impl Workflows {
-    /// Removes the worktree of the run and the worktrees of its For each branches, forgets them in
-    /// the run record and drops their ownership mark. The branches and their commits stay. The
+    /// Removes the worktree of the run and the worktrees of its For each branches, marks them
+    /// removed in the run record and drops their ownership mark. The branches and their commits stay. The
     /// caller showed the user what would be lost and got the click. A run that is going or
     /// queued keeps its worktrees.
     pub(crate) fn remove_run_worktrees(
@@ -38,6 +38,13 @@ impl Workflows {
                 .map(|tree| tree.path.clone())
                 .collect();
             paths.extend(run.worktree.iter().map(|tree| tree.path.clone()));
+            // Already removed ones are not taken twice.
+            paths.retain(|path| {
+                !run.branch_worktrees
+                    .values()
+                    .chain(run.worktree.iter())
+                    .any(|t| t.path == *path && t.is_removed())
+            });
             let mut gone: Vec<String> = Vec::new();
             let mut failure = None;
             for path in &paths {
@@ -56,18 +63,18 @@ impl Workflows {
                     }
                 }
             }
-            // What was removed is forgotten even when a later one failed.
+            // What was removed is marked so even when a later one failed. The record keeps the
+            // branch name, since the branch and its commits stay.
+            let at = monocode_core::time::now_ms();
             update_runs(&dir, &workflow_id, |mut runs| {
                 for stored in runs.iter_mut().filter(|r| r.id == run_id) {
-                    stored
+                    for tree in stored
                         .branch_worktrees
-                        .retain(|_, tree| !gone.contains(&tree.path));
-                    if stored
-                        .worktree
-                        .as_ref()
-                        .is_some_and(|t| gone.contains(&t.path))
+                        .values_mut()
+                        .chain(stored.worktree.iter_mut())
+                        .filter(|t| gone.contains(&t.path))
                     {
-                        stored.worktree = None;
+                        tree.removed_at = Some(at);
                     }
                 }
                 Ok((runs, ()))

@@ -34,12 +34,13 @@ pub(super) fn trees_of(run: &WorkflowRun) -> Vec<TreeEntry> {
     let mut trees: Vec<TreeEntry> = run
         .branch_worktrees
         .values()
+        .filter(|t| !t.is_removed())
         .map(|t| TreeEntry {
             path: t.path.clone(),
             branch: t.branch.clone(),
         })
         .collect();
-    if let Some(tree) = &run.worktree {
+    if let Some(tree) = run.worktree.as_ref().filter(|t| !t.is_removed()) {
         trees.push(TreeEntry {
             path: tree.path.clone(),
             branch: tree.branch.clone(),

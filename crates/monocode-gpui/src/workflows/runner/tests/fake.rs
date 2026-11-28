@@ -470,6 +470,7 @@ impl WorkflowHost for FakeHost {
                 path: format!("/code/app-worktrees/wf-{}-{}", request.slug, request.number),
                 branch: format!("wf/{}-{}", request.slug, request.number),
                 base: "run-base".into(),
+                removed_at: None,
             }),
         };
         w.run_trees.push(request);
@@ -491,6 +492,7 @@ impl WorkflowHost for FakeHost {
             path: format!("{}-{group}-{index}", run.path),
             branch: format!("{}-{group}-{index}", run.branch),
             base: format!("fork-{group}-{index}"),
+            removed_at: None,
         };
         Box::pin(async move { Ok(tree) })
     }

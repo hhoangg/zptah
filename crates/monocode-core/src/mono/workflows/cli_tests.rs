@@ -156,6 +156,7 @@ fn definition(extra: Value) -> Value {
         "name": "Ticket review",
         "inputs": {"project": {"type": "project"}},
         "inputValues": {"project": "/code/app"},
+        "workspace": {"mode": "perRun", "project": "{{inputs.project}}"},
         "nodes": [
             {"id": "start", "type": "schedule", "schedule": {"kind": "weekdays", "time": "09:00"}},
             {
@@ -3310,7 +3311,7 @@ fn add_reads_the_workspace_and_concurrency_and_get_returns_them() {
 #[test]
 fn a_workflow_without_them_defaults_to_a_per_run_workspace_and_three_runs_at_once() {
     let mut f = Fx::new();
-    f.add(definition(json!({})));
+    f.add(without(definition(json!({})), "workspace"));
     let saved = &f.stored()[0];
     assert_eq!(saved.workspace, Workspace::default());
     assert_eq!(saved.workspace.mode, WorkspaceMode::PerRun);
@@ -3517,6 +3518,7 @@ fn runs_report_their_number_worktree_and_queue_place() {
         path: "/code/app-worktrees/wf-x-4".into(),
         branch: "wf/x-4".into(),
         base: "abc".into(),
+        removed_at: None,
     });
     f.host.runs.insert(
         id.clone(),

@@ -112,6 +112,7 @@ pub fn create_run_worktree(
                     path: tree.path,
                     branch,
                     base,
+                    removed_at: None,
                 })
             }
             Err(error) if is_collision(&error) => last = error,
@@ -146,6 +147,7 @@ pub fn fork_branch_worktree(
                     path: tree.path,
                     branch,
                     base,
+                    removed_at: None,
                 })
             }
             Err(error) if is_collision(&error) => last = error,

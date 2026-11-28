@@ -1918,18 +1918,21 @@ pub fn workflow_warnings(w: &Workflow) -> Vec<WorkflowIssue> {
             });
         }
     }
-    // Without a worktree per run, runs that go at once write into the same project folder.
+    // Without a worktree per run (mode none, or perRun with no workspace.project, which makes
+    // none), runs that go at once write into the same project folder.
     let shared_root =
         |key: &str| key.starts_with("root:") || (key.starts_with("run:") && !w.workspace.per_run());
     let concurrent = w.concurrency.limit() > 1;
-    if concurrent
-        && w.workspace.mode == WorkspaceMode::None
-        && writers.iter().any(|(_, key)| shared_root(key))
-    {
+    if concurrent && !w.workspace.per_run() && writers.iter().any(|(_, key)| shared_root(key)) {
+        let why = if w.workspace.mode == WorkspaceMode::None {
+            "with workspace mode none"
+        } else {
+            "with no workspace project, so no run worktree is made"
+        };
         out.push(WorkflowIssue {
             node_id: None,
             message: format!(
-                "Up to {} runs of this workflow can go at the same time and, with workspace mode none, its steps write into the project folder itself: set concurrency.max to 1, or let each run work in its own worktree (workspace mode perRun with a project)",
+                "Up to {} runs of this workflow can go at the same time and, {why}, its steps write into the project folder itself: set concurrency.max to 1, or let each run work in its own worktree (workspace mode perRun with a project)",
                 w.concurrency.limit()
             ),
         });

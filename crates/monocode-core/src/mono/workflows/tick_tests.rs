@@ -1671,3 +1671,50 @@ fn a_resume_waits_for_nothing_but_needs_a_free_slot() {
     assert!(resumes_of(&found).is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// Removes the workflow (and clears its runs) just before the first save of its runs file, as
+/// `workflows.remove` does between a tick's claim and its write.
+struct Remover {
+    disk: MonoDir,
+    armed: Cell<bool>,
+}
+
+impl MonoFiles for Remover {
+    fn read(&self, relative: &str) -> Result<AgentFile, String> {
+        self.disk.read(relative)
+    }
+    fn save(&self, relative: &str, text: &str, expected: Option<&str>) -> Result<String, String> {
+        if relative.contains("wf-abcd1234") && self.armed.replace(false) {
+            update_workflows(&self.disk, |_| Ok((Vec::new(), ()))).unwrap();
+            clear_runs(&self.disk, ID);
+        }
+        self.disk.save(relative, text, expected)
+    }
+}
+
+#[test]
+fn a_run_claimed_just_before_the_workflow_is_removed_is_not_queued_after_it() {
+    let root = temp_root();
+    let disk = dir(&root);
+    save(&disk, &[workflow(json!({"concurrency": {"max": 1}}))]);
+    let remover = Remover {
+        disk: disk.clone(),
+        armed: Cell::new(true),
+    };
+    let found = check(
+        &remover,
+        &Tick {
+            now: now(),
+            live_runs: &|_| 1,
+            probe: probe_nothing,
+            on_claim: &|_, _| {},
+            preflight: &|_| Preflight::default(),
+        },
+    )
+    .unwrap();
+    assert!(found.starts.is_empty());
+    assert!(load_workflows(&disk).unwrap().workflows.is_empty());
+    // Neither a lost run in a live file nor an orphan run of the removed workflow.
+    assert!(load_runs(&disk, ID).unwrap().is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}

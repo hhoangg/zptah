@@ -101,18 +101,40 @@ pub enum Enqueued {
     Queued(usize),
     /// Not written: the queue already holds the most it may.
     Full,
+    /// Not written (or taken back): the workflow was removed while the run was being queued.
+    Gone,
 }
 
-/// Puts a run in the queue, unless it is full. Hash-checked with the rest of the runs file.
+fn workflow_exists(files: &impl MonoFiles, id: &str) -> Result<bool, String> {
+    Ok(super::store::load_workflows(files)?
+        .workflows
+        .iter()
+        .any(|w| w.id == id))
+}
+
+/// Puts a run in the queue, unless it is full or its workflow was removed. Hash-checked with the
+/// rest of the runs file, and the workflow is looked for again on every attempt, so a removal
+/// that lands between a claim and this write leaves no runs file behind.
 pub fn enqueue(files: &impl MonoFiles, run: WorkflowRun) -> Result<Enqueued, String> {
-    update_runs(files, &run.workflow_id.clone(), |runs| {
+    let id = run.workflow_id.clone();
+    let result = update_runs(files, &id, |runs| {
+        if !workflow_exists(files, &id)? {
+            return Ok((runs, Enqueued::Gone));
+        }
         if queued_count(&runs) >= QUEUED_RUNS_MAX {
             return Ok((runs, Enqueued::Full));
         }
         let place = queued_count(&runs) + 1;
         let list = std::iter::once(run.clone()).chain(runs).collect();
         Ok((list, Enqueued::Queued(place)))
-    })
+    })?;
+    // A removal that cleared the file to the very text this write started from does not move the
+    // hash, so look once more after the write.
+    if matches!(result, Enqueued::Queued(_)) && !workflow_exists(files, &id)? {
+        super::store::clear_runs(files, &id);
+        return Ok(Enqueued::Gone);
+    }
+    Ok(result)
 }
 
 /// Records a start the queue refused (an event over the cap) as a `skipped` run with the reason,

@@ -118,6 +118,7 @@ fn the_offer_is_only_for_a_run_that_has_a_worktree_and_is_not_using_it() {
         path: "/wt".into(),
         branch: "wf/x-1".into(),
         base: "abc".into(),
+        removed_at: None,
     };
     assert!(!can_remove(&done_run(&w, None)));
     assert!(can_remove(&done_run(&w, Some(tree.clone()))));
@@ -145,6 +146,7 @@ fn the_worktrees_listed_are_the_branches_first_and_the_runs_own_last() {
         path: format!("/wt/{n}"),
         branch: format!("wf/{n}"),
         base: "abc".into(),
+        removed_at: None,
     };
     let mut run = done_run(&w, Some(tree("run")));
     run.branch_worktrees.insert("each#0".into(), tree("a"));
@@ -237,11 +239,29 @@ fn remove_worktree_asks_first_lists_the_work_and_removes_only_on_the_click(
     visual.run_until_parked();
     assert!(!Path::new(&tree.path).exists());
     repo.git(&["show-ref", "--verify", "refs/heads/wf/ship-it-1"]);
-    assert!(history(&s, A)[0].worktree.is_none());
+    // The record keeps the branch name and says when the folder went (D47).
+    let kept = history(&s, A)[0]
+        .worktree
+        .clone()
+        .expect("the record stays");
+    assert_eq!(kept.branch, "wf/ship-it-1");
+    assert!(kept.removed_at.is_some());
     assert!(!marked(&s, &tree.path), "the ownership mark goes with it");
     assert!(s.manager.read_with(visual, |m, _| m.wf.tree.is_none()));
     settle(&s, visual);
     assert!(visual.debug_bounds("wf-run-remove-tree").is_none());
+    // The page still names the worktree: removed, with its branch.
+    assert!(visual.debug_bounds("wf-run-worktree").is_some());
+    assert_eq!(
+        s.manager.read_with(visual, |m, _| m
+            .wf
+            .run
+            .run
+            .as_ref()
+            .and_then(|r| r.worktree.as_ref())
+            .map(|t| t.removed_at.is_some())),
+        Some(true)
+    );
 }
 
 #[gpui::test]
@@ -255,6 +275,7 @@ fn a_run_that_is_still_going_has_no_remove_button(cx: &mut TestAppContext) {
             path: "/wt".into(),
             branch: "wf/x-1".into(),
             base: "abc".into(),
+            removed_at: None,
         }),
     );
     run.status = RunStatus::Running;

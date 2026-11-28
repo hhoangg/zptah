@@ -163,6 +163,7 @@ fn the_record_of_a_worktree_round_trips() {
         path: "/p".into(),
         branch: "wf/x-1".into(),
         base: "abc".into(),
+        removed_at: None,
     };
     let json = serde_json::to_string(&tree).unwrap();
     assert_eq!(json, r#"{"path":"/p","branch":"wf/x-1","base":"abc"}"#);

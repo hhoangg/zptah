@@ -543,7 +543,7 @@ fn stop_while_continue_waits_for_the_turn_takes_no_outputs(cx: &mut TestAppConte
     let _busy = rig.fake.busy();
     answer(&rig, "s1", WaitChoice::Continue).unwrap();
     cx.run_until_parked();
-    assert!(rig.runner.stop(WF));
+    assert!(rig.runner.stop(WF, None));
     cx.run_until_parked();
     let run = rig.last_run();
     assert_eq!(run.status, RunStatus::Stopped);

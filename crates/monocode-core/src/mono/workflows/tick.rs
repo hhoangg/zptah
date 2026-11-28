@@ -441,6 +441,8 @@ pub fn check(files: &impl MonoFiles, tick: &Tick) -> Result<Found, String> {
                 );
                 match enqueue(files, record) {
                     Ok(Enqueued::Queued(_)) => {}
+                    // The workflow was removed after the claim: nothing to record.
+                    Ok(Enqueued::Gone) => {}
                     Ok(Enqueued::Full) => {
                         let reason = queue_full_reason();
                         let skipped =

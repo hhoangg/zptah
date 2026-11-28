@@ -312,6 +312,7 @@ fn a_resumed_run_goes_on_in_the_worktree_it_has(cx: &mut TestAppContext) {
         path: "/code/app-worktrees/earlier".into(),
         branch: "wf/ship-it-3".into(),
         base: "old-base".into(),
+        removed_at: None,
     });
     let rig = Rig::new(&["done"]);
     rig.start_run(cx, run);

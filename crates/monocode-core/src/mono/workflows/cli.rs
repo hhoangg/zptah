@@ -571,10 +571,11 @@ fn run_summary_fields(run: &WorkflowRun) -> Vec<(&'static str, Json)> {
         fields.push(("number", Json::Number(number as f64)));
     }
     if let Some(tree) = &run.worktree {
-        fields.push((
-            "worktree",
-            obj([("path", st(&tree.path)), ("branch", st(&tree.branch))]),
-        ));
+        let mut shown = vec![("path", st(&tree.path)), ("branch", st(&tree.branch))];
+        if let Some(at) = tree.removed_at {
+            shown.push(("removedAt", st(stamp(at))));
+        }
+        fields.push(("worktree", Json::Object(shown.into_iter().collect())));
     }
     if let Some(ended) = run.ended_at.filter(|at| *at != 0) {
         fields.push(("endedAt", st(stamp(ended))));

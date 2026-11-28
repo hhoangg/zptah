@@ -26,6 +26,10 @@ fn workflow() -> Workflow {
     )
 }
 
+fn stored(disk: &MonoDir) {
+    update_workflows(disk, |_| Ok((vec![workflow()], ()))).unwrap();
+}
+
 fn waiting(id: &str, at: u64) -> WorkflowRun {
     queued_run(
         &workflow(),
@@ -78,6 +82,7 @@ fn a_run_that_is_not_waiting_is_not_in_the_queue() {
 fn at_most_fifty_runs_wait_and_the_next_one_is_refused() {
     let root = temp_root();
     let disk = MonoDir::new(&root, "mono-1");
+    stored(&disk);
     for n in 0..QUEUED_RUNS_MAX {
         let run = waiting(&format!("run-{n}"), n as u64 + 1);
         assert_eq!(
@@ -126,6 +131,7 @@ fn an_event_over_the_cap_is_recorded_as_a_skipped_run_with_the_reason() {
 fn cancelling_a_queued_run_stops_it_without_starting_and_leaves_the_others() {
     let root = temp_root();
     let disk = MonoDir::new(&root, "mono-1");
+    stored(&disk);
     enqueue(&disk, waiting("a", 1)).unwrap();
     enqueue(&disk, waiting("b", 2)).unwrap();
     assert!(cancel_queued(&disk, ID, "a", 100).unwrap());
@@ -140,5 +146,15 @@ fn cancelling_a_queued_run_stops_it_without_starting_and_leaves_the_others() {
     // Cancelling again, or a run that never queued, changes nothing.
     assert!(!cancel_queued(&disk, ID, "a", 101).unwrap());
     assert!(!cancel_queued(&disk, ID, "nobody", 101).unwrap());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_run_is_not_queued_for_a_workflow_that_was_removed() {
+    let root = temp_root();
+    let disk = MonoDir::new(&root, "mono-1");
+    // The workflow is not stored: nothing is written, and no runs file is left behind.
+    assert_eq!(enqueue(&disk, waiting("late", 1)).unwrap(), Enqueued::Gone);
+    assert!(load_runs(&disk, ID).unwrap().is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }

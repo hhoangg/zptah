@@ -438,7 +438,8 @@ fn build_scope<'n>(
             run.branch_worktrees
                 .get(&format!("{}#{}", b.group_id, b.index))
         })
-        .or(run.worktree.as_ref());
+        .or(run.worktree.as_ref())
+        .filter(|tree| !tree.is_removed());
     if let Some(tree) = tree {
         info.insert("worktree", Json::String(tree.path.clone()));
         info.insert("branch", Json::String(tree.branch.clone()));

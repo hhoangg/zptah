@@ -298,7 +298,7 @@ impl Exec {
                 run.definition.name.clone(),
                 run.number,
                 run.id.clone(),
-                run.worktree.is_some(),
+                run.worktree.as_ref().is_some_and(|t| !t.is_removed()),
             )
         };
         if !workspace.per_run() || made {
@@ -332,14 +332,29 @@ impl Exec {
     /// (forked from the run worktree when the branch first needs it, then reused for every round
     /// and every later step), else the run's. `None` when the run has no worktree.
     async fn run_tree(self: &Rc<Self>, branch: &str) -> Result<Option<RunWorktree>, String> {
-        let Some(run_tree) = self.state.borrow().run.worktree.clone() else {
+        let Some(run_tree) = self
+            .state
+            .borrow()
+            .run
+            .worktree
+            .clone()
+            .filter(|t| !t.is_removed())
+        else {
             return Ok(None);
         };
         let Some(split) = parse_branch(branch) else {
             return Ok(Some(run_tree));
         };
         let key = branch_key(&split.group_id, split.index);
-        let known = |this: &Self| this.state.borrow().run.branch_worktrees.get(&key).cloned();
+        let known = |this: &Self| {
+            this.state
+                .borrow()
+                .run
+                .branch_worktrees
+                .get(&key)
+                .filter(|t| !t.is_removed())
+                .cloned()
+        };
         if let Some(tree) = known(self) {
             return Ok(Some(tree));
         }

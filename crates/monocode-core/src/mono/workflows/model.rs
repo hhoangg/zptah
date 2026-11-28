@@ -1249,6 +1249,17 @@ pub struct RunWorktree {
     pub branch: String,
     /// The commit the worktree started from, to tell what the run changed.
     pub base: String,
+    /// When the user removed the folder. The record stays, so the run page still names the branch
+    /// (its commits are kept).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_at: Option<u64>,
+}
+
+impl RunWorktree {
+    /// Whether the folder is gone (removed from the run page).
+    pub fn is_removed(&self) -> bool {
+        self.removed_at.is_some()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
