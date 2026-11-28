@@ -112,6 +112,26 @@ describe("the list", () => {
     expect(screen.queryByTestId("workflow-row")).toBeNull();
   });
 
+  it("says when the run history could not be read instead of saying never run", async () => {
+    FIXTURE_HANDLERS["workflows.list"] = (() => ({
+      workflows: [
+        { id: "a", name: "Broken history", enabled: true, triggers: [], lastRunUnreadable: true },
+        { id: "b", name: "Fresh", enabled: true, triggers: [] },
+      ],
+    })) as never;
+    mount();
+    expect((await rowOf("Broken history")).getByText("Run history unreadable")).toBeInTheDocument();
+    expect((await rowOf("Broken history")).queryByText("Never run")).toBeNull();
+    expect((await rowOf("Fresh")).getByText("Never run")).toBeInTheDocument();
+  });
+
+  it("does not make every status badge a live region", async () => {
+    mount();
+    await rowOf("Nightly checks");
+    expect(document.querySelectorAll('[role="status"]')).toHaveLength(0);
+    expect(screen.getAllByText("Done").length).toBeGreaterThan(0);
+  });
+
   it("tolerates fields it does not know", async () => {
     FIXTURE_HANDLERS["workflows.list"] = (() => ({
       workflows: [{ id: "w", name: "Odd", enabled: true, triggers: [{ id: "t", type: "later", label: "Something new", extra: 1 }], futureField: { a: 1 }, lastRun: { status: "queuedSomewhere", startedAt: 1 } }],
@@ -151,6 +171,21 @@ describe("the runs of a workflow", () => {
     const run = within(await screen.findByTestId("workflow-run"));
     expect(run.getAllByText("Waiting for you")).toHaveLength(2);
     expect(run.getByText("A Mono", { exact: false })).toBeInTheDocument();
+  });
+
+  it("says so on a run whose outputs or last steps the desktop left out", async () => {
+    FIXTURE_HANDLERS["workflows.runs"] = (() => ({
+      workflow: { id: "w", name: "X" },
+      runs: [
+        { id: "r1", status: "done", caller: { kind: "manual" }, startedAt: 2, outputsDropped: true, nodesTruncated: true, nodes: [{ nodeId: "n", status: "done" }] },
+        { id: "r2", status: "done", caller: { kind: "manual" }, startedAt: 1, nodes: [{ nodeId: "n", status: "done", output: { a: 1 } }] },
+      ],
+    })) as never;
+    mount("workflows/w");
+    const runs = await screen.findAllByTestId("workflow-run");
+    expect(within(runs[0]!).getByText("Outputs left out (too large)")).toBeInTheDocument();
+    expect(within(runs[0]!).getByText("Later steps left out (too large)")).toBeInTheDocument();
+    expect(within(runs[1]!).queryByText(/left out/)).toBeNull();
   });
 
   it("answers like a missing workflow when the desktop hides it", async () => {

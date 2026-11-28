@@ -341,6 +341,8 @@ export const WorkflowSummarySchema = z.looseObject({
   /** Milliseconds since the epoch; null when nothing is scheduled. */
   nextRunAt: z.number().nullish(),
   lastRun: z.looseObject({ status: z.string(), startedAt: z.number() }).nullish(),
+  /** True when the desktop could not read the run history: that is not the same as "never run". */
+  lastRunUnreadable: z.boolean().optional(),
 });
 
 export const WorkflowsListResultSchema = z.looseObject({ workflows: z.array(WorkflowSummarySchema) });
@@ -370,6 +372,10 @@ export const WorkflowRunSchema = z.looseObject({
   error: z.string().nullish(),
   nodes: z.array(WorkflowNodeRunSchema),
   sessions: z.array(z.string()).optional(),
+  /** The desktop left the step outputs of this run out to keep the reply small. */
+  outputsDropped: z.boolean().optional(),
+  /** The desktop left the last steps of this run out to keep the reply small. */
+  nodesTruncated: z.boolean().optional(),
 });
 
 export const WorkflowsRunsResultSchema = z.looseObject({

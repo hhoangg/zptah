@@ -44,7 +44,7 @@ export function WorkflowsScreen({ desktopId }: { desktopId: string }) {
             <Link to="/d/$desktopId/workflows/$workflowId" params={{ desktopId, workflowId: workflow.id }} className="flex flex-col gap-2 rounded-card p-4 hover:bg-content-a04">
               <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
                 <h2 className="min-w-0 wrap-anywhere text-body font-semibold text-content">{safeText(workflow.name, 80) || "Unnamed workflow"}</h2>
-                {workflow.lastRun ? <StatusBadge status={workflow.lastRun.status} scope="Last run" /> : <Badge variant="outline">Never run</Badge>}
+                {workflow.lastRun ? <StatusBadge status={workflow.lastRun.status} /> : workflow.lastRunUnreadable ? <Badge variant="destructive">Run history unreadable</Badge> : <Badge variant="outline">Never run</Badge>}
               </div>
               {workflow.description ? <p className="wrap-anywhere text-small text-muted-text">{safeText(workflow.description, 200)}</p> : null}
               <p className="text-small text-muted-text">{workflow.triggers.length === 0 ? "No trigger" : workflow.triggers.map((trigger) => safeText(trigger.label, 60)).join(", ")}</p>

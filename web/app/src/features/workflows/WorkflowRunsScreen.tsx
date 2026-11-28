@@ -64,7 +64,7 @@ function RunRow({ desktopId, run }: { desktopId: string; run: Run }) {
             {duration ? ` - ${duration}` : ""}
           </p>
         </div>
-        <StatusBadge status={run.status} scope="Run" />
+        <StatusBadge status={run.status} />
       </div>
       {summary ? (
         <div className="text-small">
@@ -77,6 +77,8 @@ function RunRow({ desktopId, run }: { desktopId: string; run: Run }) {
           {safeText(run.error, 300)}
         </Notice>
       ) : null}
+      {run.outputsDropped ? <p className="text-small text-muted-text">Outputs left out (too large)</p> : null}
+      {run.nodesTruncated ? <p className="text-small text-muted-text">Later steps left out (too large)</p> : null}
       <div>
         <h3 className="text-label font-medium text-muted-text">Steps</h3>
         {run.nodes.length === 0 ? (
@@ -103,7 +105,7 @@ function NodeRow({ desktopId, node }: { desktopId: string; node: NodeRun }) {
           {name}
           {node.branch ? <span className="text-muted-text"> ({safeText(node.branch, 30)})</span> : null}
         </span>
-        <StatusBadge status={node.status} scope={`Step ${name}`} />
+        <StatusBadge status={node.status} />
       </div>
       {node.error ? <p className="wrap-anywhere text-small text-destructive-text">{safeText(node.error, 300)}</p> : null}
       {output ? (
