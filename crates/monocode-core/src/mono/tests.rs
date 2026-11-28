@@ -278,6 +278,9 @@ fn the_prompt_and_help_describe_workflows() {
     // The help of monos.send says the switch is on by default, as `Mono::default()` has it.
     assert!(bridge::HELP.contains("turned on in its settings (on by default)"));
     assert!(!bridge::HELP.contains("(off by default)"));
+    // Habit runs, heartbeats and workflow questions are refused for monos.send, and the help says so.
+    assert!(bridge::HELP.contains("can call monos.list but not monos.send"));
+    assert!(!bridge::HELP.contains("workflow questions follow the sessions.* rules"));
     // The paragraph follows the habits and keeps the native CLI's words (no React `app ` prefix).
     assert!(
         context.find("Habits are scheduled work").unwrap()

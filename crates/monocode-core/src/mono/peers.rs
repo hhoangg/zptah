@@ -14,6 +14,8 @@ pub const MESSAGE_MAX: usize = 16_000;
 pub const REPLY_MAX: usize = 24_000;
 /// Hops one exchange may take before a Mono can no longer send: a peer message is hop 1, its reply
 /// hop 2, a follow-up from that reply hop 3. The user's own message always starts at 0.
+/// The limit is not absolute: a completion report from a session started at the last hop arrives
+/// as a fresh turn at depth 0, so the rate limit (`RATE_MAX`) is what finally bounds an exchange.
 pub const MAX_DEPTH: u8 = 3;
 /// At most `RATE_MAX` messages per sender in `RATE_WINDOW_MS`.
 pub const RATE_MAX: usize = 10;
