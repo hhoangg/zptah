@@ -721,12 +721,46 @@ pub fn workflow_projects(w: &Workflow) -> (Vec<String>, bool) {
 /// or from an input that is not declared or has no value. The mobile link hides such a workflow
 /// from a device that sees only some projects.
 pub fn has_unresolved_project(w: &Workflow) -> bool {
-    w.nodes.iter().any(|node| {
-        let (NodeKind::Session { project, .. } | NodeKind::Command { project, .. }) = &node.kind
-        else {
-            return false;
-        };
-        let project = project.trim();
+    // A folder a step is sent to that is made from a variable cannot be told either.
+    let existing_unknown = w.nodes.iter().any(|node| {
+        matches!(
+            &node.kind,
+            NodeKind::Session { checkout: super::model::Checkout::Existing(path), .. }
+                if path.contains("{{")
+        )
+    });
+    // The workspace project may be empty (the steps name theirs), but when it is set it counts.
+    let workspace_unknown = !w.workspace.project.trim().is_empty()
+        && project_unresolved(w, w.workspace.project.trim(), false);
+    existing_unknown
+        || workspace_unknown
+        || w.nodes.iter().any(|node| {
+            let (NodeKind::Session { project, .. } | NodeKind::Command { project, .. }) =
+                &node.kind
+            else {
+                return false;
+            };
+            project_unresolved(w, project.trim(), true)
+        })
+}
+
+/// The literal folders steps are sent to with `checkout: existing`.
+pub fn workflow_existing_paths(w: &Workflow) -> Vec<String> {
+    w.nodes
+        .iter()
+        .filter_map(|node| match &node.kind {
+            NodeKind::Session {
+                checkout: super::model::Checkout::Existing(path),
+                ..
+            } if !path.contains("{{") && !path.trim().is_empty() => Some(path.trim().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether the project text of a step (or of the workspace) cannot be told from the definition.
+fn project_unresolved(w: &Workflow, project: &str, empty_is_unknown: bool) -> bool {
+    {
         match project
             .strip_prefix("{{")
             .and_then(|rest| rest.strip_suffix("}}"))
@@ -739,9 +773,9 @@ pub fn has_unresolved_project(w: &Workflow) -> bool {
                 ),
                 None => true,
             },
-            None => project.contains("{{") || project.is_empty(),
+            None => project.contains("{{") || (empty_is_unknown && project.is_empty()),
         }
-    })
+    }
 }
 
 /// Whether a step names `{{inputs.<name>}}` as its `project`, whatever the input's declared type.
@@ -1651,19 +1685,13 @@ fn run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
             // Only for the run that is about to start; never written to the stored input values.
             values: (!values.is_empty()).then(|| values.clone()),
         };
-        if latest.run_requested {
-            // Several calls in one turn: each waits behind the one before it.
-            if latest.run_backlog.len() + 1 + waiting >= QUEUED_RUNS_MAX {
-                return Err(format!(
-                    "That workflow already has {QUEUED_RUNS_MAX} runs waiting, the most it keeps. Wait for some to start, or cancel some with workflows.stop and a runId"
-                ));
-            }
-            latest.run_backlog.push(request);
-        } else {
-            latest.run_requested = true;
-            latest.run_caller = request.caller;
-            latest.run_values = request.values;
+        // Several calls in one turn: each waits behind the one before it.
+        if latest.run_requested && latest.run_backlog.len() + 1 + waiting >= QUEUED_RUNS_MAX {
+            return Err(format!(
+                "That workflow already has {QUEUED_RUNS_MAX} runs waiting, the most it keeps. Wait for some to start, or cancel some with workflows.stop and a runId"
+            ));
         }
+        latest.push_run_request(request);
         Ok((replace(list, latest), ()))
     })?;
     host.request_check_now();
@@ -1728,6 +1756,30 @@ fn stop<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
             _ => return Err("That run is not going or queued".into()),
         }
     } else {
+        if !host.is_running(&current.id) && current.pending_requests() > 0 {
+            // Runs asked for and not claimed yet: stopping them takes the requests back.
+            let dropped = host.update(|_, list| {
+                let mut dropped = 0;
+                let list = list
+                    .into_iter()
+                    .map(|mut w| {
+                        if w.id == current.id {
+                            dropped = w.cancel_requests();
+                        }
+                        w
+                    })
+                    .collect();
+                Ok((list, dropped))
+            })?;
+            return Ok(obj([
+                ("id", st(&current.id)),
+                ("cancelledRequests", Json::Number(dropped as f64)),
+                (
+                    "note",
+                    st("The runs that were asked for and had not started were cancelled."),
+                ),
+            ]));
+        }
         if !host.is_running(&current.id) {
             let waiting: Vec<String> = queued_fifo(&runs).iter().map(|r| r.id.clone()).collect();
             return Err(if waiting.is_empty() {
@@ -2031,5 +2083,13 @@ fn runs<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         }
         detail
     });
-    Ok(obj([("runs", Json::Array(detailed.collect()))]))
+    let mut out = vec![("runs", Json::Array(detailed.collect()))];
+    // Runs asked for that no claim has answered yet; workflows.stop takes them back.
+    if current.pending_requests() > 0 {
+        out.push((
+            "pendingRequests",
+            Json::Number(current.pending_requests() as f64),
+        ));
+    }
+    Ok(Json::Object(out.into_iter().collect()))
 }

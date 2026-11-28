@@ -206,6 +206,7 @@ impl Monos {
         let gate = self.run_gate_dialog(scope, window, cx);
         let stopping = self.stop_ask_dialog(window, cx);
         let removing = self.remove_ask_dialog(window, cx);
+        let cancelling = self.cancel_ask_dialog(window, cx);
         div()
             .size_full()
             .min_w_0()
@@ -227,6 +228,7 @@ impl Monos {
             .children(gate)
             .children(stopping)
             .children(removing)
+            .children(cancelling)
             .into_any_element()
     }
 

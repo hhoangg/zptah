@@ -554,6 +554,7 @@ impl Monos {
         let tree = self.run_tree_dialog(window, cx);
         let stopping = self.stop_ask_dialog(window, cx);
         let removing = self.remove_ask_dialog(window, cx);
+        let cancelling = self.cancel_ask_dialog(window, cx);
         div()
             .id("wf-board")
             .debug_selector(|| "wf-board".into())
@@ -592,6 +593,7 @@ impl Monos {
             .children(tree)
             .children(stopping)
             .children(removing)
+            .children(cancelling)
             .into_any_element()
     }
 

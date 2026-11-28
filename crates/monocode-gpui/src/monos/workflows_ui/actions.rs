@@ -165,11 +165,12 @@ pub(super) fn run_now(
             return Ok((Some(w), Some(notice)));
         }
         let mut next = w;
-        next.run_requested = true;
-        // The user asks for this run, whatever a Mono left in the request before.
-        next.run_caller = None;
-        // Only for the run that starts now; a value left by an earlier request must not leak in.
-        next.run_values = values.clone();
+        // Behind a request a Mono (or an earlier click) left: that one is not overwritten.
+        next.push_run_request(monocode_core::mono::workflows::model::RunRequest {
+            caller: None,
+            // Only for this run; a value left by an earlier request must not leak in.
+            values: values.clone(),
+        });
         Ok((Some(next), None))
     });
     if notice.is_none() {
@@ -295,9 +296,10 @@ pub(super) fn approve(
             approved.needs_review = false;
             let approved = match intent {
                 ReviewIntent::Run => {
-                    approved.run_requested = true;
-                    approved.run_caller = None;
-                    approved.run_values = None;
+                    approved.push_run_request(monocode_core::mono::workflows::model::RunRequest {
+                        caller: None,
+                        values: None,
+                    });
                     Ok(approved)
                 }
                 ReviewIntent::Enable => enabled_now(approved, host.now()),
@@ -349,6 +351,10 @@ pub(super) fn remove(host: &mut impl WorkflowHost, id: &str) -> Option<String> {
 
 /// Cancels every run that waits, then removes the workflow (the user agreed to both).
 pub(super) fn remove_cancelling_queue(host: &mut impl WorkflowHost, id: &str) -> Option<String> {
+    // Refused first: a workflow that cannot be removed keeps its waiting runs.
+    if host.is_running(id) {
+        return Some(STOP_FIRST.into());
+    }
     let runs = host.runs(id).unwrap_or_default();
     for run in monocode_core::mono::workflows::queue::queued_fifo(&runs) {
         if let Err(error) = host.cancel_queued(id, &run.id) {

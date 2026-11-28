@@ -204,8 +204,8 @@ pub fn requeue(files: &impl MonoFiles, run: &WorkflowRun) -> Result<bool, String
                     && stored.status == RunStatus::Running
                     && stored.worktree.is_none()
                 {
-                    let mut claimed = run.definition.clone();
-                    claimed.run_values = Some(run.definition.input_values.clone());
+                    // Its own values only when it had some; otherwise the stored inputs apply.
+                    let claimed = run.definition.clone();
                     let mut queued = queued_run(
                         &claimed,
                         run.caller.clone(),

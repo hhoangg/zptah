@@ -24,7 +24,7 @@ mod sessions;
 mod summary;
 mod terminal;
 mod waits;
-mod worktrees;
+pub(crate) mod worktrees;
 
 pub(crate) use runner::{Live, WaitChoice, WorkflowRunner};
 #[cfg(test)]

@@ -193,11 +193,11 @@ fn removing_a_workflow_with_waiting_runs_and_worktrees_asks_then_cancels_and_rem
         remove_lines(m.wf.remove_ask.as_ref().expect("asked"))
     });
     assert!(
-        lines[0].contains("2 queued runs will be cancelled"),
+        lines[2].contains("2 queued runs will be cancelled"),
         "{lines:?}"
     );
     assert!(
-        lines[1].contains("1 worktree") && lines[1].contains("wf/x-1"),
+        lines[3].contains("1 worktree") && lines[3].contains("wf/x-1"),
         "{lines:?}"
     );
     assert_eq!(saved(&s).len(), 1);
@@ -225,18 +225,25 @@ fn the_removal_dialog_says_only_what_applies() {
         trees: (0..trees)
             .map(|n| (format!("/p{n}"), format!("wf/b{n}")))
             .collect(),
+        requests: 0,
     };
-    assert_eq!(remove_lines(&ask(1, 0)).len(), 1);
+    // Always the two lines of what goes and what stays; the rest only when it applies.
+    assert_eq!(remove_lines(&ask(0, 0)).len(), 2);
+    assert_eq!(remove_lines(&ask(1, 0)).len(), 3);
     assert!(
-        remove_lines(&ask(1, 0))[0].starts_with("1 queued run will be cancelled; it never starts")
+        remove_lines(&ask(1, 0))[2].starts_with("1 queued run will be cancelled; it never starts")
     );
-    assert_eq!(remove_lines(&ask(0, 2)).len(), 1);
-    assert!(remove_lines(&ask(0, 2))[0].contains("2 worktrees"));
-    assert!(remove_lines(&ask(0, 0)).is_empty());
+    assert_eq!(remove_lines(&ask(0, 2)).len(), 3);
+    assert!(remove_lines(&ask(0, 2))[2].contains("2 worktrees"));
+    let mut with_requests = ask(0, 0);
+    with_requests.requests = 2;
+    assert!(remove_lines(&with_requests)[0].contains("2 runs asked for"));
 }
 
 #[gpui::test]
-fn a_workflow_whose_worktrees_were_all_removed_goes_without_a_question(cx: &mut TestAppContext) {
+fn a_workflow_with_nothing_left_over_is_still_asked_about_and_goes_on_confirm(
+    cx: &mut TestAppContext,
+) {
     let s = setup(cx);
     let w = linear();
     put(&s, vec![w.clone()]);
@@ -252,7 +259,18 @@ fn a_workflow_whose_worktrees_were_all_removed_goes_without_a_question(cx: &mut 
     let visual = &mut visual_of(&s, cx);
     click(visual, "mono-workflow-delete-wf-aaaaaaaa");
     settle(&s, visual);
-    assert!(!shown(visual, "wf-remove-ask"));
+    // Always asked (D52), and the dialog says what goes and what stays.
+    assert!(shown(visual, "wf-remove-ask"));
+    assert_eq!(saved(&s).len(), 1);
+    let lines = s.manager.read_with(visual, |m, _| {
+        remove_lines(m.wf.remove_ask.as_ref().expect("asked"))
+    });
+    assert!(
+        lines[0].starts_with("Goes:") && lines[1].starts_with("Stays:"),
+        "{lines:?}"
+    );
+    click(visual, "wf-remove-confirm");
+    visual.run_until_parked();
     assert!(saved(&s).is_empty());
 }
 
@@ -308,6 +326,7 @@ fn the_runs_list_can_cancel_every_waiting_run_at_once(cx: &mut TestAppContext) {
     let visual = &mut visual_of(&s, cx);
     open_runs(&s, visual, "run-1");
     click(visual, "wf-runs-cancel-queued");
+    click(visual, "wf-cancelall-confirm");
     visual.run_until_parked();
     assert!(
         history(&s, A)
@@ -456,4 +475,68 @@ fn settings_edits_the_workspace_and_the_concurrency_and_saves_them(cx: &mut Test
     pick(&s, visual, BoardPick::WorkspaceProject, "");
     pick(&s, visual, BoardPick::Concurrency, "3");
     assert_eq!(on_board(&s, visual, |b| b.meta.concurrency.max), 3.);
+}
+
+// ---- the re-check ---------------------------------------------------------------------------------
+
+#[gpui::test]
+fn removing_a_workflow_that_is_going_keeps_its_waiting_runs(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut w = linear();
+    w.last_run_id = Some("run-0".into());
+    put(&s, vec![w.clone()]);
+    put_runs(&s, &[queued(&w, "run-1", 1)]);
+    open_tab(&s, cx);
+    let visual = &mut visual_of(&s, cx);
+    // A run is going (claimed) when the removal is confirmed.
+    let signals = s
+        .manager
+        .read_with(visual, |m, _| m.workflow_signals.clone());
+    click(visual, "mono-workflow-delete-wf-aaaaaaaa");
+    settle(&s, visual);
+    signals.claim_run(A, "run-9");
+    click(visual, "wf-remove-confirm");
+    visual.run_until_parked();
+    // Refused before anything was cancelled: the workflow stays and so does its queue.
+    assert_eq!(saved(&s).len(), 1);
+    assert_eq!(history(&s, A)[0].status, RunStatus::Queued);
+    signals.release_run(A, "run-9");
+}
+
+#[gpui::test]
+fn a_run_asked_for_by_the_user_goes_behind_a_pending_mono_request(cx: &mut TestAppContext) {
+    use monocode_core::mono::workflows::cli::{Signals, StoreHost};
+    let s = setup(cx);
+    let mut w = super::tests::workflow_in(&s, json!({}));
+    w.run_requested = true;
+    w.run_caller = Some(RunCaller::mono("mono-1", "start"));
+    put(&s, vec![w]);
+    let mut host = StoreHost::new(s.workflows_dir(), std::sync::Arc::new(Signals::default()));
+    assert_eq!(super::actions::run_now(&mut host, A, None), None);
+    let stored = saved(&s).remove(0);
+    assert_eq!(
+        stored.run_caller,
+        Some(RunCaller::mono("mono-1", "start")),
+        "the Mono's request was not overwritten"
+    );
+    assert_eq!(stored.run_backlog.len(), 1);
+    assert!(stored.run_backlog[0].caller.is_none());
+}
+
+#[gpui::test]
+fn cancel_all_queued_asks_first(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut w = linear();
+    w.last_run_id = Some("run-0".into());
+    put(&s, vec![w.clone()]);
+    put_runs(&s, &[queued(&w, "run-2", 2), queued(&w, "run-1", 1)]);
+    open_tab(&s, cx);
+    let visual = &mut visual_of(&s, cx);
+    open_runs(&s, visual, "run-1");
+    click(visual, "wf-runs-cancel-queued");
+    assert!(shown(visual, "wf-cancelall-ask"));
+    assert!(history(&s, A).iter().all(|r| r.status == RunStatus::Queued));
+    click(visual, "wf-cancelall-cancel");
+    assert!(!shown(visual, "wf-cancelall-ask"));
+    assert!(history(&s, A).iter().all(|r| r.status == RunStatus::Queued));
 }

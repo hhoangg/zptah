@@ -527,7 +527,9 @@ impl Monos {
                             .text_size(px(11.))
                             .cursor_pointer()
                             .on_click(cx.listener(
-                                move |this, _, _, cx| this.run_cancel_all_queued(&bulk, cx),
+                                move |this, _, _, cx| {
+                                    this.run_cancel_all_clicked(&bulk, waiting, cx)
+                                },
                             )),
                         )
                     }),

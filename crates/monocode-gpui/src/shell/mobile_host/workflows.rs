@@ -16,7 +16,7 @@
 //! dropped.
 use super::*;
 use monocode_core::mono::workflows::{
-    cli::{has_unresolved_project, workflow_projects},
+    cli::{has_unresolved_project, workflow_existing_paths, workflow_projects},
     global::WorkflowsDir,
     model::{NodeKind, NodeRun, Workflow, WorkflowRun, with_run_values},
     store::{load_runs_checked, load_workflows},
@@ -51,13 +51,65 @@ pub(super) fn workflow_visible(device: &DeviceContext, known: &[String], w: &Wor
     if has_unresolved_project(w) {
         return false;
     }
-    workflow_projects(w).0.iter().all(|path| {
+    let selected = |project: &str| selection.iter().any(|id| *id == project_id(project));
+    let projects_ok = workflow_projects(w).0.iter().all(|path| {
         let key = monocode_core::files::path_key(path);
         known
             .iter()
             .find(|known| monocode_core::files::path_key(known) == key)
-            .is_some_and(|known| selection.iter().any(|id| *id == project_id(known)))
-    })
+            .is_some_and(|known| selected(known))
+    });
+    // A folder a step is sent to belongs to the project it is inside of, or whose worktrees
+    // folder it is inside of; a folder that is neither is not known, so the workflow is hidden.
+    projects_ok
+        && workflow_existing_paths(w).iter().all(|path| {
+            known.iter().any(|project| {
+                selected(project)
+                    && (monocode_core::files::is_equal_or_inside(path, project)
+                        || monocode_core::files::is_equal_or_inside(
+                            path,
+                            &monocode_core::worktree_management::default_root(
+                                std::path::Path::new(project),
+                            )
+                            .to_string_lossy(),
+                        ))
+            })
+        })
+}
+
+/// Every run worktree path the run records, removed or not. Branch names are not paths.
+fn worktree_paths(run: &WorkflowRun) -> Vec<String> {
+    let mut paths: Vec<String> = run
+        .worktree
+        .iter()
+        .chain(run.branch_worktrees.values())
+        .map(|tree| tree.path.clone())
+        .filter(|path| !path.is_empty())
+        .collect();
+    // The longest first, so a path inside another is not left half replaced.
+    paths.sort_by_key(|path| std::cmp::Reverse(path.len()));
+    paths
+}
+
+/// Replaces the run's worktree paths wherever text carries them (a summary built from
+/// `{{run.worktree}}`, a step's output or error).
+fn hide_worktrees(value: &mut Value, paths: &[String]) {
+    match value {
+        Value::String(text) => {
+            for path in paths {
+                if text.contains(path.as_str()) {
+                    *text = text.replace(path.as_str(), "(worktree)");
+                }
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| hide_worktrees(item, paths)),
+        Value::Object(fields) => fields
+            .values_mut()
+            .for_each(|item| hide_worktrees(item, paths)),
+        _ => {}
+    }
 }
 
 /// The longest string kept in a node output or error, and in a summary. Longer text ends in [`TRUNCATED`].
@@ -332,6 +384,7 @@ fn run_reply(device: &DeviceContext, run: &WorkflowRun, links: &Links) -> Value 
     if let Some(fields) = value.as_object_mut() {
         fields.retain(|key, _| key == "sessions" || RUN_KEYS.contains(&key.as_str()));
     }
+    hide_worktrees(&mut value, &worktree_paths(run));
     value
 }
 

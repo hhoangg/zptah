@@ -64,7 +64,13 @@ fn a_node_is_offered_trigger_inputs_and_run_variables() {
     );
     assert_eq!(
         in_group(&w, "fetch", &VariableGroup::Run),
-        ["{{run.id}}", "{{run.round}}", "{{run.startedAt}}"]
+        [
+            "{{run.id}}",
+            "{{run.round}}",
+            "{{run.startedAt}}",
+            "{{run.worktree}}",
+            "{{run.branch}}"
+        ]
     );
     let input = available_variables(&w, "fetch")
         .into_iter()

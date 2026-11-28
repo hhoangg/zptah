@@ -193,10 +193,8 @@ fn a_promoted_run_the_app_refused_goes_back_in_the_queue_with_its_values() {
     assert_eq!(back.queued_at, Some(100));
     assert_eq!(back.caller, run.caller);
     // The values the run had are what the next promotion starts it with.
-    assert_eq!(
-        back.definition.run_values,
-        Some(run.definition.input_values.clone())
-    );
+    // It had no values of its own, so the next start uses the stored inputs.
+    assert_eq!(back.definition.run_values, None);
     assert_eq!(queue_len(&disk, ID).unwrap(), 1);
     // Asked again, there is no running record left to put back.
     assert!(!requeue(&disk, &run).unwrap());
@@ -204,5 +202,33 @@ fn a_promoted_run_the_app_refused_goes_back_in_the_queue_with_its_values() {
     let mut fresh = run.clone();
     fresh.queued_at = None;
     assert!(!requeue(&disk, &fresh).unwrap());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_requeued_run_keeps_the_values_it_was_asked_with_when_it_had_some() {
+    use super::engine::start_run;
+    let root = temp_root();
+    let disk = MonoDir::new(&root, "mono-1");
+    stored(&disk);
+    let mut values = super::ordered::OrderedMap::new();
+    values.insert("count".to_string(), InputValue::Number(3.0));
+    let mut run = start_run(
+        &workflow(),
+        RunCaller::new(CallerKind::Manual, "start"),
+        500,
+        "run-v",
+    );
+    run.status = RunStatus::Running;
+    run.ended_at = None;
+    run.number = Some(2);
+    run.queued_at = Some(100);
+    run.definition.run_values = Some(values.clone());
+    update_runs(&disk, ID, |_| Ok((vec![run.clone()], ()))).unwrap();
+    assert!(requeue(&disk, &run).unwrap());
+    assert_eq!(
+        load_runs(&disk, ID).unwrap()[0].definition.run_values,
+        Some(values)
+    );
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -981,7 +981,8 @@ fn a_requested_run_uses_its_run_values_and_keeps_the_stored_ones() {
     assert!(failure.is_none());
     assert_eq!(run.status, RunStatus::Running);
     assert_eq!(count_of(&run.definition), Some(InputValue::Number(9.0)));
-    assert!(run.definition.run_values.is_none());
+    // Kept on the run's snapshot only so a run put back in the queue knows its own values.
+    assert!(run.definition.run_values.is_some());
     let after = stored_one(&disk);
     assert_eq!(count_of(&after), Some(InputValue::Number(2.0)));
     assert!(after.run_values.is_none() && !after.run_requested);
@@ -1464,7 +1465,8 @@ fn a_queued_run_starts_on_the_definition_of_that_moment_with_its_own_values() {
         run.definition.input_values.get("repo"),
         Some(&InputValue::String("/code/lib".into()))
     );
-    assert!(run.definition.run_values.is_none());
+    // Kept on the run's snapshot only so a run put back in the queue knows its own values.
+    assert!(run.definition.run_values.is_some());
     assert_eq!(
         stored_one(&disk).input_values.get("repo"),
         Some(&InputValue::String("/code/app".into()))
@@ -1757,5 +1759,25 @@ fn a_run_claimed_just_before_the_workflow_is_removed_is_not_queued_after_it() {
     assert!(load_workflows(&disk).unwrap().workflows.is_empty());
     // Neither a lost run in a live file nor an orphan run of the removed workflow.
     assert!(load_runs(&disk, ID).unwrap().is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_claim_that_leaves_more_requests_behind_asks_for_another_look() {
+    let root = temp_root();
+    let disk = dir(&root);
+    let mut w = workflow(json!({"runRequested": true}));
+    w.run_backlog = vec![RunRequest {
+        caller: None,
+        values: None,
+    }];
+    save(&disk, &[w]);
+    let found = look(&disk, &idle);
+    assert!(found.more_requests);
+    // The next request is the pending one now, so the next look claims it.
+    assert!(stored_one(&disk).run_requested);
+    let found = look(&disk, &idle);
+    assert!(!found.more_requests);
+    assert!(!stored_one(&disk).run_requested);
     std::fs::remove_dir_all(root).unwrap();
 }

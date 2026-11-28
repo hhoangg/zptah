@@ -182,6 +182,7 @@ pub(super) struct WorkflowsUi {
     /// The open "Which run should stop?" and "Remove this workflow?" confirmations.
     stop_ask: Option<ask_dialogs::StopAsk>,
     remove_ask: Option<ask_dialogs::RemoveAsk>,
+    cancel_ask: Option<ask_dialogs::CancelAsk>,
     /// The open Run or Resume dialog, and the number of the last check it asked for.
     gate: Option<run_gate::RunGate>,
     gate_generation: u64,

@@ -626,6 +626,7 @@ impl Shell {
                 return;
             }
         };
+        let run_dir = self.workflows().map(|w| w.read(cx).dir().clone());
         let check_cwd = cwd.clone();
         let check_path = path.clone();
         let work = cx.background_executor().spawn(async move {
@@ -647,7 +648,11 @@ impl Shell {
                 let snapshot=monocode_core::git::snapshot(Path::new(&worker_cwd))?;
                 let main=snapshot.worktrees.first().ok_or("No main working copy found")?;
                 monocode_core::worktree_management::remove(Path::new(&main.path),Path::new(&worker_path))?;
-                locked(&store)?.detach_worktree(&worker_path,&main.path)
+                let db=locked(&store)?;
+                let detached=db.detach_worktree(&worker_path,&main.path);
+                // A worktree a workflow run owned: its record says it went, and the mark goes.
+                if let Some(dir)=&run_dir {crate::workflows::worktrees::mark_removed_everywhere(dir,&db,&worker_path);}
+                detached
             });let result=work.await;
             let _=this.update(cx,|this,cx|{let result=result.map(|detached|this.worktree_detached(detached,&path,cx));this.finish_worktree_action(&path,result,cx);});
         }).detach();

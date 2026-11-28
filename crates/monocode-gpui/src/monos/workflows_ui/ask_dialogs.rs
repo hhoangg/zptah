@@ -26,6 +26,14 @@ pub(super) struct RemoveAsk {
     pub(super) queued: Vec<String>,
     /// `(path, branch)` of the worktrees that stay on disk.
     pub(super) trees: Vec<(String, String)>,
+    /// Runs asked for that no claim answered yet: they go with the workflow.
+    pub(super) requests: usize,
+}
+
+/// "Cancel all queued" asks first: how many runs it would end.
+pub(super) struct CancelAsk {
+    pub(super) workflow: String,
+    pub(super) count: usize,
 }
 
 /// What a row of the stop dialog says about a run.
@@ -40,7 +48,19 @@ pub(super) fn run_label(number: Option<u64>, started_at: u64, now: u64) -> Strin
 
 /// The lines the removal dialog shows.
 pub(super) fn remove_lines(ask: &RemoveAsk) -> Vec<String> {
-    let mut lines = Vec::new();
+    let mut lines = vec![format!(
+        "Goes: the workflow with its steps, and its run history{}.",
+        if ask.requests > 0 {
+            format!(
+                ", and {} run{} asked for that did not start yet",
+                ask.requests,
+                if ask.requests == 1 { "" } else { "s" }
+            )
+        } else {
+            String::new()
+        }
+    )];
+    lines.push("Stays: the sessions its runs opened, with their history.".to_string());
     if !ask.queued.is_empty() {
         lines.push(format!(
             "{} queued run{} will be cancelled; {} never start{}.",
@@ -104,11 +124,15 @@ impl Monos {
         page: bool,
         cx: &mut Context<Self>,
     ) {
-        let (id, name) = (
+        let (id, name, requests) = (
             id.to_string(),
             self.global_workflow(id)
                 .map(|w| w.name.clone())
                 .unwrap_or_default(),
+            self.global_workflow(id).map_or(
+                0,
+                monocode_core::mono::workflows::model::Workflow::pending_requests,
+            ),
         );
         let looked = id.clone();
         self.workflow_task(
@@ -118,16 +142,14 @@ impl Monos {
                 (queued, worktrees_left(&runs))
             },
             move |this, (queued, trees), cx| {
-                if queued.is_empty() && trees.is_empty() {
-                    this.workflow_remove_now(&id, page, false, cx);
-                    return;
-                }
+                // Always asked (D52): a removal cannot be taken back.
                 this.wf.remove_ask = Some(RemoveAsk {
                     workflow: id,
                     name,
                     page,
                     queued,
                     trees,
+                    requests,
                 });
                 cx.notify();
             },
@@ -145,6 +167,80 @@ impl Monos {
             self.workflow_remove_now(&ask.workflow, ask.page, !ask.queued.is_empty(), cx);
         }
         cx.notify();
+    }
+
+    /// "Cancel all queued" in the runs list: asks first.
+    pub(super) fn run_cancel_all_clicked(
+        &mut self,
+        workflow: &str,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.wf.cancel_ask = Some(CancelAsk {
+            workflow: workflow.to_string(),
+            count,
+        });
+        cx.notify();
+    }
+
+    fn cancel_ask_close(&mut self, cx: &mut Context<Self>) {
+        self.wf.cancel_ask = None;
+        cx.notify();
+    }
+
+    fn cancel_ask_confirm(&mut self, cx: &mut Context<Self>) {
+        if let Some(ask) = self.wf.cancel_ask.take() {
+            self.run_cancel_all_queued(&ask.workflow, cx);
+        }
+        cx.notify();
+    }
+
+    /// The cancel-all dialog, when it is open.
+    pub(super) fn cancel_ask_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let ask = self.wf.cancel_ask.as_ref()?;
+        let count = ask.count;
+        let weak = cx.weak_entity();
+        let footer = crate::modal::actions()
+            .child(
+                crate::modal::ghost_button("wf-cancelall-cancel", "Keep them")
+                    .debug_selector(|| "wf-cancelall-cancel".into())
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| this.cancel_ask_close(cx))),
+            )
+            .child(
+                crate::modal::danger_button("wf-cancelall-confirm", format!("Cancel {count} runs"))
+                    .debug_selector(|| "wf-cancelall-confirm".into())
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| this.cancel_ask_confirm(cx))),
+            );
+        let card = crate::modal::scroll_card(
+            "wf-cancelall-scroll",
+            crate::modal::max_card_height(window),
+            crate::modal::title("Cancel every queued run?"),
+            div().pt_3().child(dialog_text(
+                format!("{count} runs wait for a free slot. Cancelled, they never start."),
+                0.7,
+            )),
+            footer,
+        )
+        .w(px(420.))
+        .id("wf-cancelall-ask")
+        .debug_selector(|| "wf-cancelall-ask".into())
+        .role(Role::Dialog)
+        .aria_label("Cancel every queued run?");
+        Some(
+            crate::modal::window_overlay(
+                window,
+                crate::modal::overlay("wf-cancelall-modal", card, move |_, cx| {
+                    let _ = weak.update(cx, |this, cx| this.cancel_ask_close(cx));
+                }),
+            )
+            .into_any_element(),
+        )
     }
 
     /// The stop dialog, when it is open.

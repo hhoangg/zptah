@@ -353,6 +353,11 @@ fn removing_a_workflow_from_its_own_page_still_shows_the_instances_it_left(
     s.manager
         .update(visual, |m, cx| m.workflow_remove_clicked(A, true, cx));
     visual.run_until_parked();
+    settle(&s, visual);
+    // Removing always asks first (D52).
+    assert_eq!(saved(&s).len(), 1);
+    click(visual, "wf-remove-confirm");
+    visual.run_until_parked();
     assert_eq!(route(&s, visual), None);
     assert!(saved(&s).is_empty());
     let shown = notice(&s, visual).expect("the list says what the removal left");
@@ -900,6 +905,10 @@ fn resume_and_pause_flip_the_workflow_and_remove_takes_it_out(cx: &mut TestAppCo
     click(visual, "mono-workflow-toggle-wf-aaaaaaaa");
     assert!(!saved(&s)[0].enabled);
     click(visual, "mono-workflow-delete-wf-other001");
+    // Asked first; nothing is removed until it is confirmed.
+    assert_eq!(saved(&s).len(), 2);
+    click(visual, "wf-remove-confirm");
+    visual.run_until_parked();
     assert_eq!(saved(&s).len(), 1);
     assert_eq!(
         s.manager.read_with(visual, |m, _| m.workflow_count()),
@@ -918,6 +927,7 @@ fn remove_on_a_row_is_refused_while_a_run_is_going(cx: &mut TestAppContext) {
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     click(visual, "mono-workflow-delete-wf-aaaaaaaa");
+    click(visual, "wf-remove-confirm");
     assert_eq!(
         notice(&s, visual).as_deref(),
         Some("Stop the workflow before removing it.")
@@ -1170,6 +1180,7 @@ fn remove_on_the_page_closes_it_and_is_refused_while_a_run_is_going(cx: &mut Tes
     s.manager
         .read_with(visual, |m, _| m.workflow_signals.set_running(A, true));
     more_menu(&s, visual, "remove");
+    click(visual, "wf-remove-confirm");
     assert!(
         page_notice(&s, visual)
             .unwrap()
@@ -1180,6 +1191,8 @@ fn remove_on_the_page_closes_it_and_is_refused_while_a_run_is_going(cx: &mut Tes
     s.manager
         .read_with(visual, |m, _| m.workflow_signals.set_running(A, false));
     more_menu(&s, visual, "remove");
+    click(visual, "wf-remove-confirm");
+    visual.run_until_parked();
     assert!(saved(&s).is_empty());
     assert_eq!(route(&s, visual), None);
 }

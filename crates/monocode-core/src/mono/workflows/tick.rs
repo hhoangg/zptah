@@ -81,6 +81,8 @@ pub struct Found {
     pub stops: Vec<String>,
     /// `(workflow id, run id)` of runs asked to stop by id. A queued one was cancelled already.
     pub stop_runs: Vec<(String, String)>,
+    /// A claim left more requests asked for behind it: look again at once to claim the next.
+    pub more_requests: bool,
 }
 
 fn warn(what: &str, error: &str) {
@@ -155,6 +157,8 @@ fn begin(claimed: &Workflow, origin: Origin, tick: &Tick, run_id: &str) -> Start
     let mut run = start_run(&effective, origin.caller, tick.now, run_id);
     run.number = Some(origin.number);
     run.queued_at = origin.queued_at;
+    // Kept so a run put back in the queue knows whether it had values of its own.
+    run.definition.run_values = claimed.run_values.clone();
     let catalog = ModelCatalog::for_harnesses(&harnesses_used(&effective), tick.probe);
     let mut messages: Vec<String> = workflow_issues(&effective, &catalog)
         .into_iter()
@@ -435,6 +439,7 @@ pub fn check(files: &impl MonoFiles, tick: &Tick) -> Result<Found, String> {
         let run_id = uuid::Uuid::new_v4().to_string();
         match claim(files, tick.now, &id, &run_id, &waiting) {
             Ok(Some(claimed)) => {
+                found.more_requests |= !claimed.run_backlog.is_empty();
                 let origin = Origin {
                     caller: caller_of(&claimed, tick.now),
                     number: claimed.run_counter + 1,

@@ -717,17 +717,26 @@ impl WorkflowHost for AppHost {
     ) -> Fut<Result<RunWorktree, String>> {
         let store = self.with(|w, _| w.store.clone());
         let run_id = run_id.to_string();
+        let (workflows, mut cx) = (self.workflows.clone(), self.cx.clone());
         let work = self.cx.background_executor().spawn(async move {
             let store = store.ok_or("The app is closing")?;
             let tree = run_worktree::restore_worktree(&tree)?;
-            monocode_core::session_worktree::mark_workflow_worktree(
-                &*locked(&store)?,
-                &tree.path,
-                &run_id,
-            )?;
-            Ok(tree)
+            let db = locked(&store)?;
+            monocode_core::session_worktree::mark_workflow_worktree(&db, &tree.path, &run_id)?;
+            // The sessions that worked there when it was removed work there again.
+            let back = db.reattach_worktree(&tree.path).unwrap_or_default();
+            Ok::<_, String>((tree, back))
         });
-        Box::pin(work)
+        Box::pin(async move {
+            let (tree, back) = work.await?;
+            let path = tree.path.clone();
+            let _ = workflows.update(&mut cx, |w, cx| {
+                if let Some(shell) = w.shell.upgrade() {
+                    shell.update(cx, |shell, cx| shell.worktree_reattached(back, &path, cx));
+                }
+            });
+            Ok(tree)
+        })
     }
 
     fn save_run(&self, run: WorkflowRun) -> Fut<Result<(), String>> {

@@ -162,3 +162,44 @@ impl Workflows {
         })
     }
 }
+
+/// A worktree some other path deleted (the Settings removal): any run that owned it says when it
+/// went, and the ownership mark goes. Blocks (reads the run files): use it off the UI thread.
+pub(crate) fn mark_removed_everywhere(
+    dir: &monocode_core::mono::workflows::global::WorkflowsDir,
+    store: &monocode_core::store::Store,
+    path: &str,
+) {
+    let key = monocode_core::files::path_key(path);
+    let _ = monocode_core::session_worktree::unmark_workflow_worktree(store, path);
+    let Ok(loaded) = load_workflows(dir) else {
+        return;
+    };
+    let at = monocode_core::time::now_ms();
+    for workflow in loaded.workflows {
+        let owns = load_runs(dir, &workflow.id).is_ok_and(|runs| {
+            runs.iter().any(|run| {
+                run.worktree
+                    .iter()
+                    .chain(run.branch_worktrees.values())
+                    .any(|t| monocode_core::files::path_key(&t.path) == key && !t.is_removed())
+            })
+        });
+        if !owns {
+            continue;
+        }
+        let _ = update_runs(dir, &workflow.id, |mut runs| {
+            for run in runs.iter_mut().filter(|r| r.status != RunStatus::Running) {
+                for tree in run
+                    .worktree
+                    .iter_mut()
+                    .chain(run.branch_worktrees.values_mut())
+                    .filter(|t| monocode_core::files::path_key(&t.path) == key)
+                {
+                    tree.removed_at.get_or_insert(at);
+                }
+            }
+            Ok((runs, ()))
+        });
+    }
+}

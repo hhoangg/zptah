@@ -73,6 +73,27 @@ impl Shell {
             .retain(|_, focus| !is_equal_or_inside(&focus.path, path));
     }
 
+    /// Shows the sessions `reattach_worktree` gave their folder back, so a resumed run goes on in
+    /// the conversation it had.
+    pub(crate) fn worktree_reattached(
+        &mut self,
+        back: Vec<(
+            monocode_core::store::Session,
+            monocode_core::agent::Settings,
+        )>,
+        _path: &str,
+        cx: &mut Context<Self>,
+    ) {
+        for (summary, settings) in back {
+            self.session_summaries.insert(summary.id, summary.clone());
+            self.session_worktrees
+                .insert(summary.id, settings.worktree_cwd.clone());
+            if let Some(view) = self.sessions.get(&summary.id) {
+                view.update(cx, |v, cx| v.worktree_restored(summary, settings, cx));
+            }
+        }
+    }
+
     pub(super) fn working_copy(&self) -> &str {
         self.worktree_focus
             .get(&self.workspace.project)

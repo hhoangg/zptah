@@ -485,6 +485,35 @@ pub struct RunRequest {
     pub values: Option<OrderedMap<InputValue>>,
 }
 
+impl Workflow {
+    /// Asks for one more run: it becomes the pending request, or waits behind the ones already
+    /// asked for, so a request is never overwritten.
+    pub fn push_run_request(&mut self, request: RunRequest) {
+        if self.run_requested {
+            self.run_backlog.push(request);
+        } else {
+            self.run_requested = true;
+            self.run_caller = request.caller;
+            self.run_values = request.values;
+        }
+    }
+
+    /// How many requested runs no claim has answered yet.
+    pub fn pending_requests(&self) -> usize {
+        usize::from(self.run_requested) + self.run_backlog.len()
+    }
+
+    /// Drops every request that was not claimed. Returns how many there were.
+    pub fn cancel_requests(&mut self) -> usize {
+        let n = self.pending_requests();
+        self.run_requested = false;
+        self.run_caller = None;
+        self.run_values = None;
+        self.run_backlog.clear();
+        n
+    }
+}
+
 /// Who or what started a run, and through which trigger node. It replaces the old `RunTrigger`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

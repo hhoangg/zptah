@@ -1866,7 +1866,13 @@ fn the_store_host_saves_to_the_mono_files_and_signals_the_runner() {
     assert!(load_workflows(&dir).unwrap().workflows[0].run_requested);
     assert!(signals.take_check_now());
     assert!(!signals.take_check_now(), "a check is taken once");
-    // Nothing is running until the runner says so.
+    // Nothing is running until the runner says so: stopping takes the request back.
+    let taken = call("workflows.stop", json!({"id": id})).unwrap();
+    assert_eq!(
+        taken.get("cancelledRequests").and_then(Json::as_f64),
+        Some(1.0)
+    );
+    assert!(!load_workflows(&dir).unwrap().workflows[0].run_requested);
     let e = call("workflows.stop", json!({"id": id})).unwrap_err();
     assert!(e.contains("not running"), "{e}");
     signals.set_running(&id, true);
@@ -3748,4 +3754,51 @@ fn resuming_a_run_whose_removed_worktree_has_no_repository_or_branch_is_refused(
     let e = f.err("workflows.resumeRun", json!({"id": id, "runId": "run-1"}));
     assert!(e.contains("cannot continue"), "{e}");
     assert!(f.stored()[0].resume_run_id.is_none());
+}
+
+#[test]
+fn a_request_pushed_while_another_waits_goes_behind_it_and_none_is_overwritten() {
+    let mut w = Workflow::new("wf-x", "x");
+    let ask = |n: f64| {
+        let mut values = OrderedMap::new();
+        values.insert("n".to_string(), InputValue::Number(n));
+        RunRequest {
+            caller: None,
+            values: Some(values),
+        }
+    };
+    let mono = RunRequest {
+        caller: Some(RunCaller::mono("mono-1", "start")),
+        values: None,
+    };
+    w.push_run_request(mono.clone());
+    w.push_run_request(ask(1.));
+    assert!(w.run_requested);
+    assert_eq!(w.run_caller, mono.caller, "the Mono's request stays first");
+    assert_eq!(w.run_backlog, vec![ask(1.)]);
+    assert_eq!(w.pending_requests(), 2);
+    assert_eq!(w.cancel_requests(), 2);
+    assert!(!w.run_requested && w.run_backlog.is_empty() && w.run_caller.is_none());
+}
+
+#[test]
+fn stopping_a_workflow_with_only_unclaimed_requests_takes_them_back_and_runs_lists_them() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({}));
+    for _ in 0..3 {
+        f.ok("workflows.run", json!({"id": id}));
+    }
+    let result = f.ok("workflows.runs", json!({"id": id}));
+    assert_eq!(
+        result.get("pendingRequests").and_then(Json::as_f64),
+        Some(3.0)
+    );
+    let stopped = f.ok("workflows.stop", json!({"id": id}));
+    assert_eq!(
+        stopped.get("cancelledRequests").and_then(Json::as_f64),
+        Some(3.0)
+    );
+    assert_eq!(f.stored()[0].pending_requests(), 0);
+    let result = f.ok("workflows.runs", json!({"id": id}));
+    assert!(result.get("pendingRequests").is_none());
 }

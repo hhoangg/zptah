@@ -1561,6 +1561,53 @@ impl Store {
         tx.commit().map_err(|e| e.to_string())?;
         Ok(changed)
     }
+    /// The folder of a removed worktree is back (a run made it again from its kept branch): the
+    /// sessions that worked in it work there again, on the same conversation. Returns them.
+    pub fn reattach_worktree(
+        &self,
+        path: &str,
+    ) -> Result<Vec<(Session, crate::agent::Settings)>, String> {
+        if self.shared.is_some() {
+            return Ok(Vec::new());
+        }
+        let mut changed = Vec::new();
+        for mut session in self.sessions()? {
+            let Some(mut settings) = self.agent_settings(session.id)? else {
+                continue;
+            };
+            let Some(execution) = settings.worktree_cwd.clone() else {
+                continue;
+            };
+            if !settings.worktree_removed || !crate::files::is_equal_or_inside(&execution, path) {
+                continue;
+            }
+            settings.worktree_removed = false;
+            settings.revision += 1;
+            session.cwd = execution;
+            changed.push((session, settings));
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        for (session, settings) in &changed {
+            tx.execute(
+                "UPDATE native_sessions SET cwd=?2 WHERE id=?1",
+                params![session.id, session.cwd],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                SAVE_AGENT_SETTINGS,
+                params![
+                    format!("agent:{}", session.id),
+                    serde_json::to_string(settings).map_err(|e| e.to_string())?
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(changed)
+    }
     pub fn reset_provider_id(&self, id: i64) -> Result<(), String> {
         if self.shared.is_some() {
             return self.shared_patch(id, &[("provider_session_id", serde_json::Value::Null)]);
@@ -1702,6 +1749,44 @@ mod tests {
                 .unwrap()
                 .worktree_removed
         );
+    }
+
+    #[test]
+    fn a_restored_worktree_gives_its_sessions_back_their_folder() {
+        let store = super::Store::open(std::path::Path::new(":memory:")).unwrap();
+        let inside = store.create("claude", "/project-worktrees/run").unwrap();
+        let other = store.create("claude", "/project").unwrap();
+        for id in [inside.id, other.id] {
+            let settings = crate::agent::Settings {
+                worktree_cwd: Some("/project-worktrees/run".into()),
+                ..Default::default()
+            };
+            store.save_agent_settings(id, &settings).unwrap();
+        }
+        store
+            .detach_worktree("/project-worktrees/run", "/project")
+            .unwrap();
+        assert!(
+            store
+                .agent_settings(inside.id)
+                .unwrap()
+                .unwrap()
+                .worktree_removed
+        );
+        let back = store.reattach_worktree("/project-worktrees/run").unwrap();
+        assert_eq!(back.len(), 2);
+        let settings = store.agent_settings(inside.id).unwrap().unwrap();
+        assert!(!settings.worktree_removed);
+        let cwd = store
+            .sessions()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == inside.id)
+            .unwrap()
+            .cwd;
+        assert_eq!(cwd, "/project-worktrees/run");
+        // Another worktree's sessions are left alone.
+        assert!(store.reattach_worktree("/elsewhere").unwrap().is_empty());
     }
 
     #[test]

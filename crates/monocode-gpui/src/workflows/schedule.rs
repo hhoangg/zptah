@@ -73,7 +73,10 @@ pub(super) fn look_at(
     };
     match tick::check(dir, &tick) {
         Ok(found)
-            if found.starts.is_empty() && found.stops.is_empty() && found.stop_runs.is_empty() => {}
+            if found.starts.is_empty()
+                && found.stops.is_empty()
+                && found.stop_runs.is_empty()
+                && !found.more_requests => {}
         Ok(found) => looked.found = Some(found),
         Err(error) => looked
             .errors
@@ -179,6 +182,11 @@ impl Workflows {
         // it promoted was written as `running`: it goes back in the queue, so the next start
         // finds it waiting instead of a record of a run that never ran.
         if let Some(found) = looked.found {
+            // A claim left more requests behind it: the next look claims them without waiting
+            // for the clock.
+            if found.more_requests && !self.runner.is_quitting() {
+                self.signals.request_check_now();
+            }
             if self.runner.is_quitting() {
                 for start in found.starts {
                     if let Start::Run { run, failure: None } = start
