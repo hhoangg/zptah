@@ -503,7 +503,15 @@ fn run_turn_using(
         let prompt = if raw_native_command {
             prompt
         } else if let Some(mono) = &settings.mono {
-            let files = monocode_core::mono::load_files(&mono.root, &mono.mono)?;
+            let chief = match &mono.role {
+                monocode_core::agent::Role::Chief(chief) => Some(chief),
+                monocode_core::agent::Role::Mono => None,
+            };
+            let files = if chief.is_some() {
+                monocode_core::mono::load_chief_files(&mono.root)?
+            } else {
+                monocode_core::mono::load_files(&mono.root, &mono.mono)?
+            };
             let rotated = provider_id.is_some() && context.ratio().is_some_and(|r| r >= 0.8);
             if rotated {
                 // The replaced session keeps its files; remember it for a later reset.
@@ -519,19 +527,17 @@ fn run_turn_using(
                 }
             }
             let receipt = locked(&store)?.setting(&format!("mono-context:{}", summary.id))?;
-            let rules = monocode_core::mono::files::content_hash(
-                &monocode_core::mono::instructions(&mono.mono, &mono.executable),
-            );
+            let rules = monocode_core::mono::files::content_hash(&match chief {
+                Some(chief) => monocode_core::mono::chief::instructions(chief),
+                None => monocode_core::mono::instructions(&mono.mono, &mono.executable),
+            });
             let held_rules = receipt
                 .as_deref()
                 .and_then(|r| serde_json::from_str::<serde_json::Value>(r).ok())
                 .and_then(|r| r["rules"].as_str().map(str::to_owned));
             // A library that cannot be read adds no emoji block; the turn still runs. Reading never
             // removes anything.
-            let emoji = mono
-                .mono
-                .emoji
-                .enabled
+            let emoji = (mono.mono.emoji.enabled && chief.is_none())
                 .then(|| {
                     monocode_core::mono::emoji::load(&monocode_core::mono::emoji::dir_for_root(
                         &mono.root,
@@ -542,18 +548,22 @@ fn run_turn_using(
                 .and_then(|loaded| {
                     monocode_core::mono::emoji::context_block(&loaded.library, &mono.mono.emoji)
                 });
-            let added = monocode_core::mono::context(
-                &mono.mono,
-                &files,
-                &mono.executable,
-                monocode_core::mono::rules_in_system(
-                    kind,
-                    provider_id.is_some(),
-                    held_rules.as_deref(),
-                    &rules,
-                ),
-                emoji.as_deref(),
+            let in_system = monocode_core::mono::rules_in_system(
+                kind,
+                provider_id.is_some(),
+                held_rules.as_deref(),
+                &rules,
             );
+            let added = match chief {
+                Some(chief) => monocode_core::mono::chief::context(chief, &files, in_system),
+                None => monocode_core::mono::context(
+                    &mono.mono,
+                    &files,
+                    &mono.executable,
+                    in_system,
+                    emoji.as_deref(),
+                ),
+            };
             let fingerprint = monocode_core::mono::files::content_hash(&added);
             mono_fingerprint = Some((fingerprint.clone(), rules.clone()));
             let expected =

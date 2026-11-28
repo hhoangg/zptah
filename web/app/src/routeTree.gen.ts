@@ -46,6 +46,8 @@ import { Route as DDesktopIdSettingsIndexRouteImport } from './routes/d/$desktop
 import { Route as DDesktopIdTTerminalIdRouteImport } from './routes/d/$desktopId/t/$terminalId'
 import { Route as DDesktopIdTerminalIndexRouteImport } from './routes/d/$desktopId/terminal/index'
 import { Route as DDesktopIdMonosMonoIdIndexRouteImport } from './routes/d/$desktopId/monos/$monoId/index'
+import { Route as DDesktopIdMonosChiefIndexRouteImport } from './routes/d/$desktopId/monos/chief/index'
+import { Route as DDesktopIdMonosChiefProfileRouteImport } from './routes/d/$desktopId/monos/chief/profile'
 import { Route as DDesktopIdPProjectIdIndexRouteImport } from './routes/d/$desktopId/p/$projectId/index'
 import { Route as DDesktopIdPProjectIdGitRouteImport } from './routes/d/$desktopId/p/$projectId/git'
 import { Route as DDesktopIdPProjectIdNewRouteImport } from './routes/d/$desktopId/p/$projectId/new'
@@ -243,6 +245,18 @@ const DDesktopIdMonosMonoIdIndexRoute =
     path: '/monos/$monoId/',
     getParentRoute: () => DDesktopIdRouteRoute,
   } as any)
+const DDesktopIdMonosChiefIndexRoute =
+  DDesktopIdMonosChiefIndexRouteImport.update({
+    id: '/monos/chief/',
+    path: '/monos/chief/',
+    getParentRoute: () => DDesktopIdRouteRoute,
+  } as any)
+const DDesktopIdMonosChiefProfileRoute =
+  DDesktopIdMonosChiefProfileRouteImport.update({
+    id: '/monos/chief/profile',
+    path: '/monos/chief/profile',
+    getParentRoute: () => DDesktopIdRouteRoute,
+  } as any)
 const DDesktopIdPProjectIdIndexRoute =
   DDesktopIdPProjectIdIndexRouteImport.update({
     id: '/p/$projectId/',
@@ -339,9 +353,11 @@ export interface FileRoutesByFullPath {
   '/d/$desktopId/monos/': typeof DDesktopIdMonosIndexRoute
   '/d/$desktopId/settings/': typeof DDesktopIdSettingsIndexRoute
   '/d/$desktopId/terminal/': typeof DDesktopIdTerminalIndexRoute
+  '/d/$desktopId/monos/chief/profile': typeof DDesktopIdMonosChiefProfileRoute
   '/d/$desktopId/p/$projectId/git': typeof DDesktopIdPProjectIdGitRoute
   '/d/$desktopId/p/$projectId/new': typeof DDesktopIdPProjectIdNewRoute
   '/d/$desktopId/monos/$monoId/': typeof DDesktopIdMonosMonoIdIndexRoute
+  '/d/$desktopId/monos/chief/': typeof DDesktopIdMonosChiefIndexRoute
   '/d/$desktopId/p/$projectId/': typeof DDesktopIdPProjectIdIndexRoute
   '/d/$desktopId/monos/$monoId/profile/documents': typeof DDesktopIdMonosMonoIdProfileDocumentsRoute
   '/d/$desktopId/monos/$monoId/profile/edit': typeof DDesktopIdMonosMonoIdProfileEditRoute
@@ -386,9 +402,11 @@ export interface FileRoutesByTo {
   '/d/$desktopId/monos': typeof DDesktopIdMonosIndexRoute
   '/d/$desktopId/settings': typeof DDesktopIdSettingsIndexRoute
   '/d/$desktopId/terminal': typeof DDesktopIdTerminalIndexRoute
+  '/d/$desktopId/monos/chief/profile': typeof DDesktopIdMonosChiefProfileRoute
   '/d/$desktopId/p/$projectId/git': typeof DDesktopIdPProjectIdGitRoute
   '/d/$desktopId/p/$projectId/new': typeof DDesktopIdPProjectIdNewRoute
   '/d/$desktopId/monos/$monoId': typeof DDesktopIdMonosMonoIdIndexRoute
+  '/d/$desktopId/monos/chief': typeof DDesktopIdMonosChiefIndexRoute
   '/d/$desktopId/p/$projectId': typeof DDesktopIdPProjectIdIndexRoute
   '/d/$desktopId/monos/$monoId/profile/documents': typeof DDesktopIdMonosMonoIdProfileDocumentsRoute
   '/d/$desktopId/monos/$monoId/profile/edit': typeof DDesktopIdMonosMonoIdProfileEditRoute
@@ -436,9 +454,11 @@ export interface FileRoutesById {
   '/d/$desktopId/monos/': typeof DDesktopIdMonosIndexRoute
   '/d/$desktopId/settings/': typeof DDesktopIdSettingsIndexRoute
   '/d/$desktopId/terminal/': typeof DDesktopIdTerminalIndexRoute
+  '/d/$desktopId/monos/chief/profile': typeof DDesktopIdMonosChiefProfileRoute
   '/d/$desktopId/p/$projectId/git': typeof DDesktopIdPProjectIdGitRoute
   '/d/$desktopId/p/$projectId/new': typeof DDesktopIdPProjectIdNewRoute
   '/d/$desktopId/monos/$monoId/': typeof DDesktopIdMonosMonoIdIndexRoute
+  '/d/$desktopId/monos/chief/': typeof DDesktopIdMonosChiefIndexRoute
   '/d/$desktopId/p/$projectId/': typeof DDesktopIdPProjectIdIndexRoute
   '/d/$desktopId/monos/$monoId/profile/documents': typeof DDesktopIdMonosMonoIdProfileDocumentsRoute
   '/d/$desktopId/monos/$monoId/profile/edit': typeof DDesktopIdMonosMonoIdProfileEditRoute
@@ -487,9 +507,11 @@ export interface FileRouteTypes {
     | '/d/$desktopId/monos/'
     | '/d/$desktopId/settings/'
     | '/d/$desktopId/terminal/'
+    | '/d/$desktopId/monos/chief/profile'
     | '/d/$desktopId/p/$projectId/git'
     | '/d/$desktopId/p/$projectId/new'
     | '/d/$desktopId/monos/$monoId/'
+    | '/d/$desktopId/monos/chief/'
     | '/d/$desktopId/p/$projectId/'
     | '/d/$desktopId/monos/$monoId/profile/documents'
     | '/d/$desktopId/monos/$monoId/profile/edit'
@@ -534,9 +556,11 @@ export interface FileRouteTypes {
     | '/d/$desktopId/monos'
     | '/d/$desktopId/settings'
     | '/d/$desktopId/terminal'
+    | '/d/$desktopId/monos/chief/profile'
     | '/d/$desktopId/p/$projectId/git'
     | '/d/$desktopId/p/$projectId/new'
     | '/d/$desktopId/monos/$monoId'
+    | '/d/$desktopId/monos/chief'
     | '/d/$desktopId/p/$projectId'
     | '/d/$desktopId/monos/$monoId/profile/documents'
     | '/d/$desktopId/monos/$monoId/profile/edit'
@@ -583,9 +607,11 @@ export interface FileRouteTypes {
     | '/d/$desktopId/monos/'
     | '/d/$desktopId/settings/'
     | '/d/$desktopId/terminal/'
+    | '/d/$desktopId/monos/chief/profile'
     | '/d/$desktopId/p/$projectId/git'
     | '/d/$desktopId/p/$projectId/new'
     | '/d/$desktopId/monos/$monoId/'
+    | '/d/$desktopId/monos/chief/'
     | '/d/$desktopId/p/$projectId/'
     | '/d/$desktopId/monos/$monoId/profile/documents'
     | '/d/$desktopId/monos/$monoId/profile/edit'
@@ -877,6 +903,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DDesktopIdMonosMonoIdIndexRouteImport
       parentRoute: typeof DDesktopIdRouteRoute
     }
+    '/d/$desktopId/monos/chief/': {
+      id: '/d/$desktopId/monos/chief/'
+      path: '/monos/chief'
+      fullPath: '/d/$desktopId/monos/chief/'
+      preLoaderRoute: typeof DDesktopIdMonosChiefIndexRouteImport
+      parentRoute: typeof DDesktopIdRouteRoute
+    }
+    '/d/$desktopId/monos/chief/profile': {
+      id: '/d/$desktopId/monos/chief/profile'
+      path: '/monos/chief/profile'
+      fullPath: '/d/$desktopId/monos/chief/profile'
+      preLoaderRoute: typeof DDesktopIdMonosChiefProfileRouteImport
+      parentRoute: typeof DDesktopIdRouteRoute
+    }
     '/d/$desktopId/p/$projectId/': {
       id: '/d/$desktopId/p/$projectId/'
       path: '/p/$projectId'
@@ -992,9 +1032,11 @@ interface DDesktopIdRouteRouteChildren {
   DDesktopIdMonosIndexRoute: typeof DDesktopIdMonosIndexRoute
   DDesktopIdSettingsIndexRoute: typeof DDesktopIdSettingsIndexRoute
   DDesktopIdTerminalIndexRoute: typeof DDesktopIdTerminalIndexRoute
+  DDesktopIdMonosChiefProfileRoute: typeof DDesktopIdMonosChiefProfileRoute
   DDesktopIdPProjectIdGitRoute: typeof DDesktopIdPProjectIdGitRoute
   DDesktopIdPProjectIdNewRoute: typeof DDesktopIdPProjectIdNewRoute
   DDesktopIdMonosMonoIdIndexRoute: typeof DDesktopIdMonosMonoIdIndexRoute
+  DDesktopIdMonosChiefIndexRoute: typeof DDesktopIdMonosChiefIndexRoute
   DDesktopIdPProjectIdIndexRoute: typeof DDesktopIdPProjectIdIndexRoute
   DDesktopIdMonosMonoIdProfileDocumentsRoute: typeof DDesktopIdMonosMonoIdProfileDocumentsRoute
   DDesktopIdMonosMonoIdProfileEditRoute: typeof DDesktopIdMonosMonoIdProfileEditRoute
@@ -1013,9 +1055,11 @@ const DDesktopIdRouteRouteChildren: DDesktopIdRouteRouteChildren = {
   DDesktopIdMonosIndexRoute: DDesktopIdMonosIndexRoute,
   DDesktopIdSettingsIndexRoute: DDesktopIdSettingsIndexRoute,
   DDesktopIdTerminalIndexRoute: DDesktopIdTerminalIndexRoute,
+  DDesktopIdMonosChiefProfileRoute: DDesktopIdMonosChiefProfileRoute,
   DDesktopIdPProjectIdGitRoute: DDesktopIdPProjectIdGitRoute,
   DDesktopIdPProjectIdNewRoute: DDesktopIdPProjectIdNewRoute,
   DDesktopIdMonosMonoIdIndexRoute: DDesktopIdMonosMonoIdIndexRoute,
+  DDesktopIdMonosChiefIndexRoute: DDesktopIdMonosChiefIndexRoute,
   DDesktopIdPProjectIdIndexRoute: DDesktopIdPProjectIdIndexRoute,
   DDesktopIdMonosMonoIdProfileDocumentsRoute:
     DDesktopIdMonosMonoIdProfileDocumentsRoute,

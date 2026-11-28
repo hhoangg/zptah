@@ -299,6 +299,8 @@ impl Monos {
             mono.unavailable_session = None;
             mono.seen_rows = 0;
             mono.outbox.retain(|m| !delivered.contains(&m.id));
+            // A command whose message the old conversation took will not come back.
+            self.chief_mono_lost(id, true, "The Mono's conversation was reset", cx);
             self.save(cx);
             self.ensure_chat(id, cx);
         }

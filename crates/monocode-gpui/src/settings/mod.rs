@@ -378,6 +378,8 @@ pub(crate) struct SettingsView {
     import: pages::ImportState,
     /// The emoji library page of the Monos section, once the app has installed the library.
     emoji_library: Option<Entity<crate::emoji_library::EmojiLibraryView>>,
+    /// The Chief page, once the app has installed it.
+    chief: Option<Entity<crate::monos::chief_settings::ChiefSettings>>,
     _subscriptions: Vec<Subscription>,
 }
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -545,6 +547,7 @@ impl SettingsView {
             cloud: pages::CloudState::default(),
             import: pages::ImportState::default(),
             emoji_library,
+            chief: None,
             _subscriptions: subscriptions,
         };
         this.refresh_import();
@@ -750,6 +753,15 @@ impl SettingsView {
         &self,
     ) -> Option<Entity<crate::emoji_library::EmojiLibraryView>> {
         self.emoji_library.clone()
+    }
+    /// Installs the Chief's page, which the Monos manager draws and changes.
+    pub(crate) fn set_chief_settings(
+        &mut self,
+        view: Entity<crate::monos::chief_settings::ChiefSettings>,
+        cx: &mut Context<Self>,
+    ) {
+        self.chief = Some(view);
+        cx.notify();
     }
     /// Settings > Monos > Emoji: the Monos page, scrolled to the emoji library.
     pub(crate) fn show_emoji_library(&mut self, cx: &mut Context<Self>) {

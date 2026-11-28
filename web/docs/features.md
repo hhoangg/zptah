@@ -227,6 +227,7 @@ A Mono is a persistent agent with one conversation id `mono:<id>`.
 | F-94 | ASCII field background | `mobile/src/features/background/AsciiField.tsx:33` | none | Canvas at 10 fps, still frame under reduced motion; sign-in page only. | P2 |
 | F-95 | Dither loading cover | `mobile/src/ui/DitherLoading.tsx` | none | Optional route-transition cover; P2. | P2 |
 | F-96 | Copy session ID / copy text / share | `SessionToolbar.tsx:141` | none | Clipboard on gesture; Web Share API only for PR links (P2). Gap: `navigator.share` exists on iOS Safari but needs a gesture. | P2 |
+| F-97 | The Chief: a pinned first row in the Mono lists, a chat with proposal cards, a profile a Control device can edit | (desktop: Chief Mono, `docs/superpowers/specs/2026-11-27-chief-mono.md`) | `chief.profile`, `chief.update`, `chief.proposals`, `chief.proposal.send`, `chief.proposal.edit`, `chief.proposal.cancel`, `conversation.read`/`watch`/`send` on `chief`, `workspace.list` (`chief`) | The Chief is a Mono that proposes commands for coding sessions. It is pinned first, with a "Chief" tag and a dot while commands wait, in the Mono home and in the sidebar's Monos list, only when `workspace.list` says `chief.enabled` (an older desktop, a Chief that is off and a device narrowed to some projects or Monos show nothing). It opens at `/d/:desktopId/monos/chief` as conversation `chief`; its proposal cards (route line, instruction, notes, state chip) sit inline right after the turn whose `chief.propose` result returned them (the turn's `chiefProposals`), and the rest in a list under the transcript. **Send** needs a Control device AND the desktop toggle "Allow Send from the web"; otherwise the card reads "Confirm on the desktop". **Edit** and **Cancel** need Control. A Mono chat shows a command the Chief relayed as "From you, via <Chief>". The profile (`.../monos/chief/profile`) is editable on a Control device for name, mascot, emoji, color, model, effort and the delivery notification (`chief.update`); the rest is text only and is changed in the desktop app. | P2 |
 
 ### 2.16 Requested items that do NOT exist in mobile today
 
@@ -319,6 +320,12 @@ Permission: R = read-only device allowed; C = control device only; T = class `te
 | `mono.create` | F-75 | mutate | C | P2 | |
 | `mono.file` | F-79 | read | R | P2 | |
 | `mono.saveFile` | F-79 | mutate (R3, steers the agent) | C | denied for web in v1 (security.md section 7) | Hidden in the UI; Soul and Memory are read-only on web. |
+| `chief.profile` | F-97 | read | R | P2 | The Chief's name, mascot, color, status, harness line, `openCount`, `allowWebSend`, `notifyOnDelivery`. Answers `not_selected` to a device narrowed to some projects or Monos and `disabled` while the Chief is off. |
+| `chief.update` | F-97 | mutate | C | P2 | Params (strict, at least one): `name` (1 to 40 chars), `mascot`, `emoji` (`null` resets to the mascot's emoji), `color` (`#rrggbb`), `model` and `effort` (`null` = app default), `notifyOnDelivery`. Any other key (`enabled`, `harness`, `account`, `allowWebSend`, `soul`) is refused. Answers the updated `chief.profile`. |
+| `chief.proposals` | F-97 | read | R | P2 | `{enabled, proposals (newest first), openCount, allowWebSend}`. The same list rides on `conversation.read` and watch frames of `chief` as the extra field `chief` (frames carry it only on change). |
+| `chief.proposal.send` | F-97 | mutate (R4) | C | P2 | `{proposalId, instruction?}` (an edit sent with the click) answers `{proposal}`. Needs Control AND the desktop toggle "Allow Send from the web" (default off; `disabled` while off). `read_only` for a read device; a handled card answers "This command was already handled". |
+| `chief.proposal.edit` | F-97 | mutate | C | P2 | `{proposalId, instruction}` answers `{proposal}`. Only while the proposal is open. |
+| `chief.proposal.cancel` | F-97 | mutate | C | P2 | `{proposalId}` answers `{proposal}`. Only while the proposal is open. |
 
 ### 3.2 Host-handled methods (`crates/monocode-core/src/mobile/host.rs:654-690`, watch at `:734`)
 

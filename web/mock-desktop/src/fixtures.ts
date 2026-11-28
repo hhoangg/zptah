@@ -12,6 +12,7 @@ import {
   STARTUP_STEP_IDS,
   MOVE_STEP_IDS,
   type Approval,
+  type ChiefProposal,
   type CloudField,
   type DesktopErrorCode,
   type MethodName,
@@ -121,7 +122,38 @@ export interface WatchCursor {
   busy: boolean | null;
   cloud: string | null;
   approvals: string | null;
+  /** The `chief` extra last sent (the Chief conversation only). */
+  chief: string | null;
 }
+
+/** The Chief of the mock desktop: a test toggles `enabled` and `allowWebSend` ("Allow Send from the web", the real default is off). */
+export interface ChiefState {
+  /** False: the catalog says `{enabled: false, openCount: 0}` and `chief.*` answer `disabled`. */
+  enabled: boolean;
+  /** Set false to mimic an older desktop: the catalog has no `chief` key at all. */
+  supported: boolean;
+  allowWebSend: boolean;
+  notifyOnDelivery: boolean;
+  name: string;
+  mascot: string;
+  /** Absent: the mascot's own emoji. */
+  emoji?: string;
+  color: string;
+  /** Absent: the app default. */
+  model?: string;
+  effort?: string;
+  proposals: ChiefProposal[];
+}
+
+export const CHIEF_CONVERSATION = "chief";
+export const CHIEF_FIXTURE_VIA_MONO_ID = "p_0000abcd";
+export const CHIEF_FIXTURE_DIRECT_ID = "p_0000abce";
+export const CHIEF_FIXTURE_SENT_ID = "p_0000abcf";
+/** The Mono chat that carries a relayed command (`chiefRelay`). */
+export const CHIEF_FIXTURE_RELAY_TEXT = "Run the parser tests and report";
+
+/** The conversations of Monos and of the Chief are not coding sessions: they stay out of the session lists. */
+export const isMonoConversation = (id: string): boolean => id.startsWith("mono:") || id === CHIEF_CONVERSATION;
 
 export interface MockWorldOptions {
   now?: () => number;
@@ -171,6 +203,7 @@ export class MockWorld {
   /** Session folders of every project, in the desktop's order. */
   folders: FolderRecord[] = [];
   #nextFolder = 1;
+  readonly chief: ChiefState;
   readonly #listeners = new Map<string, Set<() => void>>();
   #nextTurn = 100;
   #nextSession = 1;
@@ -180,6 +213,60 @@ export class MockWorld {
     this.capabilities = { approvals: true, cloud: true, ...options.capabilities };
     this.appVersion = options.appVersion ?? "1.4.0";
     this.latestVersion = options.latestVersion ?? this.appVersion;
+    const at = this.now();
+    this.chief = {
+      enabled: true,
+      supported: true,
+      allowWebSend: false,
+      notifyOnDelivery: true,
+      name: "Chief",
+      mascot: "owl",
+      color: "#8a63d2",
+      proposals: [
+        {
+          id: CHIEF_FIXTURE_DIRECT_ID,
+          createdAt: at - 20_000,
+          route: { type: "direct" },
+          sessionNumber: 2,
+          sessionTitle: "Run the example checks",
+          project: "Example Alpha",
+          branch: "main",
+          instruction: "Also run the lint step before you finish",
+          notes: ["queuePaused"],
+          state: "awaitingOwner",
+          open: true,
+          kind: "command",
+        },
+        {
+          id: CHIEF_FIXTURE_VIA_MONO_ID,
+          createdAt: at - 40_000,
+          route: { type: "viaMono", monoId: MONO_EMOJI_FIXTURE_MONO_ID, monoName: "Example Mono" },
+          sessionNumber: 1,
+          sessionTitle: "Fix the example parser",
+          project: "Example Alpha",
+          branch: "example-branch",
+          instruction: CHIEF_FIXTURE_RELAY_TEXT,
+          notes: ["sessionBusy", "monoBusy"],
+          state: "awaitingOwner",
+          open: true,
+          kind: "command",
+        },
+        {
+          id: CHIEF_FIXTURE_SENT_ID,
+          createdAt: at - 600_000,
+          confirmedAt: at - 590_000,
+          route: { type: "direct" },
+          sessionNumber: 3,
+          sessionTitle: "Write the example report",
+          project: "Example Alpha",
+          instruction: "Summarize the report in two lines",
+          notes: [],
+          state: "sent",
+          open: false,
+          kind: "command",
+        },
+      ],
+    };
     this.#seed();
   }
 
@@ -223,6 +310,22 @@ export class MockWorld {
             { at: monoText.indexOf(" !") + 1, ...monoPick },
             { at: monoText.indexOf("\n") + 1, ...monoPick, large: true },
           ],
+        },
+      ],
+    });
+    // The Chief conversation (`chief`): drawn like a Mono chat; its proposals ride along as the `chief` extra.
+    this.#addSession({ id: CHIEF_CONVERSATION, projectId: "proj-alpha", title: "Chief", target: { kind: "local" } });
+    // A command the Chief relayed through this Mono: the user turn carries `chiefRelay` (the text is the instruction).
+    monoChat.turns.unshift({
+      id: `${monoChat.id}-t0`,
+      stampAt: at - 90_000,
+      items: [
+        {
+          type: "user",
+          id: `${monoChat.id}-u0`,
+          text: CHIEF_FIXTURE_RELAY_TEXT,
+          at: at - 90_000,
+          chiefRelay: { proposalId: CHIEF_FIXTURE_VIA_MONO_ID, instruction: CHIEF_FIXTURE_RELAY_TEXT, chiefName: "Chief" },
         },
       ],
     });
@@ -515,7 +618,115 @@ export class MockWorld {
   session(conversationId: string): SessionRecord {
     const s = this.sessions.get(conversationId);
     if (!s || !this.visibleSessions().includes(s)) throw new FixtureError(`Unknown conversation ${conversationId}`);
+    if (s.id === CHIEF_CONVERSATION && !this.chief.enabled) throw new FixtureError("The Chief is off", "disabled");
     return s;
+  }
+
+  // --- The Chief ---
+
+  /** The `chief` extra of the Chief conversation: newest proposal first, as `chief.proposals` answers. */
+  chiefExtra(): { openCount: number; allowWebSend: boolean; proposals: ChiefProposal[] } {
+    const proposals = [...this.chief.proposals].sort((a, b) => b.createdAt - a.createdAt).map((p) => structuredClone(p));
+    return { openCount: proposals.filter((p) => p.open).length, allowWebSend: this.chief.allowWebSend, proposals };
+  }
+
+  /** The `chief` key of `workspace.list`; undefined on an older desktop. */
+  chiefCatalog(): NonNullable<ResultOf<"workspace.list">["chief"]> | undefined {
+    if (!this.chief.supported) return undefined;
+    if (!this.chief.enabled) return { enabled: false, openCount: 0 };
+    const openCount = this.chief.proposals.filter((p) => p.open).length;
+    return { enabled: true, name: this.chief.name, mascot: this.chief.mascot, ...(this.chief.emoji ? { emoji: this.chief.emoji } : {}), color: this.chief.color, status: openCount > 0 ? "needs-you" : "idle", openCount };
+  }
+
+  /** Tests: turn the Chief on or off, or "Allow Send from the web"; the Chief conversation's watchers get a frame. */
+  setChief(patch: Partial<Pick<ChiefState, "enabled" | "allowWebSend" | "supported">>): void {
+    Object.assign(this.chief, patch);
+    this.#notifyChief();
+  }
+
+  /** `chief.update`: the allowed fields only (the schema already refused anything else). `null` resets emoji, model and effort. */
+  updateChief(patch: {
+    name?: string;
+    mascot?: string;
+    emoji?: string | null;
+    color?: string;
+    model?: string | null;
+    effort?: string | null;
+    notifyOnDelivery?: boolean;
+  }): void {
+    const chief = this.chief;
+    if (patch.name !== undefined) chief.name = patch.name.trim();
+    if (patch.mascot !== undefined) chief.mascot = patch.mascot;
+    if (patch.emoji === null) delete chief.emoji;
+    else if (patch.emoji !== undefined) chief.emoji = patch.emoji;
+    if (patch.color !== undefined) chief.color = (patch.color.startsWith("#") ? patch.color : `#${patch.color}`).toLowerCase();
+    if (patch.model === null) delete chief.model;
+    else if (patch.model !== undefined) chief.model = patch.model;
+    if (patch.effort === null) delete chief.effort;
+    else if (patch.effort !== undefined) chief.effort = patch.effort;
+    if (patch.notifyOnDelivery !== undefined) chief.notifyOnDelivery = patch.notifyOnDelivery;
+    this.#notifyChief();
+  }
+
+  /** Tests: a new open proposal, as the Chief would write one. */
+  addChiefProposal(proposal: Partial<ChiefProposal> & { id: string }): ChiefProposal {
+    const full: ChiefProposal = {
+      createdAt: this.now(),
+      route: { type: "direct" },
+      sessionTitle: "Example session",
+      project: "Example Alpha",
+      instruction: "Example instruction",
+      notes: [],
+      state: "awaitingOwner",
+      open: true,
+      kind: "command",
+      ...proposal,
+    };
+    this.chief.proposals.push(full);
+    this.#notifyChief();
+    return structuredClone(full);
+  }
+
+  #notifyChief(): void {
+    const s = this.sessions.get(CHIEF_CONVERSATION);
+    if (s) this.#notify(s);
+  }
+
+  #openProposal(proposalId: string): ChiefProposal {
+    const proposal = this.chief.proposals.find((p) => p.id === proposalId);
+    if (!proposal) throw new FixtureError("Unknown command");
+    if (!proposal.open) throw new FixtureError("This command was already handled");
+    return proposal;
+  }
+
+  /**
+   * `chief.proposal.send`: queued at the Mono (via Mono) or in the session (direct). `expectedInstruction` is the text the device showed (a changed text is refused) and `instruction` an edit sent with the
+   * click. A direct proposal that starts new work (`kind: "start"`) has no session to queue in: the app starts one, so it is sent.
+   */
+  sendChiefProposal(proposalId: string, expectedInstruction: string, instruction?: string): ChiefProposal {
+    const proposal = this.#openProposal(proposalId);
+    if (proposal.instruction !== expectedInstruction) throw new FixtureError("The text changed. Review the command again");
+    if (instruction !== undefined && instruction.trim() !== "") proposal.instruction = instruction;
+    proposal.state = proposal.route.type === "viaMono" ? "queuedAtMono" : proposal.kind === "start" ? "sent" : "queuedInSession";
+    proposal.open = false;
+    proposal.confirmedAt = this.now();
+    this.#notifyChief();
+    return structuredClone(proposal);
+  }
+
+  editChiefProposal(proposalId: string, instruction: string): ChiefProposal {
+    const proposal = this.#openProposal(proposalId);
+    proposal.instruction = instruction;
+    this.#notifyChief();
+    return structuredClone(proposal);
+  }
+
+  cancelChiefProposal(proposalId: string): ChiefProposal {
+    const proposal = this.#openProposal(proposalId);
+    proposal.state = "cancelled";
+    proposal.open = false;
+    this.#notifyChief();
+    return structuredClone(proposal);
   }
 
   /** Appends a finished assistant turn with `text` to a conversation (the mention fixtures use it). */
@@ -532,6 +743,7 @@ export class MockWorld {
     const s = this.session(conversationId);
     return {
       id: s.id,
+      ...(s.id === CHIEF_CONVERSATION ? { chief: this.chiefExtra() } : {}),
       turns: s.turns.map((t) => structuredClone(t)),
       busy: s.busy,
       usageLimit: s.usageLimit ?? null,
@@ -545,7 +757,7 @@ export class MockWorld {
   // --- Watches ---
 
   newCursor(): WatchCursor {
-    return { first: true, turns: new Map(), busy: null, cloud: null, approvals: null };
+    return { first: true, turns: new Map(), busy: null, cloud: null, approvals: null, chief: null };
   }
 
   /** The next watch frame for `cursor`, or null when nothing changed since the last one. */
@@ -557,7 +769,9 @@ export class MockWorld {
     const cloudChanged = cloudJson !== null && cloudJson !== cursor.cloud;
     // The first frame always states the approvals (an empty array clears a stale card).
     const approvalsChanged = approvalsJson !== null && approvalsJson !== cursor.approvals;
-    if (!cursor.first && changedTurns.length === 0 && !cloudChanged && !approvalsChanged && cursor.busy === s.busy) return null;
+    const chiefJson = s.id === CHIEF_CONVERSATION ? JSON.stringify(this.chiefExtra()) : null;
+    const chiefChanged = chiefJson !== null && chiefJson !== cursor.chief;
+    if (!cursor.first && changedTurns.length === 0 && !cloudChanged && !approvalsChanged && !chiefChanged && cursor.busy === s.busy) return null;
 
     const frame: WatchFrame = {
       usageLimit: s.usageLimit ?? null,
@@ -568,11 +782,13 @@ export class MockWorld {
       ...(cursor.first ? { question: null } : {}),
       ...(cloudChanged && s.cloud ? { cloud: structuredClone(s.cloud) } : {}),
       ...(approvalsChanged ? { approvals: structuredClone(s.approvals) } : {}),
+      ...(chiefChanged ? { chief: this.chiefExtra() } : {}),
     };
     for (const t of changedTurns) cursor.turns.set(t.id, JSON.stringify(t));
     cursor.busy = s.busy;
     cursor.cloud = cloudJson;
     cursor.approvals = approvalsJson;
+    if (chiefJson !== null) cursor.chief = chiefJson;
     cursor.first = false;
     return frame;
   }
@@ -911,6 +1127,37 @@ export function selectionRef(kind: "project" | "mono", id: string): string {
   return `r${out}`;
 }
 
+/** A device narrowed to some projects or Monos never reaches the Chief. */
+function chiefVisible(ctx: HandlerContext): boolean {
+  return ctx.device.selection.projects === null && ctx.device.selection.monos === null;
+}
+
+/** The checks every `chief.*` call goes through: not narrowed, the Chief on, and Control for a change. */
+function chiefGuard(ctx: HandlerContext, need: "read" | "control"): void {
+  if (!chiefVisible(ctx)) throw new FixtureError("The Chief is not on this device's selection", "not_selected");
+  if (need === "control" && ctx.device.permission === "read") throw new FixtureError("This device can only read", "read_only");
+  if (!ctx.world.chief.enabled) throw new FixtureError("The Chief is off", "disabled");
+}
+
+/** The `chief.profile` answer, also the answer of `chief.update`. */
+function chiefProfile(ctx: HandlerContext) {
+  chiefGuard(ctx, "read");
+  const { chief } = ctx.world;
+  const model = chief.model ?? "example-model-1";
+  return {
+    enabled: chief.enabled,
+    name: chief.name,
+    mascot: chief.mascot,
+    ...(chief.emoji ? { emoji: chief.emoji } : {}),
+    color: chief.color,
+    status: ctx.world.chiefCatalog()?.status ?? "idle",
+    openCount: ctx.world.chiefExtra().openCount,
+    allowWebSend: chief.allowWebSend,
+    notifyOnDelivery: chief.notifyOnDelivery,
+    harness: { id: "claude", model, ...(chief.effort ? { effort: chief.effort } : {}), ok: true, line: "Claude Code" },
+  };
+}
+
 function selected(ctx: HandlerContext, projectId: string): boolean {
   return ctx.device.selection.projects === null || ctx.device.selection.projects.includes(projectId);
 }
@@ -939,7 +1186,10 @@ function terminalsOf(ctx: HandlerContext): MockTerminals {
 const ACK = (sessionId?: string) => (sessionId === undefined ? {} : { sessionId });
 
 export const FIXTURE_HANDLERS: { [M in MethodName]: HandlerOf<M> } = {
-  "conversation.read": (p, { world }) => world.read(p.conversationId),
+  "conversation.read": (p, ctx) => {
+    if (p.conversationId === CHIEF_CONVERSATION) chiefGuard(ctx, "read");
+    return ctx.world.read(p.conversationId);
+  },
   "conversation.older": (p, { world }) => {
     world.session(p.conversationId);
     return { turns: [], older: false };
@@ -1113,6 +1363,29 @@ export const FIXTURE_HANDLERS: { [M in MethodName]: HandlerOf<M> } = {
       throw new FixtureError(error instanceof Error ? error.message : "Invalid value for this visual control");
     }
   },
+  "chief.profile": (_p, ctx) => chiefProfile(ctx),
+  "chief.update": (p, ctx) => {
+    chiefGuard(ctx, "control");
+    ctx.world.updateChief(p);
+    return chiefProfile(ctx);
+  },
+  "chief.proposals": (_p, ctx) => {
+    chiefGuard(ctx, "read");
+    return { enabled: ctx.world.chief.enabled, ...ctx.world.chiefExtra() };
+  },
+  "chief.proposal.send": (p, ctx) => {
+    chiefGuard(ctx, "control");
+    if (!ctx.world.chief.allowWebSend) throw new FixtureError("Allow Send from the web is off on the desktop", "disabled");
+    return { proposal: ctx.world.sendChiefProposal(p.proposalId, p.expectedInstruction, p.instruction) };
+  },
+  "chief.proposal.edit": (p, ctx) => {
+    chiefGuard(ctx, "control");
+    return { proposal: ctx.world.editChiefProposal(p.proposalId, p.instruction) };
+  },
+  "chief.proposal.cancel": (p, ctx) => {
+    chiefGuard(ctx, "control");
+    return { proposal: ctx.world.cancelChiefProposal(p.proposalId) };
+  },
   "mono.document": (p) => ({ id: p.documentId, title: "Example document", kind: "note" }),
   "mono.profile": (p) => ({ id: p.monoId, name: "Example Mono", ...(p.monoId === MONO_EMOJI_FIXTURE_MONO_ID ? { resetFiles: { label: "Claude Code", supported: true } } : {}) }),
   "mono.emoji": (p) => {
@@ -1136,18 +1409,20 @@ export const FIXTURE_HANDLERS: { [M in MethodName]: HandlerOf<M> } = {
     return {
       projects: world.projects().filter((p) => visible(p.id)).map((p) => ({ ...p })),
       monos: world.monos().filter((m) => ctx.device.selection.monos === null || ctx.device.selection.monos.includes(m.id)).map((m) => ({ ...m, projectIds: [...m.projectIds] })),
-      sessions: world.visibleSessions().filter((s) => !s.id.startsWith("mono:") && visible(s.projectId)).map((s) => world.card(s)),
+      sessions: world.visibleSessions().filter((s) => !isMonoConversation(s.id) && visible(s.projectId)).map((s) => world.card(s)),
       folders: world.folders.flatMap((f) => (visible(f.projectId) ? [world.folderCard(f, () => true)] : [])).filter((f) => f !== null),
       monoTools: true,
       monoFiles: true,
       push: true,
+      // A device narrowed to some projects or Monos gets no `chief` key at all.
+      ...(chiefVisible(ctx) && world.chiefCatalog() ? { chief: world.chiefCatalog() } : {}),
     };
   },
   "sessions.list": (p, ctx) => {
     const { world } = ctx;
     const all = world
       .visibleSessions()
-      .filter((s) => !s.id.startsWith("mono:") && s.projectId === p.projectId && selected(ctx, s.projectId))
+      .filter((s) => !isMonoConversation(s.id) && s.projectId === p.projectId && selected(ctx, s.projectId))
       .filter((s) => !p.query || s.title.toLowerCase().includes(p.query.toLowerCase()))
       .filter((s) => p.since === undefined || s.updatedAt >= p.since);
     const offset = p.offset ?? 0;

@@ -973,6 +973,7 @@ mod tests {
                 root: "/fixture".into(),
                 executable: "/fixture/binary".into(),
                 browser_database: None,
+                role: Default::default(),
             });
             v.status = "Usage limit reached: Fixture subscription exhausted".into();
             v.detect_usage_limit(cx);

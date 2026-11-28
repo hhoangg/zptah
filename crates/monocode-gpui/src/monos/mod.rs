@@ -10,6 +10,28 @@ mod browser_tests;
 mod browser_ui;
 pub(crate) mod cards;
 mod changes;
+pub(crate) mod chief;
+#[cfg(test)]
+mod chief_command_tests;
+mod chief_commands;
+mod chief_history;
+mod chief_main;
+pub(crate) use chief_commands::ChiefProposalsChanged;
+pub(crate) use chief_main::ShowChiefSettings;
+#[cfg(test)]
+mod chief_fix_tests;
+pub(crate) mod chief_settings;
+#[cfg(test)]
+mod chief_start_tests;
+#[cfg(test)]
+mod chief_tests;
+mod chief_ui;
+pub(crate) use chief_ui::CHIEF_ID;
+#[cfg(test)]
+mod chief_ui_tests;
+mod chief_web;
+#[cfg(test)]
+mod chief_web_tests;
 #[cfg(test)]
 mod cloud_tests;
 pub(crate) mod color_picker;
@@ -142,6 +164,29 @@ pub(crate) struct Monos {
     _clock: Option<gpui::Task<()>>,
     writes: Option<gpui::Task<()>>,
     loading_chats: HashSet<String>,
+    /// The Chief's hidden chat, once it exists and is open.
+    chief_chat: Option<Entity<Conversation>>,
+    chief_loading: bool,
+    /// Why the Chief's chat is not running (a harness it cannot use, a lost conversation).
+    pub(crate) chief_status: Option<String>,
+    /// A send of the owner's text the Chief did not take (busy, not ready, text only): shown
+    /// in the header until the next send goes through. Not a harness problem.
+    pub(crate) chief_notice: Option<String>,
+    /// A hand-off of the proposals to the chats is already queued.
+    chief_sync_pending: bool,
+    /// Whether the open Monos' chats were last configured with the Chief's rules.
+    chief_rules_applied: bool,
+    /// Settings > Chief shows its History section first (the main view's History button).
+    chief_history_first: bool,
+    /// What the last click on a card was refused with, by proposal id.
+    chief_card_errors: HashMap<String, String>,
+    /// The inline editors of cards being edited, by proposal id.
+    chief_editors: HashMap<String, Entity<Input>>,
+    /// The proposals whose delivery notice was already posted (each is posted once).
+    chief_notified: HashSet<String>,
+    /// Start proposals whose bound `sessions.start` passed the check and is still running, so a
+    /// second start with the same proposal cannot slip in before the first one records it.
+    chief_starting: HashSet<String>,
     work: work::Cache,
     pub(crate) error: Option<String>,
     /// The roster could not be loaded, so `roster` is empty by default, not by choice.
@@ -433,6 +478,9 @@ impl Monos {
                 let _ = entity.update(&mut *app.borrow_mut(), |this, cx| {
                     if id == "quit" {
                         this.request_quit(cx);
+                    } else if id == chief_ui::CHIEF_ID {
+                        // "Ask <Chief>...": the floating panel, on the Chief.
+                        this.open_floating(id.into(), cx);
                     } else if id == "composer" {
                         // The composer is its own panel: the workspace window
                         // stays where it is, as in the Tauri menu.
@@ -462,8 +510,9 @@ impl Monos {
             let modifiers = self
                 .hotkey_modifiers()
                 .filter(|_| self.hotkey_error.is_none());
+            let chief = self.chief_enabled().then(|| self.chief_label());
             if let Some(status) = &mut self.status {
-                status.update(&monos, modifiers.as_deref(), run);
+                status.update(chief.as_deref(), &monos, modifiers.as_deref(), run);
             }
         }
     }
@@ -586,6 +635,17 @@ impl Monos {
             _clock: None,
             writes: None,
             loading_chats: HashSet::new(),
+            chief_chat: None,
+            chief_loading: false,
+            chief_status: None,
+            chief_notice: None,
+            chief_sync_pending: false,
+            chief_rules_applied: false,
+            chief_history_first: false,
+            chief_card_errors: HashMap::new(),
+            chief_editors: HashMap::new(),
+            chief_notified: HashSet::new(),
+            chief_starting: HashSet::new(),
             work: work::Cache::default(),
             roster_failed: roster_error.is_some(),
             error: roster_error,
@@ -704,22 +764,34 @@ impl Monos {
             }
         }));
         if this.prefs.monos
-            && let Some(id) = active.filter(|id| this.roster.get(id).is_some())
+            && let Some(id) = active.filter(|id| {
+                this.roster.get(id).is_some() || (id == chief_ui::CHIEF_ID && this.chief_enabled())
+            })
         {
             this.active = Some(id.clone());
-            this.ensure_chat(&id, cx);
+            this.ensure_chat_for(&id, cx);
             this.reload_files(&id, cx);
         }
+        this.chief_fix_interrupted(cx);
+        this.chief_changed(cx);
         this
     }
     pub(crate) fn is_mono_session(&self, id: i64) -> bool {
-        self.roster.hidden_sessions.contains(&id)
+        self.is_chief_session(id)
+            || self.roster.hidden_sessions.contains(&id)
             || self.roster.of_session(id).is_some()
             || self
                 .roster
                 .monos
                 .iter()
                 .any(|m| m.habit_sessions.contains(&id))
+    }
+    /// A Mono started this session, or fed it, and has not dismissed it.
+    pub(crate) fn owned_by_a_mono(&self, id: i64) -> bool {
+        !matches!(
+            mono::chief::owners_of(&self.roster, id),
+            mono::chief::Owners::None
+        )
     }
     pub(crate) fn hidden_session(&self, id: i64) -> bool {
         self.is_mono_session(id)
@@ -792,12 +864,11 @@ impl Monos {
     }
     /// TitleBar.tsx's MonoTitle, used by the original full-width Mono view.
     pub(crate) fn original_title(&self, inset: f32, cx: &App) -> AnyElement {
-        let Some(mono) = self.current() else {
+        let Some(mono) = self.active_identity() else {
             return div().flex_1().min_w_0().into_any_element();
         };
         let state = self
-            .chats
-            .get(&mono.id)
+            .chat_for(&mono.id)
             .map(|chat| chat.read(cx).mono_status())
             .unwrap_or("idle");
         let status = match state {
@@ -862,10 +933,7 @@ impl Monos {
         self.active.as_deref().and_then(|id| self.roster.get(id))
     }
     pub(crate) fn chat(&self) -> Option<Entity<Conversation>> {
-        self.active
-            .as_ref()
-            .and_then(|id| self.chats.get(id))
-            .cloned()
+        self.active.as_ref().and_then(|id| self.chat_for(id))
     }
     /// A Mono's chat when it is open, without opening it.
     pub(crate) fn open_chat(&self, id: &str) -> Option<Entity<Conversation>> {
@@ -1071,7 +1139,8 @@ impl Monos {
                 };
                 mono.session_id = Some(summary.id);
                 mono.outbox.retain(|q| !delivered.contains(&q.id));
-                let mono = mono.clone();
+                let mut mono = mono.clone();
+                mono.chief_rules = this.chief_enabled();
                 let view = cx.new(|cx| Conversation::new(summary, this.store.clone(), cx));
                 let root = this.root.clone();
                 let env = this
@@ -1115,7 +1184,7 @@ impl Monos {
                                 .collect(),
                             false,
                             cx,
-                        )
+                        );
                     },
                 ));
                 let source = id.clone();
@@ -1211,6 +1280,7 @@ impl Monos {
                     this.note_settings_model(cx);
                 }
                 cx.emit(ChatOpened);
+                this.chief_sync_cards(cx);
                 if let Some(handle) = this.parent_window {
                     let owner = cx.weak_entity();
                     let id = id.clone();
@@ -1241,6 +1311,9 @@ impl Monos {
                 message.error = None;
             }
         }
+        if remove {
+            self.chief_outbox_lost(id, "The message was discarded from the Mono's queue", cx);
+        }
         self.save(cx);
         self.configure_chat(source, cx);
     }
@@ -1258,9 +1331,10 @@ impl Monos {
                 let _ = owner.update(cx, |shell, cx| shell.mono_track_sessions(launches, cx));
             });
         }
-        if let (Some(mono), Some(view)) =
+        if let (Some(mut mono), Some(view)) =
             (self.roster.get(id).cloned(), self.chats.get(id).cloned())
         {
+            mono.chief_rules = self.chief_enabled();
             let env = self
                 .bridge
                 .as_ref()
@@ -1280,10 +1354,11 @@ impl Monos {
         attachments: Vec<String>,
         internal: bool,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<String> {
         if let Some(mono) = self.roster.get_mut(id) {
+            let message_id = mono::new_id();
             mono.outbox.push(Message {
-                id: mono::new_id(),
+                id: message_id.clone(),
                 text,
                 sent_at: Some(monocode_core::time::now_ms()),
                 internal,
@@ -1293,7 +1368,9 @@ impl Monos {
             self.save(cx);
             self.configure_chat(id, cx);
             self.dispatch(id, cx);
+            return Some(message_id);
         }
+        None
     }
     fn dispatch(&mut self, id: &str, cx: &mut Context<Self>) {
         let delivered = self
@@ -1308,6 +1385,7 @@ impl Monos {
             .map(|view| view.update(cx, |view, _| view.mono_take_failures()))
             .unwrap_or_default();
         let mut changed = false;
+        let mut refused = Vec::new();
         if let Some(mono) = self.roster.get_mut(id) {
             let before = mono.outbox.len();
             mono.outbox
@@ -1317,8 +1395,16 @@ impl Monos {
                 if let Some(message) = mono.outbox.iter_mut().find(|m| m.id == id) {
                     message.error = Some(report_error(&error));
                     changed = true;
+                    refused.push((id, report_error(&error)));
                 }
             }
+        }
+        for (message, error) in refused {
+            self.chief_outbox_lost(
+                &message,
+                &format!("The Mono could not take the message: {error}"),
+                cx,
+            );
         }
         if changed {
             self.save(cx);
@@ -1369,10 +1455,13 @@ impl Monos {
                         failed.push(report);
                         continue;
                     }
+                    // A habit's or a workflow's report is text from other sessions: it must not
+                    // carry the header of a command from the Chief.
                     let (role, text) = report
                         .strip_prefix("mono-card:")
                         .map(|s| ("mono-card", s.to_string()))
                         .unwrap_or_else(|| ("assistant", report.clone()));
+                    let text = mono::chief::neutralize_chief_header(&text);
                     let body = (role == "assistant").then(|| {
                         text.strip_prefix("**Habit report**")
                             .unwrap_or(&text)
@@ -1433,15 +1522,20 @@ impl Monos {
         let Some(view) = self.chats.get(id) else {
             return;
         };
+        // The Mono's turn on a command the owner confirmed in the Chief is not the owner's own
+        // turn: nothing notifies about it.
+        let relay = self.chief_relay_of(id);
         let view = view.read(cx);
         let row_count = view.mono_rows(cx).len();
         let finished = !view.busy;
         let completion =
-            (finished && self.inflight.contains_key(id)).then(|| NotificationFinished {
-                summary: view.summary.clone(),
-                body: view.notification_reply_text(cx),
-                habit: false,
-                was_cancelled: view.notification_was_cancelled(),
+            (finished && self.inflight.contains_key(id) && relay.is_none()).then(|| {
+                NotificationFinished {
+                    summary: view.summary.clone(),
+                    body: view.notification_reply_text(cx),
+                    habit: false,
+                    was_cancelled: view.notification_was_cancelled(),
+                }
             });
         cx.emit(NotificationChanged);
         if let Some(completion) = completion {
@@ -1455,6 +1549,10 @@ impl Monos {
         if finished {
             if let Some(mut sent) = self.inflight.remove(id) {
                 let (ok, status) = self.chats[id].read(cx).external_outcome(cx);
+                if let Some(proposal) = &relay {
+                    let reply = self.chats[id].read(cx).chief_final_reply(cx);
+                    self.chief_relay_ended(proposal, ok, &status, &reply, cx);
+                }
                 if !ok && !status.starts_with("Stopped") {
                     if let Some(mono) = self.roster.get_mut(id) {
                         if let Some(queued) = mono.outbox.iter_mut().find(|m| m.id == sent.id) {
@@ -1476,7 +1574,7 @@ impl Monos {
         self.changed(cx);
     }
     pub(crate) fn open(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.prefs.monos || self.roster.get(id).is_none() {
+        if !self.prefs.monos || self.identity_for(id).is_none() {
             return;
         }
         if self.active.as_deref() != Some(id) {
@@ -1495,7 +1593,7 @@ impl Monos {
             self.settings = None;
         }
         self.active = Some(id.into());
-        self.ensure_chat(id, cx);
+        self.ensure_chat_for(id, cx);
         self.reload_files(id, cx);
         cx.emit(TabOpened(id.into()));
         self.focus_active(window, cx);
@@ -1638,7 +1736,13 @@ impl Monos {
         }
         let count = roster.len();
         let has = count > 0;
-        if original && !has && compact {
+        // The Chief heads the rail that lists every Mono, above its own divider.
+        let chief = if project.is_none() {
+            self.chief_rail_entry(original, compact, cx)
+        } else {
+            None
+        };
+        if original && !has && compact && chief.is_none() {
             return div().into_any_element();
         }
         let add_project = project.clone();
@@ -1688,6 +1792,7 @@ impl Monos {
                 d.w_full().flex().flex_col().items_center().gap(px(6.))
             })
             .when(!compact, |d| d.child(heading))
+            .children(chief)
             .when(!has, |d| {
                 d.child(
                     div()
@@ -1907,7 +2012,7 @@ impl Monos {
             .into_any_element()
     }
     pub(crate) fn title_tab(&self, id: &str, width: f32, cx: &Context<Self>) -> Option<AnyElement> {
-        self.roster.get(id).map(|mono| {
+        self.identity_for(id).map(|mono| {
             let id = mono.id.clone();
             let close = id.clone();
             let active = self.active.as_deref() == Some(&id);
@@ -2015,6 +2120,9 @@ impl gpui::Render for Monos {
         }
         self.watch_accounts(cx);
         self.hide_html(cx);
+        if self.chief_active() {
+            return self.chief_view(cx);
+        }
         let Some(mono) = self.current().cloned() else {
             return div().into_any_element();
         };

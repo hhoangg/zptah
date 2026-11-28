@@ -75,6 +75,18 @@ const CASES: ReadonlyArray<{ url: string; route: string; params: Record<string, 
     fullPath: "/d/$desktopId/monos/$monoId/",
   },
   {
+    url: "/d/dk1/monos/chief",
+    route: "/d/:desktopId/monos/chief",
+    params: { desktopId: "dk1" },
+    fullPath: "/d/$desktopId/monos/chief/",
+  },
+  {
+    url: "/d/dk1/monos/chief/profile",
+    route: "/d/:desktopId/monos/chief/profile",
+    params: { desktopId: "dk1" },
+    fullPath: "/d/$desktopId/monos/chief/profile",
+  },
+  {
     url: "/d/dk1/monos/m1/profile",
     route: "/d/:desktopId/monos/:monoId/profile",
     params: { desktopId: "dk1", monoId: "m1" },
@@ -192,6 +204,11 @@ const SCREENS: Record<string, string> = {
   "/d/dk1/monos/m1": "Mono",
   "/d/:desktopId/monos/:monoId": "Mono",
   // U-09 (WS-P, P2): the Mono profile pages. Without a connected desktop they show their loading state.
+  // The Chief chat is titled "Chief" before the catalog names it; its profile page has the same title.
+  "/d/dk1/monos/chief": "Chief",
+  "/d/:desktopId/monos/chief": "Chief",
+  "/d/dk1/monos/chief/profile": "Chief",
+  "/d/:desktopId/monos/chief/profile": "Chief",
   "/d/dk1/monos/m1/profile": "Profile",
   "/d/:desktopId/monos/:monoId/profile": "Profile",
   "/d/dk1/monos/m1/profile/edit": "Edit Mono",

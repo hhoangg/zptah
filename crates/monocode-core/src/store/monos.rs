@@ -240,6 +240,7 @@ impl Store {
                     dismissed: false,
                     each: false,
                     visible: false,
+                    origin: None,
                 });
             }
         }

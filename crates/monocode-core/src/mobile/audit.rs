@@ -267,6 +267,20 @@ pub struct SlashCommand<'a> {
     pub outcome: Outcome,
 }
 
+/// One `chief.proposal.*` call (send, edit or cancel a command the Chief proposed), written by the
+/// app for every outcome with the proposal id only, never the instruction text. `send` makes a
+/// session run a command, which is why a refusal is kept too.
+#[derive(Clone, Copy)]
+pub struct ChiefCommand<'a> {
+    pub fingerprint: &'a str,
+    /// `chief.proposal.send`, `chief.proposal.edit` or `chief.proposal.cancel`.
+    pub method: &'a str,
+    pub proposal_id: Option<&'a str>,
+    pub command_id: Option<&'a str>,
+    pub transport: Transport,
+    pub outcome: Outcome,
+}
+
 /// Methods whose class depends on parameters `record` does not get. They are
 /// written even when they succeed, because the no-parameter class may be the
 /// harmless one while the call was an edit (a selection change, a git action,
@@ -307,7 +321,7 @@ fn should_write(event: &AuditEvent) -> bool {
 fn written_by_the_app(event: &AuditEvent) -> bool {
     // An approval answer is written by the app for every outcome it words with
     // a code (and `ok`); an uncoded failure is still the host's line.
-    if event.method == "session.answerApproval" {
+    if event.method == "session.answerApproval" || chief_command(&event.method) {
         return event.from_app && matches!(event.outcome, Outcome::Ok | Outcome::Denied(_));
     }
     mentioned_file_answered(event)
@@ -322,6 +336,14 @@ fn written_by_the_app(event: &AuditEvent) -> bool {
                         Code::NotSelected | Code::PathDenied | Code::UnsupportedTarget
                     )
             )
+}
+
+/// `chief.proposal.send`, `.edit` and `.cancel`: audited by the app, like an approval answer.
+fn chief_command(method: &str) -> bool {
+    matches!(
+        method,
+        "chief.proposal.send" | "chief.proposal.edit" | "chief.proposal.cancel"
+    )
 }
 
 /// `chat.mentionedFile` is audited by the app for every outcome, successes
@@ -570,6 +592,38 @@ impl Log {
         }));
     }
 
+    /// One line per Chief proposal command: method, proposal id and the outcome with its code.
+    pub fn record_chief_command(&self, device: &DeviceContext, command: &ChiefCommand) {
+        let ChiefCommand {
+            fingerprint,
+            method,
+            proposal_id,
+            command_id,
+            transport,
+            outcome,
+        } = *command;
+        if !chief_command(method) {
+            return;
+        }
+        let id = |value: Option<&str>| value.map(|v| capped(v, ID_CHARS));
+        self.append(&json!({
+            "ts": now_ms(),
+            "deviceId": capped(&device.id, ID_CHARS),
+            "fingerprint": prefix(fingerprint),
+            "transport": transport.as_str(),
+            "event": "call",
+            "method": method,
+            "projectId": null,
+            "outcome": outcome.text(),
+            "commandId": id(command_id),
+            "proposalId": id(proposal_id),
+            "permission": match device.permission {
+                Permission::Read => "read",
+                Permission::Control => "control",
+            },
+        }));
+    }
+
     /// One line per web push attempt or drop: category, target kind
     /// (`session`, `mono`, `habit`), device count and the outcome text. Metadata
     /// only: no token, URL, title, name or message text.
@@ -710,6 +764,13 @@ pub fn record_file_transfer_with(device: &DeviceContext, read: &FileTransfer) {
 pub fn record_slash_command_with(device: &DeviceContext, run: &SlashCommand) {
     if let Some(log) = global() {
         log.record_slash_command(device, run);
+    }
+}
+
+/// Records one Chief proposal command. A no-op before [`init`].
+pub fn record_chief_command_with(device: &DeviceContext, command: &ChiefCommand) {
+    if let Some(log) = global() {
+        log.record_chief_command(device, command);
     }
 }
 
@@ -1104,6 +1165,43 @@ mod tests {
         answered.from_app = true;
         log.record(&device(), &answered);
         assert_eq!(lines(dir.path()).len(), 2);
+    }
+
+    #[test]
+    fn a_chief_command_is_audited_with_the_proposal_id_and_never_the_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Log::new(dir.path());
+        for (method, outcome) in [
+            ("chief.proposal.send", Outcome::Ok),
+            ("chief.proposal.send", Outcome::Denied(Code::Disabled)),
+            ("chief.proposal.edit", Outcome::Ok),
+            ("chief.proposals", Outcome::Ok),
+        ] {
+            log.record_chief_command(
+                &device(),
+                &ChiefCommand {
+                    fingerprint: "abcdef0123456789",
+                    method,
+                    proposal_id: Some("p_00000001"),
+                    command_id: Some("c1"),
+                    transport: Transport::Web,
+                    outcome,
+                },
+            );
+        }
+        let all = lines(dir.path());
+        // The read method is not a command, so it writes nothing.
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0]["method"], "chief.proposal.send");
+        assert_eq!(all[0]["proposalId"], "p_00000001");
+        assert_eq!(all[0]["transport"], "web");
+        assert_eq!(all[1]["outcome"], "denied:disabled");
+        assert!(all[0].get("instruction").is_none());
+        // The host's own line for a call the app already wrote is dropped.
+        let mut answered = event("chief.proposal.send", Outcome::Ok);
+        answered.from_app = true;
+        log.record(&device(), &answered);
+        assert_eq!(lines(dir.path()).len(), 3);
     }
 
     #[test]

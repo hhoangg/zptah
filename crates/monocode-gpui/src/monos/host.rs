@@ -158,18 +158,21 @@ pub(super) enum Batch {
 const RESULT_CHARS: usize = 12_000;
 const BATCH_CHARS: usize = 48_000;
 /// Reports that can go out now. A group waits for its launching turn to end and
-/// for every child to stop; an "each" launch only for itself.
+/// for every child to stop; an "each" launch only for itself. A launch an owner command
+/// (`held`) has not reached yet, because its message still waits in the session's queue, is
+/// not reported: what the session last did was not that command's work.
 pub(super) fn ready_batches(
     launches: &[Launch],
     source_busy: impl Fn(i64) -> bool,
     stopped: impl Fn(i64) -> bool,
+    held: impl Fn(&Launch) -> bool,
 ) -> Vec<(Batch, Vec<(i64, String)>)> {
     let waiting = |l: &&Launch| l.notify_on_complete && !l.completed && !l.dismissed;
     let mut ready = Vec::new();
     let mut seen = HashSet::new();
     for launch in launches.iter().filter(waiting) {
         if launch.each {
-            if stopped(launch.session_id) {
+            if stopped(launch.session_id) && !held(launch) {
                 ready.push((
                     Batch::Each(launch.session_id),
                     vec![(launch.session_id, launch.title.clone())],
@@ -186,7 +189,7 @@ pub(super) fn ready_batches(
             .filter(waiting)
             .filter(|l| !l.each && l.origin_turn == turn)
             .collect();
-        if children.iter().all(|l| stopped(l.session_id)) {
+        if children.iter().all(|l| stopped(l.session_id) && !held(l)) {
             let sessions = children
                 .iter()
                 .map(|l| (l.session_id, l.title.clone()))
@@ -273,19 +276,42 @@ pub(super) fn usage_limit_note(
 }
 /// The message the Mono receives. The results share one budget, so a large
 /// group still names every session.
+#[cfg(test)]
 pub(super) fn completion_message(batch: Batch, results: &[(i64, String, String)]) -> String {
+    completion_message_for(batch, results, &[])
+}
+/// `completion_message`; `chief` holds the sessions an owner command relayed by the Chief
+/// started or fed. When every result is one of them the lead tells the Mono to answer in one
+/// line and not to carry on; a mixed batch keeps its normal lead and names them instead.
+pub(super) fn completion_message_for(
+    batch: Batch,
+    results: &[(i64, String, String)],
+    chief: &[i64],
+) -> String {
     let budget = (BATCH_CHARS / results.len().max(1)).clamp(200, RESULT_CHARS);
     let report = results
         .iter()
         .map(|(id, title, prose)| {
+            // Titles and replies are a session's own words: they must not carry the header of a
+            // command from the Chief.
             format!(
-                "Session {id}: {title}\n{}",
-                monocode_core::response::limit(prose, budget)
+                "Session {id}: {}\n{}",
+                mono::chief::neutralize_chief_header(title),
+                mono::chief::neutralize_chief_header(&monocode_core::response::limit(
+                    prose, budget
+                ))
             )
         })
         .collect::<Vec<_>>()
         .join("\n\n");
+    let from_chief: Vec<i64> = results
+        .iter()
+        .map(|(id, _, _)| *id)
+        .filter(|id| chief.contains(id))
+        .collect();
+    let all_chief = !results.is_empty() && from_chief.len() == results.len();
     let lead = match batch {
+        _ if all_chief => mono::chief::COMPLETION_LEAD,
         Batch::Group(_) => {
             "All sessions in this group have stopped. Inspect their results and give an integrated update."
         }
@@ -293,7 +319,16 @@ pub(super) fn completion_message(batch: Batch, results: &[(i64, String, String)]
             "This session has stopped. Inspect its result and continue; other sessions report separately."
         }
     };
-    format!("[Delegated work completed]\n{lead}\n\n{report}")
+    let note = if from_chief.is_empty() || all_chief {
+        String::new()
+    } else {
+        let ids: Vec<String> = from_chief.iter().map(|id| format!("#{id}")).collect();
+        format!(
+            "\nSessions {} were work an owner command relayed by the Chief started or fed: report their result in one line and do not continue them unless the owner asks.",
+            ids.join(", ")
+        )
+    };
+    format!("[Delegated work completed]\n{lead}{note}\n\n{report}")
 }
 /// The tab group palette index of a Mono's color.
 fn folder_color(color: u32) -> Option<usize> {
@@ -302,14 +337,31 @@ fn folder_color(color: u32) -> Option<usize> {
         .position(|c| *c == color)
         .map(|n| if n == 8 { 6 } else { n + 1 })
 }
-fn text(v: &Value, key: &str, max: usize) -> Result<String, String> {
+impl Monos {
+    /// Ends a call that failed: when it carried a Chief proposal this Mono holds, the proposal
+    /// is refused with the same reason first.
+    fn finish_bound(
+        &mut self,
+        call: Call,
+        proposal: Option<&str>,
+        mono_id: &str,
+        reason: String,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(proposal) = proposal {
+            self.chief_refuse_bound(proposal, mono_id, &reason, cx);
+        }
+        self.finish_call(call, Err(reason), cx);
+    }
+}
+pub(super) fn text(v: &Value, key: &str, max: usize) -> Result<String, String> {
     v.get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty() && s.len() <= max)
         .map(str::to_owned)
         .ok_or_else(|| format!("Provide {key} (up to {max} bytes)"))
 }
-fn id(v: &Value, key: &str) -> Result<i64, String> {
+pub(super) fn id(v: &Value, key: &str) -> Result<i64, String> {
     v.get(key)
         .and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))
         // Cloud sessions live in the remote store, whose session IDs are negative.
@@ -319,7 +371,7 @@ fn id(v: &Value, key: &str) -> Result<i64, String> {
 fn flag(v: &Value, key: &str, default: bool) -> bool {
     v.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
-fn fingerprint(call: &Call) -> String {
+pub(super) fn fingerprint(call: &Call) -> String {
     files::content_hash(&format!("{}:{}", call.action, call.input))
 }
 /// What a `sessions.delete` with `providerFiles` answers, and whether the
@@ -382,6 +434,10 @@ impl Monos {
         cx.notify();
     }
     fn app_caller(&self, call: &Call) -> Result<Mono, String> {
+        // `chief.*` belongs to the Chief's own chat, which never reaches this function.
+        if mono::chief::is_action(&call.action) {
+            return Err(super::chief::NOT_A_CHIEF.into());
+        }
         let mono = self
             .roster
             .of_session(call.session)
@@ -460,7 +516,7 @@ impl Monos {
     /// A session that a Mono must not manage through the app: its own, another Mono's chat, a
     /// habit run, a workflow's question and a worker. The one rule of `sessions.delete`,
     /// `sessions.archive` with a cloud stop or delete, and the move actions.
-    fn unmanaged_session(&self, session: i64, caller: i64, cx: &App) -> bool {
+    pub(super) fn unmanaged_session(&self, session: i64, caller: i64, cx: &App) -> bool {
         session == caller
             || self.is_mono_session(session)
             || self.running.contains_key(&session)
@@ -470,7 +526,12 @@ impl Monos {
                 .upgrade()
                 .is_some_and(|o| o.read(cx).mono_is_worker(session))
     }
-    fn finish_call(&mut self, call: Call, result: Result<Value, String>, cx: &mut Context<Self>) {
+    pub(super) fn finish_call(
+        &mut self,
+        call: Call,
+        result: Result<Value, String>,
+        cx: &mut Context<Self>,
+    ) {
         let key = (call.session, call.request_id.clone());
         self.app_pending.remove(&key);
         // A read has nothing to replay, and a day's list is large to keep as a receipt.
@@ -698,7 +759,7 @@ impl Monos {
             _ => shell.api_cancel_move(project, session, cx),
         })
     }
-    fn call_work(
+    pub(super) fn call_work(
         &mut self,
         call: Call,
         mono_id: String,
@@ -750,6 +811,16 @@ impl Monos {
                     this.changed(cx);
                     value
                 });
+                // Whatever the start did, its proposal is no longer held; a start that failed
+                // refuses it, so the turn cannot end as `NotAttempted` and be retried.
+                if call.action == "sessions.start"
+                    && let Some(proposal) = call.input.get("proposalId").and_then(Value::as_str)
+                {
+                    match &result {
+                        Err(reason) => this.chief_start_failed(proposal, &mono_id, reason, cx),
+                        Ok(_) => this.chief_start_ended(proposal),
+                    }
+                }
                 this.finish_call(call, result, cx);
             });
         })
@@ -789,6 +860,19 @@ impl Monos {
             .unwrap_or(0);
         let run_chat = self.run_chat(caller, mono_id);
         let (origin_turn, each) = report_to(caller, origin, run_chat, input);
+        // A start that carried a Chief proposal uses it now that the session exists; its launch
+        // then reports back with the owner-command lead.
+        let launch_origin = input
+            .get("proposalId")
+            .and_then(Value::as_str)
+            .filter(|proposal| {
+                let prompt = text(input, "prompt", 65536).unwrap_or_default();
+                self.chief_start_accepted(proposal, mono_id, id, &summary.title, &prompt, cx)
+            })
+            .map(|proposal| mono::LaunchOrigin {
+                proposal_id: proposal.to_owned(),
+                follow_up_id: None,
+            });
         if let Some(mono) = self.roster.get_mut(mono_id) {
             mono.launches.push(Launch {
                 session_id: id,
@@ -802,6 +886,7 @@ impl Monos {
                 completed: false,
                 dismissed: false,
                 visible,
+                origin: launch_origin,
             });
         }
         self.note_run_session(caller, id, true);
@@ -826,8 +911,17 @@ impl Monos {
             });
         }
     }
+    /// Who a call comes from: a Mono's chat or run (`Some`), or the Chief's chat (`None`, which
+    /// only the Chief's own actions get through).
+    fn caller_of(&self, call: &Call) -> Result<Option<Mono>, String> {
+        if self.is_chief_session(call.session) {
+            self.chief_caller(call).map(|()| None)
+        } else {
+            self.app_caller(call).map(Some)
+        }
+    }
     pub(super) fn app_call(&mut self, call: Call, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Err(error) = self.app_caller(&call) {
+        if let Err(error) = self.caller_of(&call) {
             let _ = call.reply.send(Err(error));
             return;
         }
@@ -869,7 +963,7 @@ impl Monos {
             let stored = lookup.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 // Capabilities may have been revoked while storage was busy.
-                let mono = match this.app_caller(&call) {
+                let mono = match this.caller_of(&call) {
                     Ok(mono) => mono,
                     Err(error) => {
                         this.app_pending.remove(&key);
@@ -878,9 +972,10 @@ impl Monos {
                     }
                 };
                 match stored {
-                    Ok(None) => {
-                        this.app_call_ready(call, mono, window, cx);
-                    }
+                    Ok(None) => match mono {
+                        Some(mono) => this.app_call_ready(call, mono, window, cx),
+                        None => this.chief_call(call, window, cx),
+                    },
                     Ok(Some((hash, result))) => {
                         this.app_pending.remove(&key);
                         let _ = call.reply.send(if hash == fingerprint(&call) {
@@ -915,6 +1010,22 @@ impl Monos {
         }
         let mut input = call.input.clone();
         let action = call.action.clone();
+        if action.starts_with("sessions.")
+            && let Ok(target) = id(&input, "sessionId")
+        {
+            if self.is_chief_session(target) {
+                self.finish_call(call, Err(super::chief::CHIEF_CHAT_REFUSED.into()), cx);
+                return;
+            }
+            // Never another Mono's chat, nor this one's own: a send or a stop there would drive
+            // a Mono from outside its own queue.
+            if matches!(action.as_str(), "sessions.send" | "sessions.stop")
+                && self.roster.of_session(target).is_some()
+            {
+                self.finish_call(call, Err(super::chief::MONO_CHAT_REFUSED.into()), cx);
+                return;
+            }
+        }
         // A session it starts without naming a model takes the one set for
         // its sessions, if any; the receipt still keys on what it sent.
         if action == "sessions.start"
@@ -974,6 +1085,20 @@ impl Monos {
         } else {
             String::new()
         };
+        // A start that carries a proposal is checked before anything is created: the app, not
+        // the model, decides whether the owner's command may start a session through this Mono.
+        if action == "sessions.start"
+            && let Some(proposal) = input.get("proposalId").and_then(Value::as_str)
+        {
+            let prompt = text(&input, "prompt", 65536).unwrap_or_default();
+            let draft = flag(&input, "draft", false);
+            if let Err(reason) =
+                self.chief_check_bound_start(proposal, &mono.id, &project, &prompt, draft, cx)
+            {
+                self.finish_call(call, Err(reason), cx);
+                return;
+            }
+        }
         let hidden = self.roster.hidden_sessions.clone();
         let run_chat = self.run_chat(call.session, &mono.id);
         let source = self
@@ -1063,6 +1188,17 @@ impl Monos {
                     );
                     return;
                 }
+                // The proposal this send is bound to. Once it is matched to this Mono, every
+                // later refusal is recorded on it, so the turn cannot end as `NotAttempted`
+                // and the Mono cannot retry within it.
+                let bound = if action == "sessions.send" {
+                    input
+                        .get("proposalId")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                } else {
+                    None
+                };
                 let view = self
                     .owner
                     .upgrade()
@@ -1080,23 +1216,38 @@ impl Monos {
                                 }))
                     });
                 let Some(view) = view else {
-                    self.finish_call(
+                    self.finish_bound(
                         call,
-                        Err("Session is outside the assigned project".into()),
+                        bound.as_deref(),
+                        &mono.id,
+                        "Session is outside the assigned project".into(),
                         cx,
                     );
                     return;
                 };
+                // A send that carries a proposal is checked before anything else: the app, not
+                // the model, decides whether the owner's command may go out through this Mono.
+                if let Some(proposal) = &bound {
+                    let prompt = text(&input, "prompt", 65536).unwrap_or_default();
+                    if let Err(reason) =
+                        self.chief_check_bound(proposal, &mono.id, session, &prompt, cx)
+                    {
+                        self.finish_call(call, Err(reason), cx);
+                        return;
+                    }
+                }
                 if matches!(action.as_str(), "sessions.send" | "sessions.draft")
                     && view.read(cx).move_locked()
                 {
-                    self.finish_call(call, Err(crate::conversation::MOVE_PAUSED.into()), cx);
+                    let reason = crate::conversation::MOVE_PAUSED.into();
+                    self.finish_bound(call, bound.as_deref(), &mono.id, reason, cx);
                     return;
                 }
                 if matches!(action.as_str(), "sessions.send" | "sessions.draft")
                     && view.read(cx).auto_stopping
                 {
-                    self.finish_call(call, Err(crate::conversation::AUTO_STOPPING.into()), cx);
+                    let reason = crate::conversation::AUTO_STOPPING.into();
+                    self.finish_bound(call, bound.as_deref(), &mono.id, reason, cx);
                     return;
                 }
                 if matches!(action.as_str(), "sessions.send" | "sessions.draft")
@@ -1106,7 +1257,8 @@ impl Monos {
                             .upgrade()
                             .is_some_and(|o| o.read(cx).cloud_archive_in_progress(session)))
                 {
-                    self.finish_call(call, Err(crate::shell::CLOUD_ARCHIVING.into()), cx);
+                    let reason = crate::shell::CLOUD_ARCHIVING.into();
+                    self.finish_bound(call, bound.as_deref(), &mono.id, reason, cx);
                     return;
                 }
                 if action == "sessions.send"
@@ -1114,15 +1266,22 @@ impl Monos {
                         monocode_core::cloud_sessions::starting_refusal(&store, session)
                     })
                 {
-                    self.finish_call(call, Err(error), cx);
+                    self.finish_bound(call, bound.as_deref(), &mono.id, error, cx);
                     return;
                 }
                 if action == "sessions.send" || action == "sessions.draft" {
-                    if view.read(cx).busy
-                        || view.read(cx).mono_external_pending()
-                        || view.read(cx).has_saved_draft()
-                        || !view.read(cx).input.read(cx).content.trim().is_empty()
-                    {
+                    // An owner's command waits behind everything a Chief command respects (the
+                    // follow-up queue included); a plain send only for a busy or drafting session.
+                    let must_wait = if bound.is_some() {
+                        view.read(cx).chief_must_queue(cx)
+                    } else {
+                        view.read(cx).busy
+                            || view.read(cx).mono_external_pending()
+                            || view.read(cx).has_saved_draft()
+                            || !view.read(cx).input.read(cx).content.trim().is_empty()
+                    };
+                    // An owner's command waits in the session's queue; a plain send is refused.
+                    if must_wait && bound.is_none() {
                         self.finish_call(
                             call,
                             Err("Session is busy or has an unsent draft".into()),
@@ -1132,16 +1291,34 @@ impl Monos {
                     }
                     match text(&input, "prompt", 65536) {
                         Ok(prompt) => {
-                            let sent = view.update(cx, |v, cx| {
-                                v.mono_external_send(prompt, action == "sessions.draft", cx)
-                            });
-                            if let Err(e) = sent {
-                                self.finish_call(call, Err(e), cx);
-                                return;
+                            let sent_text = prompt.clone();
+                            let mut follow_up = None;
+                            if must_wait {
+                                match view.update(cx, |v, cx| v.chief_queue(prompt, cx)) {
+                                    Ok(id) => follow_up = Some(id),
+                                    Err(e) => {
+                                        self.finish_bound(call, bound.as_deref(), &mono.id, e, cx);
+                                        return;
+                                    }
+                                }
+                            } else {
+                                let sent = view.update(cx, |v, cx| {
+                                    v.mono_external_send(prompt, action == "sessions.draft", cx)
+                                });
+                                if let Err(e) = sent {
+                                    self.finish_bound(call, bound.as_deref(), &mono.id, e, cx);
+                                    return;
+                                }
                             }
                             // The send is queued until the history loads, which a stopped instance
                             // never allows: wake or reconnect it (a draft never does), and the queue flushes.
-                            if action == "sessions.send" && !view.read(cx).ready_for_external(cx) {
+                            if action == "sessions.send"
+                                && (if must_wait {
+                                    view.read(cx).chief_cloud_asleep()
+                                } else {
+                                    !view.read(cx).ready_for_external(cx)
+                                })
+                            {
                                 let store = self.store.clone();
                                 let view = view.clone();
                                 cx.spawn(async move |_, cx| {
@@ -1150,6 +1327,19 @@ impl Monos {
                                 })
                                 .detach();
                             }
+                            // Used from here on: a second send with this proposal is refused.
+                            let launch_origin = bound.as_ref().map(|proposal| {
+                                self.chief_bound_accepted(
+                                    proposal,
+                                    follow_up.clone(),
+                                    &sent_text,
+                                    cx,
+                                );
+                                mono::LaunchOrigin {
+                                    proposal_id: proposal.clone(),
+                                    follow_up_id: follow_up.clone(),
+                                }
+                            });
                             if flag(&input, "notifyOnComplete", false) {
                                 if let Some(m) = self.roster.get_mut(&mono.id) {
                                     let origin = source.map(|v| v.read(cx).mono_turn).unwrap_or(0);
@@ -1163,6 +1353,7 @@ impl Monos {
                                         launch.notify_on_complete = true;
                                         launch.origin_turn = origin_turn;
                                         launch.each = each;
+                                        launch.origin = launch_origin.clone();
                                     } else {
                                         let summary = &view.read(cx).summary;
                                         let cwd =
@@ -1179,6 +1370,7 @@ impl Monos {
                                             completed: false,
                                             dismissed: false,
                                             visible: false,
+                                            origin: launch_origin.clone(),
                                         });
                                     }
                                 }
@@ -1187,7 +1379,11 @@ impl Monos {
                             if action == "sessions.send" {
                                 self.note_run_session(call.session, session, false);
                             }
-                            Ok(json!({"accepted":true}))
+                            Ok(if follow_up.is_some() {
+                                json!({"accepted":true,"queued":true})
+                            } else {
+                                json!({"accepted":true})
+                            })
                         }
                         Err(e) => Err(e),
                     }
@@ -1725,7 +1921,12 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.set_enabled
         });
         match prepared {
             Ok(work) => self.call_work(call, target, work, cx),
-            Err(error) => self.finish_call(call, Err(error), cx),
+            Err(error) => {
+                if let Some(proposal) = call.input.get("proposalId").and_then(Value::as_str) {
+                    self.chief_start_failed(proposal, &target, &error, cx);
+                }
+                self.finish_call(call, Err(error), cx)
+            }
         }
     }
     /// Everything a start decides on the UI thread; the returned work creates the session row off
@@ -2106,6 +2307,7 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.set_enabled
             .collect()
     }
     pub(super) fn check_completions(&mut self, cx: &mut Context<Self>) {
+        self.chief_sync_follow_ups(cx);
         let views = self
             .owner
             .upgrade()
@@ -2125,13 +2327,32 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.set_enabled
                     .find(|v| v.id == id)
                     .is_none_or(|v| !v.busy && v.has_messages)
             };
-            for (batch, sessions) in ready_batches(&mono.launches, source_busy, stopped) {
+            // A command still in the session's queue holds the report: the roster says so (the
+            // proposal is `QueuedInSession`), whether or not the session's view is loaded.
+            let held = |launch: &Launch| {
+                launch.origin.as_ref().is_some_and(|origin| {
+                    origin.follow_up_id.is_some()
+                        && self.chief_proposals().iter().any(|p| {
+                            p.id == origin.proposal_id
+                                && p.state == mono::chief::ProposalState::QueuedInSession
+                        })
+                })
+            };
+            for (batch, sessions) in ready_batches(&mono.launches, source_busy, stopped, held) {
                 if !self.completion_work.contains(&(mono.id.clone(), batch)) {
-                    ready.push((mono.id.clone(), batch, sessions));
+                    let from_chief: Vec<i64> = mono
+                        .launches
+                        .iter()
+                        .filter(|l| {
+                            l.origin.is_some() && sessions.iter().any(|(id, _)| *id == l.session_id)
+                        })
+                        .map(|l| l.session_id)
+                        .collect();
+                    ready.push((mono.id.clone(), batch, sessions, from_chief));
                 }
             }
         }
-        for (id, batch, sessions) in ready {
+        for (id, batch, sessions, from_chief) in ready {
             self.completion_work.insert((id.clone(), batch));
             let store = self.store.clone();
             let book = crate::accounts::get(cx).map(|center| center.read(cx).book.clone());
@@ -2150,7 +2371,7 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.set_enabled
                     // Always the Mono's chat: a habit run's sessions report there too.
                     this.enqueue(
                         &id,
-                        completion_message(batch, &results),
+                        completion_message_for(batch, &results, &from_chief),
                         Vec::new(),
                         true,
                         cx,
@@ -2232,7 +2453,7 @@ fn stored_limit(db: &monocode_core::store::Store, id: i64) -> Option<LimitFacts>
 
 /// The project a launch is recorded and filed under: a cloud session belongs to the local project
 /// it twins (its cwd is a remote key no sidebar shows), every other session to its own cwd.
-fn launch_project(store: &Database, id: i64, cwd: &str) -> String {
+pub(super) fn launch_project(store: &Database, id: i64, cwd: &str) -> String {
     locked(store)
         .ok()
         .and_then(|store| store.remote_session(id).ok().flatten())

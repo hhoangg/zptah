@@ -31,7 +31,7 @@ import { HandshakeState, NoiseError, fingerprint, generateKeyPair, prologue, typ
 import { SecureChannel } from "./secure-channel.ts";
 import { MockTransfers } from "./transfer.ts";
 import { MockTerminals, type MockTerminalOptions } from "./terminal.ts";
-import { FIXTURE_HANDLERS, FixtureError, MockWorld, type HandlerContext, type MockDevice, type WatchCursor } from "./fixtures.ts";
+import { CHIEF_CONVERSATION, FIXTURE_HANDLERS, FixtureError, MockWorld, type HandlerContext, type MockDevice, type WatchCursor } from "./fixtures.ts";
 import type { FrameSocket } from "./transport.ts";
 
 export interface Timers {
@@ -564,6 +564,9 @@ export class MockDesktop {
     if (open >= HOST_MAX_WATCHES_PER_DEVICE) return this.#error(session, rid, "Too many open watches", "busy");
     try {
       this.world.session(conversationId);
+      if (conversationId === CHIEF_CONVERSATION && (session.device.selection.projects !== null || session.device.selection.monos !== null)) {
+        throw new FixtureError("The Chief is not on this device's selection", "not_selected");
+      }
     } catch (error) {
       if (error instanceof FixtureError) return this.#error(session, rid, error.message, error.code);
       throw error;

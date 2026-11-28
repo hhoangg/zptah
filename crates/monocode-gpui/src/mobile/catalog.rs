@@ -49,6 +49,7 @@ fn head_branch(cwd: &std::path::Path) -> Option<String> {
     })
 }
 
+#[derive(Clone)]
 pub(crate) struct LiveSession {
     pub loaded: bool,
     pub metadata: MobileSessionMetadata,

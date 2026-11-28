@@ -5,6 +5,7 @@ pub mod api;
 pub mod bridge;
 pub mod browser;
 pub mod cards;
+pub mod chief;
 pub mod cloud_api;
 mod desktop;
 pub mod emoji;
@@ -56,6 +57,10 @@ pub struct Mono {
     pub mascot: String,
     pub color: u32,
     pub projects: Vec<String>,
+    /// Never saved: set by the app on the copy a chat is configured with while the Chief is on,
+    /// so the rules carry the section on the Chief's commands only then.
+    #[serde(skip)]
+    pub chief_rules: bool,
     pub show_started_sessions_in_sidebar: bool,
     pub use_sidebar_folders: bool,
     pub background: Option<Background>,
@@ -209,6 +214,7 @@ impl Default for Mono {
             mascot: MASCOTS[0].into(),
             color: COLORS_MONO[0],
             projects: Vec::new(),
+            chief_rules: false,
             show_started_sessions_in_sidebar: false,
             use_sidebar_folders: false,
             background: None,
@@ -307,6 +313,18 @@ pub struct Launch {
     /// run's sessions: the run is followed from there).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub visible: bool,
+    /// Set when the Chief relayed an owner command that started or fed this launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<LaunchOrigin>,
+}
+/// The owner command behind a launch: the Chief proposal and, when the command waited in the
+/// session's follow-up queue, the id of that queued message.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchOrigin {
+    pub proposal_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_up_id: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -346,6 +364,10 @@ pub struct Roster {
     /// without discarding deliberate native edits or resurrecting deletions.
     #[serde(skip_serializing_if = "Option::is_none")]
     desktop_source: Option<Vec<Mono>>,
+    /// The one Chief above the Monos, when the owner turned it on. Kept apart from `monos` so
+    /// no loop over the Monos reaches it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chief: Option<chief::Chief>,
 }
 impl Roster {
     pub fn load(store: &Store) -> Result<Self, String> {
@@ -373,6 +395,9 @@ impl Roster {
         });
         for mono in &mut roster.monos {
             mono.normalize();
+        }
+        if let Some(chief) = &mut roster.chief {
+            chief.normalize();
         }
         Ok(roster)
     }
@@ -434,22 +459,31 @@ pub fn root(store: &Store) -> PathBuf {
         .join("monos")
 }
 pub fn load_files(root: &Path, mono: &Mono) -> Result<files::AgentFiles, String> {
-    let mut files = files::load(root, &mono.id, None)?;
+    load_files_for(root, &mono.id)
+}
+/// The folder the Chief's folder `chief/` lives in (the app data folder itself, so the Chief's
+/// files sit next to `monos/`, not inside it). Pass it, with [`chief::FILES_ID`], wherever a
+/// Mono's `root` and id are taken (`files::*`, `memory::*`).
+pub fn chief_root(store: &Store) -> PathBuf {
+    store
+        .data_dir()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("monocode-test-{}", new_id())))
+}
+/// The Chief's soul and memory, seeded like a Mono's. `root` is [`chief_root`].
+pub fn load_chief_files(root: &Path) -> Result<files::AgentFiles, String> {
+    load_files_for(root, chief::FILES_ID)
+}
+fn load_files_for(root: &Path, id: &str) -> Result<files::AgentFiles, String> {
+    let mut files = files::load(root, id, None)?;
     if files.soul.is_none() {
         let soul = DEFAULT_SOUL;
-        match files::save(
-            root,
-            &mono.id,
-            None,
-            "SOUL.md",
-            soul,
-            Some(&files.soul_hash),
-        ) {
+        match files::save(root, id, None, "SOUL.md", soul, Some(&files.soul_hash)) {
             Ok(hash) => {
                 files.soul = Some(soul.into());
                 files.soul_hash = hash;
             }
-            Err(error) if error == files::CONFLICT => files = files::load(root, &mono.id, None)?,
+            Err(error) if error == files::CONFLICT => files = files::load(root, id, None)?,
             Err(error) => return Err(error),
         }
     }
@@ -500,6 +534,11 @@ Save substantial written reports with artifacts.write, kind document, title, sum
         workflows = WORKFLOWS_RULES,
         file_rule = crate::files::links::MENTION_RULE,
     );
+    let rules = if mono.chief_rules {
+        format!("{rules}\n\n{}", chief::MONO_RULES)
+    } else {
+        rules
+    };
     match mono.browser.as_ref().filter(|b| b.active()) {
         Some(browser) => format!("{rules}\n\n{}", browser::prompt_block(browser)),
         None => rules,

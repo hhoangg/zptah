@@ -2,7 +2,7 @@
 // change it. Decision (architecture.md 3.2 and 6.6): the `cloud` and `approvals` fields live in this
 // TanStack Query entry, next to the turns, not in a second store, so a read, a watch frame and the
 // persisted cache all write one place and `useCloud` / `useApprovals` are selectors over it.
-import type { Approval, Attachment, CloudField, QuestionPrompt, Turn, UsageLimit } from "@monoptah/protocol";
+import type { Approval, Attachment, ChiefExtra, CloudField, QuestionPrompt, Turn, UsageLimit } from "@monoptah/protocol";
 import type { AppliedFrames } from "./watchUpdates.ts";
 
 /** A message the user sent that the desktop transcript does not hold yet (F-09, F-06). */
@@ -30,6 +30,8 @@ export interface ConversationState {
   error: string | null;
   cloud: CloudField | undefined;
   approvals: Approval[];
+  /** The Chief conversation's proposals (`chief` of a read or frame); undefined for every other conversation. */
+  chief: ChiefExtra | undefined;
   /**
    * Counts the times the desktop itself sent the `approvals` field (a frame that carried it, or a read). A card
    * armed before a reconnect compares it with the value it saw then, so a list that survived the reconnect
@@ -53,6 +55,7 @@ export function emptyConversation(): ConversationState {
     error: null,
     cloud: undefined,
     approvals: NO_APPROVALS,
+    chief: undefined,
     approvalsSeq: 0,
     optimistic: [],
     cachedOnly: false,
@@ -117,6 +120,7 @@ export function withFrames(state: ConversationState, applied: AppliedFrames): Co
     cloud: applied.cloud !== undefined ? (applied.cloud ?? undefined) : state.cloud,
     approvals: applied.approvals !== undefined ? applied.approvals : state.approvals,
     approvalsSeq: applied.approvals !== undefined ? state.approvalsSeq + 1 : state.approvalsSeq,
+    chief: applied.chief !== undefined ? applied.chief : state.chief,
     cachedOnly: false,
   });
 }
@@ -132,6 +136,7 @@ export function withRead(
     question?: QuestionPrompt | null | undefined;
     cloud?: CloudField | null | undefined;
     approvals?: Approval[] | undefined;
+    chief?: ChiefExtra | undefined;
   },
 ): ConversationState {
   return reconcile({
@@ -145,6 +150,7 @@ export function withRead(
     // Only an explicit `cloud: null` clears it; a read that omits the field (marks not loaded yet) leaves it.
     cloud: result.cloud === undefined ? state.cloud : (result.cloud ?? undefined),
     approvals: result.approvals ?? NO_APPROVALS,
+    chief: result.chief ?? state.chief,
     approvalsSeq: state.approvalsSeq + 1,
     cachedOnly: false,
   });

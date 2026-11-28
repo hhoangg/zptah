@@ -18,8 +18,8 @@ function Signature({ agent, name }: { agent: TranscriptAgent; name: string }) {
   const color = safeHexColor(agent.color, "var(--accent-color)");
   return (
     <span className="inline-flex max-w-full items-center gap-1.5 self-start rounded-pill bg-[var(--content-a07)] py-0.5 pr-3 pl-2" data-testid="mono-signature">
-      {agent.id !== undefined && isKnownMascot(agent.mascot) ? (
-        <MonoAvatar monoId={agent.id} name={agent.name} mascot={agent.mascot} color={agent.color} size={16} />
+      {agent.id !== undefined && (agent.emoji || isKnownMascot(agent.mascot)) ? (
+        <MonoAvatar monoId={agent.id} name={agent.name} mascot={agent.mascot} emoji={agent.emoji} color={agent.color} size={16} />
       ) : (
         <span aria-hidden="true" className="grid size-3.5 shrink-0 place-items-center rounded-[4px] text-[9px] leading-none font-bold text-white" style={{ background: color }}>
           {agent.name.trim().charAt(0).toUpperCase()}

@@ -90,6 +90,12 @@ pub(super) const APP_METHODS: &[&str] = &[
     "mono.file",
     "mono.emoji",
     "mono.saveFile",
+    "chief.profile",
+    "chief.proposals",
+    "chief.proposal.send",
+    "chief.proposal.edit",
+    "chief.proposal.cancel",
+    "chief.update",
     "session.answerApproval",
     "cloud.instances",
     "cloud.stop",
@@ -2507,6 +2513,34 @@ impl MobileHost {
         Ok(())
     }
 
+    /// Adds a Mono the device just created to its Mono selection, so the device
+    /// can open and edit it. A device that sees every Mono (`None`) already can.
+    /// Its watches are left alone: only an addition changed.
+    pub fn grant_mono(
+        &self,
+        device_id: &str,
+        kind: DeviceKind,
+        mono_id: &str,
+    ) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(unavailable)?;
+        let mut config = inner.config.clone();
+        let device = config
+            .devices
+            .iter_mut()
+            .find(|device| device.id == device_id && device.kind == kind)
+            .ok_or("Device revoked or not paired")?;
+        let Some(monos) = device.monos.as_mut() else {
+            return Ok(());
+        };
+        if monos.iter().any(|id| id == mono_id) {
+            return Ok(());
+        }
+        monos.push(mono_id.to_owned());
+        self.save(&config)?;
+        inner.config = config;
+        Ok(())
+    }
+
     /// Sets what a paired device of `kind` may see and do, for a web device or
     /// a phone ("Your phones": the project selection). Only a row of that kind
     /// is changed: ids of different kinds are unrelated. Its watches end so the
@@ -3243,6 +3277,41 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(dir.path().join("mobile-access.json")).unwrap(),
             OLD_CONFIG
+        );
+    }
+
+    #[test]
+    fn a_created_mono_joins_the_device_mono_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = host_in(dir.path());
+        let mut web = phone_row();
+        web.id = "w1".into();
+        web.kind = DeviceKind::Web;
+        web.projects = Some(vec![]);
+        web.monos = Some(vec!["m1".into()]);
+        let mut all = phone_row();
+        all.id = "w2".into();
+        all.fingerprint = "aaaa1111bbbb2222".into();
+        all.kind = DeviceKind::Web;
+        all.monos = None;
+        let mut config = host.inner.lock().unwrap().config.clone();
+        config.devices.extend([web, all]);
+        host.save(&config).unwrap();
+        host.inner.lock().unwrap().config = config;
+        host.grant_mono("w1", DeviceKind::Web, "m2").unwrap();
+        host.grant_mono("w1", DeviceKind::Web, "m2").unwrap();
+        host.grant_mono("w2", DeviceKind::Web, "m2").unwrap();
+        let devices = host.inner.lock().unwrap().config.devices.clone();
+        let find = |id: &str| devices.iter().find(|d| d.id == id).unwrap().clone();
+        assert_eq!(find("w1").monos, Some(vec!["m1".into(), "m2".into()]));
+        assert_eq!(find("w1").projects, Some(vec![]));
+        assert_eq!(find("w2").monos, None);
+        assert!(host.grant_mono("nobody", DeviceKind::Web, "m2").is_err());
+        let reopened = host_in(dir.path());
+        let saved = reopened.inner.lock().unwrap().config.devices.clone();
+        assert_eq!(
+            saved.iter().find(|d| d.id == "w1").unwrap().monos,
+            Some(vec!["m1".into(), "m2".into()])
         );
     }
 

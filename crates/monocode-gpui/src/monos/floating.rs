@@ -1,19 +1,16 @@
 //! FloatingMonoChat.tsx: the menu bar's chat panel. It floats over other
 //! apps without activating zptah, and its rail moves between Monos without
 //! touching the workspace window's selection.
+use super::chief_ui::CHIEF_ID;
 use super::*;
-#[cfg(any(target_os = "macos", test))]
 use gpui::{Bounds, WindowBounds, WindowKind, WindowOptions, point, size};
 /// A 384pt conversation plus the 56pt Mono rail beside it.
-#[cfg(any(target_os = "macos", test))]
 const WIDTH: f32 = 440.;
-#[cfg(any(target_os = "macos", test))]
 const HEIGHT: f32 = 560.;
-#[cfg(any(target_os = "macos", test))]
 const MARGIN: f32 = 12.;
-struct Floating {
+pub(super) struct Floating {
     owner: Entity<Monos>,
-    selected: String,
+    pub(super) selected: String,
     /// Hidden panels are kept for reuse; only a shown one owns its chat.
     shown: bool,
     /// The Mono whose composer last received focus here.
@@ -64,7 +61,7 @@ impl Floating {
         self.selected = id.clone();
         self.focused = None;
         self.owner.update(cx, |owner, cx| {
-            owner.ensure_chat(&id, cx);
+            owner.ensure_chat_for(&id, cx);
             // The workspace may now show, or stop deferring to, this chat.
             cx.notify();
         });
@@ -75,7 +72,7 @@ impl Floating {
         if self.focused.as_deref() == Some(&self.selected) {
             return;
         }
-        if let Some(chat) = self.owner.read(cx).chats.get(&self.selected) {
+        if let Some(chat) = self.owner.read(cx).chat_for(&self.selected) {
             window.focus(&chat.read(cx).input.focus_handle(cx), cx);
             self.focused = Some(self.selected.clone());
         }
@@ -88,12 +85,19 @@ impl Floating {
     }
     fn rail(&self, roster: Vec<Mono>, cx: &mut Context<Self>) -> impl IntoElement {
         let owner = self.owner.read(cx);
-        let states: HashMap<String, String> = roster
+        // The Chief, when it is on, heads the rail; its tag and divider are drawn below its row.
+        let chief_open = owner.chief_open_count();
+        let entries: Vec<(Mono, bool)> = owner
+            .identity_for(CHIEF_ID)
+            .into_iter()
+            .map(|m| (m, true))
+            .chain(roster.into_iter().map(|m| (m, false)))
+            .collect();
+        let states: HashMap<String, String> = entries
             .iter()
-            .map(|m| {
+            .map(|(m, _)| {
                 let state = owner
-                    .chats
-                    .get(&m.id)
+                    .chat_for(&m.id)
                     .map(|c| c.read(cx).mono_status().to_owned())
                     .unwrap_or_else(|| "idle".into());
                 (m.id.clone(), state)
@@ -115,11 +119,11 @@ impl Floating {
             .items_center()
             .gap(px(6.))
             .on_mouse_down(MouseButton::Left, |_, window, _| drag(window))
-            .children(roster.into_iter().map(|mono| {
+            .children(entries.into_iter().map(|(mono, is_chief)| {
                 let id = mono.id.clone();
                 let selected = id == self.selected;
                 let state = states[&id].clone();
-                div()
+                let row = div()
                     .id(SharedString::from(format!("floating-mono-{id}")))
                     .group("floating-mono-row")
                     .relative()
@@ -149,6 +153,10 @@ impl Floating {
                     .child(
                         div()
                             .id(SharedString::from(format!("floating-mono-button-{id}")))
+                            .debug_selector({
+                                let id = id.clone();
+                                move || format!("floating-mono-button-{id}")
+                            })
                             .role(Role::Button)
                             .aria_label(mono.label())
                             .size(px(32.))
@@ -177,6 +185,35 @@ impl Floating {
                             .border_color(shell_fill())
                             .bg(status_fill(&state, mono.color)),
                     )
+                    // A proposal is waiting for the owner's Send.
+                    .when(is_chief && chief_open > 0, |d| {
+                        d.child(
+                            div()
+                                .debug_selector(|| "floating-chief-badge".into())
+                                .absolute()
+                                .top(px(2.))
+                                .left(px(10.))
+                                .size(px(8.))
+                                .rounded_full()
+                                .border_1()
+                                .border_color(shell_fill())
+                                .bg(accent_color()),
+                        )
+                    });
+                if is_chief {
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(4.))
+                        .child(row)
+                        .child(super::chief_ui::chief_tag())
+                        .child(div().h(px(1.)).w(px(28.)).my_1().bg(content(0.12)))
+                        .into_any_element()
+                } else {
+                    row.into_any_element()
+                }
             }))
             .child(
                 div()
@@ -223,6 +260,11 @@ impl Floating {
         busy: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let is_chief = mono.id == CHIEF_ID;
+        // Why the Chief cannot answer (a harness it cannot run on), shown as its status line.
+        let note = is_chief
+            .then(|| self.owner.read(cx).chief_status.clone())
+            .flatten();
         div()
             .flex_shrink_0()
             .flex()
@@ -250,11 +292,18 @@ impl Floating {
                     .justify_center()
                     .child(
                         div()
-                            .truncate()
-                            .text_size(px(13.))
-                            .line_height(px(16.))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(mono.label()),
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(13.))
+                                    .line_height(px(16.))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(mono.label()),
+                            )
+                            .when(is_chief, |d| d.child(super::chief_ui::chief_tag())),
                     )
                     .child(
                         div()
@@ -271,7 +320,13 @@ impl Floating {
                                     .rounded_full()
                                     .bg(status_fill(state, mono.color)),
                             )
-                            .child(status_label(state)),
+                            .child(
+                                div()
+                                    .debug_selector(|| "floating-status".into())
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(note.unwrap_or_else(|| status_label(state).into())),
+                            ),
                     ),
             )
             .when(busy, |d| {
@@ -280,28 +335,30 @@ impl Floating {
                         .on_click(cx.listener(|this, _, _, cx| this.stop(cx))),
                 )
             })
-            .child(
-                header_button("floating-reveal", "Open in zptah", "external-link").on_click(
-                    cx.listener(|this, _, window, cx| {
-                        let id = this.selected.clone();
-                        let owner = this.owner.clone();
-                        let parent = owner.read(cx).parent_window;
-                        // As Tauri's reveal: the workspace takes the chat over,
-                        // so this panel steps aside.
-                        this.close(window, cx);
-                        let app: &mut App = cx;
-                        app.defer(move |cx| {
-                            if let Some(parent) = parent {
-                                let _ = parent.update(cx, |_, w, cx| {
-                                    owner.update(cx, |m, cx| m.open(&id, w, cx));
-                                    w.activate_window();
-                                    cx.activate(true);
-                                });
-                            }
-                        });
-                    }),
-                ),
-            )
+            .when(!is_chief, |d| {
+                d.child(
+                    header_button("floating-reveal", "Open in zptah", "external-link").on_click(
+                        cx.listener(|this, _, window, cx| {
+                            let id = this.selected.clone();
+                            let owner = this.owner.clone();
+                            let parent = owner.read(cx).parent_window;
+                            // As Tauri's reveal: the workspace takes the chat over,
+                            // so this panel steps aside.
+                            this.close(window, cx);
+                            let app: &mut App = cx;
+                            app.defer(move |cx| {
+                                if let Some(parent) = parent {
+                                    let _ = parent.update(cx, |_, w, cx| {
+                                        owner.update(cx, |m, cx| m.open(&id, w, cx));
+                                        w.activate_window();
+                                        cx.activate(true);
+                                    });
+                                }
+                            });
+                        }),
+                    ),
+                )
+            })
             .child(
                 header_button("floating-close", "Hide chat", "close")
                     .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
@@ -348,7 +405,7 @@ impl Floating {
         });
     }
     fn stop(&mut self, cx: &mut Context<Self>) {
-        if let Some(chat) = self.owner.read(cx).chats.get(&self.selected).cloned() {
+        if let Some(chat) = self.owner.read(cx).chat_for(&self.selected) {
             chat.update(cx, |v, cx| v.stop_if_busy(cx));
         }
     }
@@ -363,14 +420,14 @@ impl gpui::Render for Floating {
             let _ = shell.update(cx, |shell, cx| shell.keep_visible_idle_agents(cx));
         });
         if self.focused.as_deref() != Some(&self.selected)
-            && self.owner.read(cx).chats.contains_key(&self.selected)
+            && self.owner.read(cx).chat_for(&self.selected).is_some()
         {
             cx.defer_in(window, |this, window, cx| this.focus_chat(window, cx));
         }
         let owner = self.owner.read(cx);
-        let chat = owner.chats.get(&self.selected).cloned();
+        let chat = owner.chat_for(&self.selected);
         let roster = owner.roster.monos.clone();
-        let mono = owner.roster.get(&self.selected).cloned();
+        let mono = owner.identity_for(&self.selected);
         let failure = owner.error.clone();
         let (state, busy) = chat.as_ref().map_or(("idle".to_owned(), false), |c| {
             let c = c.read(cx);
@@ -464,7 +521,7 @@ impl Monos {
             if let Some(window) = window.downcast::<Floating>()
                 && let Ok(view) = window.read(cx)
                 && view.shown
-                && let Some(chat) = self.chats.get(&view.selected)
+                && let Some(chat) = self.chat_for(&view.selected)
             {
                 ids.push(chat.read(cx).summary.id);
             }
@@ -545,12 +602,11 @@ impl Monos {
         self.changed(cx);
         id
     }
-    #[cfg(any(target_os = "macos", test))]
     pub(super) fn open_floating(&mut self, id: String, cx: &mut Context<Self>) {
-        if self.roster.get(&id).is_none() {
+        if self.identity_for(&id).is_none() {
             return;
         }
-        self.ensure_chat(&id, cx);
+        self.ensure_chat_for(&id, cx);
         // Bring back the panel already on this Mono, else reuse a hidden one.
         let mut hidden = None;
         let mut shown = 0;

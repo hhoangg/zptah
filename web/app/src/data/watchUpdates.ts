@@ -1,7 +1,7 @@
 // Copied from mobile/src/features/workspace/watchUpdates.ts at 5e188b47, adapted to the protocol
 // types of @monoptah/protocol and extended with the `cloud` and `approvals` fields of frames
 // (architecture.md 6.6: a frame carries a field only on change, absent means unchanged).
-import type { Approval, CloudField, QuestionPrompt, Turn, UsageLimit, WatchFrame as ProtocolWatchFrame } from "@monoptah/protocol";
+import type { Approval, ChiefExtra, CloudField, QuestionPrompt, Turn, UsageLimit, WatchFrame as ProtocolWatchFrame } from "@monoptah/protocol";
 
 /**
  * A frame of a watched conversation, from the desktop's watch update. Every field is optional here:
@@ -67,6 +67,8 @@ export interface AppliedFrames {
   cloud?: CloudField | null;
   /** The last `approvals` a frame carried (an empty array clears); undefined when unchanged. */
   approvals?: Approval[];
+  /** The last `chief` a frame carried (the Chief conversation only); undefined when unchanged. */
+  chief?: ChiefExtra;
 }
 
 /**
@@ -84,6 +86,7 @@ export function applyFrames(previous: Turn[], frames: WatchFrameInput[]): Applie
   let error: string | undefined;
   let cloud: CloudField | null | undefined;
   let approvals: Approval[] | undefined;
+  let chief: ChiefExtra | undefined;
   for (const frame of frames) {
     if (frame.error) {
       error = frame.error;
@@ -96,6 +99,7 @@ export function applyFrames(previous: Turn[], frames: WatchFrameInput[]): Applie
     if (frame.question !== undefined) questions.push(frame.question);
     if (frame.cloud !== undefined) cloud = frame.cloud;
     if (frame.approvals !== undefined) approvals = frame.approvals;
+    if (frame.chief !== undefined) chief = frame.chief;
     if (!frame.order) continue;
     const known = new Map(turns.map((turn) => [turn.id, turn]));
     for (const turn of frame.turns ?? []) known.set(turn.id, turn);
@@ -127,5 +131,6 @@ export function applyFrames(previous: Turn[], frames: WatchFrameInput[]): Applie
     ...(usageLimit !== undefined ? { usageLimit } : {}),
     ...(cloud !== undefined ? { cloud } : {}),
     ...(approvals !== undefined ? { approvals } : {}),
+    ...(chief !== undefined ? { chief } : {}),
   };
 }

@@ -1624,6 +1624,7 @@ pub(super) fn launch_context(
         root: dir.join("monos"),
         executable: "/bin/app".into(),
         browser_database: Some(database),
+        role: Default::default(),
     };
     (store, ctx)
 }
@@ -1992,6 +1993,7 @@ fn a_shell_call_to_ardia_in_a_mono_run_is_recorded_once() {
         root: PathBuf::from("/monos"),
         executable: "/bin/app".into(),
         browser_database: Some(database.clone()),
+        role: Default::default(),
     };
     let mut watch = ShellAudit::new(Some(&context), Some(5));
     let call_of = |id: &str, name: &str, input: Value| {

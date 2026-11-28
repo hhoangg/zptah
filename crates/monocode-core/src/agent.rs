@@ -201,6 +201,20 @@ pub struct MonoContext {
     pub executable: std::path::PathBuf,
     /// The database that holds the Mono's browser token. None: no browser server is added.
     pub browser_database: Option<std::path::PathBuf>,
+    pub role: Role,
+}
+/// What the chat behind a [`MonoContext`] is. A Chief chat reuses the Mono chat machinery (a
+/// hidden conversation, the `app` tool, rotation) with its own rules, files and tool set.
+#[derive(Clone, Debug, Default)]
+pub enum Role {
+    #[default]
+    Mono,
+    Chief(Box<crate::mono::chief::Chief>),
+}
+impl MonoContext {
+    pub fn is_chief(&self) -> bool {
+        matches!(self.role, Role::Chief(_))
+    }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]

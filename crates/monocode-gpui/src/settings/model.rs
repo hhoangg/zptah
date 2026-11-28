@@ -15,6 +15,7 @@ pub(crate) enum Section {
     Mcp,
     Skills,
     Monos,
+    Chief,
     Inbox,
     Archive,
     Worktrees,
@@ -42,6 +43,7 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
             Section::Mcp,
             Section::Skills,
             Section::Monos,
+            Section::Chief,
         ],
     ),
     (
@@ -52,7 +54,7 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
 
 impl Section {
     /// The searchable pages. [`Section::Cloud`] is added by the rail.
-    pub(crate) const ALL: [Section; 12] = [
+    pub(crate) const ALL: [Section; 13] = [
         Section::General,
         Section::Connections,
         Section::Appearance,
@@ -65,6 +67,7 @@ impl Section {
         Section::Inbox,
         Section::Archive,
         Section::Worktrees,
+        Section::Chief,
     ];
     pub(crate) fn id(self) -> &'static str {
         match self {
@@ -77,6 +80,7 @@ impl Section {
             Section::Mcp => "mcp",
             Section::Skills => "skills",
             Section::Monos => "monos",
+            Section::Chief => "chief",
             Section::Inbox => "inbox",
             Section::Archive => "archive",
             Section::Worktrees => "worktrees",
@@ -95,6 +99,7 @@ impl Section {
             Section::Mcp => "MCP",
             Section::Skills => "Skills",
             Section::Monos => "Monos",
+            Section::Chief => "Chief",
             Section::Inbox => "Inbox",
             Section::Archive => "Archive",
             Section::Worktrees => "Worktrees",
@@ -125,6 +130,9 @@ impl Section {
                 "Discover and manage file skills from project, personal, and harness folders."
             }
             Section::Monos => "The resident agent beside your tabs, and which projects have one.",
+            Section::Chief => {
+                "Experimental. An assistant above your Monos that proposes commands for your sessions."
+            }
             Section::Inbox => {
                 "Manage Inbox services and notification preferences for each project."
             }
@@ -157,6 +165,7 @@ impl Section {
             }
             Section::Skills => "skill instructions prompt",
             Section::Monos => "mono resident agent mascot claim project title bar",
+            Section::Chief => "chief assistant commands send propose soul memory experimental",
             Section::Inbox => {
                 "github gitlab linear jira clickup atlassian azure devops connect token integration"
             }
@@ -180,6 +189,7 @@ impl Section {
             Section::Mcp => "globe",
             Section::Skills => "sparkles",
             Section::Monos => "ghost",
+            Section::Chief => "sparkles",
             Section::Inbox => "inbox-hi",
             Section::Archive => "archive",
             Section::Worktrees => "folder-tree",
@@ -220,6 +230,18 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::Monos,
         "Your monos",
         "mono reset soul name projects sessions sidebar visibility hidden show",
+    ),
+    (
+        "chief-enabled",
+        Section::Chief,
+        "Turn the Chief on",
+        "chief assistant experimental enable",
+    ),
+    (
+        "chief-allow-web-send",
+        Section::Chief,
+        "Allow Send from web devices",
+        "chief web device send control",
     ),
     (
         "project-worktrees",

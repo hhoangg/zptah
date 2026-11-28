@@ -7,6 +7,8 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { useCatalog } from "@/data";
 import { requestCreateMono } from "@/features/monos/createRequest";
+import { ChiefNavRow } from "@/features/chief/ChiefRow";
+import { CHIEF_ID, useChiefCatalog } from "@/features/chief/chief";
 import { MonoAvatar } from "@/features/monos/MonoAvatar";
 import { useLinkState } from "@/link";
 import { safeHexColor } from "@/lib/color";
@@ -138,6 +140,8 @@ export function WorkspaceNav({ desktopId, onNavigate, onNewMono, railed = false 
   const data = catalog.data;
   const unreadIds = useCatalogUnreadMonos(desktopId);
   const monos = data ? sortMonos(data.monos) : [];
+  // The Chief is pinned above the Monos, only when the desktop says it is on.
+  const chief = useChiefCatalog();
   const projects = data?.projects ?? [];
   const canNewMono = canCreateMono(monoTools) && !readOnly;
 
@@ -150,7 +154,7 @@ export function WorkspaceNav({ desktopId, onNavigate, onNewMono, railed = false 
   return (
     <nav aria-label="Workspace" data-testid="workspace-nav" className="flex h-full min-h-0 flex-col bg-drawer">
       <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pt-3 pb-3">
-        {monos.length > 0 || canNewMono ? (
+        {monos.length > 0 || canNewMono || chief ? (
           <section aria-label="Monos" className="flex flex-col gap-0.5">
             <div className="flex items-center justify-between gap-2 pb-1">
               <h2 className="px-2.5 text-meta font-medium text-muted-text">Monos</h2>
@@ -160,6 +164,7 @@ export function WorkspaceNav({ desktopId, onNavigate, onNewMono, railed = false 
                 </button>
               ) : null}
             </div>
+            {chief ? <ChiefNavRow desktopId={desktopId} chief={chief} active={active.monoId === CHIEF_ID} onNavigate={onNavigate} /> : null}
             {monos.map((mono) => (
               <MonoRow key={mono.id} desktopId={desktopId} mono={mono} active={mono.id === active.monoId} unread={unreadIds.has(mono.id)} onNavigate={onNavigate} />
             ))}
@@ -173,7 +178,7 @@ export function WorkspaceNav({ desktopId, onNavigate, onNewMono, railed = false 
             ))}
           </section>
         ) : null}
-        {data && monos.length === 0 && projects.length === 0 ? (
+        {data && monos.length === 0 && projects.length === 0 && !chief ? (
           <p className="px-4 pt-3 text-label text-muted-text">No Monos or projects on this desktop yet.</p>
         ) : null}
         {!data && catalog.isPending ? <p className="px-4 pt-3 text-label text-muted-text">Loading…</p> : null}
