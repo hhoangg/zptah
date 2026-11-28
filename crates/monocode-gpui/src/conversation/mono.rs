@@ -449,6 +449,11 @@ impl Conversation {
         };
         Some(WorkflowTurn { end, reply })
     }
+    /// How many turns have finished here.
+    /// A remote or cloud conversation is told by its snapshots, not counted here.
+    pub(crate) fn workflow_turns_done(&self) -> Option<u64> {
+        (!self.is_remote() && !self.is_cloud_session()).then_some(self.turns_done)
+    }
     /// The last message of the conversation's final turn, for a run reading a reply.
     pub(crate) fn workflow_reply(&self, cx: &App) -> String {
         self.outward_reply(monocode_core::response::final_reply(

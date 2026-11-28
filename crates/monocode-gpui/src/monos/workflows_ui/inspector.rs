@@ -584,6 +584,7 @@ impl Monos {
                     "Starts when you use Run now, or when a Mono runs it. Values it needs are set in the Settings mode.",
                 )
                 .into_any_element(),
+            NodeKind::Event(event) => self.board_event_fields(scope, w, node, event, window, cx),
             NodeKind::Session {
                 prompt,
                 checkout,
@@ -678,6 +679,8 @@ impl Monos {
                 let variables = self.board_variables(w, &id, BoardField::Prompt(id.clone()), cx);
                 let outputs = self.board_outputs(&id, output, window, cx);
                 let how = self.board_session_how(w, node, cx);
+                let policy = self.board_session_policy(scope, w, node, cx);
+                let warnings = self.board_node_warnings(&id);
                 div()
                     .flex()
                     .flex_col()
@@ -692,6 +695,8 @@ impl Monos {
                             .child(limit),
                     )
                     .child(how)
+                    .child(policy)
+                    .children(warnings)
                     .children(reuse.map(|r| div().px_2().child(r)))
                     .child(prompt_section)
                     .children(variables)
@@ -1128,6 +1133,13 @@ impl Monos {
                 },
                 cx,
             ),
+            BoardPick::Access(_) | BoardPick::Folder(_) => {
+                self.board_policy_picked(pick, value, cx)
+            }
+            BoardPick::EventSource(_)
+            | BoardPick::EventKind(_)
+            | BoardPick::EventProject(_)
+            | BoardPick::EventSpace(_) => self.board_event_picked(pick, value, cx),
             BoardPick::NewInputType => {
                 if let Some(b) = self.wf.board.as_mut() {
                     b.new_input_type = v;

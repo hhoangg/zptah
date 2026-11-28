@@ -2,6 +2,7 @@
 //!
 //! Field names and shapes match the React app's `workflow.ts`, so `workflows.json` and the run
 //! files are shared between both apps. Definitions never hold absolute paths or session ids.
+use super::event::EventTrigger;
 use super::ordered::{serialize_number, serialize_opt_number, write_number, Json, OrderedMap};
 use super::parse;
 use crate::mono::habits::Schedule;
@@ -41,9 +42,17 @@ pub const WORKFLOW_NAME_MAX: usize = 80;
 pub const WORKFLOW_DESCRIPTION_MAX: usize = 1_000;
 pub const WORKFLOW_DEFINITION_MAX_BYTES: usize = 512 * 1024;
 
-pub const NODE_TYPES: [&str; 7] = [
-    "schedule", "manual", "session", "command", "if", "switch", "forEach",
+pub const NODE_TYPES: [&str; 8] = [
+    "schedule", "manual", "event", "session", "command", "if", "switch", "forEach",
 ];
+
+/// The access modes a session node may name (`access`). `read-only` is not offered.
+pub const SESSION_ACCESS_IDS: [&str; 4] =
+    ["supervised", "auto-accept-edits", "auto", "full-access"];
+/// The access a session node uses when it names none.
+pub const DEFAULT_SESSION_ACCESS: &str = "auto-accept-edits";
+/// The access that lets an agent run anything without asking.
+pub const FULL_ACCESS: &str = "full-access";
 
 /// The most trigger nodes a workflow may have. Any of them can start a run.
 pub const TRIGGERS_MAX: usize = 5;
@@ -654,6 +663,8 @@ pub enum NodeKind {
         schedule: Schedule,
     },
     Manual,
+    /// Starts a run for an Inbox item that matches the filter.
+    Event(EventTrigger),
     #[serde(rename_all = "camelCase")]
     Session {
         /// A project path or `{{inputs.<name>}}`. Empty means `workspace.project`.
@@ -697,6 +708,18 @@ pub enum NodeKind {
         /// with a new instance takes one (validation refuses the rest).
         #[serde(skip_serializing_if = "Option::is_none")]
         account: Option<String>,
+        /// `supervised`, `auto-accept-edits` (default), `auto` or `full-access`. Kept as written
+        /// so validation can name a value it does not know; see `NodeKind::session_access`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        access: Option<String>,
+        /// A session folder id the session is filed in; it overrides the workflow's own folder.
+        /// Local sessions only. A deleted folder falls back to the workflow's folder.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        folder: Option<String>,
+        /// Link the session to the work item of the trigger item (local only, no remote write).
+        /// Needs an event trigger upstream.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        link_work_item: Option<bool>,
     },
     #[serde(rename_all = "camelCase")]
     Command {
@@ -771,11 +794,32 @@ impl NodeKind {
             _ => SessionSurface::Chat,
         }
     }
+    /// A session node's access id as it runs: the default when unset or not known.
+    pub fn session_access(&self) -> &str {
+        match self {
+            Self::Session {
+                access: Some(access),
+                ..
+            } if SESSION_ACCESS_IDS.contains(&access.as_str()) => access,
+            _ => DEFAULT_SESSION_ACCESS,
+        }
+    }
+    /// Whether a session node links the trigger item's work item.
+    pub fn links_work_item(&self) -> bool {
+        matches!(
+            self,
+            Self::Session {
+                link_work_item: Some(true),
+                ..
+            }
+        )
+    }
     /// The `type` tag as written in the file.
     pub fn type_name(&self) -> &'static str {
         match self {
             Self::Schedule { .. } => "schedule",
             Self::Manual => "manual",
+            Self::Event(_) => "event",
             Self::Session { .. } => "session",
             Self::Command { .. } => "command",
             Self::If { .. } => "if",
@@ -810,7 +854,10 @@ impl Node {
         }
     }
     pub fn is_trigger(&self) -> bool {
-        matches!(self.kind, NodeKind::Schedule { .. } | NodeKind::Manual)
+        matches!(
+            self.kind,
+            NodeKind::Schedule { .. } | NodeKind::Manual | NodeKind::Event(_)
+        )
     }
 }
 

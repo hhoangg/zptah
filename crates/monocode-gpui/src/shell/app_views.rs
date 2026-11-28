@@ -429,6 +429,7 @@ impl Shell {
                         this.start_inbox_session(item.as_ref().clone(), prompt.clone(), cx);
                     }
                     inbox::Event::ItemsChanged(items) => {
+                        this.inbox_workflow_events(items.clone(), cx);
                         this.inbox_automation_events(items.clone(), cx)
                     }
                 },
@@ -445,6 +446,7 @@ impl Shell {
                         automations
                             .update(cx, |view, cx| view.set_trigger_connections(connections, cx));
                     }
+                    this.push_workflow_event_sources(cx);
                     this.invalidate_chrome(cx);
                     this.sync_settings(cx);
                     cx.notify();
@@ -528,6 +530,7 @@ impl Shell {
         }
         if let Some(view) = self.workflows_page.clone() {
             self.push_workflows_context(&view, cx);
+            self.push_workflow_event_sources(cx);
             view.update(cx, |page, cx| page.set_shown(true, cx));
         }
         self.show_app_view(AppView::Workflows, window, cx);
@@ -545,7 +548,19 @@ impl Shell {
         }
         let project = self.workspace.project.clone();
         let default = self.workflow_default_choice(&project, None);
+        let folders = projects
+            .iter()
+            .map(|path| {
+                let groups = self.mono_groups(path);
+                let list = groups
+                    .folders
+                    .iter()
+                    .map(|f| (f.id.clone(), f.name.clone()));
+                (path.clone(), list.collect())
+            })
+            .collect();
         view.update(cx, |page, cx| {
+            page.set_session_folders(folders, cx);
             page.set_context(projects, project, default, cx)
         });
     }

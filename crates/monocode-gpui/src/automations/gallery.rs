@@ -1,4 +1,5 @@
 use super::*;
+use crate::template_gallery::{card_grid, template_card, template_icon};
 
 impl Automations {
     pub(super) fn render_gallery(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -70,101 +71,23 @@ impl Automations {
             }
         }) {
             let selected = template.clone();
-            let path = match template.icon.as_str() {
-                "alert" => "alert-circle",
-                "lock" => "lock",
-                "file" => "file",
-                "check" => "check",
-                "pr" => "git-pull-request",
-                "inbox" => "inbox",
-                "terminal" => "terminal",
-                "note" => "note",
-                "gauge" => "gauge",
-                _ => "search",
-            };
+            let path = template_icon(&template.icon);
             cards.push(
-                div()
-                    .id(SharedString::from(format!("template-{}", template.id)))
-                    .role(Role::Button)
-                    .aria_label(template.name.clone())
-                    .min_h(px(148.))
-                    .p(px(16.))
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(content(0.1))
-                    .flex()
-                    .flex_col()
-                    .gap(px(12.))
-                    .hover(|s| s.bg(content(0.05)).border_color(content(0.16)))
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(12.))
-                            .child(
-                                div()
-                                    .size(px(36.))
-                                    .flex_shrink_0()
-                                    .rounded_full()
-                                    .bg(content(0.08))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(icon(path, 16.)),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(4.))
-                                    .child(
-                                        div()
-                                            .text_size(px(13.))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child(template.name.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(content(0.5))
-                                            .child(template.description.clone()),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .mt_auto()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .text_size(px(11.))
-                            .text_color(content(0.45))
-                            .child(trigger_mark(
-                                template.trigger["kind"].as_str().unwrap_or("time"),
-                                12.,
-                            ))
-                            .child(template.trigger_label.clone()),
-                    )
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.begin(Some(selected.clone()), cx)),
-                    )
-                    .into_any_element(),
+                template_card(
+                    SharedString::from(format!("template-{}", template.id)),
+                    path,
+                    template.name.clone(),
+                    template.description.clone(),
+                    Some((
+                        trigger_mark(template.trigger["kind"].as_str().unwrap_or("time"), 12.),
+                        template.trigger_label.clone().into(),
+                    )),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.begin(Some(selected.clone()), cx)))
+                .into_any_element(),
             );
         }
-        // CSS's two-column card grid, with the same 1024px content cap.
-        let mut grid = div().flex().flex_col().gap(px(12.));
-        let mut iter = cards.into_iter();
-        while let Some(left) = iter.next() {
-            let right = iter.next();
-            grid = grid.child(
-                div()
-                    .flex()
-                    .gap(px(12.))
-                    .child(div().flex_1().min_w_0().child(left))
-                    .child(div().flex_1().min_w_0().children(right)),
-            );
-        }
+        let grid = card_grid(cards);
         div()
             .id("automation-gallery")
             .flex_1()

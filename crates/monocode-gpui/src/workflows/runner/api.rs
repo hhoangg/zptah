@@ -100,6 +100,14 @@ pub(crate) struct SessionRequest {
     /// The sidebar folder the session is filed in: the workflow's own, made on demand and shared
     /// by all its runs.
     pub folder_name: Option<String>,
+    /// The session folder the node chose (D31). It wins over `folder_name`; a folder that is gone
+    /// falls back to `folder_name`. Local sessions only.
+    pub folder_id: Option<String>,
+    /// How much the agent may do without asking (an `AccessMode` id). The node's `access`, else
+    /// `auto-accept-edits`.
+    pub access: String,
+    /// The work item of the event item, linked to the session on this computer only (D32).
+    pub work_item: Option<monocode_core::session_groups::WorkItem>,
     /// `Some` for a cloud step: the session runs in a codespace or sandbox instead of here.
     pub target: Option<CloudRequest>,
     /// The step's surface is the terminal: the session is the provider's own CLI (Claude), started

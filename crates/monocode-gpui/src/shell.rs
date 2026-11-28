@@ -108,6 +108,7 @@ mod web_link;
 mod window_chrome;
 mod workflow_banner;
 mod workflow_bridge;
+mod workflow_events;
 mod workflow_output;
 #[cfg(test)]
 mod workflows_entry_tests;
@@ -915,6 +916,7 @@ pub(crate) struct Shell {
     data_dir: Option<std::path::PathBuf>,
     app_view_events: Vec<Subscription>,
     automation_state: automation_runs::State,
+    workflow_events: workflow_events::State,
     settings: Option<Entity<crate::settings::SettingsView>>,
     settings_events: Option<Subscription>,
     settings_overlay_watch: Option<Subscription>,
@@ -1421,6 +1423,7 @@ impl Shell {
             data_dir,
             app_view_events: Vec::new(),
             automation_state: Default::default(),
+            workflow_events: Default::default(),
             settings: None,
             settings_events: None,
             settings_overlay_watch: None,
@@ -1623,6 +1626,29 @@ impl Shell {
         ));
         this.observations.push(cx.subscribe(
             &monos,
+            |_, _, _: &crate::monos::NeedEventSources, cx| {
+                cx.spawn(async move |this, cx| {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.ensure_background_inbox(window, cx);
+                        this.push_workflow_event_sources(cx);
+                    });
+                })
+                .detach();
+            },
+        ));
+        this.observations.push(cx.subscribe(
+            &monos,
+            |_, _, _: &crate::monos::OpenInboxSettings, cx| {
+                cx.spawn(async move |this, cx| {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.open_settings(crate::settings::Section::Inbox, window, cx)
+                    });
+                })
+                .detach();
+            },
+        ));
+        this.observations.push(cx.subscribe(
+            &monos,
             |this, _, event: &crate::monos::NodePathChanged, cx| {
                 this.workspace.preferences.node_path = event.0.clone();
                 this.apply_preferences(cx);
@@ -1701,6 +1727,7 @@ impl Shell {
         this.apply_preferences(cx);
         this.poll_reminders(cx);
         this.initialize_automations(cx);
+        this.watch_workflow_event_inbox(cx);
         this.init_contributors(cx);
         if this.workspace.active.is_none() {
             cx.spawn(async move |this, cx| {

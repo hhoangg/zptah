@@ -9,6 +9,7 @@ pub(super) fn type_glyph(ty: NodeType) -> &'static str {
     match ty {
         NodeType::Schedule => "clock",
         NodeType::Manual => "play",
+        NodeType::Event => "zap",
         NodeType::Session => "message-multiple",
         NodeType::Command => "terminal",
         NodeType::If => "git-branch",

@@ -152,6 +152,9 @@ pub fn account_issues<H: WorkflowHost>(host: &mut H, w: &Workflow) -> Vec<Workfl
     issues
 }
 
+/// What drops the event claims of a removed workflow.
+type ForgetClaims = Box<dyn Fn(&str) + Send + Sync>;
+
 /// What the runner and the actions tell each other, shared as an `Arc`: the runner marks a run
 /// live when it starts and releases it when it ends, and an action that wrote a request (`run`,
 /// `stop`, `resumeRun`) calls `request_check_now`, which sets a flag and rings the waker the
@@ -162,6 +165,9 @@ pub struct Signals {
     running: Mutex<std::collections::HashMap<String, HashSet<String>>>,
     check_now: AtomicBool,
     waker: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    /// Called with the id of a removed workflow so its event claims are dropped (the claims live
+    /// in the session database, which this crate's actions do not hold).
+    forget_claims: Mutex<Option<ForgetClaims>>,
 }
 
 /// The id a `set_running(workflow, true)` call is counted under: one live run without an id.
@@ -225,6 +231,21 @@ impl Signals {
     /// Rung by every `request_check_now`. It must not block (it runs inside an action).
     pub fn set_waker(&self, wake: impl Fn() + Send + Sync + 'static) {
         *self.waker.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(wake));
+    }
+    /// Installs what drops the event claims of a removed workflow.
+    pub fn set_forget_claims(&self, forget: impl Fn(&str) + Send + Sync + 'static) {
+        *self.forget_claims.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(forget));
+    }
+    /// Drops the event claims of a removed workflow, when something was installed to do it.
+    pub fn forget_claims(&self, workflow_id: &str) {
+        if let Some(forget) = self
+            .forget_claims
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            forget(workflow_id);
+        }
     }
     pub fn request_check_now(&self) {
         self.check_now.store(true, Ordering::SeqCst);
@@ -321,6 +342,7 @@ impl WorkflowHost for StoreHost {
     }
     fn clear_runs(&mut self, workflow_id: &str) {
         clear_runs(&self.dir, workflow_id);
+        self.signals.forget_claims(workflow_id);
     }
     fn catalog(&mut self, w: &Workflow) -> ModelCatalog {
         ModelCatalog::for_harnesses(&harnesses_used(w), self.probe)
@@ -586,6 +608,21 @@ fn trigger_json(node: &super::model::Node) -> Json {
             ("type", st("schedule")),
             ("schedule", st(schedule.label())),
         ]),
+        NodeKind::Event(event) => {
+            let mut fields = vec![
+                ("node", st(&node.id)),
+                ("type", st("event")),
+                ("source", st(&event.source)),
+                ("event", st(&event.event)),
+            ];
+            if let Some(project) = &event.project {
+                fields.push(("project", st(project)));
+            }
+            if !event.repos.is_empty() {
+                fields.push(("repos", Json::Array(event.repos.iter().map(st).collect())));
+            }
+            Json::Object(fields.into_iter().collect())
+        }
         _ => obj([("node", st(&node.id)), ("type", st("manual"))]),
     }
 }
@@ -706,6 +743,7 @@ pub fn workflow_projects(w: &Workflow) -> (Vec<String>, bool) {
             NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => {
                 Some(project.as_str())
             }
+            NodeKind::Event(event) => event.project.as_deref(),
             _ => None,
         })
         .chain(std::iter::once(w.workspace.project.as_str()));
@@ -742,13 +780,15 @@ pub fn has_unresolved_project(w: &Workflow) -> bool {
         && project_unresolved(w, w.workspace.project.trim(), false);
     existing_unknown
         || workspace_unknown
-        || w.nodes.iter().any(|node| {
-            let (NodeKind::Session { project, .. } | NodeKind::Command { project, .. }) =
-                &node.kind
-            else {
-                return false;
-            };
-            project_unresolved(w, project.trim(), true)
+        || w.nodes.iter().any(|node| match &node.kind {
+            NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => {
+                project_unresolved(w, project.trim(), true)
+            }
+            NodeKind::Event(event) => event
+                .project
+                .as_deref()
+                .is_some_and(|project| project_unresolved(w, project.trim(), false)),
+            _ => false,
         })
 }
 
@@ -800,6 +840,7 @@ fn used_as_project(w: &Workflow, name: &str) -> bool {
     names(&w.workspace.project)
         || w.nodes.iter().any(|node| match &node.kind {
             NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => names(project),
+            NodeKind::Event(event) => event.project.as_deref().is_some_and(names),
             _ => false,
         })
 }

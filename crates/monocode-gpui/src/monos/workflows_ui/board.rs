@@ -12,8 +12,8 @@ use gpui::Pixels;
 use monocode_core::mono::workflows::{
     board_edit::*,
     board_model::{
-        BoardNodeData, Flow, FlowKind, NodeType, Point, absolute, blank_workflow, definition_key,
-        issues_by_node, node_height, to_flow,
+        BoardNodeData, Flow, FlowKind, NodeType, Point, absolute, definition_key, issues_by_node,
+        node_height, to_flow,
     },
     model::{
         InputValue, LoopSpec, Node, NodeKind, Requirement, RequirementKind, SWITCH_DEFAULT,
@@ -98,6 +98,8 @@ pub(super) enum BoardField {
     /// Committed: the name, and the hint, of the requirement at this place.
     RequireName(usize),
     RequireHint(usize),
+    /// Committed as typed: the repositories an event trigger is limited to.
+    EventRepos(String),
 }
 
 impl BoardField {
@@ -149,6 +151,14 @@ pub(in crate::monos) enum BoardPick {
     WorkspaceProject,
     /// How many runs go at the same time (1 to 10).
     Concurrency,
+    /// The source, the event, the project and the ClickUp space of the event trigger.
+    EventSource(String),
+    EventKind(String),
+    EventProject(String),
+    EventSpace(String),
+    /// The access, and the session folder, of a session step.
+    Access(String),
+    Folder(String),
 }
 
 /// The loop being asked for after a connection back up a branch.
@@ -285,7 +295,7 @@ impl Monos {
                     None => return false,
                 }
             }
-            _ => (blank_workflow(now_ms()), true),
+            _ => (self.new_board_workflow(scope, now_ms()), true),
         };
         let canvas = cx.new(|_| GraphCanvas::new(scope.color));
         canvas.update(cx, |c, _| c.set_editable(Rc::new(|_, _, _| false)));
@@ -833,6 +843,7 @@ impl Monos {
             BoardField::BaseBranch => {
                 self.board_meta_edit(|m| m.workspace.base_branch = some(text.trim()), cx)
             }
+            BoardField::EventRepos(id) => self.board_event_repos(id, &text, cx),
             BoardField::Title(id) => self.board_node_edit(id, |n| n.title = some(&text), cx),
             BoardField::Time(id) => self.board_node_edit(
                 id,

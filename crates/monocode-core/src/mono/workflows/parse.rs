@@ -1,5 +1,6 @@
 //! Lenient reading of workflow files. A node or edge that cannot be read could not run, and
 //! dropping it quietly would change what the workflow does, so the whole entry is left out.
+use super::event::EventTrigger;
 use super::model::{
     CallerKind, Checkout, Concurrency, Cwd, Decide, DecisionModel, Edge, Handle, InputType,
     InputValue, LoopSpec, Node, NodeKind, OutputField, OutputFieldType, ReportTo, Requirement,
@@ -224,6 +225,33 @@ fn parse_decide(raw: &Json) -> Option<Decide> {
         .then_some(Decide::Ai)
 }
 
+/// An event trigger. A missing or unknown source or event is kept (empty) so validation can
+/// name it; a filter of the wrong type makes the node unreadable.
+fn parse_event(raw: &Json) -> Option<EventTrigger> {
+    let project = match raw.get("project") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(p)) => Some(p.clone()).filter(|p| !p.trim().is_empty()),
+        Some(_) => return None,
+    };
+    let repos = match raw.get("repos") {
+        None | Some(Json::Null) => Vec::new(),
+        Some(Json::Array(items)) => items
+            .iter()
+            .map(|r| r.as_str().map(|r| r.trim().to_string()))
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .filter(|r| !r.is_empty())
+            .collect(),
+        Some(_) => return None,
+    };
+    Some(EventTrigger {
+        source: str_of(raw, "source").unwrap_or_default(),
+        event: str_of(raw, "event").unwrap_or_default(),
+        project,
+        repos,
+    })
+}
+
 pub fn parse_node(raw: &Json) -> Option<Node> {
     if !is_rec(raw) {
         return None;
@@ -244,6 +272,7 @@ pub fn parse_node(raw: &Json) -> Option<Node> {
             schedule: parse_schedule(raw.get("schedule"))?,
         },
         "manual" => NodeKind::Manual,
+        "event" => NodeKind::Event(parse_event(raw)?),
         "session" => {
             let target = parse_target(raw.get("target"))?;
             NodeKind::Session {
@@ -262,6 +291,9 @@ pub fn parse_node(raw: &Json) -> Option<Node> {
                 timeout_minutes: num_of(raw, "timeoutMinutes"),
                 target,
                 account: parse_account(raw.get("account"))?,
+                access: str_of(raw, "access"),
+                folder: str_of(raw, "folder").filter(|f| !f.trim().is_empty()),
+                link_work_item: bool_of(raw, "linkWorkItem"),
             }
         }
         "command" => NodeKind::Command {

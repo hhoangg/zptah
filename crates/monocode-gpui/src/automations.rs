@@ -29,34 +29,7 @@ mod editor;
 mod gallery;
 mod trigger_menu;
 
-/// Providers whose mark keeps its own colours instead of taking the text colour.
-fn color_artwork(kind: &str) -> Option<&'static str> {
-    match kind {
-        "gitlab" => Some("inbox-gitlab-color.svg"),
-        "clickup" => Some("inbox-clickup.svg"),
-        _ => None,
-    }
-}
-
-/// Event providers and schedules are separate from agent harness branding.
-fn trigger_mark(kind: &str, side: f32) -> AnyElement {
-    if let Some(path) = color_artwork(kind) {
-        return gpui::img(path)
-            .size(px(side))
-            .flex_shrink_0()
-            .object_fit(gpui::ObjectFit::Contain)
-            .into_any_element();
-    }
-    let (path, color) = match kind {
-        "time" => ("clock", content(0.45)),
-        "github" => ("inbox-github", content(0.65)),
-        "linear" => ("inbox-linear", content(0.65)),
-        "jira" => ("inbox-jira", rgb(0x2684ff).into()),
-        "azuredevops" => ("inbox-azuredevops", content(0.65)),
-        _ => ("zap", content(0.45)),
-    };
-    icon(path, side).text_color(color).into_any_element()
-}
+use crate::template_gallery::{color_artwork, trigger_mark};
 
 pub(crate) enum Event {
     Close,
@@ -528,19 +501,15 @@ impl Automations {
             return;
         };
         self.clickup_spaces_loading = true;
-        let work = cx.background_executor().spawn(async move {
-            let root = locked(&database)?
-                .data_dir()
-                .map(std::path::Path::to_path_buf)
-                .ok_or("No data directory")?;
-            monocode_core::inbox::clickup::clickup_list_spaces(root)
-        });
+        let work = cx
+            .background_executor()
+            .spawn(async move { crate::inbox::spaces::list_spaces(&database) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.clickup_spaces_loading = false;
                 if let Ok(spaces) = result {
-                    this.clickup_spaces = spaces.into_iter().map(|s| (s.id, s.name)).collect();
+                    this.clickup_spaces = spaces;
                 }
                 cx.notify();
             });

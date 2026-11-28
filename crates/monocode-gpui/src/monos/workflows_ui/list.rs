@@ -133,6 +133,23 @@ impl Monos {
             }))
             .into_any_element(),
             icon_button_enabled(
+                "mono-workflow-templates",
+                if at_most {
+                    "At most 100 workflows"
+                } else {
+                    "New from template"
+                },
+                "file-add",
+                can_add,
+            )
+            .debug_selector(|| "mono-workflow-templates".into())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if can_add {
+                    this.open_templates_page(cx);
+                }
+            }))
+            .into_any_element(),
+            icon_button_enabled(
                 "mono-workflow-new",
                 if at_most {
                     "At most 100 workflows"
@@ -145,6 +162,7 @@ impl Monos {
             .debug_selector(|| "mono-workflow-new".into())
             .on_click(cx.listener(move |this, _, _, cx| {
                 if can_add {
+                    this.wf.template = None;
                     this.open_workflow_route(WfRoute::New, cx);
                 }
             }))
@@ -192,9 +210,22 @@ impl Monos {
                 .id("mono-workflows-list")
                 .debug_selector(|| "mono-workflows-list".into())
                 .size_full()
-                .child(super::super::panels::empty_state(
-                    "git-branch",
-                    EMPTY_MESSAGE,
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .child(super::super::panels::empty_state(
+                            "git-branch",
+                            EMPTY_MESSAGE,
+                        )),
+                )
+                .child(div().flex_shrink_0().pb_6().flex().justify_center().child(
+                    super::templates::empty_templates_button(
+                        cx,
+                        self.workflow_count().is_some_and(|n| n < WORKFLOWS_MAX),
+                    ),
                 ))
                 .into_any_element();
         }

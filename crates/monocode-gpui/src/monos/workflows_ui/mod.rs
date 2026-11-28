@@ -26,7 +26,13 @@ mod import;
 #[cfg(test)]
 mod import_tests;
 mod inspector;
+mod inspector_event;
+#[cfg(test)]
+mod inspector_event_tests;
 mod inspector_parts;
+mod inspector_policy;
+#[cfg(test)]
+mod inspector_policy_tests;
 #[cfg(test)]
 mod inspector_tests;
 mod inspector_variables;
@@ -58,6 +64,9 @@ mod run_tests;
 mod run_tree_dialog;
 #[cfg(test)]
 mod run_tree_tests;
+mod templates;
+#[cfg(test)]
+mod templates_tests;
 #[cfg(test)]
 pub(in crate::monos) mod tests;
 pub(in crate::monos) mod view;
@@ -103,6 +112,8 @@ pub(in crate::monos) enum WfRoute {
     Board(String),
     Review(String, ReviewIntent),
     New,
+    /// The gallery of starter workflows.
+    Templates,
     Import,
 }
 
@@ -144,8 +155,14 @@ pub(super) struct WorkflowsUi {
     requested: bool,
     /// Where the Ask Mono picker opens from.
     ask_anchor: AnchorSlot,
+    /// What the Inbox tells the event inspector (see `inspector_event`).
+    events: inspector_event::EventSources,
+    /// The session folders of each app project, as (id, name), for the step's folder picker.
+    folders: HashMap<String, Vec<(String, String)>>,
     /// The open page, or the list when `None`.
     route: Option<WfRoute>,
+    /// The template the next new board is filled from (see `start_from_template`).
+    template: Option<String>,
     /// Whether the Workflows view is the one on screen.
     open: bool,
     /// The page of a workflow is on its Settings mode (the Edit mode otherwise, for the routes

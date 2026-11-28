@@ -17,11 +17,12 @@ use monocode_core::mono::workflows::{
     engine::{
         EngineAction, EngineEvent, apply_event, is_asking, next_actions, resume_run, run_scope,
     },
+    event::work_item_of,
     model::{
-        Checkout, Cwd, DEFAULT_COMMAND_TIMEOUT_MINUTES, DEFAULT_SESSION_TIMEOUT_MINUTES, Node,
-        NodeKind, NodeRun, NodeStatus, OutputField, RunInstance, RunStatus, RunSummary,
-        RunWorktree, SessionMode, SessionTarget, TEMPLATABLE_TARGET_OPTIONS, TargetInstance,
-        WorkflowRun, parse_branch,
+        Checkout, Cwd, DEFAULT_COMMAND_TIMEOUT_MINUTES, DEFAULT_SESSION_ACCESS,
+        DEFAULT_SESSION_TIMEOUT_MINUTES, Node, NodeKind, NodeRun, NodeStatus, OutputField,
+        RunInstance, RunStatus, RunSummary, RunWorktree, SessionMode, SessionTarget,
+        TEMPLATABLE_TARGET_OPTIONS, TargetInstance, WorkflowRun, parse_branch,
     },
     ordered::{Json, OrderedMap, js_number_text},
     output::{check_output_value, output_hint, parse_workflow_output},
@@ -773,6 +774,7 @@ impl Exec {
                     timeout_minutes,
                     target,
                     account,
+                    folder,
                     ..
                 },
             ..
@@ -780,6 +782,23 @@ impl Exec {
         else {
             return;
         };
+        let (access, links_work_item) = self.node_of(&node_id).map_or_else(
+            || (DEFAULT_SESSION_ACCESS.to_string(), false),
+            |n| {
+                (
+                    n.kind.session_access().to_string(),
+                    n.kind.links_work_item(),
+                )
+            },
+        );
+        // The trigger item of an event run, linked locally when the node asks for it (D32).
+        let work_item = links_work_item
+            .then(|| {
+                let state = self.state.borrow();
+                let item = state.run.caller.item.as_ref()?;
+                work_item_of(&serde_json::to_value(item).ok()?)
+            })
+            .flatten();
         let project = self.project_text(&project);
         let Some(project_path) = self.project_for(&project, &node_id, &branch) else {
             return self.fail(
@@ -908,6 +927,10 @@ impl Exec {
                 worktree_cwd,
                 parent_session_id,
                 folder_name: Some(folder_name),
+                // A folder is for local sessions: a cloud one is filed by its instance.
+                folder_id: folder.filter(|_| !is_cloud),
+                access,
+                work_item: work_item.filter(|_| !is_cloud),
                 target: cloud,
                 terminal,
             };

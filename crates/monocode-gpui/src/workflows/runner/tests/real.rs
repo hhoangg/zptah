@@ -26,6 +26,9 @@ pub(super) fn request(s: &Setup) -> SessionRequest {
         worktree_cwd: None,
         parent_session_id: None,
         folder_name: None,
+        folder_id: None,
+        access: "auto-accept-edits".into(),
+        work_item: None,
         target: None,
         terminal: false,
     }
@@ -151,7 +154,7 @@ pub(super) fn global_dir(s: &Setup, cx: &mut TestAppContext) -> WorkflowsDir {
 // --- workflowSessionStart.test.ts -------------------------------------------------------------
 
 #[gpui::test]
-fn it_starts_a_full_access_session_without_a_mono_and_files_it_in_the_workflows_folder(
+fn it_starts_a_session_without_a_mono_and_files_it_in_the_workflows_folder(
     cx: &mut TestAppContext,
 ) {
     let s = setup(cx);
@@ -161,7 +164,7 @@ fn it_starts_a_full_access_session_without_a_mono_and_files_it_in_the_workflows_
     let id = local(&first);
     let view = view_of(&s, cx, id);
     cx.update(|cx| {
-        assert_eq!(view.read(cx).settings.access, AccessMode::FullAccess);
+        assert_eq!(view.read(cx).settings.access, AccessMode::AutoAcceptEdits);
     });
     // The session is an ordinary one: no Mono's roster knows it.
     cx.update(|cx| {
@@ -197,6 +200,102 @@ fn it_starts_a_full_access_session_without_a_mono_and_files_it_in_the_workflows_
             .session_ids,
         [local(&other)]
     );
+}
+
+#[gpui::test]
+fn the_access_of_the_request_is_the_access_of_the_session(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    for (id, expected) in [
+        ("supervised", AccessMode::Supervised),
+        ("auto-accept-edits", AccessMode::AutoAcceptEdits),
+        ("auto", AccessMode::Auto),
+        ("full-access", AccessMode::FullAccess),
+    ] {
+        let mut req = request(&s);
+        req.access = id.into();
+        let started = begin(&s, cx, req).unwrap();
+        let view = view_of(&s, cx, local(&started));
+        cx.update(|cx| assert_eq!(view.read(cx).settings.access, expected, "{id}"));
+    }
+}
+
+#[gpui::test]
+fn a_node_folder_wins_and_a_deleted_one_falls_back_to_the_workflows_folder(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let mut req = request(&s);
+    req.folder_name = Some("Ship it".into());
+    let first = begin(&s, cx, req.clone()).unwrap();
+    let mut other = request(&s);
+    other.folder_name = Some("Nightly".into());
+    let second = begin(&s, cx, other).unwrap();
+    let groups = folders_of(&s, cx);
+    let nightly = groups
+        .folders
+        .iter()
+        .find(|f| f.name == "Nightly")
+        .unwrap()
+        .id
+        .clone();
+    // The node names Nightly: the session goes there, whatever the workflow's folder is.
+    req.folder_id = Some(nightly.clone());
+    let chosen = begin(&s, cx, req.clone()).unwrap();
+    let groups = folders_of(&s, cx);
+    let in_folder = |name: &str| {
+        groups
+            .folders
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap()
+            .session_ids
+            .clone()
+    };
+    assert_eq!(in_folder("Nightly"), [local(&second), local(&chosen)]);
+    assert_eq!(in_folder("Ship it"), [local(&first)]);
+    // A folder that is gone falls back to the workflow's folder.
+    req.folder_id = Some("deleted-folder".into());
+    let fallback = begin(&s, cx, req).unwrap();
+    let groups = folders_of(&s, cx);
+    assert_eq!(groups.folders.len(), 2);
+    assert_eq!(
+        groups
+            .folders
+            .iter()
+            .find(|f| f.name == "Ship it")
+            .unwrap()
+            .session_ids,
+        [local(&first), local(&fallback)]
+    );
+}
+
+#[gpui::test]
+fn a_session_links_the_work_item_of_the_request(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let item = monocode_core::session_groups::WorkItem {
+        kind: "pr".into(),
+        repo: "acme/app".into(),
+        number: 7,
+        url: "https://github.com/acme/app/pull/7".into(),
+    };
+    let mut req = request(&s);
+    req.work_item = Some(item.clone());
+    let linked = begin(&s, cx, req).unwrap();
+    let view = view_of(&s, cx, local(&linked));
+    cx.update(|cx| assert_eq!(view.read(cx).summary.work_item, Some(item.clone())));
+    // It is stored, not only shown.
+    let stored = crate::runtime::locked(&s.store)
+        .unwrap()
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .find(|session| session.id == local(&linked))
+        .and_then(|session| session.work_item);
+    assert_eq!(stored, Some(item));
+    // Without one the session links nothing.
+    let plain = begin(&s, cx, request(&s)).unwrap();
+    let view = view_of(&s, cx, local(&plain));
+    cx.update(|cx| assert_eq!(view.read(cx).summary.work_item, None));
 }
 
 #[gpui::test]
@@ -367,17 +466,29 @@ fn a_turn_that_was_never_taken_is_given_up_on_and_an_idle_one_has_ended(cx: &mut
     let started = begin(&s, cx, request(&s)).unwrap();
     let id = local(&started);
     let workflows = workflows_of(&s, cx);
-    // Idle and armed: the turn is over.
+    // Idle and armed, but no turn has finished since: the prompt may not be taken yet, so the run
+    // does not call it over.
     let over = cx.update(|cx| workflows.update(cx, |w, cx| w.workflow_settled(id, true, cx)));
     let over = collect(cx, over);
     cx.run_until_parked();
+    assert!(over.borrow().is_none());
+    // A turn that finishes ends it.
+    s.window
+        .update(cx, |shell, _, cx| {
+            let view = shell.mono_session_entity(id).expect("the session");
+            view.update(cx, |view, _| view.finish_for_test("Ready"));
+        })
+        .unwrap();
+    cx.executor().advance_clock(Duration::from_secs(15));
+    cx.run_until_parked();
+    assert_eq!(over.borrow().clone().unwrap().error, None);
     assert_eq!(over.borrow().clone().unwrap().status, Status::Completed);
     // Idle and never seen working: the prompt was not taken, so the wait ends in a failure.
     let never = cx.update(|cx| workflows.update(cx, |w, cx| w.workflow_settled(id, false, cx)));
     let never = collect(cx, never);
     cx.run_until_parked();
     assert!(never.borrow().is_none());
-    cx.executor().advance_clock(Duration::from_secs(15));
+    cx.executor().advance_clock(Duration::from_secs(70));
     cx.run_until_parked();
     assert_eq!(
         never.borrow().clone().unwrap().error.as_deref(),

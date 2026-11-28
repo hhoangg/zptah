@@ -813,7 +813,7 @@ fn the_rail_buttons_say_what_they_do_or_why_they_cannot_be_used(cx: &mut TestApp
         .collect();
     glyphs.sort();
     glyphs.dedup();
-    assert_eq!(glyphs.len(), 7);
+    assert_eq!(glyphs.len(), 8);
     assert_eq!(
         rail_tip(NodeType::If, "Go one way or the other", None),
         "If: Go one way or the other"

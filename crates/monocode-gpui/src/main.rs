@@ -119,6 +119,7 @@ mod syntax;
 mod tab_label;
 mod tab_motion;
 mod tab_tile;
+mod template_gallery;
 mod terminal;
 mod theme;
 mod today;

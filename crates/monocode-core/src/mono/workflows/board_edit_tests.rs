@@ -928,7 +928,7 @@ mod picker {
             .iter()
             .flat_map(|g| g.items.iter().map(|(ty, _)| *ty))
             .collect();
-        assert_eq!(types.len(), 7);
+        assert_eq!(types.len(), 8);
         for ty in NodeType::ALL {
             assert!(types.contains(&ty));
         }

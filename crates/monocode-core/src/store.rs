@@ -30,6 +30,8 @@ mod edit;
 mod shared;
 mod side_threads;
 mod thread_files;
+mod workflow_claims;
+pub use workflow_claims::WorkflowClaim;
 mod today;
 pub use today::{NotePlan, NoteSaved};
 mod today_mention;

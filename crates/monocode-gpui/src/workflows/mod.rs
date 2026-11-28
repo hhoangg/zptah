@@ -17,6 +17,7 @@ use monocode_core::{
 use std::sync::Arc;
 
 mod decide;
+pub(crate) mod events;
 mod extract;
 mod runner;
 mod schedule;
@@ -175,6 +176,8 @@ impl Workflows {
             probes: Probes::new(),
         };
         cx.set_global(schedule::QuitTarget(this.runner.clone()));
+        this.release_unclaimed_events();
+        this.forget_claims_on_removal();
         this.start_workflow_checks(cx);
         this
     }

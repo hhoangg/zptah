@@ -296,6 +296,9 @@ pub(crate) struct Conversation {
     #[cfg(test)]
     pub(super) launched_no_wake: Vec<bool>,
     notification_cancelled: bool,
+    /// How many turns have finished in this conversation (a workflow run tells a turn that ran
+    /// from a conversation that is only idle).
+    turns_done: u64,
     /// The store's saved-draft flag, until the conversation loads its own.
     pub(crate) draft_hint: bool,
     /// The provider model for the next turn; `None` uses its configured default.
@@ -805,6 +808,7 @@ impl Conversation {
             #[cfg(test)]
             launched_no_wake: Vec::new(),
             notification_cancelled: false,
+            turns_done: 0,
             draft_hint: false,
             model: std::env::var(format!(
                 "MONOCODE_{}_MODEL",
@@ -1781,6 +1785,7 @@ impl Conversation {
                             this.summary.updated_at = monocode_core::time::now_ms();
                             this.busy = false;
                             this.stopping = false;
+                            this.turns_done += 1;
                             this.clear_background();
                             if this.is_remote() {
                                 this.refresh_remote_snapshot(cx);
@@ -3108,6 +3113,7 @@ impl Conversation {
     #[cfg(test)]
     pub(crate) fn finish_for_test(&mut self, status: &str) {
         self.busy = false;
+        self.turns_done += 1;
         self.status = status.into();
     }
     /// Escape closes this conversation's own transient surfaces before it

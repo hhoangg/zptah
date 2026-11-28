@@ -145,13 +145,13 @@ fn caller_of(claimed: &Workflow, now: u64) -> RunCaller {
 }
 
 /// What starts a run: who asked, the number and queue time it already has.
-struct Origin {
-    caller: RunCaller,
-    number: u64,
-    queued_at: Option<u64>,
+pub(super) struct Origin {
+    pub(super) caller: RunCaller,
+    pub(super) number: u64,
+    pub(super) queued_at: Option<u64>,
 }
 
-fn begin(claimed: &Workflow, origin: Origin, tick: &Tick, run_id: &str) -> Start {
+pub(super) fn begin(claimed: &Workflow, origin: Origin, tick: &Tick, run_id: &str) -> Start {
     // The run sees the values asked for this run laid over the stored ones, and keeps only that.
     let effective = with_run_values(claimed);
     let mut run = start_run(&effective, origin.caller, tick.now, run_id);

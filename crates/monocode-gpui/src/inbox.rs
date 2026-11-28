@@ -5,6 +5,7 @@ mod diff;
 mod document;
 mod memory;
 mod running;
+pub(crate) mod spaces;
 mod ui;
 pub(crate) use avatar::image as avatar_image;
 pub(crate) use ui::{
@@ -170,7 +171,8 @@ impl Inbox {
         cwd: PathBuf,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::new_inner(store, projects, cwd, true, cx)
+        // A test never polls the providers.
+        Self::new_inner(store, projects, cwd, !cfg!(test), cx)
     }
 
     fn new_inner(
@@ -419,6 +421,11 @@ impl Inbox {
             .iter()
             .filter(|item| self.state.seen.unseen(item))
             .count()
+    }
+
+    /// The items of the last refresh, newest first.
+    pub(crate) fn items(&self) -> &[Item] {
+        &self.snapshot.items
     }
 
     pub(crate) fn connection_statuses(&self) -> std::collections::HashMap<String, (bool, String)> {

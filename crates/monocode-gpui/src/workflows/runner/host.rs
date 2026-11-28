@@ -28,6 +28,9 @@ use std::{collections::HashMap, rc::Rc, time::Duration};
 const WATCH_POLL: Duration = Duration::from_secs(1);
 /// A session that never shows a turn going is not waited for forever.
 const UNSTARTED_POLLS: u32 = 10;
+/// How many timer ticks (about a minute) a session that sent its prompt may take to start a turn
+/// or to report why it could not.
+const NO_TURN_POLLS: u32 = 60;
 
 /// A probe that finds every harness installed and lists no models, so a harness is never
 /// refused; what a test wants refused it says itself.
@@ -128,12 +131,25 @@ pub(in crate::workflows) enum Seen {
     /// for it: there is no turn to see yet, and none to give up on.
     Starting,
     Over(WorkflowTurn),
+    /// The conversation is idle and says "Ready", but no turn has finished since the prompt was
+    /// sent: the prompt is not taken yet, or its start error is still on the way. Not an end.
+    NoTurnYet,
+    /// A turn finished since the prompt was sent: it ran, whether or not it was seen working.
+    Ran(WorkflowTurn),
 }
 
 /// What one look at a watched session means: its outcome, or `None` to keep waiting. `armed`
 /// says a turn has been seen going; an idle session that never was is given up on after a while,
 /// unless it ended in an error (a prompt that failed to start says why).
-pub(super) fn look(seen: Seen, armed: &mut bool, unstarted: &mut u32) -> Option<Outcome> {
+/// `tick` is true when the look follows the timer, false when a wake-up from the conversation
+/// asked for it: only ticks count toward giving up, so a burst of wake-ups cannot fail a session
+/// that is slow to start.
+pub(super) fn look(
+    seen: Seen,
+    armed: &mut bool,
+    unstarted: &mut u32,
+    tick: bool,
+) -> Option<Outcome> {
     match seen {
         Seen::Working => {
             *armed = true;
@@ -145,11 +161,18 @@ pub(super) fn look(seen: Seen, armed: &mut bool, unstarted: &mut u32) -> Option<
             *unstarted = 0;
             None
         }
+        // Patience as for a turn that never began; an error that lands meanwhile ends it.
+        Seen::Ran(turn) => Some(outcome_of(turn)),
+        Seen::NoTurnYet => {
+            *unstarted += u32::from(tick);
+            (*unstarted > NO_TURN_POLLS)
+                .then(|| Outcome::failed("The session did not start a turn."))
+        }
         Seen::Over(turn) if *armed || matches!(turn.end, TurnEnd::Failed(_)) => {
             Some(outcome_of(turn))
         }
         Seen::Over(_) => {
-            *unstarted += 1;
+            *unstarted += u32::from(tick);
             (*unstarted > UNSTARTED_POLLS)
                 .then(|| Outcome::failed("The session did not start a turn."))
         }
@@ -163,19 +186,23 @@ async fn settle(
     session: i64,
     wake: Receiver<()>,
     mut armed: bool,
+    turns_before: Option<u64>,
 ) -> Outcome {
     let mut unstarted = 0;
+    // The first look, and each one after the timer; a wake-up is not a tick.
+    let mut tick = true;
     loop {
-        match workflows.update(&mut cx, |w, cx| w.workflow_turn(session, cx)) {
+        match workflows.update(&mut cx, |w, cx| w.workflow_turn(session, turns_before, cx)) {
             Err(_) => return Outcome::failed("The app is closing."),
             Ok(None) => return Outcome::failed("The session is no longer available."),
             Ok(Some(seen)) => {
-                if let Some(outcome) = look(seen, &mut armed, &mut unstarted) {
+                if let Some(outcome) = look(seen, &mut armed, &mut unstarted, tick) {
                     return outcome;
                 }
             }
         }
-        let _ = race(wake.recv(), cx.background_executor().timer(WATCH_POLL)).await;
+        let woken = race(wake.recv(), cx.background_executor().timer(WATCH_POLL)).await;
+        tick = matches!(woken, super::sync::Either::Right(_));
     }
 }
 
@@ -276,12 +303,22 @@ impl Workflows {
         cx: &mut Context<Self>,
     ) -> Fut<Outcome> {
         let wake = self.live.wake(session).1.clone();
+        // A conversation counts the turns it finished: only one after this point is this prompt's.
+        let turns_before = if self.live.tui.contains_key(&session) {
+            None
+        } else {
+            self.shell
+                .upgrade()
+                .and_then(|shell| shell.read(cx).mono_session_entity(session))
+                .and_then(|view| view.read(cx).workflow_turns_done())
+        };
         Box::pin(settle(
             cx.weak_entity(),
             cx.to_async(),
             session,
             wake,
             armed,
+            turns_before,
         ))
     }
 
@@ -323,7 +360,12 @@ impl Workflows {
         Box::pin(idle(cx.weak_entity(), cx.to_async(), local, wake))
     }
 
-    fn workflow_turn(&mut self, session: i64, cx: &mut Context<Self>) -> Option<Seen> {
+    fn workflow_turn(
+        &mut self,
+        session: i64,
+        turns_before: Option<u64>,
+        cx: &mut Context<Self>,
+    ) -> Option<Seen> {
         // A terminal step has no conversation: its pane's events say how the turn goes.
         if let Some(turn) = self.live.tui.get(&session) {
             return Some(turn.seen());
@@ -339,6 +381,13 @@ impl Workflows {
             return Some(wait);
         }
         Some(match view.workflow_turn(cx) {
+            Some(turn) if matches!(turn.end, TurnEnd::Completed) && turns_before.is_some() => {
+                match (turns_before, view.workflow_turns_done()) {
+                    (Some(before), Some(done)) if done > before => Seen::Ran(turn),
+                    (Some(_), Some(_)) => Seen::NoTurnYet,
+                    _ => Seen::Over(turn),
+                }
+            }
             Some(turn) => Seen::Over(turn),
             None => Seen::Working,
         })

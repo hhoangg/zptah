@@ -34,6 +34,7 @@ pub(in crate::monos) fn type_icon(kind: &NodeKind) -> &'static str {
     match kind {
         NodeKind::Schedule { .. } => "clock",
         NodeKind::Manual => "play",
+        NodeKind::Event(_) => "zap",
         NodeKind::Session { .. } => "message-multiple",
         NodeKind::Command { .. } => "terminal",
         NodeKind::If { .. } | NodeKind::Switch { .. } => "git-branch",
@@ -57,6 +58,7 @@ pub(in crate::monos) fn node_summary(node: &Node) -> String {
     match &node.kind {
         NodeKind::Schedule { schedule } => schedule.label(),
         NodeKind::Manual => "Starts when you run it".into(),
+        NodeKind::Event(event) => event.summary(),
         NodeKind::Session { prompt, target, .. } => {
             let prompt = or(prompt, "No prompt yet");
             match target {
@@ -978,6 +980,9 @@ mod tests {
                 timeout_minutes: None,
                 target,
                 account: None,
+                access: None,
+                folder: None,
+                link_work_item: None,
             },
         )
     }

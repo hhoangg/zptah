@@ -221,7 +221,7 @@ fn a_declared_output_carries_its_type_and_a_missing_node_has_no_variables() {
 
 #[test]
 fn event_item_variables_wait_for_an_event_trigger() {
-    // Hook: no node kind is an event trigger yet, so none is offered.
+    // The example starts on a schedule, so no event item is offered.
     let w = example();
     assert!(!paths(&w, "fetch")
         .iter()

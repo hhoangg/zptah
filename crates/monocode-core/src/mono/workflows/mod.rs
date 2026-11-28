@@ -21,6 +21,14 @@ mod data_passing_tests;
 pub mod engine;
 #[cfg(test)]
 mod engine_tests;
+pub mod event;
+#[cfg(test)]
+mod event_node_tests;
+pub mod event_run;
+#[cfg(test)]
+mod event_run_tests;
+#[cfg(test)]
+mod event_tests;
 #[cfg(test)]
 mod fixtures;
 pub mod global;
@@ -58,6 +66,9 @@ pub mod store;
 #[cfg(test)]
 mod store_tests;
 pub mod template;
+pub mod templates;
+#[cfg(test)]
+mod templates_tests;
 #[cfg(test)]
 mod tests;
 pub mod tick;

@@ -145,6 +145,17 @@ fn export_node(node: &Node) -> Doc {
             put(&mut out, "schedule", Some(export_schedule(schedule)));
         }
         NodeKind::Manual => {}
+        NodeKind::Event(event) => {
+            put(&mut out, "source", Some(text(&event.source)));
+            put(&mut out, "event", Some(text(&event.event)));
+            put(&mut out, "project", event.project.as_deref().map(text));
+            put(
+                &mut out,
+                "repos",
+                (!event.repos.is_empty())
+                    .then(|| Doc::Seq(event.repos.iter().map(|r| text(r)).collect())),
+            );
+        }
         NodeKind::Session {
             project,
             prompt,
@@ -160,6 +171,9 @@ fn export_node(node: &Node) -> Doc {
             timeout_minutes,
             target,
             account,
+            access,
+            folder,
+            link_work_item,
         } => {
             put(
                 &mut out,
@@ -189,6 +203,9 @@ fn export_node(node: &Node) -> Doc {
             put(&mut out, "timeoutMinutes", timeout_minutes.map(number));
             put(&mut out, "target", target.as_ref().map(export_target));
             put(&mut out, "account", account.as_deref().map(text));
+            put(&mut out, "access", access.as_deref().map(text));
+            put(&mut out, "folder", folder.as_deref().map(text));
+            put(&mut out, "linkWorkItem", link_work_item.map(Doc::Bool));
             put(&mut out, "prompt", Some(text(prompt)));
             put(&mut out, "outputs", Some(export_output(output)));
         }

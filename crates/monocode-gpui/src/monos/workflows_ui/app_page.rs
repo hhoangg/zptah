@@ -46,6 +46,32 @@ impl WorkflowsPage {
         });
     }
 
+    /// What the Inbox knows, for the event inspector: which sources are connected, and its items.
+    pub(crate) fn set_event_sources(
+        &mut self,
+        connections: std::collections::HashMap<String, (bool, String)>,
+        items: Vec<monocode_core::inbox::Item>,
+        cx: &mut Context<Self>,
+    ) {
+        self.monos.update(cx, |monos, cx| {
+            monos.set_event_sources(connections, items, cx)
+        });
+    }
+
+    /// The session folders of each app project, as (id, name).
+    pub(crate) fn set_session_folders(
+        &mut self,
+        folders: std::collections::HashMap<String, Vec<(String, String)>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.monos.update(cx, |monos, cx| {
+            if monos.wf.folders != folders {
+                monos.wf.folders = folders;
+                cx.notify();
+            }
+        });
+    }
+
     /// The page is on screen (or no longer is).
     pub(crate) fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
         self.monos
@@ -88,6 +114,7 @@ impl Monos {
             None => self.workflows_home(&scope, window, cx),
             Some(WfRoute::Review(id, intent)) => self.workflow_review_page(&id, intent, cx),
             Some(WfRoute::Import) => self.import_workflow_page(&scope, cx),
+            Some(WfRoute::Templates) => self.workflow_templates_page(cx),
             Some(
                 route
                 @ (WfRoute::New | WfRoute::Board(_) | WfRoute::Workflow(_) | WfRoute::Run(..)),

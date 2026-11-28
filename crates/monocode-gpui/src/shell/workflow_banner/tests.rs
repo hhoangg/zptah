@@ -425,6 +425,9 @@ fn a_terminal_step_on_a_remote_project_is_refused_before_a_session_exists(cx: &m
         worktree_cwd: None,
         parent_session_id: None,
         folder_name: None,
+        folder_id: None,
+        access: "auto-accept-edits".into(),
+        work_item: None,
         target: None,
         terminal: true,
     };

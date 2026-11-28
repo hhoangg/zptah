@@ -3,6 +3,7 @@
 //! run graph draw from these structs. A For each is a group node; its children carry `parent_id`
 //! and a position relative to it, which is what `node.ui` stores for them too. Coordinates are
 //! f32 pixels with the same numbers as the React board.
+use super::event::EventTrigger;
 use super::model::{
     new_workflow_id, stable_json, Checkout, Cwd, Decide, Edge, Handle, InputType, InputValue,
     LoopSpec, Node, NodeId, NodeKind, Ui, Workflow, WorkflowInput, WorkflowUi, SWITCH_DEFAULT,
@@ -183,6 +184,7 @@ pub struct Flow {
 pub enum NodeType {
     Schedule,
     Manual,
+    Event,
     Session,
     Command,
     If,
@@ -191,9 +193,10 @@ pub enum NodeType {
 }
 
 impl NodeType {
-    pub const ALL: [NodeType; 7] = [
+    pub const ALL: [NodeType; 8] = [
         Self::Schedule,
         Self::Manual,
+        Self::Event,
         Self::Session,
         Self::Command,
         Self::If,
@@ -206,6 +209,7 @@ impl NodeType {
         match self {
             Self::Schedule => "schedule",
             Self::Manual => "manual",
+            Self::Event => "event",
             Self::Session => "session",
             Self::Command => "command",
             Self::If => "if",
@@ -218,6 +222,7 @@ impl NodeType {
         match kind {
             NodeKind::Schedule { .. } => Self::Schedule,
             NodeKind::Manual => Self::Manual,
+            NodeKind::Event(_) => Self::Event,
             NodeKind::Session { .. } => Self::Session,
             NodeKind::Command { .. } => Self::Command,
             NodeKind::If { .. } => Self::If,
@@ -229,7 +234,7 @@ impl NodeType {
     /// The start of the id a new node of this type gets.
     fn id_base(self) -> &'static str {
         match self {
-            Self::Schedule | Self::Manual => "start",
+            Self::Schedule | Self::Manual | Self::Event => "start",
             Self::Session => "session",
             Self::Command => "command",
             Self::If => "check",
@@ -873,6 +878,7 @@ pub fn new_node(ty: NodeType, w: &Workflow) -> Node {
             },
         },
         NodeType::Manual => NodeKind::Manual,
+        NodeType::Event => NodeKind::Event(EventTrigger::default()),
         NodeType::Session => NodeKind::Session {
             project: default_project(w),
             prompt: String::new(),
@@ -888,6 +894,9 @@ pub fn new_node(ty: NodeType, w: &Workflow) -> Node {
             timeout_minutes: None,
             target: None,
             account: None,
+            access: None,
+            folder: None,
+            link_work_item: None,
         },
         NodeType::Command => NodeKind::Command {
             project: default_project(w),
