@@ -566,7 +566,7 @@ pub struct Snapshot {
 
 /// The Tauri InboxNotificationTracker: provider baselines and revisions are
 /// separate from the user's read state. Startup and query changes never
-/// trigger automations for an existing backlog.
+/// trigger workflows for an existing backlog.
 #[derive(Default)]
 pub struct NotificationTracker {
     revisions: HashMap<String, i64>,

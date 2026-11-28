@@ -204,7 +204,7 @@ pub fn exit_notice(kind: Kind, exit: &Exit) -> ExitNotice {
     ExitNotice { message, hint }
 }
 
-/// The error stored on an automation run whose CLI died or never started.
+/// The error stored on a workflow run whose CLI died or never started.
 pub fn run_error(kind: Kind, exit: &Exit) -> String {
     let notice = exit_notice(kind, exit);
     match notice.hint {

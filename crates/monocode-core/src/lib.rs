@@ -4,7 +4,6 @@ pub mod agent;
 pub mod app_access;
 pub mod app_update;
 pub mod attachment;
-pub mod automations;
 pub mod brand;
 pub mod catalog;
 pub mod checkpoint;

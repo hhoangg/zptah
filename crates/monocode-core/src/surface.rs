@@ -146,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn automations_open_a_terminal_only_when_it_can_take_the_prompt() {
+    fn a_run_opens_a_terminal_only_when_it_can_take_the_prompt() {
         assert_eq!(
             session_surface(Kind::Claude, "/repo", Surface::Tui),
             Surface::Tui
