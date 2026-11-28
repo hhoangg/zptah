@@ -3,12 +3,13 @@
 //! every length goes through `scaled`.
 use super::super::review::node_title;
 use super::canvas::{GraphCanvas, GraphEvent};
+use super::geometry::Rect;
 use super::hit::{HandleKind, handles_of};
 use super::scene::{Bar, BarKind, EdgeLabel, LABEL_H, SceneNode, TabItem, out_at};
 use crate::monos::*;
 use gpui::{BoxShadow, ClickEvent, Hsla, MouseDownEvent, Role, ScrollHandle, ScrollWheelEvent};
 use monocode_core::mono::workflows::{
-    board_model::{FlowKind, GROUP_HEADER, NODE_H, Point, out_handles},
+    board_model::{FlowKind, GAP_X, GROUP_HEADER, Point, out_handles},
     model::{Decide, Node, NodeKind},
     run_graph_model::RunNodeStatus,
 };
@@ -19,7 +20,10 @@ const RED: u32 = 0xef4444;
 /// About how wide a character of a port label is, at its 11 pixel size.
 const PORT_CHAR: f32 = 6.;
 /// How far right of its out a port label starts.
-const PORT_LABEL_GAP: f32 = 9.;
+const PORT_LABEL_GAP: f32 = 8.;
+/// How wide a port label may be: the room between a card and the next column, less the gap and
+/// the arrowhead.
+const PORT_LABEL_W: f32 = GAP_X - PORT_LABEL_GAP - 12.;
 
 fn hue(color: u32, alpha: f32) -> Hsla {
     Hsla::from(rgb(color)).opacity(alpha)
@@ -109,16 +113,9 @@ pub(in crate::monos) fn without_round(label: &str) -> &str {
     }
 }
 
-/// How wide the label right of out number `index` of `count` on a card `card_w` wide may be: the
-/// room up to the next out, or up to the card's right edge for the last one.
-pub(in crate::monos) fn port_label_width(card_w: f32, index: usize, count: usize) -> f32 {
-    let from = out_at(index, count);
-    let to = if index + 1 < count {
-        out_at(index + 1, count)
-    } else {
-        1.
-    };
-    (card_w * (to - from) - PORT_LABEL_GAP).max(PORT_CHAR * 2.)
+/// How wide the label of an out may be. It sits right of the out, above its line.
+pub(in crate::monos) fn port_label_width() -> f32 {
+    PORT_LABEL_W
 }
 
 /// `name` cut with an ellipsis to fit `width` (graph pixels) at the size of the port labels.
@@ -236,7 +233,8 @@ impl GraphCanvas {
     }
 
     /// The small rings on the sides of a card on the board: pressing one starts a connection.
-    /// Lines come out of the bottom (an If has two) and loops leave and arrive at the right;
+    /// Lines come out of the right (an If has two) and arrive at the left, and loops leave and
+    /// arrive at the bottom;
     /// while a connection is drawn the ones it could land on light up.
     fn handle_dots(&mut self, node: &SceneNode, cx: &mut Context<Self>) -> Vec<AnyElement> {
         if !self.editable {
@@ -525,16 +523,16 @@ impl GraphCanvas {
             .children(handles)
             .into_any_element();
         let mut out = vec![card];
-        // Under an If, which line is the true one and which the false one; under a Switch, which
-        // line is which case. Each label starts just right of its out.
+        // Beside an If, which line is the true one and which the false one; beside a Switch,
+        // which line is which case. Each label starts just right of its out, above the line.
         let outs = out_handles(&data.node);
         for (index, word) in outs.iter().enumerate() {
             let at = out_at(index, outs.len());
             let (x, y) = self.at(Point {
-                x: node.rect.x + node.rect.w * at + PORT_LABEL_GAP,
-                y: node.rect.y + NODE_H + 5.,
+                x: node.rect.right() + PORT_LABEL_GAP,
+                y: node.rect.y + node.rect.h * at - 15.,
             });
-            let width = port_label_width(node.rect.w, index, outs.len());
+            let width = port_label_width();
             out.push(
                 div()
                     .absolute()
@@ -685,7 +683,45 @@ impl GraphCanvas {
             .into_any_element()
     }
 
-    /// The pill on the loop edge: who decides and how many rounds at most.
+    /// The frame the triggers sit in: a titled box behind them, like a For each's but with no
+    /// handles and nothing to press.
+    pub(super) fn trigger_frame(&self, rect: Rect) -> AnyElement {
+        let (left, top) = self.at(Point {
+            x: rect.x,
+            y: rect.y,
+        });
+        div()
+            .id("wf-trigger-frame")
+            .debug_selector(|| "wf-trigger-frame".into())
+            .absolute()
+            .left(left)
+            .top(top)
+            .w(self.px(rect.w))
+            .h(self.px(rect.h))
+            .rounded(self.px(12.))
+            .border_1()
+            .border_color(content(0.1))
+            .bg(content(0.03))
+            .child(
+                div()
+                    .h(self.px(GROUP_HEADER))
+                    .px(self.px(12.))
+                    .flex()
+                    .items_center()
+                    .gap(self.px(6.))
+                    .text_size(self.px(11.))
+                    .child(icon("zap", self.scaled(12.)).text_color(content(0.4)))
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(content(0.4))
+                            .child("TRIGGERS"),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// The pill on the loop edge: how many rounds at most (the tooltip says who decides).
     pub(super) fn edge_label(&self, id: &str, label: &EdgeLabel) -> AnyElement {
         let (left, top) = self.at(Point {
             x: label.at.x,

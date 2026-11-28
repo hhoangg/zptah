@@ -17,6 +17,7 @@ pub(super) fn ticket(extra: Value) -> Workflow {
         "name": "ClickUp -> Dev -> Review",
         "inputs": {"project": {"type": "project"}, "clickupList": {"type": "string"}},
         "inputValues": {"project": "/work/api", "clickupList": "Sprint"},
+        "ui": {"direction": "lr"},
     });
     for (key, value) in extra.as_object().unwrap() {
         if value.is_null() {
@@ -28,20 +29,20 @@ pub(super) fn ticket(extra: Value) -> Workflow {
     build(
         all,
         json!([
-            {"id": "start", "type": "schedule", "title": "Weekdays", "ui": {"x": 0, "y": 0},
+            {"id": "start", "type": "schedule", "title": "Weekdays", "ui": {"x": 16, "y": 50},
              "schedule": {"scheduleKind": "weekdays", "time": "09:00", "minute": 0, "dayOfWeek": 1}},
             {"id": "fetch", "type": "session", "title": "Fetch tickets", "project": "{{inputs.project}}",
              "model": "claude:sonnet-5", "checkout": "root", "output": {"tickets": {"type": "list"}},
-             "prompt": "List open tickets assigned to me in {{inputs.clickupList}}.", "ui": {"x": 0, "y": 90}},
+             "prompt": "List open tickets assigned to me in {{inputs.clickupList}}.", "ui": {"x": 336, "y": 42}},
             {"id": "each", "type": "forEach", "title": "Each ticket", "in": "{{fetch.tickets}}",
-             "as": "item", "maxParallel": 3, "ui": {"x": -16, "y": 190}},
+             "as": "item", "maxParallel": 3, "ui": {"x": 640, "y": 0}},
             {"id": "dev", "type": "session", "title": "Dev", "parent": "each", "project": "{{inputs.project}}",
-             "model": "claude:sonnet-5", "checkout": "newWorktree", "ui": {"x": 16, "y": 40},
+             "model": "claude:sonnet-5", "checkout": "newWorktree", "ui": {"x": 16, "y": 32},
              "prompt": "Implement {{item.title}}", "output": {"pr_url": {"type": "string"}, "count": {"type": "number"}}},
             {"id": "review", "type": "session", "title": "Review", "parent": "each", "project": "{{inputs.project}}",
-             "checkout": {"worktreeOf": "dev"}, "nestUnder": "dev", "ui": {"x": 16, "y": 130},
+             "checkout": {"worktreeOf": "dev"}, "nestUnder": "dev", "ui": {"x": 320, "y": 32},
              "prompt": "Review {{dev.pr_url}}.", "output": {"verdict": {"type": "string"}}},
-            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "title": "Report to Mono", "ui": {"x": 0, "y": 480}},
+            {"id": "report", "type": "command", "project": "{{inputs.project}}", "command": "true", "title": "Report to Mono", "ui": {"x": 1324, "y": 42}},
         ]),
         json!([
             {"from": "start", "to": "fetch"}, {"from": "fetch", "to": "each"},

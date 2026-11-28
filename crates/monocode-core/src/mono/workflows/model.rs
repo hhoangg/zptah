@@ -283,6 +283,27 @@ pub struct Ui {
     pub y: f64,
 }
 
+/// Workflow-level board settings, kept so a file opens laid out the same way. `direction` is
+/// "lr" once the board has laid the workflow out left to right; a file without it holds
+/// top-to-bottom positions and is laid out once on open.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct WorkflowUi {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
+}
+
+/// The `ui.direction` value of a workflow laid out left to right.
+pub const DIRECTION_LR: &str = "lr";
+
+impl WorkflowUi {
+    /// The marker of a left-to-right workflow.
+    pub fn lr() -> Self {
+        Self {
+            direction: Some(DIRECTION_LR.into()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Decide {
     /// A one-shot AI call with no tools. Files written before this name read `"mono"` as `"ai"`.
@@ -682,6 +703,10 @@ pub struct Workflow {
     pub run_values: Option<OrderedMap<InputValue>>,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    /// Board settings (the layout direction). Not part of the definition: it never changes
+    /// `definition_fingerprint`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui: Option<WorkflowUi>,
     pub enabled: bool,
     pub created_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -736,6 +761,7 @@ impl Workflow {
             run_values: None,
             nodes: Vec::new(),
             edges: Vec::new(),
+            ui: None,
             enabled: false,
             created_at: 0,
             next_run_at: None,
@@ -754,6 +780,13 @@ impl Workflow {
     }
     pub fn node(&self, id: &str) -> Option<&Node> {
         self.nodes.iter().find(|n| n.id == id)
+    }
+    /// Whether the saved node positions are left to right (the `ui.direction` marker).
+    pub fn is_lr(&self) -> bool {
+        self.ui
+            .as_ref()
+            .and_then(|ui| ui.direction.as_deref())
+            .is_some_and(|d| d == DIRECTION_LR)
     }
     /// The workflow's trigger nodes, in definition order. Any of them can start a run.
     pub fn triggers(&self) -> Vec<&Node> {

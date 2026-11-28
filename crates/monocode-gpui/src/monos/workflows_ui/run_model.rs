@@ -5,7 +5,7 @@ use super::super::scheduler::duration;
 use super::graph::{Bar, BarKind, Rect, Scene, TabItem};
 use super::review::{node_label, node_title};
 use monocode_core::mono::workflows::{
-    board_model::{FlowKind, FlowNode, GROUP_PAD, NODE_W},
+    board_model::{FlowKind, FlowNode, GROUP_PAD},
     model::{
         NodeKind, NodeRun, NodeStatus, RoundRecord, WorkflowRun, archived_items_key, parse_branch,
     },
@@ -35,9 +35,8 @@ fn run_bars(nodes: &[FlowNode], groups: &[GroupView], view: RunView) -> Vec<Bar>
             .filter(|n| n.parent_id.as_deref() == Some(group.id.as_str()))
             .collect();
         if gv.rounds.len() > 1 {
-            // Right of the column the edge into the group runs down, so that edge stays visible.
-            let w = (group.width - (GROUP_PAD + NODE_W / 2. + 12.))
-                .min(gv.rounds.len() as f32 * 64. + 8.);
+            // Over the right of the group; the edge into the group arrives on its left.
+            let w = (group.width - GROUP_PAD * 2.).min(gv.rounds.len() as f32 * 64. + 8.);
             bars.push(Bar {
                 id: format!("bar-rounds:{}", group.id),
                 rect: Rect::new(

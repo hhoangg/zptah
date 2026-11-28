@@ -4,9 +4,10 @@
 //! board draws and calls these.
 use super::board_model::{
     auto_place, connection_kind, definition_key, deletion, drop_crossing_edges, drop_nodes,
-    fit_groups, from_flow, groupable, is_group, make_edge, new_node, project_input_for, push_below,
-    settle_drop, BoardNodeData, ConnectionKind, Flow, FlowEdge, FlowKind, FlowNode, NodeType,
-    Point, EMPTY_GROUP_H, GAP_Y, GROUP_PAD, NODE_H, NODE_W,
+    fit_groups, from_flow, groupable, is_group, make_edge, new_node, project_input_for, push_right,
+    settle_drop, stack_triggers, to_flow, trigger_frame, trigger_frame_size, trigger_slot,
+    BoardNodeData, ConnectionKind, Flow, FlowEdge, FlowKind, FlowNode, NodeType, Point,
+    EMPTY_GROUP_H, EMPTY_GROUP_W, GAP_X, NODE_H, NODE_W,
 };
 use super::engine::looped_node_ids;
 use super::model::{
@@ -343,7 +344,6 @@ pub fn add_node(flow: &Flow, w: &Workflow, ty: NodeType) -> (Flow, NodeId) {
     } else {
         None
     };
-    let step = NODE_H + GAP_Y;
     let to_node = |position: Point, parent_id: Option<NodeId>| -> FlowNode {
         let group = is_group(&node);
         FlowNode {
@@ -354,11 +354,7 @@ pub fn add_node(flow: &Flow, w: &Workflow, ty: NodeType) -> (Flow, NodeId) {
                 FlowKind::Board
             },
             position,
-            width: if group {
-                NODE_W + GROUP_PAD * 2.0
-            } else {
-                NODE_W
-            },
+            width: if group { EMPTY_GROUP_W } else { NODE_W },
             height: if group { EMPTY_GROUP_H } else { NODE_H },
             parent_id,
             selected: true,
@@ -372,19 +368,35 @@ pub fn add_node(flow: &Flow, w: &Workflow, ty: NodeType) -> (Flow, NodeId) {
     let mut edges = flow.edges.clone();
     let nodes: Vec<FlowNode>;
     if is_trigger_type(ty) {
-        let top = deselected
+        // The triggers sit in one column; the new one goes at its end, and the layout
+        // (`stack_triggers`, below) puts it in its slot.
+        let count = deselected
             .iter()
-            .filter(|n| n.parent_id.is_none())
-            .map(|n| n.position.y)
-            .fold(0.0_f32, f32::min);
+            .filter(|n| n.parent_id.is_none() && n.data.node.is_trigger())
+            .count();
+        let at = match trigger_frame(&deselected) {
+            Some((frame, _)) => trigger_slot(frame, count),
+            None => {
+                // No trigger left: the frame goes before everything else.
+                let tops = || deselected.iter().filter(|n| n.parent_id.is_none());
+                let left = tops().map(|n| n.position.x).fold(f32::MAX, f32::min);
+                let top = tops().map(|n| n.position.y).fold(f32::MAX, f32::min);
+                let (left, top) = if left == f32::MAX {
+                    (0.0, 0.0)
+                } else {
+                    (left, top)
+                };
+                trigger_slot(
+                    Point {
+                        x: left - GAP_X - trigger_frame_size(1).width,
+                        y: top,
+                    },
+                    0,
+                )
+            }
+        };
         let mut all = deselected;
-        all.push(to_node(
-            Point {
-                x: 0.0,
-                y: top - step,
-            },
-            None,
-        ));
+        all.push(to_node(at, None));
         nodes = all;
         // Any trigger can start a run, so each leads to the same first step.
         let existing = w
@@ -406,22 +418,15 @@ pub fn add_node(flow: &Flow, w: &Workflow, ty: NodeType) -> (Flow, NodeId) {
         }
     } else {
         let place = auto_place(w, parent.as_deref());
-        let at = if is_group(&node) && parent.is_none() {
-            Point {
-                x: place.x - GROUP_PAD,
-                y: place.y,
-            }
-        } else {
-            place
-        };
         let mut all = deselected;
-        all.push(to_node(at, parent.clone()));
+        all.push(to_node(place, parent.clone()));
         nodes = all;
-        // Wired after the node that hangs lowest in its scope, when that one leads nowhere yet.
-        let y_of = |n: &Node| n.ui.map_or(0.0, |u| u.y);
+        // Wired after the node that sits furthest right in its scope, when that one leads
+        // nowhere yet.
+        let x_of = |n: &Node| n.ui.map_or(0.0, |u| u.x);
         let mut lowest: Option<&Node> = None;
         for n in w.nodes.iter().filter(|n| n.parent == parent) {
-            if lowest.is_none_or(|low| y_of(n) >= y_of(low)) {
+            if lowest.is_none_or(|low| x_of(n) >= x_of(low)) {
                 lowest = Some(n);
             }
         }
@@ -460,7 +465,7 @@ pub fn add_node(flow: &Flow, w: &Workflow, ty: NodeType) -> (Flow, NodeId) {
         }
     }
     let placed = sort_parents_first(nodes);
-    let fitted = push_below(&placed, &fit_groups(&placed));
+    let fitted = stack_triggers(push_right(&placed, &fit_groups(&placed)), None);
     (
         Flow {
             nodes: fitted,
@@ -542,6 +547,29 @@ pub fn update_node(flow: &Flow, next: &Node) -> Flow {
         if n.id == next.id {
             n.data.node = next.clone();
         }
+    }
+    out
+}
+
+/// The flow laid out afresh, left to right: every saved position (and the board's own) is
+/// dropped and the layout runs again over `w`, the workflow the flow draws. Selection stays.
+pub fn tidy(flow: &Flow, w: &Workflow) -> Flow {
+    let mut fresh = from_flow(w, &flow.nodes, &flow.edges);
+    for n in &mut fresh.nodes {
+        n.ui = None;
+    }
+    let mut out = to_flow(&fresh);
+    for n in &mut out.nodes {
+        n.selected = flow.nodes.iter().any(|o| o.id == n.id && o.selected);
+        n.data.issues = flow
+            .nodes
+            .iter()
+            .find(|o| o.id == n.id)
+            .map(|o| o.data.issues.clone())
+            .unwrap_or_default();
+    }
+    for e in &mut out.edges {
+        e.selected = flow.edges.iter().any(|o| o.id == e.id && o.selected);
     }
     out
 }

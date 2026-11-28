@@ -178,9 +178,9 @@ pub struct RunGraph {
 pub const LANE_HEADER: f32 = 28.0;
 /// Width of a card in the lanes view: four lanes of two nodes fit the panel on the first frame.
 pub const LANE_CARD_W: f32 = 92.0;
-/// Space between two lanes; wide enough for the loop arc that runs down a lane's right.
+/// Space between two lanes.
 pub const LANE_GAP: f32 = 26.0;
-/// Room right of the last lane for that arc.
+/// Room right of the last lane.
 const LANE_EDGE: f32 = 12.0;
 
 const LANE_SCALE: f32 = LANE_CARD_W / NODE_W;
@@ -593,6 +593,7 @@ pub fn group_views(run: &WorkflowRun, pick: &Picks, now: u64) -> Vec<GroupView> 
 }
 
 /// The width of one lane of a group: its children's snapshot layout, left padding left out.
+/// The children run left to right, so a lane is as wide as its row of cards.
 fn lane_width_of(kids: &[&FlowNode]) -> f32 {
     kids.iter()
         .map(|k| k.position.x + NODE_W - GROUP_PAD)
@@ -604,12 +605,16 @@ fn lane_width_of(kids: &[&FlowNode]) -> f32 {
 pub fn default_run_view(run: &WorkflowRun) -> RunView {
     let flow = to_flow(&run.definition).nodes;
     for group_id in for_each_ids(run) {
-        // Children laid out side by side make a lane too wide to repeat.
+        // A row of cards too long to repeat side by side, even narrowed to a lane's cards.
         let kids: Vec<&FlowNode> = flow
             .iter()
             .filter(|n| n.parent_id.as_deref() == Some(group_id))
             .collect();
-        if lane_width_of(&kids) > NODE_W * 1.5 {
+        let narrowed = kids
+            .iter()
+            .map(|k| (k.position.x - GROUP_PAD) * LANE_SCALE + LANE_CARD_W)
+            .fold(LANE_CARD_W, f32::max);
+        if narrowed > NODE_W * 1.5 {
             return RunView::Single;
         }
         let info = rounds_of(run, group_id);

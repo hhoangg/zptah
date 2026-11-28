@@ -56,6 +56,8 @@ struct NodeDrag {
     start: gpui::Point<Pixels>,
     origin: Point,
     moved: bool,
+    /// A trigger: its place belongs to the layout, so pressing it picks it but never moves it.
+    fixed: bool,
 }
 
 /// A connection being drawn from a handle to the pointer.
@@ -172,11 +174,15 @@ impl GraphCanvas {
 
     /// A drag of a card began.
     pub(super) fn begin_drag(&mut self, id: &str, origin: Point, at: gpui::Point<Pixels>) {
+        let fixed = self.scene.nodes.iter().any(|n| {
+            n.flow.id == id && n.flow.parent_id.is_none() && n.flow.data.node.is_trigger()
+        });
         self.node_drag = Some(NodeDrag {
             id: id.to_string(),
             start: at,
             origin,
             moved: false,
+            fixed,
         });
     }
 
@@ -268,7 +274,14 @@ impl GraphCanvas {
             width: area.size.width.as_f32(),
             height: area.size.height.as_f32(),
         };
-        let Some(view) = fit_scene(self.scene.bounds(), size) else {
+        // A graph too big for the floor zoom is centred on the picked card.
+        let focus = self
+            .scene
+            .nodes
+            .iter()
+            .find(|n| n.flow.selected || (n.key.is_some() && n.key == self.selected))
+            .map(|n| n.rect);
+        let Some(view) = fit_scene(self.scene.bounds(), size, focus) else {
             return;
         };
         self.view = view;
@@ -359,6 +372,9 @@ impl GraphCanvas {
     fn edit_moved(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         let zoom = self.view.zoom;
         if let Some(drag) = &mut self.node_drag {
+            if drag.fixed {
+                return;
+            }
             let (start, now) = (Self::screen(drag.start), Self::screen(event.position));
             if !drag.moved && !past_threshold(start, now) {
                 return;
@@ -608,6 +624,9 @@ impl Render for GraphCanvas {
         if ready {
             use monocode_core::mono::workflows::board_model::FlowKind;
             root = root.child(self.dots());
+            if let Some(frame) = scene.trigger_frame {
+                root = root.child(self.trigger_frame(frame));
+            }
             for node in scene
                 .nodes
                 .iter()
@@ -730,8 +749,8 @@ fn paint_connection(
     window: &mut Window,
 ) {
     let (from, to) = match c.kind {
-        HandleKind::LoopOut | HandleKind::LoopIn => (Side::Right, Side::Right),
-        _ => (Side::Bottom, Side::Top),
+        HandleKind::LoopOut | HandleKind::LoopIn => (Side::Bottom, Side::Bottom),
+        _ => (Side::Right, Side::Left),
     };
     let path = step_points(c.from, from, c.to, to, 20.);
     let segs = rounded(&path.points, 5.);

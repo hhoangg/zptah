@@ -3,7 +3,8 @@
 use super::model::{
     CallerKind, Checkout, Cwd, Decide, DecisionModel, Edge, Handle, InputType, InputValue,
     LoopSpec, Node, NodeKind, OutputField, OutputFieldType, ReportTo, Requirement, RequirementKind,
-    RunCaller, SessionTarget, TargetInstance, Ui, Workflow, WorkflowInput, DECIDE_AI, NODE_TYPES,
+    RunCaller, SessionTarget, TargetInstance, Ui, Workflow, WorkflowInput, WorkflowUi, DECIDE_AI,
+    DIRECTION_LR, NODE_TYPES,
 };
 use super::ordered::{Json, OrderedMap};
 use crate::mono::habits::Schedule;
@@ -447,6 +448,12 @@ pub fn parse_caller(raw: &Json) -> Option<RunCaller> {
     })
 }
 
+/// The workflow-level `ui` object; only a direction of "lr" is kept.
+pub fn parse_workflow_ui(raw: Option<&Json>) -> Option<WorkflowUi> {
+    let direction = raw?.get("direction")?.as_str()?;
+    (direction == DIRECTION_LR).then(WorkflowUi::lr)
+}
+
 pub fn parse_workflow(raw: &Json) -> Option<Workflow> {
     if !is_rec(raw) {
         return None;
@@ -481,6 +488,7 @@ pub fn parse_workflow(raw: &Json) -> Option<Workflow> {
             .map(|v| parse_input_values(Some(v))),
         nodes,
         edges,
+        ui: parse_workflow_ui(raw.get("ui")),
         // An entry that says nothing about being enabled stays paused.
         enabled: flag("enabled"),
         created_at: num_of(raw, "createdAt").unwrap_or(0.0) as u64,

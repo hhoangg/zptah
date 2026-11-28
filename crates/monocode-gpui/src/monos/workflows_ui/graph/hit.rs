@@ -19,12 +19,12 @@ pub(super) const EDGE_SLOP: f32 = 6.;
 /// Which of a card's handles.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::monos) enum HandleKind {
-    /// Where lines arrive, at the top.
+    /// Where lines arrive, on the left.
     In,
-    /// Where lines leave, at the bottom; an If has one for true and one for false, a Switch one
+    /// Where lines leave, on the right; an If has one for true and one for false, a Switch one
     /// for each case and one for the default.
     Out(Option<String>),
-    /// Where a loop arrives and leaves, on the right.
+    /// Where a loop arrives and leaves, on the bottom.
     LoopIn,
     LoopOut,
 }
@@ -44,21 +44,21 @@ pub(in crate::monos) fn handles_of(node: &SceneNode) -> Vec<Handle> {
         at: Point { x, y },
     };
     if node.flow.kind == FlowKind::Group {
-        let x = group_anchor(&r);
+        let y = group_anchor(&r);
         return vec![
-            handle(HandleKind::In, x, r.y),
-            handle(HandleKind::Out(None), x, r.bottom()),
+            handle(HandleKind::In, r.x, y),
+            handle(HandleKind::Out(None), r.right(), y),
         ];
     }
     let kind = &node.flow.data.node.kind;
     let trigger = matches!(kind, NodeKind::Schedule { .. } | NodeKind::Manual);
     let mut out = Vec::new();
     if !trigger {
-        out.push(handle(HandleKind::In, r.x + r.w / 2., r.y));
+        out.push(handle(HandleKind::In, r.x, r.y + r.h / 2.));
         out.push(handle(
             HandleKind::LoopIn,
-            r.right(),
-            r.y + r.h * LOOP_IN_AT,
+            r.x + r.w * LOOP_IN_AT,
+            r.bottom(),
         ));
     }
     match kind {
@@ -67,18 +67,18 @@ pub(in crate::monos) fn handles_of(node: &SceneNode) -> Vec<Handle> {
             for (index, name) in outs.iter().enumerate() {
                 out.push(handle(
                     HandleKind::Out(Some(name.clone())),
-                    r.x + r.w * out_at(index, outs.len()),
-                    r.bottom(),
+                    r.right(),
+                    r.y + r.h * out_at(index, outs.len()),
                 ));
             }
         }
-        _ => out.push(handle(HandleKind::Out(None), r.x + r.w / 2., r.bottom())),
+        _ => out.push(handle(HandleKind::Out(None), r.right(), r.y + r.h / 2.)),
     }
     if matches!(kind, NodeKind::Session { .. } | NodeKind::Command { .. }) {
         out.push(handle(
             HandleKind::LoopOut,
-            r.right(),
-            r.y + r.h * LOOP_OUT_AT,
+            r.x + r.w * LOOP_OUT_AT,
+            r.bottom(),
         ));
     }
     out

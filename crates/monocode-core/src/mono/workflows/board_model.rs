@@ -5,7 +5,7 @@
 //! f32 pixels with the same numbers as the React board.
 use super::model::{
     new_workflow_id, stable_json, Checkout, Cwd, Decide, Edge, Handle, InputType, InputValue,
-    LoopSpec, Node, NodeId, NodeKind, Ui, Workflow, WorkflowInput, SWITCH_DEFAULT,
+    LoopSpec, Node, NodeId, NodeKind, Ui, Workflow, WorkflowInput, WorkflowUi, SWITCH_DEFAULT,
 };
 use super::ordered::OrderedMap;
 use super::run_graph_model::{RunEdgeState, RunNodeState};
@@ -18,19 +18,23 @@ use std::collections::{HashMap, HashSet};
 /// A node card is this wide and about this tall; layout counts on it.
 pub const NODE_W: f32 = 232.0;
 pub const NODE_H: f32 = 48.0;
-/// Space between a node and the next one down.
-pub const GAP_Y: f32 = 36.0;
-pub const GAP_X: f32 = 28.0;
+/// Space between a node and the next one in its column, and between one column and the next
+/// (which has to hold the arrow of the edges between them).
+pub const GAP_Y: f32 = 24.0;
+pub const GAP_X: f32 = 72.0;
+/// Space between two triggers in their column.
+pub const TRIGGER_GAP: f32 = 12.0;
 /// Room around the children of a group, and above them for its title.
 pub const GROUP_PAD: f32 = 16.0;
 pub const GROUP_HEADER: f32 = 32.0;
-/// The loop edge runs down the right of a group, so that side is wider.
-pub const GROUP_RIGHT: f32 = 52.0;
-/// Space left under the last child, so another can be dropped in.
+/// Space left after the last child, so another can be dropped in.
 pub const GROUP_SLACK: f32 = 44.0;
+/// A loop edge runs under the children of a group, so the frame has room below them.
+pub const GROUP_LOOP: f32 = 36.0;
 
-/// The height of a For each with nothing in it yet.
-pub const EMPTY_GROUP_H: f32 = GROUP_HEADER + NODE_H + GROUP_PAD + GROUP_SLACK;
+/// The size of a For each with nothing in it yet.
+pub const EMPTY_GROUP_W: f32 = GROUP_PAD + NODE_W + GROUP_PAD + GROUP_SLACK;
+pub const EMPTY_GROUP_H: f32 = GROUP_HEADER + NODE_H + GROUP_PAD + GROUP_LOOP;
 
 /// Handle ids: the two outs of an If node ("true", "false"), the outs of a Switch (each case,
 /// and `SWITCH_DEFAULT`), and the side handles a loop edge uses.
@@ -252,10 +256,11 @@ fn point_of(ui: Ui) -> Point {
 
 // --- layout ---------------------------------------------------------------------------------
 
+/// The frame of a group around the children at `children` (positions relative to it).
 fn group_size(children: &[Point]) -> Size {
     if children.is_empty() {
         return Size {
-            width: NODE_W + GROUP_PAD + GROUP_RIGHT,
+            width: EMPTY_GROUP_W,
             height: EMPTY_GROUP_H,
         };
     }
@@ -268,9 +273,75 @@ fn group_size(children: &[Point]) -> Size {
         .map(|p| p.y + NODE_H)
         .fold(f32::MIN, f32::max);
     Size {
-        width: (NODE_W + GROUP_PAD + GROUP_RIGHT).max(right + GROUP_RIGHT),
-        height: bottom + GROUP_PAD + GROUP_SLACK,
+        width: EMPTY_GROUP_W.max(right + GROUP_PAD + GROUP_SLACK),
+        height: EMPTY_GROUP_H.max(bottom + GROUP_PAD + GROUP_LOOP),
     }
+}
+
+/// The size of the frame the triggers sit in: one column of `count` cards under a title.
+pub fn trigger_frame_size(count: usize) -> Size {
+    let count = count.max(1) as f32;
+    Size {
+        width: NODE_W + GROUP_PAD * 2.0,
+        height: GROUP_HEADER + count * NODE_H + (count - 1.0) * TRIGGER_GAP + GROUP_PAD,
+    }
+}
+
+/// Where the `index`th trigger sits in a frame whose top left corner is `frame`.
+pub fn trigger_slot(frame: Point, index: usize) -> Point {
+    Point {
+        x: frame.x + GROUP_PAD,
+        y: frame.y + GROUP_HEADER + index as f32 * (NODE_H + TRIGGER_GAP),
+    }
+}
+
+fn is_top_trigger(n: &FlowNode) -> bool {
+    n.parent_id.is_none() && n.data.node.is_trigger()
+}
+
+/// The frame drawn behind the triggers: its top left corner and size, from where the triggers
+/// are. None when the workflow has no trigger. Pure: the same triggers always give the same frame.
+pub fn trigger_frame(nodes: &[FlowNode]) -> Option<(Point, Size)> {
+    let triggers: Vec<&FlowNode> = nodes.iter().filter(|n| is_top_trigger(n)).collect();
+    if triggers.is_empty() {
+        return None;
+    }
+    let x = triggers
+        .iter()
+        .map(|n| n.position.x)
+        .fold(f32::MAX, f32::min)
+        - GROUP_PAD;
+    let y = triggers
+        .iter()
+        .map(|n| n.position.y)
+        .fold(f32::MAX, f32::min)
+        - GROUP_HEADER;
+    Some((Point { x, y }, trigger_frame_size(triggers.len())))
+}
+
+/// The triggers put back in one column, in list order, under the frame the triggers other than
+/// `moved` (one that was just dragged) make. Their places belong to the layout, so dragging
+/// one, adding one or deleting one ends here.
+pub fn stack_triggers(nodes: Vec<FlowNode>, moved: Option<&str>) -> Vec<FlowNode> {
+    let still: Vec<FlowNode> = nodes
+        .iter()
+        .filter(|n| Some(n.id.as_str()) != moved)
+        .cloned()
+        .collect();
+    let Some((frame, _)) = trigger_frame(&still).or_else(|| trigger_frame(&nodes)) else {
+        return nodes;
+    };
+    let mut index = 0;
+    nodes
+        .into_iter()
+        .map(|mut n| {
+            if is_top_trigger(&n) {
+                n.position = trigger_slot(frame, index);
+                index += 1;
+            }
+            n
+        })
+        .collect()
 }
 
 /// The id of the For each a node sits in, if there is one that exists.
@@ -285,14 +356,24 @@ fn group_of<'a>(w: &Workflow, node: &'a Node) -> Option<&'a str> {
         .then_some(parent)
 }
 
-/// Positions for nodes of one scope that have none: layers by depth, one row per layer.
+/// What `layout_scope` made: where the nodes go, and where the lead frame (the triggers) goes.
+struct Placed {
+    at: HashMap<NodeId, Point>,
+    lead: Point,
+}
+
+/// Left to right layers for the nodes of one scope: a node sits one layer after the last node
+/// that leads to it (a loop edge is a way back and does not count), the layers are columns, and
+/// each column is centred on the tallest one. `lead` is a frame that sits before the first
+/// column (the triggers), centred the same way. Sizes are `NODE_W` x `NODE_H` unless `sizes`
+/// says otherwise (a group).
 fn layout_scope(
     w: &Workflow,
     members: &[&Node],
     origin: Point,
-    heights: &HashMap<NodeId, f32>,
-    widths: &HashMap<NodeId, f32>,
-) -> HashMap<NodeId, Point> {
+    sizes: &HashMap<NodeId, Size>,
+    lead: Option<Size>,
+) -> Placed {
     let ids: HashSet<&str> = members.iter().map(|n| n.id.as_str()).collect();
     let edges: Vec<&Edge> = w
         .edges
@@ -324,19 +405,66 @@ fn layout_scope(
         }
         layers[d].push(n);
     }
-    let mut out = HashMap::new();
-    let mut y = origin.y;
-    for layer in layers.iter().filter(|l| !l.is_empty()) {
-        let mut x = origin.x;
-        let mut tallest = NODE_H;
-        for n in layer {
-            out.insert(n.id.clone(), Point { x, y });
-            x += widths.get(&n.id).copied().unwrap_or(NODE_W) + GAP_X;
-            tallest = tallest.max(heights.get(&n.id).copied().unwrap_or(NODE_H));
+    layers.retain(|l| !l.is_empty());
+    // Within a column, a node goes near the nodes that lead to it, which keeps edges apart.
+    let mut row: HashMap<&str, f32> = HashMap::new();
+    for layer in layers.iter_mut() {
+        let key = |n: &Node| -> f32 {
+            let rows: Vec<f32> = edges
+                .iter()
+                .filter(|e| e.to == n.id)
+                .filter_map(|e| row.get(e.from.as_str()).copied())
+                .collect();
+            if rows.is_empty() {
+                f32::MAX
+            } else {
+                rows.iter().sum::<f32>() / rows.len() as f32
+            }
+        };
+        let keys: HashMap<&str, f32> = layer.iter().map(|n| (n.id.as_str(), key(n))).collect();
+        layer.sort_by(|a, b| keys[a.id.as_str()].total_cmp(&keys[b.id.as_str()]));
+        for (i, n) in layer.iter().enumerate() {
+            row.insert(n.id.as_str(), i as f32);
         }
-        y += tallest + GAP_Y;
     }
-    out
+    let size_of = |n: &Node| {
+        sizes.get(&n.id).copied().unwrap_or(Size {
+            width: NODE_W,
+            height: NODE_H,
+        })
+    };
+    let stack_h = |layer: &Vec<&Node>| -> f32 {
+        layer.iter().map(|n| size_of(n).height).sum::<f32>()
+            + GAP_Y * layer.len().saturating_sub(1) as f32
+    };
+    let total = layers
+        .iter()
+        .map(stack_h)
+        .chain(lead.map(|s| s.height))
+        .fold(0.0, f32::max);
+    let mut out = HashMap::new();
+    let mut x = origin.x;
+    if let Some(lead) = lead {
+        x += lead.width + GAP_X;
+    }
+    for layer in &layers {
+        let mut y = origin.y + (total - stack_h(layer)) / 2.0;
+        let mut widest = 0.0_f32;
+        for n in layer {
+            let s = size_of(n);
+            out.insert(n.id.clone(), Point { x, y });
+            y += s.height + GAP_Y;
+            widest = widest.max(s.width);
+        }
+        x += widest + GAP_X;
+    }
+    Placed {
+        at: out,
+        lead: Point {
+            x: origin.x,
+            y: origin.y + (total - lead.map_or(0.0, |s| s.height)) / 2.0,
+        },
+    }
 }
 
 struct Layout {
@@ -344,8 +472,13 @@ struct Layout {
     size: HashMap<NodeId, Size>,
 }
 
-/// Where every node sits: its saved position, else one made by laying its scope out.
+/// Where every node sits. The saved position is kept only when the workflow is marked as laid
+/// out left to right (`ui.direction`); older top-to-bottom positions are dropped and the whole
+/// board is laid out afresh, once, until the next save writes the marker. The triggers always
+/// sit in their one column, whatever was saved.
 fn layout_of(w: &Workflow) -> Layout {
+    let keep = w.is_lr();
+    let saved = |n: &Node| n.ui.filter(|_| keep).map(point_of);
     let mut at: HashMap<NodeId, Point> = HashMap::new();
     let mut size: HashMap<NodeId, Size> = HashMap::new();
     let none = HashMap::new();
@@ -359,11 +492,9 @@ fn layout_of(w: &Workflow) -> Layout {
             x: GROUP_PAD,
             y: GROUP_HEADER,
         };
-        let auto = layout_scope(w, &children, origin, &none, &none);
+        let auto = layout_scope(w, &children, origin, &none, None).at;
         for child in &children {
-            let p = child
-                .ui
-                .map(point_of)
+            let p = saved(child)
                 .or_else(|| auto.get(&child.id).copied())
                 .unwrap_or(origin);
             at.insert(child.id.clone(), p);
@@ -376,58 +507,74 @@ fn layout_of(w: &Workflow) -> Layout {
         .iter()
         .filter(|n| group_of(w, n).is_none())
         .collect();
-    let heights: HashMap<NodeId, f32> = size.iter().map(|(id, s)| (id.clone(), s.height)).collect();
-    let widths: HashMap<NodeId, f32> = size.iter().map(|(id, s)| (id.clone(), s.width)).collect();
-    let auto = layout_scope(w, &top, Point::default(), &heights, &widths);
-    for node in top {
-        let p = auto.get(&node.id).copied().unwrap_or_default();
-        // A group sits a padding to the left, so the nodes inside line up with the column.
-        let placed = match node.ui {
-            Some(ui) => point_of(ui),
-            None if is_group(node) => Point {
-                x: p.x - GROUP_PAD,
-                y: p.y,
-            },
-            None => p,
-        };
-        at.insert(node.id.clone(), placed);
+    let triggers: Vec<&Node> = top.iter().copied().filter(|n| n.is_trigger()).collect();
+    let rest: Vec<&Node> = top.iter().copied().filter(|n| !n.is_trigger()).collect();
+    let lead = (!triggers.is_empty()).then(|| trigger_frame_size(triggers.len()));
+    let placed = layout_scope(w, &rest, Point::default(), &size, lead);
+    for (i, node) in triggers.iter().enumerate() {
+        at.insert(node.id.clone(), trigger_slot(placed.lead, i));
+    }
+    for node in rest {
+        let p = saved(node)
+            .or_else(|| placed.at.get(&node.id).copied())
+            .unwrap_or_default();
+        at.insert(node.id.clone(), p);
     }
     Layout { at, size }
 }
 
-/// Where a new node goes: under the lowest one of its scope, in the same column. `parent` is the
-/// For each it goes into, positions then being relative to it.
+/// Where a new node goes: after the rightmost one of its scope, level with it. `parent` is the
+/// For each it goes into, positions then being relative to it. With only triggers it goes after
+/// their frame.
 pub fn auto_place(w: &Workflow, parent: Option<&str>) -> Point {
     let Layout { at, size } = layout_of(w);
     let in_scope: Vec<&Node> = w
         .nodes
         .iter()
-        .filter(|n| group_of(w, n) == parent)
+        .filter(|n| group_of(w, n) == parent && !(parent.is_none() && n.is_trigger()))
         .collect();
-    let Some(first) = in_scope.first() else {
-        return match parent {
-            None => Point::default(),
-            Some(_) => Point {
-                x: GROUP_PAD,
-                y: GROUP_HEADER,
-            },
-        };
+    let size_of = |n: &Node| {
+        size.get(&n.id).copied().unwrap_or(Size {
+            width: NODE_W,
+            height: NODE_H,
+        })
     };
-    let y_of = |n: &Node| at.get(&n.id).map_or(0.0, |p| p.y);
-    let mut lowest = *first;
+    let right_of = |n: &Node| at.get(&n.id).map_or(0.0, |p| p.x) + size_of(n).width;
+    let mut rightmost: Option<&Node> = None;
     for n in &in_scope {
-        if y_of(n) >= y_of(lowest) {
-            lowest = n;
+        if rightmost.is_none_or(|r| right_of(n) >= right_of(r)) {
+            rightmost = Some(n);
         }
     }
-    let p = at[&lowest.id];
+    if let Some(r) = rightmost {
+        let (p, s) = (at[&r.id], size_of(r));
+        return Point {
+            x: p.x + s.width + GAP_X,
+            y: p.y + (s.height - NODE_H) / 2.0,
+        };
+    }
+    if parent.is_some() {
+        return Point {
+            x: GROUP_PAD,
+            y: GROUP_HEADER,
+        };
+    }
+    // Only triggers: after their frame.
+    let slots: Vec<Point> = w
+        .nodes
+        .iter()
+        .filter(|n| n.is_trigger() && group_of(w, n).is_none())
+        .filter_map(|n| at.get(&n.id).copied())
+        .collect();
+    if slots.is_empty() {
+        return Point::default();
+    }
+    let top = slots.iter().map(|p| p.y).fold(f32::MAX, f32::min) - GROUP_HEADER;
+    let frame = trigger_frame_size(slots.len());
+    let left = slots.iter().map(|p| p.x).fold(f32::MAX, f32::min) - GROUP_PAD;
     Point {
-        x: if is_group(lowest) && parent.is_none() {
-            p.x + GROUP_PAD
-        } else {
-            p.x
-        },
-        y: p.y + size.get(&lowest.id).map_or(NODE_H, |s| s.height) + GAP_Y,
+        x: left + frame.width + GAP_X,
+        y: top + (frame.height - NODE_H) / 2.0,
     }
 }
 
@@ -570,9 +717,11 @@ pub fn from_flow(base: &Workflow, nodes: &[FlowNode], edges: &[FlowEdge]) -> Wor
             }
         })
         .collect();
+    // What is saved is laid out left to right, so the file says so.
     Workflow {
         nodes: out_nodes,
         edges: out_edges,
+        ui: Some(WorkflowUi::lr()),
         ..base.clone()
     }
 }
@@ -878,23 +1027,28 @@ pub fn fit_groups(nodes: &[FlowNode]) -> Vec<FlowNode> {
         .collect()
 }
 
-/// `after` (a refit of `before`) with the nodes below a group that grew moved down by as much,
-/// so growing a For each does not run it into what follows.
-pub fn push_below(before: &[FlowNode], after: &[FlowNode]) -> Vec<FlowNode> {
+/// `after` (a refit of `before`) with what lies after a group that grew moved along by as much:
+/// the nodes to its right when it got wider, and the ones under it in the same column when it
+/// got taller, so growing a For each does not run it into what follows. The triggers stay put.
+pub fn push_right(before: &[FlowNode], after: &[FlowNode]) -> Vec<FlowNode> {
     let mut out = after.to_vec();
     for g in before.iter().filter(|n| n.kind == FlowKind::Group) {
-        let grown = after
-            .iter()
-            .find(|n| n.id == g.id)
-            .map_or(0.0, |n| n.height)
-            - g.height;
-        if grown <= 0.0 {
-            continue;
-        }
-        let edge = g.position.y + g.height;
+        let now = after.iter().find(|n| n.id == g.id);
+        let wider = now.map_or(0.0, |n| n.width) - g.width;
+        let taller = now.map_or(0.0, |n| n.height) - g.height;
+        let (right, bottom) = (g.position.x + g.width, g.position.y + g.height);
         for n in out.iter_mut() {
-            if n.parent_id.is_none() && n.id != g.id && n.position.y >= edge {
-                n.position.y += grown;
+            if n.parent_id.is_some() || n.id == g.id || is_top_trigger(n) {
+                continue;
+            }
+            if wider > 0.0 && n.position.x >= right {
+                n.position.x += wider;
+            } else if taller > 0.0
+                && n.position.y >= bottom
+                && n.position.x < right
+                && n.position.x + n.width > g.position.x
+            {
+                n.position.y += taller;
             }
         }
     }
@@ -966,7 +1120,7 @@ pub fn settle_drop(nodes: &[FlowNode], id: &str) -> Vec<FlowNode> {
             })
             .collect(),
     );
-    push_below(&placed, &fit_groups(&placed))
+    stack_triggers(push_right(&placed, &fit_groups(&placed)), Some(id))
 }
 
 /// The edges without the ones that touch `ids` and now join nodes of different scopes. A node
@@ -1038,7 +1192,7 @@ pub fn drop_nodes(nodes: &[FlowNode], edges: &[FlowEdge], ids: &[NodeId]) -> Flo
         })
         .collect();
     Flow {
-        nodes: fit_groups(&kept),
+        nodes: stack_triggers(fit_groups(&kept), None),
         edges: edges
             .iter()
             .filter(|e| !gone.contains(e.source.as_str()) && !gone.contains(e.target.as_str()))

@@ -37,11 +37,49 @@ fn selected(flow: &Flow, id: &str) -> Flow {
     select(flow, Some(id), None)
 }
 
+mod tidy_action {
+    use super::*;
+
+    #[test]
+    fn lays_the_whole_board_out_again_and_keeps_the_selection() {
+        let (flow, current) = board(&ticket_workflow());
+        // The user dragged things about.
+        let mut messy = flow.clone();
+        for n in &mut messy.nodes {
+            if n.id == "fetch" {
+                n.position = Point { x: 50.0, y: 700.0 };
+                n.selected = true;
+            }
+            if n.id == "report" {
+                n.position = Point { x: 3.0, y: 9.0 };
+            }
+        }
+        let out = tidy(&messy, &current);
+        let neat = to_flow(&ticket_workflow());
+        for n in &neat.nodes {
+            assert_eq!(node(&out, &n.id).position, n.position, "{}", n.id);
+        }
+        assert!(node(&out, "fetch").selected);
+        assert!(!node(&out, "report").selected);
+        assert_eq!(out.edges.len(), flow.edges.len());
+        // A second tidy changes nothing.
+        assert_eq!(tidy(&out, &current).nodes, out.nodes);
+    }
+
+    #[test]
+    fn what_it_makes_saves_as_a_left_to_right_workflow() {
+        let (flow, current) = board(&ticket_workflow());
+        let out = tidy(&flow, &current);
+        let saved = from_flow(&current, &out.nodes, &out.edges);
+        assert!(saved.is_lr());
+    }
+}
+
 mod add {
     use super::*;
 
     #[test]
-    fn a_command_goes_under_the_lowest_node_and_is_wired_after_it() {
+    fn a_command_goes_after_the_rightmost_node_and_is_wired_after_it() {
         let mut w = ticket_workflow();
         w.nodes
             .retain(|n| !matches!(n.id.as_str(), "each" | "dev" | "review"));
@@ -52,21 +90,29 @@ mod add {
         let (flow, current) = board(&w);
         let (out, id) = add_node(&flow, &current, NodeType::Command);
         assert_eq!(id, "command");
-        // `report` hangs lowest and leads nowhere, so the command follows it.
+        // `report` sits furthest right and leads nowhere, so the command follows it.
         assert!(has_edge(&out, "report", "command"));
         assert!(!has_edge(&out, "fetch", "command"));
-        assert!(node(&out, "command").position.y > node(&out, "report").position.y);
+        let report = node(&out, "report").position;
+        assert_eq!(
+            node(&out, "command").position,
+            Point {
+                x: report.x + NODE_W + GAP_X,
+                y: report.y
+            }
+        );
         assert!(node(&out, "command").selected);
     }
 
     #[test]
-    fn a_for_each_goes_below_the_last_node_with_room_for_its_frame() {
+    fn a_for_each_goes_after_the_last_node_with_room_for_its_frame() {
         let (flow, current) = board(&workflow());
         let (out, id) = add_node(&flow, &current, NodeType::ForEach);
         let each = node(&out, &id);
         assert_eq!(each.kind, FlowKind::Group);
         assert_eq!(each.height, EMPTY_GROUP_H);
-        assert!(each.position.y >= node(&out, "report").position.y + NODE_H);
+        assert_eq!(each.width, EMPTY_GROUP_W);
+        assert!(each.position.x >= node(&out, "report").position.x + NODE_W + GAP_X);
         assert!(has_edge(&out, "report", &id));
     }
 
@@ -100,14 +146,41 @@ mod add {
     }
 
     #[test]
-    fn a_trigger_goes_above_everything() {
+    fn a_trigger_joins_the_trigger_column_under_the_others() {
+        let (flow, current) = board(&workflow());
+        let (out, id) = add_node(&flow, &current, NodeType::Schedule);
+        let first = node(&out, "start").position;
+        assert_eq!(
+            node(&out, &id).position,
+            Point {
+                x: first.x,
+                y: first.y + NODE_H + TRIGGER_GAP
+            }
+        );
+        // The frame grew to hold both, and nothing else moved.
+        let (_, size) = trigger_frame(&out.nodes).unwrap();
+        assert_eq!(size, trigger_frame_size(2));
+        assert_eq!(
+            node(&out, "report").position,
+            node(&flow, "report").position
+        );
+    }
+
+    #[test]
+    fn a_trigger_added_to_a_board_with_none_goes_before_everything() {
         let mut w = workflow();
         w.nodes.retain(|n| n.id != "start");
         w.edges.clear();
         let (flow, current) = board(&w);
-        let top = flow.nodes.iter().map(|n| n.position.y).fold(0., f32::min);
+        let left = flow
+            .nodes
+            .iter()
+            .map(|n| n.position.x)
+            .fold(f32::MAX, f32::min);
         let (out, id) = add_node(&flow, &current, NodeType::Schedule);
-        assert!(node(&out, &id).position.y < top);
+        let (frame, size) = trigger_frame(&out.nodes).unwrap();
+        assert!(frame.x + size.width + GAP_X <= left);
+        assert_eq!(node(&out, &id).position.x, frame.x + GROUP_PAD);
     }
 
     #[test]
@@ -381,6 +454,20 @@ mod dragging {
         let out = drag_stop(&flow, "fetch");
         assert_eq!(out.edges, flow.edges);
         assert_eq!(node(&out, "fetch").parent_id, None);
+    }
+
+    #[test]
+    fn a_trigger_dragged_away_goes_back_to_its_slot() {
+        let mut w = ticket_workflow();
+        w.nodes.insert(
+            1,
+            n(json!({"id": "second", "type": "manual", "ui": {"x": 900, "y": 900}})),
+        );
+        let (flow, _) = board(&w);
+        let home = node(&flow, "second").position;
+        let out = drag_stop(&moved(&flow, "second", 700., 500.), "second");
+        assert_eq!(node(&out, "second").position, home);
+        assert_eq!(node(&out, "start").position, node(&flow, "start").position);
     }
 
     #[test]

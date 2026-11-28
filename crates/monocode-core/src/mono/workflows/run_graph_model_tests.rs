@@ -111,6 +111,8 @@ fn each_workflow() -> Workflow {
         Edge::new("dev", "review"),
         Edge::new("each", "report"),
     ];
+    // Positions given in the tests below are left to right ones, so they are kept.
+    w.ui = Some(WorkflowUi::lr());
     w
 }
 
@@ -157,6 +159,7 @@ fn pending(count: usize) -> WorkflowRun {
 }
 
 fn move_node(w: &mut Workflow, id: &str, x: f64, y: f64) {
+    w.ui = Some(WorkflowUi::lr());
     w.nodes.iter_mut().find(|m| m.id == id).unwrap().ui = Some(Ui { x, y });
 }
 
@@ -439,11 +442,14 @@ fn lanes_view_fans_a_for_each_into_one_lane_per_item() {
 }
 
 #[test]
-fn lanes_view_is_compact_four_lanes_of_two_nodes_fit_a_narrow_panel() {
+fn lanes_view_is_compact_four_lanes_of_two_nodes_side_by_side() {
     let r = each_run(&[Done, Running, Failed, Pending]);
     let RunGraph { nodes, edges } = graph(&r, RunView::Lanes);
     let group = nodes.iter().find(|n| n.id == "each").unwrap();
-    assert!(group.width <= 500.0);
+    // A lane is a row of narrow cards (dev, then review one column on), and the lanes sit
+    // side by side inside the frame.
+    let lane_w = (NODE_W + GAP_X) * (LANE_CARD_W / NODE_W) + LANE_CARD_W;
+    assert!((group.width - (GROUP_PAD * 2.0 + 4.0 * lane_w + 3.0 * LANE_GAP + 12.0)).abs() < 0.01);
     let kids = children(&nodes);
     assert!(kids
         .iter()
@@ -832,15 +838,17 @@ fn no_items_is_only_for_a_for_each_that_expanded_to_an_empty_list() {
 }
 
 #[test]
-fn defaults_to_single_view_when_the_children_sit_side_by_side() {
+fn defaults_to_single_view_when_the_row_of_children_is_too_long_for_a_lane() {
     let mut w = each_workflow();
     move_node(&mut w, "dev", 16.0, 32.0);
-    move_node(&mut w, "review", 300.0, 32.0);
+    move_node(&mut w, "review", 16.0 + 3.0 * (232.0 + 72.0), 32.0);
     let r = WorkflowRun {
         definition: w,
         ..pending(2)
     };
     assert_eq!(default_run_view(&r), RunView::Single);
+    // Two cards one column apart are a lane that fits.
+    assert_eq!(default_run_view(&pending(2)), RunView::Lanes);
 }
 
 #[test]
@@ -892,7 +900,7 @@ fn moves_each_node_below_or_beside_a_widened_group_exactly_once() {
         put(
             &mut w,
             format!("side{i}"),
-            300.0 + i as f64 * (232.0 + 10.0),
+            700.0 + i as f64 * (232.0 + 10.0),
             50.0,
         );
     }
@@ -910,7 +918,9 @@ fn moves_each_node_below_or_beside_a_widened_group_exactly_once() {
         .find(|n| n.id == "each")
         .unwrap()
         .width;
-    let dx = (2.0 * 16.0 + 3.0 * LANE_CARD_W + 2.0 * LANE_GAP + 12.0 - base).max(0.0);
+    // Three lanes of narrow cards, dev and review one column apart.
+    let lane_w = (320.0 - 16.0) * (LANE_CARD_W / NODE_W) + LANE_CARD_W;
+    let dx = (2.0 * 16.0 + 3.0 * lane_w + 2.0 * LANE_GAP + 12.0 - base).max(0.0);
     assert!(dx > 0.0);
     let dy = LANE_HEADER;
     for i in [0, 1, 2, 5] {
@@ -1074,7 +1084,7 @@ fn an_edge_between_a_lane_and_the_outside_is_left_out() {
 fn a_node_below_the_widened_part_of_a_group_moves_down() {
     let mut w = each_workflow();
     w.nodes
-        .push(session("corner", json!({"ui": {"x": 350, "y": 400}})));
+        .push(session("corner", json!({"ui": {"x": 632, "y": 400}})));
     move_node(&mut w, "each", 0.0, 0.0);
     move_node(&mut w, "start", 700.0, 3000.0);
     move_node(&mut w, "report", 700.0, 3100.0);
@@ -1087,7 +1097,7 @@ fn a_node_below_the_widened_part_of_a_group_moves_down() {
     assert_eq!(
         corner.position,
         Point {
-            x: 350.0,
+            x: 632.0,
             y: 400.0 + LANE_HEADER
         }
     );

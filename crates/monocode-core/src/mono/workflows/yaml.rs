@@ -8,13 +8,14 @@
 use super::model::{
     new_workflow_id, Checkout, Cwd, DecisionModel, Edge, InputValue, Node, NodeId, NodeKind,
     OutputField, OutputFieldType, Requirement, SessionTarget, TargetInstance, Workflow, WorkflowId,
-    WorkflowInput, DECIDE_AI, NODE_TYPES,
+    WorkflowInput, WorkflowUi, DECIDE_AI, DIRECTION_LR, NODE_TYPES,
 };
 use super::models::{workflow_issues, ModelCatalog};
 use super::ordered::{Json, OrderedMap};
 use super::output::output_hint;
 use super::parse::{
-    drop_stray_handles, parse_decision_model, parse_edge, parse_inputs, parse_node, read_requires,
+    drop_stray_handles, parse_decision_model, parse_edge, parse_inputs, parse_node,
+    parse_workflow_ui, read_requires,
 };
 use super::template::{js_space, js_trim};
 use super::validate::{find_absolute_path, WorkflowIssue};
@@ -332,6 +333,12 @@ fn export_document(w: &Workflow) -> Doc {
             .filter(|t| !t.is_empty())
             .map(text),
     );
+    if w.is_lr() {
+        out.push((
+            "ui".to_string(),
+            Doc::Map(vec![("direction".to_string(), text(DIRECTION_LR))]),
+        ));
+    }
     out.push((
         "nodes".to_string(),
         Doc::Seq(w.nodes.iter().map(export_node).collect()),
@@ -370,6 +377,8 @@ pub struct WorkflowDraft {
     pub requires: Vec<Requirement>,
     pub decision_model: Option<DecisionModel>,
     pub summary_template: Option<String>,
+    /// The board layout marker (`ui.direction`), so a shared file opens laid out the same way.
+    pub ui: Option<WorkflowUi>,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
 }
@@ -383,6 +392,7 @@ impl From<&Workflow> for WorkflowDraft {
             requires: w.requires.clone(),
             decision_model: w.decision_model.clone(),
             summary_template: w.summary_template.clone(),
+            ui: w.ui.clone(),
             nodes: w.nodes.clone(),
             edges: w.edges.clone(),
         }
@@ -864,6 +874,7 @@ pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPrevie
         requires,
         decision_model,
         summary_template,
+        ui: parse_workflow_ui(file.get("ui")),
         nodes,
         edges,
     };
@@ -1027,6 +1038,7 @@ pub fn finish_import_with_id(
     workflow.input_values = values;
     workflow.nodes = draft.nodes;
     workflow.edges = draft.edges;
+    workflow.ui = draft.ui;
     workflow.created_at = now;
     Ok(workflow)
 }

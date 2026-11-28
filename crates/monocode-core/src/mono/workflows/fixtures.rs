@@ -167,26 +167,26 @@ pub const TICKET_JSON: &str = r#"{
   "nodes": [
     { "id": "start", "type": "schedule", "title": "Weekdays",
       "schedule": { "scheduleKind": "weekdays", "time": "09:00", "minute": 0, "dayOfWeek": 1 },
-      "ui": { "x": 0, "y": 0 } },
+      "ui": { "x": 16, "y": 50 } },
     { "id": "fetch", "type": "session", "title": "Fetch tickets", "project": "{{inputs.project}}",
       "model": "claude:sonnet-5", "checkout": "root",
       "prompt": "List open tickets assigned to me in {{inputs.clickupList}}.",
-      "outputs": { "tickets": { "type": "list" } }, "ui": { "x": 0, "y": 90 } },
+      "outputs": { "tickets": { "type": "list" } }, "ui": { "x": 336, "y": 42 } },
     { "id": "each", "type": "forEach", "title": "Each ticket", "in": "{{fetch.tickets}}",
-      "as": "item", "maxParallel": 3, "ui": { "x": -16, "y": 190 } },
+      "as": "item", "maxParallel": 3, "ui": { "x": 640, "y": 0 } },
     { "id": "dev", "type": "session", "title": "Dev", "parent": "each",
       "project": "{{inputs.project}}", "model": "claude:sonnet-5", "checkout": "newWorktree",
       "prompt": "Implement {{item.title}} ({{item.url}}) and open a PR.\n{{#if review}}Fix these review issues: {{review.issues}}{{/if}}",
       "outputs": { "pr_url": { "type": "string" }, "summary": { "type": "string" } },
-      "ui": { "x": 16, "y": 40 } },
+      "ui": { "x": 16, "y": 32 } },
     { "id": "review", "type": "session", "title": "Review", "parent": "each",
       "project": "{{inputs.project}}", "model": "claude:opus-5",
       "checkout": { "worktreeOf": "dev" }, "nestUnder": "dev",
       "prompt": "Review {{dev.pr_url}}. List blocking issues only.",
       "outputs": { "verdict": { "type": "string" }, "issues": { "type": "list" } },
-      "ui": { "x": 16, "y": 130 } },
+      "ui": { "x": 320, "y": 32 } },
     { "id": "report", "type": "command", "title": "Report", "project": "{{inputs.project}}",
-      "command": "echo done", "ui": { "x": 0, "y": 480 } }
+      "command": "echo done", "ui": { "x": 1324, "y": 42 } }
   ],
   "edges": [
     { "from": "start", "to": "fetch" },
@@ -195,6 +195,7 @@ pub const TICKET_JSON: &str = r#"{
     { "from": "each", "to": "report" },
     { "from": "review", "to": "dev", "loop": { "maxRounds": 3, "decide": "ai" } }
   ],
+  "ui": { "direction": "lr" },
   "enabled": true,
   "createdAt": 1
 }"#;
