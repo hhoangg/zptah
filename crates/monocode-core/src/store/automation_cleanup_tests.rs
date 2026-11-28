@@ -182,3 +182,94 @@ fn settings_left_behind_after_the_tables_are_gone_are_removed_on_the_next_open()
     let store = Store::read_monocode(&path).unwrap();
     assert!(store.setting(RETRY_SETTING).unwrap().is_some());
 }
+
+#[test]
+fn the_cleanup_leaves_a_summary_for_the_app_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = legacy_database(dir.path());
+    let store = Store::open_monocode(&path).unwrap();
+    let notes = store.take_cleanup_notes();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].starts_with("Removed the retired Automations data. Rows saved to "));
+    assert!(notes[0].contains("automations: 2"));
+    assert!(store.take_cleanup_notes().is_empty());
+}
+
+#[test]
+fn a_failed_export_is_noted_for_the_app_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = legacy_database(dir.path());
+    std::fs::write(dir.path().join("backups"), "not a folder").unwrap();
+    let store = Store::open_monocode(&path).unwrap();
+    let notes = store.take_cleanup_notes();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].starts_with("Kept the retired Automations data: "));
+    // The write lock taken for the export was given back.
+    store.save_setting("after", "ok").unwrap();
+}
+
+#[test]
+fn empty_tables_are_dropped_without_a_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(DB);
+    drop(Store::open_monocode(&path).unwrap());
+    add_automation_tables(&path);
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "DELETE FROM automation_event_claims; DELETE FROM automation_runs; DELETE FROM automations;",
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open_monocode(&path).unwrap();
+    assert!(backups(dir.path()).is_empty());
+    assert!(!has_table(&Connection::open(&path).unwrap(), "automations"));
+    assert!(store.take_cleanup_notes()[0].contains("no backup was written"));
+}
+
+#[test]
+fn a_setting_alone_is_still_backed_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(DB);
+    let store = Store::open_monocode(&path).unwrap();
+    store
+        .save_setting(RETRY_SETTING, "{\"fake\":true}")
+        .unwrap();
+    drop(store);
+    add_automation_tables(&path);
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "DELETE FROM automation_event_claims; DELETE FROM automation_runs; DELETE FROM automations;",
+        )
+        .unwrap();
+    drop(Store::open_monocode(&path).unwrap());
+    assert_eq!(backups(dir.path()).len(), 1);
+}
+
+#[test]
+fn a_backup_folder_is_private_and_a_duplicate_of_an_earlier_backup_is_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = legacy_database(dir.path());
+    drop(Store::open_monocode(&path).unwrap());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.path().join("backups"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0);
+    }
+    let first = backups(dir.path()).remove(0);
+    let bytes = std::fs::read(&first).unwrap();
+    let copy = dir.path().join("backups/automations-copy.json");
+    std::fs::write(&copy, &bytes).unwrap();
+    remove_if_duplicate(&copy, &bytes);
+    assert!(!copy.exists());
+    assert!(first.exists());
+    // A backup that differs from every other one is kept.
+    let other = dir.path().join("backups/automations-other.json");
+    std::fs::write(&other, b"{}").unwrap();
+    remove_if_duplicate(&other, b"{}");
+    assert!(other.exists());
+}

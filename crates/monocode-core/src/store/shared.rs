@@ -383,6 +383,7 @@ impl Store {
         let store = Self {
             conn,
             path: path.into(),
+            cleanup_notes: Default::default(),
             shared: Some(Shared {
                 columns,
                 ids: RefCell::new(HashMap::new()),

@@ -133,6 +133,7 @@ pub struct Store {
     conn: Connection,
     path: std::path::PathBuf,
     shared: Option<shared::Shared>,
+    cleanup_notes: std::cell::RefCell<Vec<String>>,
 }
 impl Store {
     pub fn reset_provider_id_if(&self, id: i64, expected: Option<&str>) -> Result<(), String> {
@@ -275,6 +276,7 @@ impl Store {
             conn,
             path: path.into(),
             shared: None,
+            cleanup_notes: Default::default(),
         };
         store.drop_automation_data(false);
         Ok(store)
@@ -868,6 +870,7 @@ impl Store {
             conn,
             path: self.path.clone(),
             shared: None,
+            cleanup_notes: Default::default(),
         }))
     }
     /// Stream saved message bodies without loading conversations into the UI.

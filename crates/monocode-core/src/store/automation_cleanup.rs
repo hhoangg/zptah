@@ -55,8 +55,20 @@ fn export_table(conn: &Connection, table: &str) -> Result<Value, String> {
     Ok(Value::Array(out))
 }
 
+/// Creates the backups folder, readable by the owner only.
+fn create_backups_dir(path: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
+}
+
 /// Writes `bytes` to `path` through a temporary file, so a crash never leaves a half-written
-/// backup under the final name.
+/// backup under the final name. The folder is synced too, so the rename survives a power cut.
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let temporary = path.with_extension("json.tmp");
@@ -73,7 +85,14 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
             file.write_all(bytes)?;
             file.sync_all()
         })
-        .and_then(|_| std::fs::rename(&temporary, path));
+        .and_then(|_| std::fs::rename(&temporary, path))
+        .and_then(|_| {
+            #[cfg(unix)]
+            if let Some(folder) = path.parent() {
+                std::fs::File::open(folder)?.sync_all()?;
+            }
+            Ok(())
+        });
     if let Err(error) = result {
         let _ = std::fs::remove_file(&temporary);
         return Err(error.to_string());
@@ -81,10 +100,39 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Removes `file` when another backup in its folder has exactly the same bytes.
+fn remove_if_duplicate(file: &Path, bytes: &[u8]) {
+    let Some(folder) = file.parent() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    let duplicate = entries.flatten().map(|entry| entry.path()).any(|other| {
+        other != file
+            && other.extension().is_some_and(|ext| ext == "json")
+            && std::fs::read(&other).is_ok_and(|existing| existing == bytes)
+    });
+    if duplicate {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
 impl Store {
+    /// What the retired-data cleanup did or could not do, one line each. The open runs before the
+    /// app log exists, so the app takes these once the log is up.
+    pub fn take_cleanup_notes(&self) -> Vec<String> {
+        std::mem::take(&mut *self.cleanup_notes.borrow_mut())
+    }
+
+    fn cleanup_note(&self, note: String) {
+        eprintln!("{note}");
+        self.cleanup_notes.borrow_mut().push(note);
+    }
+
     /// Exports and drops the retired automation tables of the brand database, and clears their
     /// settings on every writable open. Never fails the
-    /// open: a problem is logged and leaves every table in place for the next open.
+    /// open: a problem is noted and leaves every table in place for the next open.
     pub(super) fn drop_automation_data(&self, shared: bool) {
         let path = self.database_path();
         let is_brand_db =
@@ -95,16 +143,22 @@ impl Store {
         if !TABLES.iter().any(|table| table_exists(&self.conn, table)) {
             // The tables are gone and their rows are in the backup. Settings a failed delete
             // left behind are removed now, without a new backup.
-            for (key, _) in self.settings_to_clear(shared) {
-                if let Err(error) = self.delete_setting(&key) {
-                    eprintln!("Could not remove the setting {key}: {error}");
-                }
-            }
+            self.clear_settings(&self.settings_to_clear(shared));
             return;
         }
         match self.export_and_drop(shared, path) {
-            Ok(summary) => eprintln!("Removed the retired Automations data. {summary}"),
-            Err(error) => eprintln!("Kept the retired Automations data: {error}"),
+            Ok(summary) => {
+                self.cleanup_note(format!("Removed the retired Automations data. {summary}"))
+            }
+            Err(error) => self.cleanup_note(format!("Kept the retired Automations data: {error}")),
+        }
+    }
+
+    fn clear_settings(&self, settings: &[(String, String)]) {
+        for (key, _) in settings {
+            if let Err(error) = self.delete_setting(key) {
+                self.cleanup_note(format!("Could not remove the setting {key}: {error}"));
+            }
         }
     }
 
@@ -133,61 +187,76 @@ impl Store {
             .collect()
     }
 
+    /// Holds the write lock from the export to the drop, so no row can arrive in between.
     fn export_and_drop(&self, shared: bool, path: &Path) -> Result<String, String> {
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| e.to_string())?;
+        match self.export_and_drop_locked(shared, path) {
+            Ok(summary) => Ok(summary),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    fn export_and_drop_locked(&self, shared: bool, path: &Path) -> Result<String, String> {
         let settings = self.settings_to_clear(shared);
         let mut tables = Map::new();
         let mut counts = Vec::new();
+        let mut total = 0;
         for table in TABLES.iter().rev() {
             if table_exists(&self.conn, table) {
                 let rows = export_table(&self.conn, table)?;
-                counts.push(format!(
-                    "{table}: {}",
-                    rows.as_array().map_or(0, |rows| rows.len())
-                ));
+                let len = rows.as_array().map_or(0, |rows| rows.len());
+                total += len;
+                counts.push(format!("{table}: {len}"));
                 tables.insert((*table).to_string(), rows);
             }
         }
-        let now = chrono::Utc::now();
-        let backups: PathBuf = path
-            .parent()
-            .ok_or("the database has no folder")?
-            .join("backups");
-        std::fs::create_dir_all(&backups)
-            .map_err(|e| format!("cannot create {}: {e}", backups.display()))?;
-        let file = backups.join(format!(
-            "automations-{}.json",
-            now.format("%Y%m%dT%H%M%S%3fZ")
-        ));
-        let document = json!({
-            "format": 1,
-            "exportedAt": now.to_rfc3339(),
-            "tables": tables,
-            "settings": settings.iter().cloned().collect::<std::collections::BTreeMap<_, _>>(),
-        });
-        let bytes = serde_json::to_vec_pretty(&document).map_err(|e| e.to_string())?;
-        write_atomically(&file, &bytes)
-            .map_err(|e| format!("cannot write {}: {e}", file.display()))?;
+        let mut backup = None;
+        if total > 0 || !settings.is_empty() {
+            let backups: PathBuf = path
+                .parent()
+                .ok_or("the database has no folder")?
+                .join("backups");
+            create_backups_dir(&backups)
+                .map_err(|e| format!("cannot create {}: {e}", backups.display()))?;
+            let file = backups.join(format!(
+                "automations-{}.json",
+                chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ")
+            ));
+            let document = json!({
+                "format": 1,
+                "tables": tables,
+                "settings": settings.iter().cloned().collect::<std::collections::BTreeMap<_, _>>(),
+            });
+            let bytes = serde_json::to_vec_pretty(&document).map_err(|e| e.to_string())?;
+            write_atomically(&file, &bytes)
+                .map_err(|e| format!("cannot write {}: {e}", file.display()))?;
+            backup = Some((file, bytes));
+        }
 
-        let transaction = self
-            .conn
-            .unchecked_transaction()
-            .map_err(|e| e.to_string())?;
-        for table in TABLES {
-            transaction
-                .execute_batch(&format!("DROP TABLE IF EXISTS {table}"))
-                .map_err(|e| e.to_string())?;
-        }
-        transaction.commit().map_err(|e| e.to_string())?;
-        for (key, _) in &settings {
-            if let Err(error) = self.delete_setting(key) {
-                eprintln!("Could not remove the setting {key}: {error}");
+        let dropped = TABLES
+            .iter()
+            .try_for_each(|table| {
+                self.conn
+                    .execute_batch(&format!("DROP TABLE IF EXISTS {table}"))
+            })
+            .and_then(|_| self.conn.execute_batch("COMMIT"));
+        if let Err(error) = dropped {
+            // Not dropped: the next open exports again, so a copy of an earlier backup is noise.
+            if let Some((file, bytes)) = &backup {
+                remove_if_duplicate(file, bytes);
             }
+            return Err(error.to_string());
         }
-        Ok(format!(
-            "Rows saved to {} ({}).",
-            file.display(),
-            counts.join(", ")
-        ))
+        self.clear_settings(&settings);
+        Ok(match backup {
+            Some((file, _)) => format!("Rows saved to {} ({}).", file.display(), counts.join(", ")),
+            None => "The tables held no rows, so no backup was written.".to_string(),
+        })
     }
 }
 
