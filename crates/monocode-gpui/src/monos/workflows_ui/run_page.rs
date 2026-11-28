@@ -545,7 +545,7 @@ impl Monos {
                                     if lanes {
                                         "Show one item at a time"
                                     } else {
-                                        "Show items side by side"
+                                        "Show all items stacked"
                                     },
                                     if lanes { "layers" } else { "columns-3" },
                                 )

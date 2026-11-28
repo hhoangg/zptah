@@ -649,6 +649,52 @@ mod groups {
     use super::*;
 
     #[test]
+    fn a_loop_line_leaves_room_before_the_card_stacked_below_in_its_column() {
+        let mut w = workflow();
+        w.nodes = vec![
+            manual(),
+            n(json!({"id": "dev", "type": "command", "project": "x", "command": "ls"})),
+            n(json!({"id": "other", "type": "command", "project": "x", "command": "ls"})),
+            n(json!({"id": "review", "type": "command", "project": "x", "command": "ls"})),
+        ];
+        w.edges = vec![
+            edge(r#"{"from": "start", "to": "dev"}"#),
+            edge(r#"{"from": "start", "to": "other"}"#),
+            edge(r#"{"from": "dev", "to": "review"}"#),
+            edge(r#"{"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}}"#),
+        ];
+        let flow = to_flow(&w);
+        let (dev, other) = (find(&flow.nodes, "dev"), find(&flow.nodes, "other"));
+        assert_eq!(dev.position.x, other.position.x);
+        assert!(other.position.y > dev.position.y);
+        assert!(other.position.y - (dev.position.y + dev.height) >= LOOP_ROOM);
+    }
+
+    #[test]
+    fn a_tall_switch_inside_a_group_stays_inside_its_frame() {
+        let mut w = workflow();
+        w.nodes
+            .push(n(json!({"id": "each", "type": "forEach", "in": ""})));
+        w.nodes.push(n(
+            json!({"id": "route", "type": "switch", "value": "{{inputs.x}}", "parent": "each",
+            "cases": ["a", "b", "c", "d", "e", "f", "g", "h"]}),
+        ));
+        let tall = node_height(&w.nodes[3]);
+        assert!(tall > NODE_H * 2.0);
+        for nodes in [to_flow(&w).nodes.clone(), fit_groups(&to_flow(&w).nodes)] {
+            let group = find(&nodes, "each");
+            let route = find(&nodes, "route");
+            assert_eq!(route.height, tall);
+            assert!(
+                route.position.y + tall <= group.height,
+                "{} + {tall} vs {}",
+                route.position.y,
+                group.height
+            );
+        }
+    }
+
+    #[test]
     fn fit_groups_wraps_the_children_with_room_to_add_another() {
         let flow = to_flow(&ticket_workflow());
         let fitted = fit_groups(&flow.nodes);

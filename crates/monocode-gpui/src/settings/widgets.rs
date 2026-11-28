@@ -522,53 +522,7 @@ impl SettingsView {
         cx: &mut Context<Self>,
         change: impl Fn(&mut Self, &'static str, &mut Context<Self>) + Clone + 'static,
     ) -> AnyElement {
-        let id: SharedString = id.into();
-        div()
-            .id(SharedString::from(format!("segmented-{id}")))
-            .role(Role::RadioGroup)
-            .aria_label(label.into())
-            .grid()
-            .grid_cols(options.len() as u16)
-            .flex_shrink_0()
-            .gap(px(2.))
-            .rounded_md()
-            .border_1()
-            .border_color(content(0.1))
-            .p(px(2.))
-            .text_size(px(12.))
-            .line_height(px(16.))
-            .children(options.iter().map(|&(option, text)| {
-                let selected = value == option;
-                let change = change.clone();
-                let id = id.clone();
-                div()
-                    .id(SharedString::from(format!("segmented-{id}-{option}")))
-                    .debug_selector({
-                        let id = id.clone();
-                        move || format!("settings-{id}-{option}")
-                    })
-                    .role(Role::RadioButton)
-                    .aria_label(text.to_owned())
-                    .aria_selected(selected)
-                    .min_w_0()
-                    .flex()
-                    .justify_center()
-                    .whitespace_nowrap()
-                    .rounded(px(5.))
-                    .px(px(10.))
-                    .py_1()
-                    .cursor_pointer()
-                    .map(|d| {
-                        if selected {
-                            d.bg(content(0.1)).text_color(content(1.))
-                        } else {
-                            d.text_color(content(0.5))
-                                .hover(|s| s.text_color(content(1.)))
-                        }
-                    })
-                    .child(text.to_owned())
-                    .on_click(cx.listener(move |this, _, _, cx| change(this, option, cx)))
-            }))
+        crate::segmented::segmented("settings", id, label, value, options, cx, change)
             .into_any_element()
     }
 

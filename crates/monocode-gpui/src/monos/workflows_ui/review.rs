@@ -526,6 +526,19 @@ impl Monos {
         cx.notify();
     }
 
+    /// Whether a review is on screen.
+    pub(crate) fn wf_review_open(&self) -> bool {
+        self.wf.open && matches!(self.wf.route, Some(WfRoute::Review(..)))
+    }
+
+    /// Cancels the review: back to where it was opened from (the board keeps its edits).
+    pub(crate) fn wf_review_cancel(&mut self, cx: &mut Context<Self>) {
+        let back = self.wf.review.take().and_then(|r| r.back);
+        self.wf.route = back;
+        self.refresh_workflows(cx);
+        cx.notify();
+    }
+
     /// The stored workflow changed (the Mono edits them too): the screen follows it, and says so.
     pub(in crate::monos) fn review_sync(&mut self, cx: &mut Context<Self>) {
         let Some(review) = &self.wf.review else {
@@ -662,7 +675,6 @@ impl Monos {
             }
             None => Vec::new(),
         };
-        let go_back = back.clone();
         div()
             .size_full()
             .min_w_0()
@@ -674,12 +686,7 @@ impl Monos {
                 self.workflow_header("Review workflow", back, cx)
                     .child(
                         header_button("mono-workflow-review-cancel", "Cancel", false, true)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.wf.review = None;
-                                this.wf.route = go_back.clone();
-                                this.refresh_workflows(cx);
-                                cx.notify();
-                            })),
+                            .on_click(cx.listener(|this, _, _, cx| this.wf_review_cancel(cx))),
                     )
                     .child(
                         header_button(

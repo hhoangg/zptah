@@ -1546,6 +1546,11 @@ impl Monos {
             }
             return true;
         }
+        // Escape on a review cancels it, back to the board.
+        if self.wf_review_open() {
+            self.wf_review_cancel(cx);
+            return true;
+        }
         // Escape on the workflow board asks what to do with unsaved edits, like Back does.
         if self.wf_board_open() {
             self.wf_board_back(cx);

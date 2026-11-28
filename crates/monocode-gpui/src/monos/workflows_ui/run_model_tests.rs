@@ -194,18 +194,12 @@ fn lanes_draw_the_boards_cards_and_the_group_counts_its_items() {
         .iter()
         .filter(|n| n.flow.id.contains('@'))
         .collect();
-    assert!(cards.iter().all(|n| !n.flow.data.compact));
+    assert_eq!(cards.len(), 8);
     let group = lanes.nodes.iter().find(|n| n.flow.id == "each").unwrap();
     assert_eq!(group.flow.data.run_items, Some(4));
     assert_eq!(group.flow.data.node.title.as_deref(), Some("Tickets"));
     let single = scene(&run, RunView::Single);
-    assert!(
-        single
-            .nodes
-            .iter()
-            .filter(|n| n.flow.id.contains('@'))
-            .all(|n| !n.flow.data.compact)
-    );
+    assert_eq!(lane_cards(&single).len(), 2);
 }
 
 #[test]

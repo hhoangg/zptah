@@ -2,7 +2,7 @@
 //! carrying what the run did with it. Port of `runGraphModel.ts`. A For each is drawn either as
 //! one lane per item (titled rows, stacked top to bottom) or as one lane at a time; the lane's child nodes get ids that
 //! name their branch (`<node>@<branch>`), so the same definition node can appear in every lane.
-use super::board_model::{to_flow, FlowEdge, FlowKind, FlowNode, Point, NODE_H};
+use super::board_model::{to_flow, FlowEdge, FlowKind, FlowNode, Point, GROUP_LOOP, NODE_H};
 use super::engine::is_asking;
 use super::model::{
     archived_branch, archived_items_key, parse_branch, stable_json, BranchKey, Edge, Node, NodeId,
@@ -805,7 +805,14 @@ pub fn run_graph(run: &WorkflowRun, view: RunView, groups: &[GroupView], now: u6
                 None => Vec::new(),
             };
             let picks: Vec<&GroupItem> = if kids.is_empty() { Vec::new() } else { picked };
-            let lane_h = lane_height_of(&kids);
+            // A loop inside the lane draws its line and label under the cards: the next lane's
+            // title starts below them.
+            let inner_loop = run.definition.edges.iter().any(|e| {
+                e.loop_spec.is_some()
+                    && kids.iter().any(|k| k.id == e.from)
+                    && kids.iter().any(|k| k.id == e.to)
+            });
+            let lane_h = lane_height_of(&kids) + if inner_loop { GROUP_LOOP } else { 0.0 };
             let round = gv.map_or(1, |g| g.round);
             let group_lanes: Vec<Lane> = picks
                 .iter()

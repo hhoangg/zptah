@@ -17,9 +17,8 @@ use monocode_core::mono::workflows::{
 /// (React Flow's smooth-step defaults).
 const STEP_OFFSET: f32 = 20.;
 const STEP_RADIUS: f32 = 5.;
-/// The loop edge's run beside the cards (tighter in a compact lane) and its corner radius.
+/// The loop edge's run beside the cards and its corner radius.
 const LOOP_OFFSET: f32 = 26.;
-const LOOP_OFFSET_COMPACT: f32 = 14.;
 const LOOP_RADIUS: f32 = 12.;
 /// Arrowhead of the edges: the closed 12 x 12 marker at the edge's stroke width.
 const ARROW_LENGTH: f32 = 5.;
@@ -173,11 +172,7 @@ fn route(edge: &FlowEdge, source: &SceneNode, target: &SceneNode) -> RoutedEdge 
         (
             Side::Bottom,
             Side::Bottom,
-            if edge.compact {
-                LOOP_OFFSET_COMPACT
-            } else {
-                LOOP_OFFSET
-            },
+            LOOP_OFFSET,
             LOOP_RADIUS,
             Point {
                 x: s.x + s.w * LOOP_OUT_AT,
@@ -213,7 +208,7 @@ fn route(edge: &FlowEdge, source: &SceneNode, target: &SceneNode) -> RoutedEdge 
         )
     };
     let path = step_points(a, from, b, to, offset);
-    let label = (is_loop && !edge.compact)
+    let label = is_loop
         .then_some(edge.loop_spec.as_ref())
         .flatten()
         .map(|spec| {
@@ -250,28 +245,45 @@ fn progress(state: Option<RunEdgeState>) -> u8 {
     }
 }
 
-/// The edges of the triggers merged into one edge from the trigger frame to each node they
-/// lead to (every trigger leads to the same first step, so that is usually one edge). The
-/// merged edge keeps the id of the first edge it stands for.
-fn from_frame(edges: &[FlowEdge], nodes: &[FlowNode]) -> Vec<FlowEdge> {
-    let is_trigger = |id: &str| {
-        nodes
-            .iter()
-            .any(|n| n.id == id && n.parent_id.is_none() && n.data.node.is_trigger())
+/// The edges of the triggers, split in two: one merged edge from the trigger frame to each node
+/// every trigger leads to (usually the first step), and, apart, the edges to a node only some of
+/// the triggers lead to, which leave their own trigger. A merged edge keeps the id of the first
+/// edge it stands for.
+fn from_frame(edges: &[FlowEdge], nodes: &[FlowNode]) -> (Vec<FlowEdge>, Vec<FlowEdge>) {
+    let triggers: Vec<&str> = nodes
+        .iter()
+        .filter(|n| n.parent_id.is_none() && n.data.node.is_trigger())
+        .map(|n| n.id.as_str())
+        .collect();
+    let from_trigger: Vec<&FlowEdge> = edges
+        .iter()
+        .filter(|e| triggers.contains(&e.source.as_str()))
+        .collect();
+    let shared = |target: &str| {
+        triggers.iter().all(|t| {
+            from_trigger
+                .iter()
+                .any(|e| e.source == *t && e.target == target)
+        })
     };
-    let mut out: Vec<FlowEdge> = Vec::new();
-    for e in edges.iter().filter(|e| is_trigger(&e.source)) {
-        match out.iter_mut().find(|m| m.target == e.target) {
+    let mut merged: Vec<FlowEdge> = Vec::new();
+    let mut own: Vec<FlowEdge> = Vec::new();
+    for &e in &from_trigger {
+        if !shared(&e.target) {
+            own.push(e.clone());
+            continue;
+        }
+        match merged.iter_mut().find(|m| m.target == e.target) {
             Some(m) => {
                 m.selected |= e.selected;
                 if progress(e.run) > progress(m.run) {
                     m.run = e.run;
                 }
             }
-            None => out.push(e.clone()),
+            None => merged.push(e.clone()),
         }
     }
-    out
+    (merged, own)
 }
 
 impl Scene {
@@ -313,9 +325,17 @@ impl Scene {
             .filter(|e| !is_trigger(&e.source))
             .filter_map(|e| route_between(e, placed.iter().find(|n| n.flow.id == e.source)))
             .collect();
-        // One edge leaves the trigger frame, not one for each trigger.
+        // One edge leaves the trigger frame for what every trigger leads to; the others leave
+        // their own trigger.
         if let Some(frame) = frame {
-            for e in from_frame(edges, nodes) {
+            let (merged, own) = from_frame(edges, nodes);
+            for e in &own {
+                routed.extend(route_between(
+                    e,
+                    placed.iter().find(|n| n.flow.id == e.source),
+                ));
+            }
+            for e in merged {
                 let Some(mut stand_in) = placed.iter().find(|n| n.flow.id == e.source).cloned()
                 else {
                     continue;

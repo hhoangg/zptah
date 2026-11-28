@@ -216,23 +216,18 @@ fn lanes_and_single_both_draw_the_boards_own_cards(cx: &mut TestAppContext) {
     let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     open_run(&s, visual);
-    let compact = |s: &Setup, visual: &mut VisualTestContext| {
+    let cards = |s: &Setup, visual: &mut VisualTestContext| {
         canvas(s, visual).read_with(visual, |c, _| {
             c.scene()
                 .nodes
                 .iter()
                 .filter(|n| n.flow.id.contains('@'))
-                .map(|n| n.flow.data.compact)
-                .collect::<Vec<_>>()
+                .count()
         })
     };
-    let lanes = compact(&s, visual);
-    assert_eq!(lanes.len(), 8);
-    assert!(lanes.iter().all(|c| !*c));
+    assert_eq!(cards(&s, visual), 8);
     click(visual, "wf-run-view");
-    let single = compact(&s, visual);
-    assert_eq!(single.len(), 2);
-    assert!(single.iter().all(|c| !*c));
+    assert_eq!(cards(&s, visual), 2);
 }
 
 #[gpui::test]

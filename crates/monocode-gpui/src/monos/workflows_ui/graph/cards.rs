@@ -337,7 +337,6 @@ impl GraphCanvas {
     fn card(&mut self, node: &SceneNode, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let data = &node.flow.data;
         let run = data.run.clone();
-        let compact = run.is_some() && data.compact;
         let status = run.as_ref().map(|r| r.status);
         let selected = self.picked(node);
         let mut look = self.look(status, selected);
@@ -373,13 +372,10 @@ impl GraphCanvas {
             ),
             None => (node_summary(&data.node), content(0.4)),
         };
-        let badge = run.as_ref().filter(|r| r.round > 1).map(|r| {
-            if compact {
-                format!("r{}", r.round)
-            } else {
-                format!("round {}", r.round)
-            }
-        });
+        let badge = run
+            .as_ref()
+            .filter(|r| r.round > 1)
+            .map(|r| format!("round {}", r.round));
         let accent = hue(self.color, 1.);
         let tile = div()
             .size(self.px(28.))
@@ -434,7 +430,7 @@ impl GraphCanvas {
                     .child(second.0),
             );
         let trailing = match status {
-            Some(status) if !compact => Some(self.status_dot(status, 8., &id)),
+            Some(status) => Some(self.status_dot(status, 8., &id)),
             None if !issues.is_empty() => Some(
                 div()
                     .size(self.px(8.))
@@ -452,7 +448,7 @@ impl GraphCanvas {
             .items_center()
             .gap(self.px(10.))
             .when(look.faded, |d| d.opacity(0.55))
-            .when(!compact, |d| d.child(tile))
+            .child(tile)
             .child(lines)
             .children(trailing);
         let mut shadows = Vec::new();
@@ -507,7 +503,7 @@ impl GraphCanvas {
             .w(self.px(node.rect.w))
             .h(self.px(node.rect.h))
             .px(self.px(8.))
-            .py(self.px(if compact { 4. } else { 5. }))
+            .py(self.px(5.))
             .rounded(self.px(8.))
             .border_1()
             .border_color(look.border)
@@ -747,7 +743,7 @@ impl GraphCanvas {
             .line_height(self.px(16.))
             .text_color(hue(self.color, 1.))
             .whitespace_nowrap()
-            .tooltip(move |_, cx| cx.new(|_| Tip(full.clone())).into())
+            .tooltip(move |_, cx| cx.new(|_| crate::theme::Tip(full.clone())).into())
             .child(label.text.clone())
             .into_any_element()
     }
@@ -953,26 +949,6 @@ impl GraphCanvas {
                     .children(tab_elements),
             )
             .into_any_element()
-    }
-}
-
-/// A tooltip with a line of text.
-struct Tip(SharedString);
-
-impl Render for Tip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .max_w(px(320.))
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .bg(shell_fill())
-            .border_1()
-            .border_color(content(0.12))
-            .text_size(px(11.))
-            .line_height(px(16.))
-            .text_color(content(0.85))
-            .child(self.0.clone())
     }
 }
 

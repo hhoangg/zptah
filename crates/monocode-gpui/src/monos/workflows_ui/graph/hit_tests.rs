@@ -95,7 +95,7 @@ fn a_switch_leaves_by_each_case_and_default_spread_down_its_right_side() {
     assert_eq!(names, vec!["bug", "feature", "chore", "default"]);
     // In order from top to bottom, apart, and all inside the card's height, on its right side.
     for pair in outs.windows(2) {
-        assert!(pair[1].1 - pair[0].1 > 10., "{outs:?}");
+        assert!(pair[1].1 - pair[0].1 > 20., "{outs:?}");
     }
     assert!(
         outs[0].1 > 0. && outs[3].1 < node(&scene, "route").rect.h,
@@ -133,12 +133,15 @@ fn the_line_of_a_case_leaves_from_the_handle_of_that_case() {
 
 #[test]
 fn a_command_takes_and_gives_lines_and_loops_like_a_session() {
-    let kinds = kinds(&scene(), "report");
-    assert_eq!(kinds.len(), 4, "{kinds:?}");
-    assert!(kinds.contains(&HandleKind::In));
-    assert!(kinds.contains(&HandleKind::Out(None)));
-    assert!(kinds.contains(&HandleKind::LoopIn));
-    assert!(kinds.contains(&HandleKind::LoopOut));
+    assert_eq!(
+        kinds(&scene(), "report"),
+        vec![
+            HandleKind::In,
+            HandleKind::LoopIn,
+            HandleKind::Out(None),
+            HandleKind::LoopOut
+        ]
+    );
 }
 
 #[test]

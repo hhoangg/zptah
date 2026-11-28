@@ -1160,6 +1160,14 @@ impl Monos {
                 }
                 b.meta.enabled = saved.enabled;
                 b.base = *saved;
+                // A new workflow that is saved is a stored one: its page takes its route (so
+                // Remove, and the rest that depend on a stored workflow, work).
+                if b.key == "new" {
+                    b.key = b.base.id.clone();
+                    if self.wf.route == Some(WfRoute::New) {
+                        self.wf.route = Some(WfRoute::Board(b.key.clone()));
+                    }
+                }
                 if leave {
                     self.board_back(cx);
                     return;
@@ -1261,9 +1269,15 @@ impl Monos {
         }
     }
 
-    /// Whether the board editor is open.
+    /// Whether the board editor is in view: its page is open on a board route (not a review).
     pub(crate) fn wf_board_open(&self) -> bool {
-        self.wf.open && self.wf.board.is_some()
+        self.wf.open
+            && self.wf.board.is_some()
+            && self
+                .wf
+                .route
+                .as_ref()
+                .is_some_and(|r| is_board(r).is_some())
     }
 
     /// Back from the board as its Back button does: asks first when edits are unsaved.
@@ -1296,6 +1310,11 @@ impl Monos {
             self.open_workflow_review(&id, super::ReviewIntent::Enable, back, cx);
             return;
         }
+        // With nothing else unsaved the switch takes effect at once, as the list rows do.
+        let alone = !b.changed() && !b.is_new && !b.saving;
         self.board_meta_edit(|m| m.enabled = !m.enabled, cx);
+        if alone && self.wf.board.as_ref().is_some_and(BoardState::can_save) {
+            self.board_save(false, false, false, cx);
+        }
     }
 }

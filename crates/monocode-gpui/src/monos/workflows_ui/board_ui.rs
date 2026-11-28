@@ -11,7 +11,8 @@ pub(super) fn type_glyph(ty: NodeType) -> &'static str {
         NodeType::Manual => "play",
         NodeType::Session => "message-multiple",
         NodeType::Command => "terminal",
-        NodeType::If | NodeType::Switch => "git-branch",
+        NodeType::If => "git-branch",
+        NodeType::Switch => "share",
         NodeType::ForEach => "refresh-cw",
     }
 }
@@ -255,7 +256,8 @@ impl Monos {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let b = self.wf.board.as_ref()?;
-        if !b.leaving {
+        // Only a board route asks: a review on top of it has its own Cancel.
+        if !b.leaving || !self.wf_board_open() {
             return None;
         }
         let (blocked, saving) = (b.blocked(), b.saving);
@@ -347,7 +349,6 @@ impl Monos {
                                                 cx.listener(|this, _, _, cx| {
                                                     if let Some(b) = this.wf.board.as_mut() {
                                                         b.leaving = false;
-                                                        b.leave_to = None;
                                                         b.leave_to = None;
                                                     }
                                                     cx.notify();

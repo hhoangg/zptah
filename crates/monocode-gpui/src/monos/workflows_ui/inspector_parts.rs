@@ -798,8 +798,12 @@ impl Monos {
         native: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let model = stored_model_id(kind, native.as_deref())
-            .unwrap_or_else(|| format!("{}:default", kind.id()));
+        // A harness's own default has no id to store (the file needs a model), so it means the
+        // model of the step before it.
+        let Some(model) = stored_model_id(kind, native.as_deref()) else {
+            self.board_meta_edit(|m| m.decision_model = None, cx);
+            return;
+        };
         self.board_meta_edit(
             |m| {
                 m.decision_model = Some(DecisionModel {

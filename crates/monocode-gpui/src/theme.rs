@@ -533,6 +533,25 @@ pub(crate) fn provider_icon(provider: &str, side: f32) -> Div {
         .justify_center()
         .child(mark)
 }
+/// A tooltip with a line of text, for `.tooltip(|_, cx| cx.new(|_| Tip(text)).into())`.
+pub(crate) struct Tip(pub gpui::SharedString);
+
+impl gpui::Render for Tip {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .max_w(px(320.))
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(shell_fill())
+            .border_1()
+            .border_color(content(0.12))
+            .text_size(px(11.))
+            .line_height(px(16.))
+            .text_color(content(0.85))
+            .child(self.0.clone())
+    }
+}
 pub(crate) fn icon_button(
     id: &'static str,
     label: &'static str,

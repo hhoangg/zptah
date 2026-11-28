@@ -441,9 +441,24 @@ fn lanes_view_fans_a_for_each_into_one_lane_per_item() {
 }
 
 #[test]
+fn a_loop_inside_the_lanes_leaves_room_for_its_line_before_the_next_title() {
+    let mut r = each_run(&[Done, Running]);
+    let gap = |r: &WorkflowRun| {
+        let nodes = graph(r, RunView::Lanes).nodes;
+        let y = |id: &str| nodes.iter().find(|n| n.id == id).unwrap().position.y;
+        y("dev@each#1") - y("dev@each#0")
+    };
+    let plain = gap(&r);
+    r.definition.edges.push(super::fixtures::edge(
+        r#"{"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "mono"}}"#,
+    ));
+    assert_eq!(gap(&r), plain + GROUP_LOOP);
+}
+
+#[test]
 fn lanes_view_stacks_four_rows_of_the_boards_own_cards() {
     let r = each_run(&[Done, Running, Failed, Pending]);
-    let RunGraph { nodes, edges } = graph(&r, RunView::Lanes);
+    let RunGraph { nodes, .. } = graph(&r, RunView::Lanes);
     let group = nodes.iter().find(|n| n.id == "each").unwrap();
     let one = graph(&pending(1), RunView::Lanes);
     let lone = one.nodes.iter().find(|n| n.id == "each").unwrap();
@@ -456,16 +471,12 @@ fn lanes_view_stacks_four_rows_of_the_boards_own_cards() {
         lone.height
     );
     let kids = children(&nodes);
-    assert!(kids.iter().all(|n| n.width == NODE_W && !n.data.compact));
+    assert!(kids.iter().all(|n| n.width == NODE_W));
     // Every card stays inside the group box.
     for k in &kids {
         assert!(k.position.x + k.width <= group.width);
         assert!(k.position.y + k.height <= group.height);
     }
-    assert!(edges
-        .iter()
-        .filter(|e| e.source.starts_with("dev@"))
-        .all(|e| !e.compact));
     // The single view shows one row, as before.
     let single = graph(&r, RunView::Single);
     assert_eq!(children(&single.nodes).len(), 2);

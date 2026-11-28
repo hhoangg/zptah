@@ -217,6 +217,43 @@ fn one_edge_leaves_the_trigger_frame_for_the_first_node() {
 }
 
 #[test]
+fn a_target_only_some_triggers_lead_to_is_drawn_from_its_own_trigger() {
+    let w = workflow(
+        json!([
+            {"id": "start", "type": "manual"},
+            {"id": "other", "type": "manual"},
+            session("dev"),
+            session("extra"),
+        ]),
+        json!([
+            {"from": "start", "to": "dev"},
+            {"from": "other", "to": "dev"},
+            {"from": "other", "to": "extra"},
+        ]),
+    );
+    let scene = scene_of(&w);
+    let frame = scene.trigger_frame.expect("a frame behind the triggers");
+    // One merged edge for dev, and one from the trigger that leads to extra.
+    assert_eq!(scene.edges.len(), 2, "{:?}", scene.edges);
+    let to = |target: &str| {
+        scene
+            .edges
+            .iter()
+            .find(|e| e.id.ends_with(&format!("->{target}")))
+            .unwrap_or_else(|| panic!("no edge to {target}"))
+    };
+    let other = node(&scene, "other").rect;
+    assert_eq!(
+        first_and_last(to("extra")).0,
+        Point {
+            x: other.right(),
+            y: other.y + other.h / 2.
+        }
+    );
+    assert_eq!(first_and_last(to("dev")).0.x, frame.right());
+}
+
+#[test]
 fn a_workflow_without_triggers_has_no_frame() {
     let w = workflow(json!([session("dev")]), json!([]));
     assert!(scene_of(&w).trigger_frame.is_none());
@@ -295,37 +332,6 @@ fn a_loop_edge_leaves_the_bottom_of_the_later_card_and_comes_back_into_the_earli
     assert!((label.at.y - run_y).abs() < 0.01, "{:?}", label.at);
     assert!((label.at.x + label.width / 2. - (start.x + end.x) / 2.).abs() < 0.01);
     assert!(edge.is_loop);
-}
-
-#[test]
-fn a_compact_loop_edge_hugs_the_cards_and_has_no_label() {
-    let w = workflow(
-        json!([{"id": "start", "type": "manual"}, session("dev"), session("review")]),
-        json!([
-            {"from": "start", "to": "dev"},
-            {"from": "dev", "to": "review"},
-            {"from": "review", "to": "dev", "loop": {"maxRounds": 3, "decide": "ai"}},
-        ]),
-    );
-    let flow = to_flow(&w);
-    let mut edges = flow.edges.clone();
-    for e in &mut edges {
-        e.compact = true;
-    }
-    let scene = Scene::build(&flow.nodes, &edges, Vec::new(), "fit".into());
-    let edge = scene.edges.iter().find(|e| e.is_loop).unwrap();
-    let review = node(&scene, "review").rect;
-    let (start, _) = first_and_last(edge);
-    assert!(edge.label.is_none());
-    let Some(Seg::Line(p)) = edge.segs.get(1) else {
-        panic!("{:?}", edge.segs)
-    };
-    // The corner is 14 pixels below the card and rounds by half of that, the most the short
-    // run allows.
-    assert!(
-        (p.y - (review.bottom() + 7.)).abs() < 0.01,
-        "{p:?} {start:?}"
-    );
 }
 
 #[test]

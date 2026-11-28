@@ -132,21 +132,27 @@ fn the_switcher_lists_the_workflows_and_switches_to_the_one_picked(cx: &mut Test
 }
 
 #[gpui::test]
-fn the_enabled_toggle_flips_the_draft_and_saving_writes_it(cx: &mut TestAppContext) {
+fn the_enabled_toggle_saves_at_once_on_a_clean_board_and_is_a_draft_beside_other_edits(
+    cx: &mut TestAppContext,
+) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
     assert!(on_board(&s, visual, |b| b.meta.enabled));
     click(visual, "wf-enabled-toggle");
-    assert!(!on_board(&s, visual, |b| b.meta.enabled));
-    assert!(on_board(&s, visual, |b| b.changed()));
-    click(visual, "wf-enabled-toggle");
-    assert!(on_board(&s, visual, |b| b.meta.enabled));
-    assert!(!on_board(&s, visual, |b| b.changed()));
-    click(visual, "wf-enabled-toggle");
-    click(visual, "wf-board-save");
     visual.run_until_parked();
     assert!(!stored_first(&s).enabled);
+    assert!(!on_board(&s, visual, |b| b.changed()));
+    // With another edit pending, the switch is part of the draft and Save writes both.
+    rename(&s, visual, "Renamed");
+    click(visual, "wf-enabled-toggle");
+    visual.run_until_parked();
+    assert!(on_board(&s, visual, |b| b.meta.enabled && b.changed()));
+    assert!(!stored_first(&s).enabled);
+    click(visual, "wf-board-save");
+    visual.run_until_parked();
+    assert!(stored_first(&s).enabled);
+    assert_eq!(stored_first(&s).name, "Renamed");
 }
 
 #[gpui::test]
@@ -771,4 +777,85 @@ fn the_trigger_frame_edge_selects_and_deletes_every_trigger_edge_to_its_target(
     event(&s, visual, GraphEvent::Delete);
     assert!(on_board(&s, visual, |b| b.flow.edges.is_empty()));
     assert_eq!(on_board(&s, visual, |b| b.flow.nodes.len()), 3);
+}
+
+#[gpui::test]
+fn the_rail_buttons_say_what_they_do_or_why_they_cannot_be_used(cx: &mut TestAppContext) {
+    use super::board_ui::type_glyph;
+    use super::layout::rail_tip;
+    use monocode_core::mono::workflows::board_edit::{picker_groups, picker_unavailable};
+    use monocode_core::mono::workflows::board_model::NodeType;
+    assert_ne!(type_glyph(NodeType::If), type_glyph(NodeType::Switch));
+    let mut glyphs: Vec<&str> = picker_groups()
+        .iter()
+        .flat_map(|g| g.items.iter().map(|(ty, _)| type_glyph(*ty)))
+        .collect();
+    glyphs.sort();
+    glyphs.dedup();
+    assert_eq!(glyphs.len(), 7);
+    assert_eq!(
+        rail_tip(NodeType::If, "Go one way or the other", None),
+        "If: Go one way or the other"
+    );
+    let why = picker_unavailable(NodeType::Manual, 5);
+    assert_eq!(
+        rail_tip(NodeType::Manual, "Runs when you start it", why),
+        "Manual: A workflow has at most 5 triggers"
+    );
+    let _ = cx;
+}
+
+#[gpui::test]
+fn escape_on_a_review_cancels_it_back_to_the_board_without_the_leave_dialog(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let mut visual = open_board(
+        &s,
+        &ticket(json!({"enabled": false, "needsReview": true})),
+        cx,
+    );
+    let visual = &mut visual;
+    rename(&s, visual, "Renamed");
+    click(visual, "wf-enabled-toggle");
+    assert!(matches!(
+        route(&s, visual),
+        Some(WfRoute::Review(_, super::ReviewIntent::Enable))
+    ));
+    assert!(!s.manager.read_with(visual, |m, _| m.wf_board_open()));
+    let closed = s
+        .manager
+        .update_in(visual, |m, window, cx| m.dismiss_settings(window, cx));
+    visual.run_until_parked();
+    assert!(closed);
+    assert_eq!(route(&s, visual), Some(WfRoute::Board(A.into())));
+    assert!(!on_board(&s, visual, |b| b.leaving));
+    // On the board, Escape asks about the unsaved name.
+    s.manager
+        .update_in(visual, |m, window, cx| m.dismiss_settings(window, cx));
+    assert!(on_board(&s, visual, |b| b.leaving));
+}
+
+#[gpui::test]
+fn a_saved_new_workflow_takes_its_stored_route_so_remove_works(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    put(&s, vec![]);
+    open_tab(&s, cx);
+    let visual = &mut VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    click(visual, "mono-workflow-new");
+    settle(&s, visual);
+    assert_eq!(route(&s, visual), Some(WfRoute::New));
+    click(visual, "wf-board-save");
+    visual.run_until_parked();
+    let id = stored_first(&s).id;
+    assert_eq!(route(&s, visual), Some(WfRoute::Board(id)));
+    click(visual, "wf-board-more");
+    s.manager.update(visual, |m, cx| {
+        m.picker = None;
+        m.board_menu_picked("Workflow menu", "remove".into(), cx)
+    });
+    visual.run_until_parked();
+    assert!(super::tests::saved(&s).is_empty());
+    assert_eq!(route(&s, visual), None);
 }

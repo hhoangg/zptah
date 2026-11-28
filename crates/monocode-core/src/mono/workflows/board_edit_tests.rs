@@ -188,6 +188,29 @@ mod add {
     }
 
     #[test]
+    fn a_trigger_added_to_nodes_at_x_zero_sits_clear_of_the_first_column() {
+        let mut w = workflow();
+        w.ui = Some(WorkflowUi::lr());
+        w.nodes.retain(|n| !n.is_trigger());
+        w.edges.clear();
+        w.nodes.push(n(
+            json!({"id": "first", "type": "command", "project": "x", "command": "ls", "ui": {"x": 0, "y": 0}}),
+        ));
+        w.nodes
+            .iter_mut()
+            .for_each(|n| n.ui = Some(Ui { x: 0.0, y: 0.0 }));
+        let (flow, current) = board(&w);
+        let (out, id) = add_node(&flow, &current, NodeType::Manual);
+        let (frame, size) = trigger_frame(&out.nodes).expect("a frame");
+        let first = node(&out, "first").position;
+        assert!(
+            frame.x + size.width + GAP_X <= first.x + 0.01,
+            "{frame:?} {first:?}"
+        );
+        assert!(node(&out, &id).position.x + NODE_W < first.x);
+    }
+
+    #[test]
     fn a_trigger_joins_the_trigger_column_under_the_others() {
         let (flow, current) = board(&workflow());
         let (out, id) = add_node(&flow, &current, NodeType::Schedule);

@@ -1,8 +1,8 @@
 //! `NodeInspector.test.ts` and the fields of the inspector.
-use super::board::{BoardField, BoardPick};
+use super::board::{BoardField, BoardPick, BoardState};
 use super::board_tests::*;
 use super::graph::GraphEvent;
-use super::tests::{click, listing};
+use super::tests::{click, listing, settle};
 use crate::monos::tests::{Setup, setup};
 use gpui::{Focusable, TestAppContext, VisualTestContext};
 use monocode_core::mono::workflows::{
@@ -614,16 +614,73 @@ fn the_settings_edit_the_description_and_the_inputs(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_enabled_switch_and_pause_change_the_draft_only_until_saved(cx: &mut TestAppContext) {
+fn the_enabled_switch_saves_at_once_when_nothing_else_is_unsaved(cx: &mut TestAppContext) {
     let s = setup(cx);
     let mut visual = open_board(&s, &ticket(json!({})), cx);
     let visual = &mut visual;
+    assert!(stored_first(&s).enabled);
+    do_with(&s, visual, |m, cx| m.board_toggle_enabled(cx));
+    assert!(!on_board(&s, visual, |b| b.meta.enabled));
+    assert!(!stored_first(&s).enabled);
+    assert!(!on_board(&s, visual, BoardState::changed));
+}
+
+#[gpui::test]
+fn the_enabled_switch_stays_a_draft_edit_beside_other_unsaved_edits(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    rename(&s, visual, "Renamed");
     do_with(&s, visual, |m, cx| m.board_toggle_enabled(cx));
     assert!(!on_board(&s, visual, |b| b.meta.enabled));
     assert!(stored_first(&s).enabled);
     click(visual, "wf-board-save");
     visual.run_until_parked();
     assert!(!stored_first(&s).enabled);
+}
+
+#[gpui::test]
+fn the_header_shows_save_in_runs_mode_once_the_draft_changed(cx: &mut TestAppContext) {
+    use super::layout::WfMode;
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    rename(&s, visual, "Renamed");
+    do_with(&s, visual, |m, cx| m.wf_set_mode(WfMode::Runs, cx));
+    settle(&s, visual);
+    assert!(visual.debug_bounds("wf-board-save").is_some());
+    click(visual, "wf-board-save");
+    visual.run_until_parked();
+    assert_eq!(stored_first(&s).name, "Renamed");
+    settle(&s, visual);
+    assert!(visual.debug_bounds("wf-board-save").is_none());
+}
+
+#[gpui::test]
+fn a_default_decision_model_pick_never_stores_an_invalid_model(cx: &mut TestAppContext) {
+    use monocode_core::provider::Kind;
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    do_with(&s, visual, |m, cx| {
+        m.board_decision_picked(Kind::Claude, Some("claude-sonnet-5".into()), cx)
+    });
+    let model = on_board(&s, visual, |b| b.meta.decision_model.clone()).unwrap();
+    assert_eq!(
+        (model.harness.as_str(), model.model.as_str()),
+        ("claude", "claude:sonnet-5")
+    );
+    // A harness with no bundled default has nothing to store: the step before it decides.
+    do_with(&s, visual, |m, cx| {
+        m.board_decision_picked(Kind::Claude, None, cx)
+    });
+    assert!(on_board(&s, visual, |b| b.meta.decision_model.is_none()));
+    // Pi has one, and the file stores it.
+    do_with(&s, visual, |m, cx| {
+        m.board_decision_picked(Kind::Pi, None, cx)
+    });
+    let model = on_board(&s, visual, |b| b.meta.decision_model.clone()).unwrap();
+    assert_eq!(model.model, "pi:default");
 }
 
 #[gpui::test]
@@ -758,4 +815,45 @@ fn leaving_an_input_value_as_it_was_shown_changes_nothing(cx: &mut TestAppContex
         Some(InputValue::String("hello".into()))
     );
     assert!(on_board(&s, visual, |b| b.changed()));
+}
+
+#[gpui::test]
+fn text_that_is_not_a_number_shows_the_problem_and_leaves_the_draft(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    do_with(&s, visual, |m, cx| {
+        m.board_add_input("retries", "number", cx)
+    });
+    open_settings(&s, visual);
+    let before = on_board(&s, visual, |b| (b.meta.input_values.clone(), b.current()));
+    type_in(
+        &s,
+        visual,
+        BoardField::InputValue("retries".into()),
+        "not a number",
+    );
+    focus_field(&s, visual, BoardField::InputValue("retries".into()));
+    click(visual, "wf-board-name");
+    assert!(on_board(&s, visual, |b| b.input_problem.is_some()));
+    let after = on_board(&s, visual, |b| (b.meta.input_values.clone(), b.current()));
+    assert_eq!(before.0, after.0);
+    assert!(!after.0.contains_key("retries"));
+    assert_eq!(before.1, after.1);
+}
+
+#[gpui::test]
+fn backspace_and_delete_in_an_inspector_field_do_not_delete_the_selected_node(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let mut visual = open_board(&s, &ticket(json!({})), cx);
+    let visual = &mut visual;
+    event(&s, visual, GraphEvent::Click("dev".into()));
+    let ids = node_ids(&s, visual);
+    focus_field(&s, visual, BoardField::Prompt("dev".into()));
+    visual.simulate_keystrokes("backspace");
+    visual.simulate_keystrokes("delete");
+    assert_eq!(node_ids(&s, visual), ids);
+    assert!(ids.contains(&"dev".to_string()));
 }

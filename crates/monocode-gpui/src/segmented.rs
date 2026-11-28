@@ -1,23 +1,25 @@
 //! The segmented control: equal-width options in a hairline frame, one of them chosen. Shared so
-//! any entity can draw one (the Workflows page header uses it for Edit, Runs and Settings).
+//! any entity can draw one (Contributors and the Workflows page header use it).
 use crate::theme::*;
 use gpui::{Context, Div, Role, SharedString, Stateful, div, prelude::*, px};
 
 /// Draws the control. `value` is the chosen option's id, `options` are `(id, text)` pairs and
-/// `change` hears the id of the option pressed. Each option has the selector
-/// `segmented-<id>-<option>`, and the whole control `segmented-<id>`.
+/// `change` hears the id of the option pressed. Each option has the test selector
+/// `<selector>-<id>-<option>`.
 pub(crate) fn segmented<T: 'static>(
-    id: &'static str,
-    label: &'static str,
+    selector: &'static str,
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
     value: &str,
-    options: &[(&'static str, &'static str)],
+    options: &[(&'static str, &str)],
     cx: &mut Context<T>,
     change: impl Fn(&mut T, &'static str, &mut Context<T>) + Clone + 'static,
 ) -> Stateful<Div> {
+    let id: SharedString = id.into();
     div()
         .id(SharedString::from(format!("segmented-{id}")))
         .role(Role::RadioGroup)
-        .aria_label(label)
+        .aria_label(label.into())
         .grid()
         .grid_cols(options.len() as u16)
         .flex_shrink_0()
@@ -31,11 +33,15 @@ pub(crate) fn segmented<T: 'static>(
         .children(options.iter().map(|&(option, text)| {
             let selected = value == option;
             let change = change.clone();
+            let id = id.clone();
             div()
                 .id(SharedString::from(format!("segmented-{id}-{option}")))
-                .debug_selector(move || format!("segmented-{id}-{option}"))
+                .debug_selector({
+                    let id = id.clone();
+                    move || format!("{selector}-{id}-{option}")
+                })
                 .role(Role::RadioButton)
-                .aria_label(text)
+                .aria_label(text.to_owned())
                 .aria_selected(selected)
                 .min_w_0()
                 .flex()
@@ -43,7 +49,7 @@ pub(crate) fn segmented<T: 'static>(
                 .whitespace_nowrap()
                 .rounded(px(5.))
                 .px(px(10.))
-                .py(px(2.))
+                .py_1()
                 .cursor_pointer()
                 .map(|d| {
                     if selected {
@@ -53,7 +59,7 @@ pub(crate) fn segmented<T: 'static>(
                             .hover(|s| s.text_color(content(1.)))
                     }
                 })
-                .child(text)
+                .child(text.to_owned())
                 .on_click(cx.listener(move |this, _, _, cx| change(this, option, cx)))
         }))
 }

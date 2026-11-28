@@ -51,7 +51,7 @@ pub(in crate::monos) fn handles_of(node: &SceneNode) -> Vec<Handle> {
         ];
     }
     let kind = &node.flow.data.node.kind;
-    let trigger = matches!(kind, NodeKind::Schedule { .. } | NodeKind::Manual);
+    let trigger = node.flow.data.node.is_trigger();
     let mut out = Vec::new();
     if !trigger {
         out.push(handle(HandleKind::In, r.x, r.y + r.h / 2.));

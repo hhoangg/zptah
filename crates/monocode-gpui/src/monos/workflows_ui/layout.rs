@@ -66,14 +66,16 @@ fn add_id(ty: NodeType) -> &'static str {
     }
 }
 
+/// The tooltip of a rail button: what the node does, or why it cannot be added now.
+pub(super) fn rail_tip(ty: NodeType, hint: &str, why: Option<&str>) -> String {
+    format!("{}: {}", type_label(ty), why.unwrap_or(hint))
+}
+
 /// The compact Enabled switch of the header.
 fn enabled_switch(on: bool) -> Stateful<Div> {
     div()
         .id("wf-enabled-toggle")
         .debug_selector(|| "wf-enabled-toggle".into())
-        .role(Role::Switch)
-        .aria_label("Enabled")
-        .aria_selected(on)
         .cursor_pointer()
         .flex_shrink_0()
         .flex()
@@ -85,21 +87,11 @@ fn enabled_switch(on: bool) -> Stateful<Div> {
         .hover(|s| s.bg(content(0.05)))
         .text_size(px(12.))
         .text_color(content(if on { 0.85 } else { 0.5 }))
-        .child(
-            div()
-                .w(px(28.))
-                .h(px(16.))
-                .rounded_full()
-                .bg(if on { accent_color() } else { content(0.2) })
-                .child(
-                    div()
-                        .size(px(12.))
-                        .mt(px(2.))
-                        .ml(px(if on { 14. } else { 2. }))
-                        .rounded_full()
-                        .bg(gpui::white()),
-                ),
-        )
+        .child(super::super::panels::switch_track(
+            "wf-enabled-track",
+            "Enabled",
+            on,
+        ))
         .child("Enabled")
 }
 
@@ -211,6 +203,7 @@ impl Monos {
         };
         let (name, enabled, id) = (b.meta.name.clone(), b.meta.enabled, b.base.id.clone());
         let (is_new, can_save, saving) = (b.is_new, b.can_save(), b.saving);
+        let changed = b.changed();
         let review = b.base.needs_review;
         let (switch_anchor, more_anchor) = (b.switch_anchor.clone(), b.more_anchor.clone());
         let running = !is_new && self.workflow_running(&id);
@@ -287,6 +280,7 @@ impl Monos {
             .when(review, |d| d.child(needs_review_badge()));
 
         let modes = crate::segmented::segmented(
+            "segmented",
             "wf-mode",
             "Workflow mode",
             mode.id(),
@@ -338,7 +332,7 @@ impl Monos {
                         this.workflow_run_clicked(&run_id, review, true, cx);
                     })),
             );
-        let editing = mode != WfMode::Runs;
+        let editing = mode != WfMode::Runs || changed;
 
         div()
             .h(px(40.))
@@ -671,13 +665,19 @@ impl Monos {
                         .flex_shrink_0(),
                 );
             }
-            for (ty, _) in group.items {
-                let ty = *ty;
+            for (ty, hint) in group.items {
+                let (ty, hint) = (*ty, *hint);
                 let why = picker_unavailable(ty, triggers);
                 let enabled = why.is_none();
+                // The reason it cannot be added now, else what the node does.
+                let tip = rail_tip(ty, hint, why);
                 rail = rail.child(
                     icon_button_enabled(add_id(ty), type_label(ty), type_glyph(ty), enabled)
                         .debug_selector(move || add_id(ty).into())
+                        .tooltip(move |_, cx| {
+                            let tip = tip.clone();
+                            cx.new(|_| crate::theme::Tip(tip.into())).into()
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if enabled {
                                 this.board_add(ty, cx);

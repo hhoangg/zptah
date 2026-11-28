@@ -22,6 +22,9 @@ pub const NODE_H: f32 = 48.0;
 /// (which has to hold the arrow of the edges between them).
 pub const GAP_Y: f32 = 24.0;
 pub const GAP_X: f32 = 72.0;
+/// Space under a card whose bottom a loop edge leaves or enters, before the next card of its
+/// column: the line runs 26 below the card and carries a label.
+pub const LOOP_ROOM: f32 = 56.0;
 /// Space between two triggers in their column.
 pub const TRIGGER_GAP: f32 = 12.0;
 /// Room around the children of a group, and above them for its title.
@@ -90,8 +93,6 @@ pub struct BoardNodeData {
     pub empty: bool,
     /// Run graph only: what the run did with the node.
     pub run: Option<RunNodeState>,
-    /// Run graph only: a narrow card (no icon tile) for lanes side by side.
-    pub compact: bool,
     /// Run graph, For each: how many items its selected round has.
     pub run_items: Option<usize>,
 }
@@ -105,7 +106,6 @@ impl BoardNodeData {
             loop_out: false,
             empty: false,
             run: None,
-            compact: false,
             run_items: None,
         }
     }
@@ -158,8 +158,7 @@ pub enum EdgeKind {
 }
 
 /// An edge on the canvas. `source_handle` is "true"/"false" on an If out edge, a case or
-/// "default" on a Switch out edge, and `LOOP_OUT` on a loop edge (whose `target_handle` is `LOOP_IN`). `run` is set only in the run graph, and
-/// `compact` only on the edges of lanes drawn side by side.
+/// "default" on a Switch out edge, and `LOOP_OUT` on a loop edge (whose `target_handle` is `LOOP_IN`). `run` is set only in the run graph.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FlowEdge {
     pub id: String,
@@ -169,7 +168,6 @@ pub struct FlowEdge {
     pub source_handle: Option<String>,
     pub target_handle: Option<&'static str>,
     pub loop_spec: Option<LoopSpec>,
-    pub compact: bool,
     pub run: Option<RunEdgeState>,
     pub selected: bool,
 }
@@ -273,8 +271,9 @@ fn point_of(ui: Ui) -> Point {
 
 // --- layout ---------------------------------------------------------------------------------
 
-/// The frame of a group around the children at `children` (positions relative to it).
-fn group_size(children: &[Point]) -> Size {
+/// The frame of a group around the children at `children` (positions relative to it, and the
+/// height of each card: a Switch with many cases is taller than `NODE_H`).
+fn group_size(children: &[(Point, f32)]) -> Size {
     if children.is_empty() {
         return Size {
             width: EMPTY_GROUP_W,
@@ -283,11 +282,11 @@ fn group_size(children: &[Point]) -> Size {
     }
     let right = children
         .iter()
-        .map(|p| p.x + NODE_W)
+        .map(|(p, _)| p.x + NODE_W)
         .fold(f32::MIN, f32::max);
     let bottom = children
         .iter()
-        .map(|p| p.y + NODE_H)
+        .map(|(p, h)| p.y + h)
         .fold(f32::MIN, f32::max);
     Size {
         width: EMPTY_GROUP_W.max(right + GROUP_PAD + GROUP_SLACK),
@@ -450,9 +449,29 @@ fn layout_scope(
             height: node_height(n),
         })
     };
+    // A loop line runs under the cards it joins: leave room for it before the next card.
+    let looped: HashSet<&str> = w
+        .edges
+        .iter()
+        .filter(|e| {
+            e.loop_spec.is_some() && ids.contains(e.from.as_str()) && ids.contains(e.to.as_str())
+        })
+        .flat_map(|e| [e.from.as_str(), e.to.as_str()])
+        .collect();
+    let gap_below = |n: &Node| {
+        if looped.contains(n.id.as_str()) {
+            LOOP_ROOM
+        } else {
+            GAP_Y
+        }
+    };
     let stack_h = |layer: &Vec<&Node>| -> f32 {
-        layer.iter().map(|n| size_of(n).height).sum::<f32>()
-            + GAP_Y * layer.len().saturating_sub(1) as f32
+        let last = layer.len().saturating_sub(1);
+        layer
+            .iter()
+            .enumerate()
+            .map(|(i, n)| size_of(n).height + if i < last { gap_below(n) } else { 0.0 })
+            .sum::<f32>()
     };
     let total = layers
         .iter()
@@ -470,7 +489,7 @@ fn layout_scope(
         for n in layer {
             let s = size_of(n);
             out.insert(n.id.clone(), Point { x, y });
-            y += s.height + GAP_Y;
+            y += s.height + gap_below(n);
             widest = widest.max(s.width);
         }
         x += widest + GAP_X;
@@ -516,7 +535,10 @@ fn layout_of(w: &Workflow) -> Layout {
                 .unwrap_or(origin);
             at.insert(child.id.clone(), p);
         }
-        let points: Vec<Point> = children.iter().map(|c| at[&c.id]).collect();
+        let points: Vec<(Point, f32)> = children
+            .iter()
+            .map(|c| (at[&c.id], node_height(c)))
+            .collect();
         size.insert(group.id.clone(), group_size(&points));
     }
     let top: Vec<&Node> = w
@@ -628,7 +650,6 @@ pub fn make_edge(
         },
         target_handle: looped.then_some(LOOP_IN),
         loop_spec,
-        compact: false,
         run: None,
         selected: false,
     }
@@ -1030,10 +1051,10 @@ pub fn fit_groups(nodes: &[FlowNode]) -> Vec<FlowNode> {
         .map(|n| {
             let mut n = n.clone();
             if n.kind == FlowKind::Group {
-                let children: Vec<Point> = nodes
+                let children: Vec<(Point, f32)> = nodes
                     .iter()
                     .filter(|c| c.parent_id.as_deref() == Some(n.id.as_str()))
-                    .map(|c| c.position)
+                    .map(|c| (c.position, node_height(&c.data.node)))
                     .collect();
                 let s = group_size(&children);
                 n.width = s.width;
