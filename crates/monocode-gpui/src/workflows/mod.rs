@@ -17,13 +17,19 @@ use monocode_core::{
 use std::sync::Arc;
 
 mod decide;
+mod extract;
 mod runner;
 mod schedule;
 mod sessions;
 mod summary;
+mod terminal;
+mod waits;
 
-pub(crate) use runner::{Live, WorkflowRunner};
+#[cfg(test)]
+pub(crate) use runner::WaitNotice;
+pub(crate) use runner::{Live, WaitChoice, WorkflowRunner};
 pub(crate) use schedule::begin_quit;
+pub(crate) use waits::WaitBanner;
 
 /// The persisted ids of every session the run files name, for the zap badge. Blocks (reads the
 /// files): use it off the UI thread.

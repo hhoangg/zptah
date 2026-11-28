@@ -3,8 +3,8 @@
 //! summary reaches a Mono's chat only through `Monos::workflow_post`.
 use super::sync::race;
 use super::{
-    CloudInstanceInfo, DecisionRequest, Fut, Outcome, STOPPED_BY_USER, SessionInfo, SessionRequest,
-    StartedSession, Summary, WorkflowHost,
+    CloudInstanceInfo, DecisionRequest, ExtractRequest, Fut, Outcome, STOPPED_BY_USER,
+    SessionFacts, SessionInfo, SessionRequest, StartedSession, Summary, WaitNotice, WorkflowHost,
 };
 use crate::conversation::{Conversation, SessionChanged, TurnEnd, WorkflowTurn};
 use crate::runtime::locked;
@@ -66,6 +66,13 @@ pub(crate) struct Live {
     watches: HashMap<i64, Subscription>,
     /// Persisted session ids (what run files hold) to local ones.
     pub(in crate::workflows) ids: HashMap<String, i64>,
+    /// The pane state of each terminal step's session, by local id.
+    pub(in crate::workflows) tui: HashMap<i64, crate::workflows::terminal::TuiTurn>,
+    /// The banner of each session a "Wait for me" step waits on, by local id.
+    pub(in crate::workflows) waits: HashMap<i64, crate::workflows::WaitBanner>,
+    /// The "needs you" notices raised, for tests.
+    #[cfg(test)]
+    pub(crate) needs_you: Vec<(i64, String)>,
 }
 
 impl Live {
@@ -74,16 +81,20 @@ impl Live {
             wakers: HashMap::new(),
             watches: HashMap::new(),
             ids: HashMap::new(),
+            tui: HashMap::new(),
+            waits: HashMap::new(),
+            #[cfg(test)]
+            needs_you: Vec::new(),
         }
     }
 
     /// What is still kept for sessions.
     #[cfg(test)]
     pub(crate) fn kept(&self) -> usize {
-        self.watches.len() + self.wakers.len() + self.ids.len()
+        self.watches.len() + self.wakers.len() + self.ids.len() + self.tui.len() + self.waits.len()
     }
 
-    fn wake(&mut self, session: i64) -> &(Sender<()>, Receiver<()>) {
+    pub(in crate::workflows) fn wake(&mut self, session: i64) -> &(Sender<()>, Receiver<()>) {
         self.wakers.entry(session).or_insert_with(|| bounded(1))
     }
 }
@@ -109,7 +120,7 @@ pub(in crate::workflows) fn model_harness(model: &str) -> Option<&str> {
     (Kind::parse(harness).is_some() && !rest.is_empty()).then_some(harness)
 }
 
-pub(super) enum Seen {
+pub(in crate::workflows) enum Seen {
     Working,
     /// A cloud session whose instance is still being made ready, or whose first prompt waits
     /// for it: there is no turn to see yet, and none to give up on.
@@ -234,6 +245,8 @@ impl Workflows {
         if let Some(local) = self.live.ids.remove(persisted) {
             self.live.watches.remove(&local);
             self.live.wakers.remove(&local);
+            self.live.tui.remove(&local);
+            self.live.waits.remove(&local);
         }
     }
 
@@ -254,6 +267,10 @@ impl Workflows {
     }
 
     fn workflow_turn(&mut self, session: i64, cx: &mut Context<Self>) -> Option<Seen> {
+        // A terminal step has no conversation: its pane's events say how the turn goes.
+        if let Some(turn) = self.live.tui.get(&session) {
+            return Some(turn.seen());
+        }
         let view = self
             .shell
             .upgrade()?
@@ -309,6 +326,16 @@ impl Workflows {
     }
 
     fn workflow_stop(&mut self, persisted: &str, cx: &mut Context<Self>) -> Result<(), String> {
+        // A terminal step ends with its CLI.
+        if let Some(local) = self
+            .workflow_local_id(persisted)
+            .filter(|local| self.live.tui.contains_key(local))
+        {
+            if let Some(shell) = self.shell.upgrade() {
+                shell.update(cx, |shell, cx| shell.workflow_stop_tui(local, cx));
+            }
+            return Ok(());
+        }
         if let Some((_, view)) = self.workflow_view(persisted, cx) {
             view.update(cx, |v, cx| {
                 v.mono_stop_turn(cx);
@@ -321,6 +348,20 @@ impl Workflows {
     }
 
     fn workflow_info(&mut self, persisted: &str, cx: &mut Context<Self>) -> Option<SessionInfo> {
+        if let Some(local) = self
+            .workflow_local_id(persisted)
+            .filter(|local| self.live.tui.contains_key(local))
+        {
+            let summary = self.shell.upgrade()?.read(cx).workflow_tui_summary(local)?;
+            return Some(SessionInfo {
+                session_id: persisted.into(),
+                local_id: Some(local),
+                cwd: summary.cwd,
+                title: summary.title,
+                harness: summary.provider,
+                model: None,
+            });
+        }
         let (local, view) = self.workflow_view(persisted, cx)?;
         let view = view.read(cx);
         Some(SessionInfo {
@@ -489,6 +530,49 @@ impl WorkflowHost for AppHost {
         Box::pin(crate::workflows::decide::decide(setup, request, executor))
     }
 
+    fn head_commit(&self, dir: String) -> Fut<Option<String>> {
+        let work = self.cx.background_executor().spawn(async move {
+            monocode_core::mono::workflows::session_facts::head_commit(std::path::Path::new(&dir))
+        });
+        Box::pin(work)
+    }
+
+    fn session_facts(&self, session_id: &str, base: Option<String>) -> Fut<SessionFacts> {
+        let dir = self.worktree_of(session_id);
+        let work = self.cx.background_executor().spawn(async move {
+            match dir {
+                Some(dir) => monocode_core::mono::workflows::session_facts::session_facts(
+                    std::path::Path::new(&dir),
+                    base.as_deref(),
+                ),
+                None => SessionFacts::default(),
+            }
+        });
+        Box::pin(work)
+    }
+
+    fn extract(&self, request: ExtractRequest) -> Fut<Result<String, String>> {
+        let voice = self
+            .with(|w, cx| w.extraction_voice(&request.session_id, cx))
+            .unwrap_or_else(|| Err("The app is closing".into()));
+        let store = self.with(|w, _| w.store.clone());
+        let executor = self.cx.background_executor().clone();
+        match store {
+            Some(store) => Box::pin(crate::workflows::extract::extract(
+                voice, store, request, executor,
+            )),
+            None => Box::pin(async { Err("The app is closing".into()) }),
+        }
+    }
+
+    fn wait_for_user(&self, notice: WaitNotice) {
+        self.with(|w, cx| w.workflow_wait(notice, cx));
+    }
+
+    fn wait_over(&self, session_id: &str) {
+        self.with(|w, cx| w.workflow_wait_over(session_id, cx));
+    }
+
     fn post(&self, summary: Summary) {
         self.with(|w, cx| w.deliver(summary, cx));
     }
@@ -503,6 +587,12 @@ impl WorkflowHost for AppHost {
 
     fn worktree_of(&self, session_id: &str) -> Option<String> {
         self.with(|w, cx| {
+            if let Some(local) = w
+                .workflow_local_id(session_id)
+                .filter(|local| w.live.tui.contains_key(local))
+            {
+                return w.shell.upgrade()?.read(cx).workflow_tui_dir(local);
+            }
             let (_, view) = w.workflow_view(session_id, cx)?;
             let view = view.read(cx);
             Some(

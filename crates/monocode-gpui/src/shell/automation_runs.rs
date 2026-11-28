@@ -668,10 +668,7 @@ impl Shell {
             }
             self.persist_automation_folder(&automation.cwd, cx);
         }
-        if !self.workspace.tabs.contains(&id) {
-            self.workspace.tabs.push(id);
-            self.workspace.title_order.push(TitleTab::Session(id));
-        }
+        self.place_background_tab(id);
     }
 
     pub(super) fn automation_session_changed(&mut self, id: i64, cx: &mut Context<Self>) {

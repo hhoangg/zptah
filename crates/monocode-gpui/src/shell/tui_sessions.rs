@@ -134,6 +134,33 @@ impl Shell {
         Some(tui)
     }
 
+    /// Gives a session a tab without showing it, so `sync_tui` finds it open and keeps its CLI
+    /// alive, and the focused project and the keyboard stay where they are.
+    pub(super) fn place_background_tab(&mut self, id: i64) {
+        if !self.workspace.tabs.contains(&id) {
+            self.workspace.tabs.push(id);
+            self.workspace.title_order.push(TitleTab::Session(id));
+        }
+    }
+
+    /// Opens the terminal session's pane and starts its CLI with `prompt` as the first prompt,
+    /// without waiting to be shown (a background run has no one looking at it).
+    pub(super) fn start_tui_with_prompt(
+        &mut self,
+        id: i64,
+        prompt: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(tui) = self.ensure_tui(id, cx) else {
+            return false;
+        };
+        tui.update(cx, |tui, cx| {
+            tui.set_initial_prompt(prompt.trim().to_owned());
+            tui.start(cx);
+        });
+        true
+    }
+
     /// Start the terminal sessions on screen and end those that left the workspace.
     pub(super) fn sync_tui(&mut self, shown: &HashSet<i64>, cx: &mut Context<Self>) {
         for &id in shown {
@@ -183,6 +210,9 @@ impl Shell {
         tui.update(cx, |tui, cx| tui.kill(cx));
         // A run waiting on this pane can never hear from it again.
         self.automation_tui_gone(id, cx);
+        if let Some(workflows) = self.workflows.clone() {
+            workflows.update(cx, |w, cx| w.tui_gone(id, cx));
+        }
         self.refresh_session_mark_idle(id, cx);
     }
 
@@ -205,6 +235,9 @@ impl Shell {
 
     fn tui_event(&mut self, id: i64, event: &TuiEvent, cx: &mut Context<Self>) {
         self.automation_tui_event(id, event, cx);
+        if let Some(workflows) = self.workflows.clone() {
+            workflows.update(cx, |w, cx| w.tui_event(id, event, cx));
+        }
         match event {
             TuiEvent::Started => {}
             TuiEvent::Busy(_) | TuiEvent::Exited(_) => {
@@ -315,6 +348,25 @@ impl Shell {
     /// A session's body: its chat, or its CLI in place of the chat. A terminal
     /// session whose pane is not made yet draws nothing.
     pub(super) fn session_body(
+        &mut self,
+        id: i64,
+        chat: Option<Entity<Conversation>>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let body = self.session_content(id, chat, cx);
+        match self.workflow_wait_banner(id, cx) {
+            Some(banner) => div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .child(banner)
+                .child(body),
+            None => body,
+        }
+    }
+
+    fn session_content(
         &mut self,
         id: i64,
         chat: Option<Entity<Conversation>>,

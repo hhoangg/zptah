@@ -2,8 +2,14 @@
 use super::Fut;
 use monocode_core::mono::{
     habits,
-    workflows::{command::CommandResult, model::WorkflowRun},
+    workflows::{
+        command::CommandResult,
+        model::{OutputField, WorkflowRun},
+        ordered::OrderedMap,
+    },
 };
+
+pub(crate) use monocode_core::mono::workflows::session_facts::SessionFacts;
 
 /// The waits a run uses; tests shorten them.
 #[derive(Clone, Copy, Debug)]
@@ -83,6 +89,9 @@ pub(crate) struct SessionRequest {
     pub folder_name: Option<String>,
     /// `Some` for a cloud step: the session runs in a codespace or sandbox instead of here.
     pub target: Option<CloudRequest>,
+    /// The step's surface is the terminal: the session is the provider's own CLI (Claude), started
+    /// with `prompt` as its first prompt and kept as a background tab.
+    pub terminal: bool,
 }
 
 /// The cloud instance a step asks for, with its instance already resolved by the run.
@@ -163,6 +172,34 @@ pub(crate) struct DecisionRequest {
     pub timeout_ms: u64,
 }
 
+/// A hidden call that reads the declared fields out of a finished session.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ExtractRequest {
+    /// Whose transcript is read, and whose harness, model and account answer.
+    pub session_id: String,
+    /// The fields still missing.
+    pub fields: OrderedMap<OutputField>,
+    pub timeout_ms: u64,
+}
+
+/// What the app shows when a "Wait for me" step needs the user: a banner in the session and a
+/// "needs you" notice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WaitNotice {
+    pub session_id: String,
+    pub workflow: String,
+    pub step: String,
+}
+
+/// How the user answered a "Wait for me" step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WaitChoice {
+    /// Finish the step with the outputs the conversation gave.
+    Continue,
+    /// Fail the step; the session stays open.
+    Fail,
+}
+
 /// Everything a run needs from the app (`MonoWorkflowHost`).
 pub(crate) trait WorkflowHost {
     /// Starts a visible session in an app project, filed in the workflow's sidebar folder, with
@@ -197,6 +234,19 @@ pub(crate) trait WorkflowHost {
     /// A hidden one-shot, no-tools model call; resolves with its reply. Dropping the future
     /// cancels the call.
     fn decide(&self, request: DecisionRequest) -> Fut<Result<String, String>>;
+    /// The commit `dir` is at (`None` outside a repository). Git runs off the UI thread.
+    fn head_commit(&self, dir: String) -> Fut<Option<String>>;
+    /// The git built-ins of the session's checkout compared with `base`. Git runs off the UI
+    /// thread; what cannot be read is empty.
+    fn session_facts(&self, session_id: &str, base: Option<String>) -> Fut<SessionFacts>;
+    /// A hidden one-shot call with the session's own harness, model and account over its
+    /// transcript; resolves with the reply to read with `parse_workflow_output`. Dropping the
+    /// future cancels the call.
+    fn extract(&self, request: ExtractRequest) -> Fut<Result<String, String>>;
+    /// The step waits for the user: show the banner in its session and raise the notice.
+    fn wait_for_user(&self, notice: WaitNotice);
+    /// The wait is over (answered, timed out or stopped): the banner goes.
+    fn wait_over(&self, session_id: &str);
     /// Delivers the summary of a run (see `Summary`).
     fn post(&self, summary: Summary);
     /// Resolves a `{{inputs.x}}` value to one of the app's project paths.

@@ -158,8 +158,23 @@ impl Workflows {
             target.account = Some(id.clone());
             cloud_account = Some(center.profile(&id));
         }
-        let defaults = shell.read(cx).workflow_defaults(&project, asked_kind, cx);
+        let surface = if req.terminal {
+            monocode_core::surface::Surface::Tui
+        } else {
+            monocode_core::surface::Surface::Chat
+        };
+        let defaults = shell
+            .read(cx)
+            .workflow_defaults(&project, asked_kind, surface, cx);
         let kind = defaults.kind();
+        // Only Claude's CLI takes a first prompt from the app, so a terminal step that would run
+        // anything else is refused before a session exists.
+        if req.terminal && kind != Kind::Claude {
+            return Err(format!(
+                "A terminal step runs Claude only, but this step would run {}. Set the step's harness to claude.",
+                kind.label()
+            ));
+        }
         // The harness the node did not name is the app's default one, and so is a model it did
         // not name. Only what the node says is checked against the catalog.
         let check = (harness.is_some() || req.model.is_some() || req.effort.is_some()).then(|| {
@@ -194,6 +209,7 @@ impl Workflows {
         let model = req.model.clone();
         let effort = req.effort.clone();
         let request_id = mono::new_id();
+        let terminal = req.terminal;
         let make = {
             let project = project.clone();
             let input = input.clone();
@@ -284,9 +300,19 @@ impl Workflows {
                     }
                     summary.title = prompt.chars().take(160).collect();
                     db.title(summary.id, &summary.title)?;
+                    if terminal {
+                        // The CLI starts in this folder and a terminal has no first send to make a
+                        // worktree later: the one the step asked for exists already.
+                        settings.new_worktree = false;
+                        settings.worktree_base = None;
+                    }
                     db.configure_agent(summary.id, &provider, &settings)?;
-                    db.prepare_app_prompt(summary.id, &request_id, &prompt)?;
-                    summary.has_messages = true;
+                    // A terminal takes its prompt on the command line, not from the store.
+                    if !terminal {
+                        db.prepare_app_prompt(summary.id, &request_id, &prompt)?;
+                    }
+                    // A terminal session is listed once the CLI has saved a conversation id.
+                    summary.has_messages = !terminal;
                     if let Some(parent) = parent {
                         db.save_started_link(summary.id, parent)?;
                     }
@@ -324,11 +350,13 @@ impl Workflows {
         };
         let work = cx.background_executor().spawn(async move { make() });
         let folder = req.folder_name.clone();
+        let terminal_prompt = terminal.then(|| req.prompt.clone());
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                let started =
-                    result.map(|made| this.install_started(made, &project, folder, draft, cx));
+                let started = result.and_then(|made| {
+                    this.install_started(made, &project, folder, draft, terminal_prompt, cx)
+                });
                 let _ = reply.try_send(started);
             });
         })
@@ -343,8 +371,9 @@ impl Workflows {
         project: &str,
         folder: Option<String>,
         draft: bool,
+        terminal_prompt: Option<String>,
         cx: &mut Context<Self>,
-    ) -> StartedSession {
+    ) -> Result<StartedSession, String> {
         let Made {
             summary,
             settings,
@@ -353,18 +382,42 @@ impl Workflows {
         } = made;
         let local = summary.id;
         if let Some(shell) = self.shell.upgrade() {
-            shell.update(cx, |shell, cx| {
-                shell.mono_install_app(summary, settings, draft, cx);
+            // The state of a terminal step's turn exists before its pane can report anything.
+            if terminal_prompt.is_some() {
+                self.live.tui.insert(local, Default::default());
+            }
+            let opened = shell.update(cx, |shell, cx| {
+                let opened = match &terminal_prompt {
+                    Some(prompt) => shell.workflow_install_tui(summary, &settings, prompt, cx),
+                    None => {
+                        shell.mono_install_app(summary, settings, draft, cx);
+                        true
+                    }
+                };
                 shell.workflow_session_started(local, cx);
                 if let Some(parent) = parent {
                     shell.mono_link_started(local, parent, cx);
                 }
+                opened
             });
+            if !opened {
+                self.live.tui.remove(&local);
+                return Err("The terminal session could not be opened.".into());
+            }
             if let Some(name) = folder {
                 self.file_in_folder(project, local, &name, cx);
             }
         }
         self.live.ids.insert(persisted.clone(), local);
+        // A terminal turn is told by the pane's events, which wake the wait as they come; the CLI
+        // takes a while to show a turn, which is not a reason to give up.
+        if terminal_prompt.is_some() {
+            let settled = self.workflow_settled(local, true, cx);
+            return Ok(StartedSession {
+                session_id: persisted,
+                settled,
+            });
+        }
         let view = self
             .shell
             .upgrade()
@@ -380,10 +433,10 @@ impl Workflows {
             None => false,
         };
         let settled = self.workflow_settled(local, armed, cx);
-        StartedSession {
+        Ok(StartedSession {
             session_id: persisted,
             settled,
-        }
+        })
     }
 
     /// Files `session` in the workflow's folder of `project`: the folder with its name when there

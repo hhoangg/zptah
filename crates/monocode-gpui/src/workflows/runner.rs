@@ -20,10 +20,10 @@ use monocode_core::mono::workflows::{
     model::{
         Checkout, Cwd, DEFAULT_COMMAND_TIMEOUT_MINUTES, DEFAULT_SESSION_TIMEOUT_MINUTES, Node,
         NodeKind, NodeRun, NodeStatus, OutputField, RunInstance, RunStatus, RunSummary,
-        SessionTarget, TEMPLATABLE_TARGET_OPTIONS, TargetInstance, WorkflowRun,
+        SessionMode, SessionTarget, TEMPLATABLE_TARGET_OPTIONS, TargetInstance, WorkflowRun,
     },
     ordered::{Json, OrderedMap, js_number_text},
-    output::{output_hint, parse_workflow_output},
+    output::{check_output_value, output_hint, parse_workflow_output},
     report::{compose_report, decision_prompt, parse_decision},
     template::render_template,
     validate::{DecisionModelSource, decision_model_for},
@@ -40,7 +40,7 @@ use std::{
 use sync::{Either, Gate, Nudge, Signal, join_all, race};
 
 mod api;
-mod host;
+pub(in crate::workflows) mod host;
 mod instances;
 mod sync;
 #[cfg(test)]
@@ -60,11 +60,43 @@ const STOPPED_BY_USER: &str = "Stopped by the user.";
 /// A cancel can beat the host registering the command, so it is retried briefly.
 const CANCEL_ATTEMPTS: usize = 10;
 const CANCEL_RETRY_MS: u64 = 50;
+/// What the user answered a step in "Wait for me" with, by (node, branch). It is taken out on the
+/// first answer, so a step settles once however often Continue is pressed.
+type Waits = RefCell<HashMap<(String, String), async_channel::Sender<WaitChoice>>>;
 /// How much of a failed command's output goes into the node error.
 const COMMAND_DETAIL_MAX: usize = 500;
 
 fn now() -> u64 {
     monocode_core::time::now_ms()
+}
+
+/// What a session step is, as far as finishing it goes.
+#[derive(Clone, Copy)]
+struct SessionKind {
+    mode: SessionMode,
+    /// The step runs the provider's CLI: no `reply`, no extraction.
+    terminal: bool,
+    /// The step runs in a cloud instance: no git built-ins.
+    cloud: bool,
+}
+
+/// The declared fields `have` has no value for yet.
+fn missing_fields(
+    declared: &OrderedMap<OutputField>,
+    have: &OrderedMap<Json>,
+) -> OrderedMap<OutputField> {
+    declared
+        .iter()
+        .filter(|(name, _)| !have.contains_key(name))
+        .map(|(name, field)| (name.clone(), field.clone()))
+        .collect()
+}
+
+/// `{name: value}` as a JSON object, to check one value against its declared type.
+fn single(name: &str, value: &Json) -> Json {
+    let mut one = OrderedMap::new();
+    one.insert(name, value.clone());
+    Json::Object(one)
 }
 
 // --- one run ------------------------------------------------------------------------------------
@@ -94,6 +126,7 @@ struct Exec {
     stopped: Signal,
     nudge: Nudge,
     flushed: Nudge,
+    waits: Waits,
     /// Sessions start one at a time so the first makes the run's folder and the rest reuse it.
     starts: Gate,
     registry: Registry,
@@ -608,21 +641,19 @@ impl Exec {
         };
         let timeout_ms =
             (timeout_minutes.unwrap_or(DEFAULT_SESSION_TIMEOUT_MINUTES as f64) * 60_000.0) as u64;
-        // A terminal step opens the provider's CLI instead of a chat. The runner does not do that
-        // yet, and running it as a chat would quietly change what the step does.
-        if self
+        let (mode, terminal) = self
             .node_of(&node_id)
-            .is_some_and(|n| n.kind.session_surface().is_terminal())
-        {
-            return self.fail(
-                &node_id,
-                &branch,
-                "Terminal steps are not available in this build yet",
-            );
-        }
+            .map(|n| {
+                (
+                    n.kind.session_mode(),
+                    n.kind.session_surface().is_terminal(),
+                )
+            })
+            .unwrap_or_default();
         // The declared outputs are recorded by a command the session runs. A cloud session
-        // cannot reach this app, so it gets no hint and is read by the fallback instead.
-        let prompt = if target.is_none() {
+        // cannot reach this app, so it gets no hint and is read by the fallback instead. The hint
+        // is part of the first prompt only: a later round talks to a session that has read it.
+        let prompt = if target.is_none() && reuse_session_id.is_none() {
             let hint = output_hint(&output, &text::app_cli());
             if hint.is_empty() {
                 prompt
@@ -632,8 +663,15 @@ impl Exec {
         } else {
             prompt
         };
+        // The commit the step starts from, to tell what it changed (D18).
+        let mut base = None;
 
         let (session_id, turn): (String, Fut<Outcome>) = if let Some(reuse) = reuse_session_id {
+            if target.is_none()
+                && let Some(dir) = self.host.worktree_of(&reuse)
+            {
+                base = self.host.head_commit(dir).await;
+            }
             let turn = self.host.send(&reuse, prompt);
             (reuse, turn)
         } else {
@@ -678,6 +716,10 @@ impl Exec {
                     let _ = self.host.stop(&old).await;
                 }
             }
+            if !is_cloud {
+                let dir = worktree_cwd.clone().unwrap_or_else(|| project_path.clone());
+                base = self.host.head_commit(dir).await;
+            }
             let request = SessionRequest {
                 project: project_path.clone(),
                 prompt,
@@ -689,6 +731,7 @@ impl Exec {
                 parent_session_id,
                 folder_name: Some(folder_name),
                 target: cloud,
+                terminal,
             };
             // The start runs on its own so Stop does not wait for one that hangs.
             let (done, started) = async_channel::bounded(1);
@@ -791,15 +834,26 @@ impl Exec {
                 }),
             );
         }
-        let reply = {
-            let reply = self.host.final_reply(&session_id);
-            if reply.is_empty() {
-                outcome.text
-            } else {
-                reply
-            }
-        };
-        match self.on_turn_end(&node_id, &branch, &reply, &output) {
+        let reply = self.reply_of(&session_id, outcome.text);
+        let finished = self
+            .finish_session(
+                &node_id,
+                &branch,
+                &session_id,
+                reply,
+                &output,
+                SessionKind {
+                    mode,
+                    terminal,
+                    cloud: target.is_some(),
+                },
+                base,
+            )
+            .await;
+        if !self.live() {
+            return;
+        }
+        match finished {
             Err(problem) => self.fail(&node_id, &branch, problem),
             Ok(value) => self.apply(EngineEvent::NodeFinished {
                 node_id,
@@ -810,43 +864,212 @@ impl Exec {
         }
     }
 
-    /// A session step's turn ended: what the node's output is. Everything a step reports meets
-    /// here, so the built-in fields, "Wait for me" and the fallback extraction hook in at this
-    /// one place. For now it is what the session recorded with `workflow.output`, completed from
-    /// a `workflow-output` block in the reply when the session wrote one anyway.
-    fn on_turn_end(
-        &self,
+    /// The last thing the session said, else what its turn reported.
+    fn reply_of(&self, session_id: &str, fallback: String) -> String {
+        let reply = self.host.final_reply(session_id);
+        if reply.is_empty() { fallback } else { reply }
+    }
+
+    /// A session step's first turn ended: what the node's output is. Everything a step reports
+    /// meets here. "Wait for me" holds the step until the user answers. The declared fields are
+    /// what the session recorded with `workflow.output` (a `workflow-output` block the session
+    /// wrote on its own counts too); the ones still missing are read from the conversation by a
+    /// hidden call with the session's own harness, model and account (never by asking the user's
+    /// session again), and a terminal session, which has no transcript to read, fails the step.
+    /// The built-in fields are added last. Err is why the step fails.
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_session(
+        self: &Rc<Self>,
         node_id: &str,
         branch: &str,
-        reply: &str,
+        session_id: &str,
+        mut reply: String,
         declared: &OrderedMap<OutputField>,
+        kind: SessionKind,
+        base: Option<String>,
     ) -> Result<OrderedMap<Json>, String> {
-        let mut output = self.pending_output(node_id, branch);
-        let missing: Vec<&String> = declared
-            .keys()
-            .filter(|name| !output.contains_key(name))
-            .collect();
-        if missing.is_empty() {
-            return Ok(output);
-        }
-        match parse_workflow_output(reply, declared) {
-            Ok(block) => {
-                for (name, value) in block.iter() {
-                    if !output.contains_key(name) {
-                        output.insert(name.clone(), value.clone());
-                    }
-                }
-                Ok(output)
+        if kind.mode == SessionMode::WaitForMe {
+            self.wait_for_user(node_id, branch, session_id).await?;
+            if !kind.terminal {
+                reply = self.reply_of(session_id, reply);
             }
-            Err(_) => Err(format!(
-                "The session did not record these output fields with workflow.output: {}",
-                missing
+        }
+        if !self.live() {
+            return Err(STOPPED_BY_USER.into());
+        }
+        let mut output = self.pending_output(node_id, branch);
+        let mut missing = missing_fields(declared, &output);
+        if !missing.is_empty()
+            && let Ok(block) = parse_workflow_output(&reply, &missing)
+        {
+            for (name, value) in block.iter() {
+                if missing.contains_key(name)
+                    && check_output_value(&missing, &single(name, value)).is_ok()
+                {
+                    output.insert(name.clone(), value.clone());
+                }
+            }
+            missing = missing_fields(declared, &output);
+        }
+        if !missing.is_empty() {
+            let names = missing.keys().cloned().collect::<Vec<_>>().join(", ");
+            if kind.terminal {
+                return Err(format!(
+                    "The terminal session did not record these output fields with workflow.output: {names}"
+                ));
+            }
+            let found = self.extract(session_id, &missing).await?;
+            for (name, value) in found.iter() {
+                output.insert(name.clone(), value.clone());
+            }
+        }
+        if !self.live() {
+            return Err(STOPPED_BY_USER.into());
+        }
+        for (name, value) in self.builtins(session_id, &reply, kind, base).await.iter() {
+            output.insert(name.clone(), value.clone());
+        }
+        Ok(output)
+    }
+
+    /// Reads `missing` out of the session's conversation. Only the fields asked for come back,
+    /// each checked against its declared type.
+    async fn extract(
+        self: &Rc<Self>,
+        session_id: &str,
+        missing: &OrderedMap<OutputField>,
+    ) -> Result<OrderedMap<Json>, String> {
+        let names = missing.keys().cloned().collect::<Vec<_>>().join(", ");
+        let why = |reason: String| {
+            format!("Could not read the output fields ({names}) from the session: {reason}")
+        };
+        let call = self.host.extract(ExtractRequest {
+            session_id: session_id.into(),
+            fields: missing.clone(),
+            timeout_ms: self.limits.decision_timeout_ms,
+        });
+        let answer = match race(call, self.stop.wait()).await {
+            Either::Right(()) => return Err(STOPPED_BY_USER.into()),
+            Either::Left(Err(error)) => return Err(why(error)),
+            Either::Left(Ok(answer)) => answer,
+        };
+        let block = parse_workflow_output(&answer, missing).map_err(why)?;
+        let mut found = OrderedMap::new();
+        for (name, value) in block.iter() {
+            if !missing.contains_key(name) {
+                continue;
+            }
+            check_output_value(missing, &single(name, value)).map_err(why)?;
+            found.insert(name.clone(), value.clone());
+        }
+        let absent: Vec<&String> = missing.keys().filter(|n| !found.contains_key(n)).collect();
+        if !absent.is_empty() {
+            return Err(why(format!(
+                "the answer had no value for {}",
+                absent
                     .iter()
-                    .map(|name| name.as_str())
+                    .map(|n| n.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
-            )),
+            )));
         }
+        Ok(found)
+    }
+
+    /// The fields every session step has without declaring anything: `reply` (chat only),
+    /// `sessionId`, and, for a step on this computer, what Git says about its checkout.
+    async fn builtins(
+        self: &Rc<Self>,
+        session_id: &str,
+        reply: &str,
+        kind: SessionKind,
+        base: Option<String>,
+    ) -> OrderedMap<Json> {
+        let mut out = OrderedMap::new();
+        if !kind.terminal {
+            out.insert("reply", Json::String(reply.to_string()));
+        }
+        out.insert("sessionId", Json::String(session_id.to_string()));
+        if !kind.cloud {
+            let facts = self.host.session_facts(session_id, base).await;
+            out.insert("worktree", Json::String(facts.worktree));
+            out.insert("branch", Json::String(facts.branch));
+            out.insert("commit", Json::String(facts.commit));
+            out.insert(
+                "changedFiles",
+                Json::Array(facts.changed_files.into_iter().map(Json::String).collect()),
+            );
+            out.insert("diffStat", Json::String(facts.diff_stat));
+        }
+        out
+    }
+
+    /// "Wait for me": the step stays open for the user. Ok when they pressed Continue; Err is why
+    /// the step fails (Fail step, Stop, or nobody answered within the wait limit).
+    async fn wait_for_user(
+        self: &Rc<Self>,
+        node_id: &str,
+        branch: &str,
+        session_id: &str,
+    ) -> Result<(), String> {
+        let key = (node_id.to_string(), branch.to_string());
+        let (answer_tx, answer_rx) = async_channel::bounded(1);
+        self.waits.borrow_mut().insert(key.clone(), answer_tx);
+        self.apply(EngineEvent::WaitingForUser {
+            node_id: node_id.into(),
+            branch: branch.into(),
+            waiting: true,
+        });
+        self.host.wait_for_user(WaitNotice {
+            session_id: session_id.into(),
+            workflow: self.state.borrow().run.definition.name.clone(),
+            step: node_id.into(),
+        });
+        let timer = self.sleep(self.limits.approval_wait_ms);
+        let answer = race(race(answer_rx.recv(), self.stop.wait()), timer).await;
+        self.waits.borrow_mut().remove(&key);
+        self.host.wait_over(session_id);
+        match answer {
+            Either::Left(Either::Left(Ok(WaitChoice::Continue))) => Ok(()),
+            Either::Left(Either::Left(Ok(WaitChoice::Fail))) => {
+                Err("You ended this step with Fail step.".into())
+            }
+            Either::Left(Either::Left(Err(_))) | Either::Left(Either::Right(())) => {
+                Err(STOPPED_BY_USER.into())
+            }
+            Either::Right(()) => {
+                Err("Nobody pressed Continue or Fail step before the wait limit ran out.".into())
+            }
+        }
+    }
+
+    /// The user answered the step waiting in `session_ids`. Settles at most once: the first
+    /// answer takes the step's slot, so another press, or an answer that comes after Stop, finds
+    /// nothing to answer.
+    fn answer_wait(&self, session_ids: &[String], choice: WaitChoice) -> Result<(), String> {
+        const GONE: &str = "This step is no longer waiting for you.";
+        if !self.live() {
+            return Err(GONE.into());
+        }
+        let key = {
+            let state = self.state.borrow();
+            let waits = self.waits.borrow();
+            state
+                .run
+                .nodes
+                .iter()
+                .find(|n| {
+                    n.session_id
+                        .as_ref()
+                        .is_some_and(|id| session_ids.contains(id))
+                        && waits.contains_key(&(n.node_id.clone(), n.branch.clone()))
+                })
+                .map(|n| (n.node_id.clone(), n.branch.clone()))
+        };
+        let sender = key
+            .and_then(|key| self.waits.borrow_mut().remove(&key))
+            .ok_or(GONE)?;
+        sender.try_send(choice).map_err(|_| GONE.to_string())
     }
 
     /// What the node's session wrote with `workflow.output` this round.
@@ -1478,6 +1701,21 @@ impl WorkflowRunner {
         })
     }
 
+    /// The user's answer to a step in "Wait for me" whose session is one of `ids` (its local and
+    /// persisted ids). Err says there is nothing to answer: the step was answered, stopped or
+    /// failed already.
+    pub(crate) fn answer_wait(&self, ids: &[String], choice: WaitChoice) -> Result<(), String> {
+        let execs: Vec<Rc<Exec>> = self.live.borrow().values().cloned().collect();
+        let mut last = Err("This step is no longer waiting for you.".to_string());
+        for exec in execs {
+            last = exec.answer_wait(ids, choice);
+            if last.is_ok() {
+                break;
+            }
+        }
+        last
+    }
+
     /// The runs going, as `(workflow id, run id)`.
     pub(crate) fn running(&self) -> Vec<(String, String)> {
         self.live
@@ -1518,6 +1756,7 @@ impl WorkflowRunner {
             stopped: Signal::default(),
             nudge: Nudge::default(),
             flushed: Nudge::default(),
+            waits: Default::default(),
             starts: Gate::default(),
             registry: self.live.clone(),
             signals: self.signals.clone(),

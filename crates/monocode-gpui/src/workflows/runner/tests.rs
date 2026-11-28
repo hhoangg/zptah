@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 
 mod cloud;
+mod data;
 mod fake;
 mod real;
 use fake::*;
@@ -342,12 +343,18 @@ fn node<'a>(run: &'a WorkflowRun, id: &str) -> &'a NodeRun {
     run.nodes.iter().find(|n| n.node_id == id).unwrap()
 }
 
+/// The declared fields of a node's output, as `name=value`; the built-ins have their own tests.
 fn output_of(run: &WorkflowRun, id: &str) -> String {
     node(run, id)
         .output
         .as_ref()
         .unwrap()
         .iter()
+        .filter(|(name, _)| {
+            !monocode_core::mono::workflows::output::SESSION_BUILTINS
+                .iter()
+                .any(|(builtin, _)| builtin == name)
+        })
         .map(|(k, v)| format!("{k}={}", v.stringify(false)))
         .collect::<Vec<_>>()
         .join(",")
@@ -454,6 +461,7 @@ fn it_never_asks_the_session_again_when_declared_output_is_missing(cx: &mut Test
     cx.run_until_parked();
     let w = rig.fake.world();
     assert!(w.sends.is_empty(), "no follow-up in the user's session");
+    assert_eq!(w.extract_calls.len(), 1, "the hidden call reads it instead");
     assert_eq!(w.posts[0].title, "Ship it \u{b7} failed");
     drop(w);
     let run = rig.last_run();
@@ -463,7 +471,7 @@ fn it_never_asks_the_session_again_when_declared_output_is_missing(cx: &mut Test
     assert_eq!(dev.reasked, None);
     let error = dev.error.as_deref().unwrap();
     assert!(
-        error.contains("workflow.output") && error.contains("summary"),
+        error.contains("summary") && error.contains("no extraction answer"),
         "{error}"
     );
 }

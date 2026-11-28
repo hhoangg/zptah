@@ -172,6 +172,42 @@ pub fn extraction_prompt(fields: &OrderedMap<OutputField>, transcript: &str) -> 
     .join("\n")
 }
 
+/// How much of a conversation the extraction call is shown, in characters.
+pub const TRANSCRIPT_MAX_CHARS: usize = 60_000;
+const OMITTED: &str = "[... the middle of the conversation is left out ...]";
+
+/// The conversation the extraction call reads: what the user and the agent said, in order, one
+/// labelled message after another (tool calls and reasoning are left out). When it is longer than
+/// `max_chars`, the start (the step's own prompt) and the end (its conclusion) are kept.
+pub fn transcript_text(rows: &[crate::transcript::Row], max_chars: usize) -> String {
+    let mut messages: Vec<(&str, String)> = Vec::new();
+    for row in rows {
+        let label = match row.role.as_str() {
+            "user" | "mono-system" => "User",
+            "assistant" => "Assistant",
+            _ => continue,
+        };
+        match messages.last_mut() {
+            Some((last, text)) if *last == label && !row.first => text.push_str(&row.text),
+            _ => messages.push((label, row.text.clone())),
+        }
+    }
+    let text = messages
+        .iter()
+        .map(|(label, text)| format!("{label}: {}", text.trim()))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text;
+    }
+    let head_len = max_chars / 5;
+    let tail_len = max_chars - head_len;
+    let head: String = text.chars().take(head_len).collect();
+    let tail: String = text.chars().skip(total - tail_len).collect();
+    format!("{head}\n\n{OMITTED}\n\n{tail}")
+}
+
 /// `^ {0,3}(`{3,})([^`]*)$`: the backtick count and the info string of an opening fence.
 fn open_fence(line: &str) -> Option<(usize, &str)> {
     let rest = line.trim_start_matches(' ');

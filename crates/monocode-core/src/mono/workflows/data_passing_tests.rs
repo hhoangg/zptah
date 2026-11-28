@@ -375,3 +375,44 @@ fn a_run_record_keeps_pending_outputs_and_reads_old_records_without_them() {
     assert_eq!(old.status, NodeStatus::WaitingForUser);
     let _ = json("{}");
 }
+
+fn row(role: &str, text: &str, first: bool) -> crate::transcript::Row {
+    crate::transcript::Row {
+        role: role.into(),
+        text: text.into(),
+        first,
+        sent_at: None,
+    }
+}
+
+#[test]
+fn the_extraction_transcript_labels_messages_and_drops_tools() {
+    use super::output::transcript_text;
+    let rows = vec![
+        row("user", "Fix it", true),
+        row("tool", "ls output", true),
+        row("reasoning", "hmm", true),
+        row("assistant", "Done, ", true),
+        row("assistant", "approved.", false),
+        row("user", "Thanks", true),
+    ];
+    assert_eq!(
+        transcript_text(&rows, 1_000),
+        "User: Fix it\n\nAssistant: Done, approved.\n\nUser: Thanks"
+    );
+    assert_eq!(transcript_text(&[], 10), "");
+}
+
+#[test]
+fn a_long_extraction_transcript_keeps_its_start_and_its_end() {
+    use super::output::transcript_text;
+    let rows = vec![
+        row("user", &format!("START{}", "m".repeat(5_000)), true),
+        row("assistant", &format!("{}END", "n".repeat(5_000)), true),
+    ];
+    let text = transcript_text(&rows, 1_000);
+    assert!(text.starts_with("User: START"));
+    assert!(text.ends_with("END"));
+    assert!(text.contains("left out"));
+    assert!(text.chars().count() < 1_200);
+}

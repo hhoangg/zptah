@@ -30,6 +30,25 @@ pub(crate) struct DecisionSetup {
     account: Profile,
 }
 
+impl DecisionSetup {
+    /// A setup for a caller that already knows who answers (the extraction of a session's fields).
+    pub(crate) fn new(
+        kind: Kind,
+        binary: PathBuf,
+        cwd: PathBuf,
+        model: Option<String>,
+        account: Profile,
+    ) -> Self {
+        Self {
+            kind,
+            binary,
+            cwd,
+            model,
+            account,
+        }
+    }
+}
+
 /// The harness a decision names: its own `harness`, else the one its model id names
 /// (`grok:grok-4.6`), else `None` (the app's default harness).
 pub(crate) fn named_kind(

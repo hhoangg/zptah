@@ -53,20 +53,13 @@ impl Shell {
             .prompt
             .clone()
             .unwrap_or_else(|| due.automation.prompt.clone());
-        match self.ensure_tui(id, cx) {
-            Some(tui) => {
-                // Not waiting to be shown: a background run has no one looking at it.
-                tui.update(cx, |tui, cx| {
-                    tui.set_initial_prompt(prompt.trim().to_owned());
-                    tui.start(cx);
-                });
-            }
-            None => self.settle_tui_run(
+        if !self.start_tui_with_prompt(id, &prompt, cx) {
+            self.settle_tui_run(
                 id,
                 "failed",
                 Some("The terminal session could not be opened.".into()),
                 cx,
-            ),
+            );
         }
         if reveal && self.navigation_revision == revision {
             self.activate_session(id, window, cx);
