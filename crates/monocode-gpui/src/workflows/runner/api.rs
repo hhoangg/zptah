@@ -45,14 +45,25 @@ pub(crate) struct Outcome {
     pub status: Status,
     pub text: String,
     pub error: Option<String>,
+    /// The runner ended the turn itself (the step's timeout, the approval wait limit): it fails
+    /// the step even in "Wait for me".
+    pub by_limit: bool,
 }
 
 impl Outcome {
+    /// A failure the runner's own limits caused.
+    pub(crate) fn limit(error: impl Into<String>) -> Self {
+        Self {
+            by_limit: true,
+            ..Self::failed(error)
+        }
+    }
     pub(crate) fn completed(text: impl Into<String>) -> Self {
         Self {
             status: Status::Completed,
             text: text.into(),
             error: None,
+            by_limit: false,
         }
     }
     pub(crate) fn failed(error: impl Into<String>) -> Self {
@@ -60,6 +71,7 @@ impl Outcome {
             status: Status::Failed,
             text: String::new(),
             error: Some(error.into()),
+            by_limit: false,
         }
     }
     pub(crate) fn cancelled(error: impl Into<String>) -> Self {
@@ -67,6 +79,7 @@ impl Outcome {
             status: Status::Cancelled,
             text: String::new(),
             error: Some(error.into()),
+            by_limit: false,
         }
     }
 }

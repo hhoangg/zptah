@@ -590,7 +590,7 @@ impl Exec {
                     )
                 };
                 let _ = self.host.stop(session_id).await;
-                break Outcome::failed(error);
+                break Outcome::limit(error);
             }
         };
         if asking && self.live() {
@@ -821,6 +821,7 @@ impl Exec {
         let user_has_it = mode == SessionMode::WaitForMe
             && !terminal
             && target.is_none()
+            && !outcome.by_limit
             && matches!(outcome.status, Status::Cancelled | Status::Failed)
             && self.host.session_info(&session_id).is_some();
         if outcome.status != Status::Completed && !user_has_it {
@@ -841,6 +842,15 @@ impl Exec {
                     }
                 }),
             );
+        }
+        // A provider failure that was handed over stays visible in the node's details.
+        let mut noted = false;
+        if outcome.status == Status::Failed
+            && let Some(error) = &outcome.error
+        {
+            let note = format!("The first turn failed: {error}");
+            self.patch_node(&node_id, &branch, |n| n.error = Some(note));
+            noted = true;
         }
         let reply = self.reply_of(&session_id, outcome.text);
         let finished = self
@@ -863,12 +873,18 @@ impl Exec {
         }
         match finished {
             Err(problem) => self.fail(&node_id, &branch, problem),
-            Ok(value) => self.apply(EngineEvent::NodeFinished {
-                node_id,
-                branch,
-                output: cap_map(&value),
-                at: now(),
-            }),
+            Ok(value) => {
+                // Continued past the failure: the note is not an error of the finished node.
+                if noted {
+                    self.patch_node(&node_id, &branch, |n| n.error = None);
+                }
+                self.apply(EngineEvent::NodeFinished {
+                    node_id,
+                    branch,
+                    output: cap_map(&value),
+                    at: now(),
+                });
+            }
         }
     }
 

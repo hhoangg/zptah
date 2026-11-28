@@ -625,3 +625,78 @@ fn a_failed_turn_of_an_auto_step_still_fails_it(cx: &mut TestAppContext) {
     assert_eq!(run.status, RunStatus::Failed);
     assert!(rig.fake.world().waits.is_empty());
 }
+
+// --- the runner's own limits still fail a Wait for me step -----------------------------------
+
+fn waiting_with(extra: Value) -> Workflow {
+    workflow(
+        vec![trigger(), session("dev", json!({}), extra)],
+        vec![edge("start", "dev")],
+    )
+}
+
+#[gpui::test]
+fn the_step_timeout_fails_a_wait_for_me_step_with_its_reason(cx: &mut TestAppContext) {
+    let rig = Rig::new(&["late"]);
+    rig.fake.hold();
+    rig.start(
+        cx,
+        &waiting_with(json!({"mode": "waitForMe", "timeoutMinutes": 1})),
+    );
+    cx.run_until_parked();
+    minutes(cx, 62);
+    let run = rig.last_run();
+    assert_eq!(run.status, RunStatus::Failed);
+    let error = node(&run, "dev").error.clone().unwrap();
+    assert!(error.contains("took longer than 1 minutes"), "{error}");
+    assert!(rig.fake.world().waits.is_empty(), "the user was not asked");
+}
+
+#[gpui::test]
+fn an_unanswered_approval_fails_a_wait_for_me_step_without_a_second_notice(
+    cx: &mut TestAppContext,
+) {
+    let rig = Rig::with_limits(
+        &[],
+        Limits {
+            approval_wait_ms: 10_000,
+            ..Limits::default()
+        },
+    );
+    rig.fake.hold();
+    rig.start(cx, &waiting_with(json!({"mode": "waitForMe"})));
+    cx.run_until_parked();
+    rig.fake.set_waiting("s1", true);
+    minutes(cx, 12);
+    let run = rig.last_run();
+    assert_eq!(run.status, RunStatus::Failed);
+    assert_eq!(
+        node(&run, "dev").error.as_deref(),
+        Some("Nobody answered its approval request.")
+    );
+    assert!(rig.fake.world().waits.is_empty(), "no needs-you notice");
+}
+
+#[gpui::test]
+fn a_provider_failure_handed_over_stays_visible_until_the_step_finishes(cx: &mut TestAppContext) {
+    let rig = Rig::new(&["Oops."]);
+    rig.fake
+        .end_turns_with(Outcome::failed("The provider errored"));
+    rig.start(cx, &waiting(json!({})));
+    cx.run_until_parked();
+    let dev = node(&rig.last_run(), "dev").clone();
+    assert_eq!(dev.status, NodeStatus::WaitingForUser);
+    assert!(
+        dev.error
+            .as_deref()
+            .unwrap()
+            .contains("The provider errored"),
+        "{:?}",
+        dev.error
+    );
+    answer(&rig, "s1", WaitChoice::Continue).unwrap();
+    cx.run_until_parked();
+    let run = rig.last_run();
+    assert_eq!(run.status, RunStatus::Done);
+    assert_eq!(node(&run, "dev").error, None);
+}

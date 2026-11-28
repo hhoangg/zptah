@@ -21,7 +21,8 @@ pub(in crate::workflows) struct TuiTurn {
     busy: bool,
     /// How the step's turn ended, once it has.
     over: Option<Result<(), String>>,
-    /// The step's run has looked at `over`. An exit that comes right behind the end of the turn
+    /// The step's run has looked at `over`. This relies on `TuiSession::settle` emitting
+    /// `Busy(false)` and `Exited` in the same update, so no look can fall between them. An exit that comes right behind the end of the turn
     /// (the pane ends its turn when the CLI leaves) can still change what the turn's end means,
     /// until then.
     taken: std::cell::Cell<bool>,
