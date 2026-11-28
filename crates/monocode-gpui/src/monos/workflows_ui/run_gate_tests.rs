@@ -342,9 +342,11 @@ fn run_now_keeps_the_values_for_this_run_apart_from_the_stored_ones() {
         w.input_values.get("area"),
         Some(&InputValue::String("src".into()))
     );
-    // A later request without values must not inherit them.
+    // A later request without values must not inherit them: it waits behind the first.
     assert_eq!(actions::run_now(&mut d.host, A, None), None);
-    assert!(d.first().run_values.is_none());
+    assert!(d.first().run_values.is_some(), "the first request is kept");
+    assert_eq!(d.first().run_backlog.len(), 1);
+    assert!(d.first().run_backlog[0].values.is_none());
 }
 
 #[test]

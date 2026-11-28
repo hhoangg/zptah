@@ -13,7 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 fn status_name(status: RunStatus) -> &'static str {
     match status {
+        RunStatus::Queued => "queued",
         RunStatus::Running => "running",
+        RunStatus::Skipped => "skipped",
         RunStatus::Done => "done",
         RunStatus::DoneWithFailures => "doneWithFailures",
         RunStatus::Failed => "failed",
@@ -24,7 +26,9 @@ fn status_name(status: RunStatus) -> &'static str {
 
 fn status_label(status: RunStatus) -> &'static str {
     match status {
+        RunStatus::Queued => "queued",
         RunStatus::Running => "running",
+        RunStatus::Skipped => "skipped",
         RunStatus::Done => "completed",
         RunStatus::DoneWithFailures => "completed with failures",
         RunStatus::Failed => "failed",

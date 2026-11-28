@@ -521,7 +521,7 @@ mod new_node_defaults {
                 ..
             } => {
                 assert_eq!(project, "{{inputs.repo}}");
-                assert_eq!(checkout, Checkout::Root);
+                assert_eq!(checkout, Checkout::Run);
                 assert_eq!(prompt, "");
                 assert!(output.is_empty());
             }

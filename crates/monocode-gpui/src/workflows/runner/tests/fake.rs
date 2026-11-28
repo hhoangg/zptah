@@ -64,6 +64,13 @@ pub(super) struct World {
     pub(super) cancelled: Vec<String>,
     pub(super) posts: Vec<Summary>,
     pub(super) saves: Vec<WorkflowRun>,
+    /// Every run worktree asked for, and every For each branch worktree (`group`, `index`).
+    pub(super) run_trees: Vec<RunWorktreeRequest>,
+    pub(super) branch_trees: Vec<(String, usize)>,
+    /// The paths of the worktrees made again from their branches.
+    pub(super) restored_trees: Vec<String>,
+    /// Why the next run worktree cannot be made.
+    tree_error: Option<String>,
 }
 
 /// Releases whatever waits on it when closed (or dropped).
@@ -155,6 +162,10 @@ impl FakeHost {
     }
     pub(super) fn end_turns_with(&self, outcome: Outcome) {
         self.0.borrow_mut().turn_outcome = Some(outcome);
+    }
+    /// The run worktree cannot be made.
+    pub(super) fn trees_fail(&self, error: &str) {
+        self.0.borrow_mut().tree_error = Some(error.into());
     }
     pub(super) fn no_worktrees(&self) {
         self.0.borrow_mut().no_worktrees = true;
@@ -451,6 +462,58 @@ impl WorkflowHost for FakeHost {
 
     fn worktree_of(&self, session_id: &str) -> Option<String> {
         (!self.0.borrow().no_worktrees).then(|| format!("/code/app-wt-{session_id}"))
+    }
+
+    fn create_run_worktree(&self, request: RunWorktreeRequest) -> Fut<Result<RunWorktree, String>> {
+        let mut w = self.0.borrow_mut();
+        let result = match w.tree_error.clone() {
+            Some(error) => Err(error),
+            None => Ok(RunWorktree {
+                path: format!("/code/app-worktrees/wf-{}-{}", request.slug, request.number),
+                branch: format!("wf/{}-{}", request.slug, request.number),
+                base: "run-base".into(),
+                removed_at: None,
+            }),
+        };
+        w.run_trees.push(request);
+        Box::pin(async move { result })
+    }
+
+    fn fork_branch_worktree(
+        &self,
+        _run_id: &str,
+        run: RunWorktree,
+        group: String,
+        index: usize,
+    ) -> Fut<Result<RunWorktree, String>> {
+        self.0
+            .borrow_mut()
+            .branch_trees
+            .push((group.clone(), index));
+        let tree = RunWorktree {
+            path: format!("{}-{group}-{index}", run.path),
+            branch: format!("{}-{group}-{index}", run.branch),
+            base: format!("fork-{group}-{index}"),
+            removed_at: None,
+        };
+        Box::pin(async move { Ok(tree) })
+    }
+
+    fn restore_worktree(
+        &self,
+        _run_id: &str,
+        tree: RunWorktree,
+    ) -> Fut<Result<RunWorktree, String>> {
+        let mut w = self.0.borrow_mut();
+        w.restored_trees.push(tree.path.clone());
+        let result = match w.tree_error.clone() {
+            Some(error) => Err(error),
+            None => Ok(RunWorktree {
+                removed_at: None,
+                ..tree
+            }),
+        };
+        Box::pin(async move { result })
     }
 
     fn save_run(&self, run: WorkflowRun) -> Fut<Result<(), String>> {

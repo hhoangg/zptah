@@ -877,6 +877,9 @@ fn a_saved_new_workflow_takes_its_stored_route_so_remove_works(cx: &mut TestAppC
         m.board_menu_picked("Workflow menu", "remove".into(), cx)
     });
     visual.run_until_parked();
+    settle(&s, visual);
+    click(visual, "wf-remove-confirm");
+    visual.run_until_parked();
     assert!(super::tests::saved(&s).is_empty());
     assert_eq!(route(&s, visual), None);
 }

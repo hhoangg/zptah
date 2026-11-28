@@ -6,16 +6,16 @@
 //! positions and edges. Every string in it is checked for absolute paths, so a file can be
 //! handed to someone else.
 use super::model::{
-    new_workflow_id, Checkout, Cwd, DecisionModel, Edge, InputValue, Node, NodeId, NodeKind,
-    OutputField, OutputFieldType, Requirement, SessionTarget, TargetInstance, Workflow, WorkflowId,
-    WorkflowInput, WorkflowUi, DECIDE_AI, DIRECTION_LR, NODE_TYPES,
+    new_workflow_id, Checkout, Concurrency, Cwd, DecisionModel, Edge, InputValue, Node, NodeId,
+    NodeKind, OutputField, OutputFieldType, Requirement, SessionTarget, TargetInstance, Workflow,
+    WorkflowId, WorkflowInput, WorkflowUi, Workspace, DECIDE_AI, DIRECTION_LR, NODE_TYPES,
 };
 use super::models::{workflow_issues, ModelCatalog};
 use super::ordered::{Json, OrderedMap};
 use super::output::output_hint;
 use super::parse::{
-    drop_stray_handles, parse_decision_model, parse_edge, parse_inputs, parse_node,
-    parse_workflow_ui, read_requires,
+    drop_stray_handles, parse_concurrency, parse_decision_model, parse_edge, parse_inputs,
+    parse_node, parse_workflow_ui, parse_workspace, read_requires,
 };
 use super::template::{js_space, js_trim};
 use super::validate::{find_absolute_path, WorkflowIssue};
@@ -161,7 +161,11 @@ fn export_node(node: &Node) -> Doc {
             target,
             account,
         } => {
-            put(&mut out, "project", Some(text(project)));
+            put(
+                &mut out,
+                "project",
+                (!project.is_empty()).then(|| text(project)),
+            );
             put(&mut out, "harness", harness.as_deref().map(text));
             put(&mut out, "model", model.as_deref().map(text));
             put(&mut out, "effort", effort.as_deref().map(text));
@@ -171,7 +175,11 @@ fn export_node(node: &Node) -> Doc {
                 &mut out,
                 "checkout",
                 Some(match checkout {
+                    Checkout::Run => text("run"),
                     Checkout::Root => text("root"),
+                    Checkout::Existing(path) => {
+                        Doc::Map(vec![("existing".to_string(), text(path))])
+                    }
                     Checkout::NewWorktree => text("newWorktree"),
                     Checkout::WorktreeOf(id) => worktree_of(id),
                 }),
@@ -189,8 +197,14 @@ fn export_node(node: &Node) -> Doc {
             command,
             cwd,
             timeout_minutes,
+            on_failure,
         } => {
-            put(&mut out, "project", Some(text(project)));
+            put(
+                &mut out,
+                "project",
+                (!project.is_empty()).then(|| text(project)),
+            );
+            put(&mut out, "onFailure", on_failure.as_deref().map(text));
             put(
                 &mut out,
                 "cwd",
@@ -283,6 +297,21 @@ fn export_requirement(r: &Requirement) -> Doc {
     Doc::Map(out)
 }
 
+fn export_workspace(workspace: &Workspace) -> Doc {
+    let mut out = vec![("mode".to_string(), text(workspace.mode.name()))];
+    put(
+        &mut out,
+        "project",
+        (!workspace.project.is_empty()).then(|| text(&workspace.project)),
+    );
+    put(
+        &mut out,
+        "baseBranch",
+        workspace.base_branch.as_deref().map(text),
+    );
+    Doc::Map(out)
+}
+
 fn export_decision_model(model: &DecisionModel) -> Doc {
     let mut out = vec![("harness".to_string(), text(&model.harness))];
     put(&mut out, "model", model.model.as_deref().map(text));
@@ -337,6 +366,17 @@ fn export_document(w: &Workflow) -> Doc {
             Doc::Map(vec![("direction".to_string(), text(DIRECTION_LR))]),
         ));
     }
+    put(
+        &mut out,
+        "workspace",
+        (!w.workspace.is_default()).then(|| export_workspace(&w.workspace)),
+    );
+    put(
+        &mut out,
+        "concurrency",
+        (!w.concurrency.is_default())
+            .then(|| Doc::Map(vec![("max".to_string(), number(w.concurrency.max))])),
+    );
     out.push((
         "nodes".to_string(),
         Doc::Seq(w.nodes.iter().map(export_node).collect()),
@@ -377,6 +417,8 @@ pub struct WorkflowDraft {
     pub summary_template: Option<String>,
     /// The board layout marker (`ui.direction`), so a shared file opens laid out the same way.
     pub ui: Option<WorkflowUi>,
+    pub workspace: Workspace,
+    pub concurrency: Concurrency,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
 }
@@ -391,6 +433,8 @@ impl From<&Workflow> for WorkflowDraft {
             decision_model: w.decision_model.clone(),
             summary_template: w.summary_template.clone(),
             ui: w.ui.clone(),
+            workspace: w.workspace.clone(),
+            concurrency: w.concurrency,
             nodes: w.nodes.clone(),
             edges: w.edges.clone(),
         }
@@ -865,6 +909,14 @@ pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPrevie
         }
         Some(_) => return fail("summaryTemplate must be text"),
     };
+    let Some(workspace) = parse_workspace(file.get("workspace")) else {
+        return fail(
+            "workspace needs a mode of perRun or none, and optionally a project and a baseBranch",
+        );
+    };
+    let Some(concurrency) = parse_concurrency(file.get("concurrency")) else {
+        return fail("concurrency needs a max, a number from 1 to 10");
+    };
     let workflow = WorkflowDraft {
         name,
         description,
@@ -873,6 +925,8 @@ pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPrevie
         decision_model,
         summary_template,
         ui: parse_workflow_ui(file.get("ui")),
+        workspace,
+        concurrency,
         nodes,
         edges,
     };
@@ -882,6 +936,8 @@ pub fn preview_import(text: &str, catalog: &ModelCatalog) -> Result<ImportPrevie
     preview.requires = workflow.requires.clone();
     preview.decision_model = workflow.decision_model.clone();
     preview.summary_template = workflow.summary_template.clone();
+    preview.workspace = workflow.workspace.clone();
+    preview.concurrency = workflow.concurrency;
     preview.nodes = workflow.nodes.clone();
     preview.edges = workflow.edges.clone();
     let issues = workflow_issues(&preview, catalog);
@@ -1006,6 +1062,17 @@ pub fn finish_import(
     finish_import_with_id(preview, input_values, now, new_workflow_id())
 }
 
+/// The warnings (advice that never blocks) of the workflow a file would make.
+pub fn draft_warnings(draft: &WorkflowDraft) -> Vec<WorkflowIssue> {
+    let mut workflow = Workflow::new("draft", draft.name.clone());
+    workflow.inputs = draft.inputs.clone();
+    workflow.workspace = draft.workspace.clone();
+    workflow.concurrency = draft.concurrency;
+    workflow.nodes = draft.nodes.clone();
+    workflow.edges = draft.edges.clone();
+    super::validate::workflow_warnings(&workflow)
+}
+
 /// `finish_import` with the id chosen by the caller.
 pub fn finish_import_with_id(
     preview: &ImportPreview,
@@ -1033,6 +1100,8 @@ pub fn finish_import_with_id(
     workflow.requires = draft.requires;
     workflow.decision_model = draft.decision_model;
     workflow.summary_template = draft.summary_template;
+    workflow.workspace = draft.workspace;
+    workflow.concurrency = draft.concurrency;
     workflow.input_values = values;
     workflow.nodes = draft.nodes;
     workflow.edges = draft.edges;

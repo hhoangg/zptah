@@ -256,6 +256,9 @@ pub struct Requests {
     pub resumes: Vec<ResumeRequest>,
     /// Workflows with a run going whose stop was asked for.
     pub stops: Vec<String>,
+    /// `(workflow id, run id)` of runs whose stop was asked for by id (`workflows.stop` with a
+    /// `runId`). Taken whether or not the run is still going.
+    pub stop_runs: Vec<(String, String)>,
 }
 
 /// Takes the requests left in the workflow file (`takeWorkflowRequests`), clearing them in the
@@ -278,6 +281,9 @@ pub fn take_requests(
             }
             if std::mem::take(&mut w.stop_requested) && is_running(&w.id) {
                 taken.stops.push(w.id.clone());
+            }
+            for run_id in std::mem::take(&mut w.stop_run_ids) {
+                taken.stop_runs.push((w.id.clone(), run_id));
             }
         }
         Ok((list, taken))
@@ -470,6 +476,22 @@ pub fn load_runs_checked(
     Ok(runs.runs.into_iter().map(|s| s.run).collect())
 }
 
+/// How many runs of the workflow wait in the queue. A run file that never mentions a queued run is
+/// not parsed, so asking for every workflow stays cheap.
+pub fn queued_count_of(files: &impl MonoFiles, workflow_id: &str) -> Result<usize, String> {
+    let file = files.read(&runs_path(workflow_id))?;
+    let text = file.text.as_deref().unwrap_or("");
+    if !text.contains("\"queued\"") {
+        return Ok(0);
+    }
+    Ok(read_runs_file(text).map_or(0, |f| {
+        f.runs
+            .iter()
+            .filter(|s| s.run.status == RunStatus::Queued)
+            .count()
+    }))
+}
+
 /// The newest run's status and start time. `Ok(None)` means the workflow never ran (no file, an
 /// empty file or an empty list). A file that is not a JSON list, or holds only entries this app
 /// cannot read, is an `Err`: the history is unknown, which is not the same as never having run.
@@ -502,23 +524,65 @@ fn names_left_instances(run: &Json) -> bool {
             .is_some_and(|list| !list.is_empty())
 }
 
+/// A run that waits in the queue (read from its stored JSON).
+fn is_queued(run: &Json) -> bool {
+    run.get("status").and_then(Json::as_str) == Some("queued")
+}
+
+/// A run that is going (read from its stored JSON).
+fn is_running(run: &Json) -> bool {
+    run.get("status").and_then(Json::as_str) == Some("running")
+}
+
+/// How many older runs whose worktree is still on disk are kept past the newest 20. The run's
+/// record is the only place the app names the worktree, so it is not trimmed with the ordinary
+/// history (beyond this many, the oldest go).
+pub const WORKTREE_RUNS_KEPT: usize = 50;
+
+/// A run that owns a worktree the user did not remove (read from its stored JSON): its own or
+/// one of its For each branches'.
+fn holds_worktree(run: &Json) -> bool {
+    let live = |tree: &Json| tree.get("removedAt").is_none() && tree.get("path").is_some();
+    run.get("worktree").is_some_and(live)
+        || run
+            .get("branchWorktrees")
+            .and_then(Json::as_object)
+            .is_some_and(|trees| trees.iter().any(|(_, tree)| live(tree)))
+}
+
 /// The newest runs that fit: at most 20 and under the size budget, never fewer than one, plus
-/// (up to `PINNED_RUNS_KEPT`) older interrupted runs that name cloud instances. Under the size
-/// budget the ordinary old runs go first. Entries that could not be read follow them, untouched.
+/// (up to `PINNED_RUNS_KEPT`) older interrupted runs that name cloud instances, plus (up to
+/// `WORKTREE_RUNS_KEPT`) older runs whose worktree is still on disk. Queued and running runs are
+/// pinned outside the 20 and outside the budget: a run that waits or goes is never trimmed (the
+/// queue is capped at `QUEUED_RUNS_MAX` where runs are queued, and the running ones at the
+/// workflow's concurrency). Under the size budget the ordinary old runs go first. Entries that
+/// could not be read follow them, untouched.
 fn serialize_runs(runs: &[Json], unreadable: &[Json]) -> String {
     let mut pinned_kept = 0;
-    let mut kept: Vec<(String, bool)> = Vec::new();
-    for (at, run) in runs.iter().enumerate() {
-        let pinned = names_left_instances(run);
-        if at < WORKFLOW_RUNS_KEPT {
-            kept.push((list_entry(run), pinned));
-        } else if pinned && pinned_kept < PINNED_RUNS_KEPT {
+    let mut trees_kept = 0;
+    let mut ordinary = 0;
+    // (text, rank): 0 ordinary, 1 pinned (cloud instances, worktree), 2 queued or running.
+    let mut kept: Vec<(String, u8)> = Vec::new();
+    for run in runs.iter() {
+        if is_queued(run) || is_running(run) {
+            kept.push((list_entry(run), 2));
+            continue;
+        }
+        let instances = names_left_instances(run);
+        let tree = holds_worktree(run);
+        if ordinary < WORKFLOW_RUNS_KEPT {
+            ordinary += 1;
+            kept.push((list_entry(run), u8::from(instances || tree)));
+        } else if tree && trees_kept < WORKTREE_RUNS_KEPT {
+            trees_kept += 1;
+            kept.push((list_entry(run), 1));
+        } else if instances && pinned_kept < PINNED_RUNS_KEPT {
             pinned_kept += 1;
-            kept.push((list_entry(run), true));
+            kept.push((list_entry(run), 1));
         }
     }
     let rest: Vec<String> = unreadable.iter().map(list_entry).collect();
-    let size = |kept: &[(String, bool)]| {
+    let size = |kept: &[(String, u8)]| {
         list_len(
             kept.iter()
                 .map(|(t, _)| t.len())
@@ -527,12 +591,13 @@ fn serialize_runs(runs: &[Json], unreadable: &[Json]) -> String {
     };
     while kept.len() > 1 && size(&kept) > RUNS_FILE_BUDGET {
         // The oldest ordinary run first; a pinned one (the oldest) only when nothing else is left
-        // to drop. The newest run (index 0) is never dropped: it is the run just written.
-        let at = kept[1..]
-            .iter()
-            .rposition(|(_, pinned)| !pinned)
-            .map_or(kept.len() - 1, |at| at + 1);
-        kept.remove(at);
+        // to drop; a queued or running run never. The newest run (index 0) is never dropped: it
+        // is the run just written.
+        let droppable = |rank: u8| kept[1..].iter().rposition(|(_, r)| *r == rank);
+        let Some(at) = droppable(0).or_else(|| droppable(1)) else {
+            break;
+        };
+        kept.remove(at + 1);
     }
     let mut lines: Vec<String> = kept.into_iter().map(|(text, _)| text).collect();
     lines.extend(rest);

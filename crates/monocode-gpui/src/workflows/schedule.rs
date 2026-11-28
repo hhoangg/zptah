@@ -15,7 +15,7 @@ use gpui::Context;
 use monocode_core::mono::workflows::{
     cli::Signals,
     global::WorkflowsDir,
-    model::RunSummary,
+    model::{RunStatus, RunSummary, WorkflowRun},
     tick::{self, Found, Start, Tick},
 };
 use std::time::Duration;
@@ -63,16 +63,20 @@ pub(super) fn look_at(
             "Could not check for interrupted workflow runs: {error}"
         ));
     }
-    let running = |workflow: &str| signals.is_running(workflow);
+    let live = |workflow: &str| signals.live_runs(workflow);
     let tick = Tick {
         now,
-        is_running: &running,
+        live_runs: &live,
         probe: probes.models,
         preflight: &probes.requirements,
-        on_claim: &|workflow: &str| signals.set_running(workflow, true),
+        on_claim: &|workflow: &str, run: &str| signals.claim_run(workflow, run),
     };
     match tick::check(dir, &tick) {
-        Ok(found) if found.starts.is_empty() && found.stops.is_empty() => {}
+        Ok(found)
+            if found.starts.is_empty()
+                && found.stops.is_empty()
+                && found.stop_runs.is_empty()
+                && !found.more_requests => {}
         Ok(found) => looked.found = Some(found),
         Err(error) => looked
             .errors
@@ -156,26 +160,49 @@ impl Workflows {
         for error in &looked.errors {
             eprintln!("{error}");
         }
-        // The look marked what it claimed as running (so nothing could remove or double-run it
-        // while its models were probed); the runs started here keep that mark, the others lose it.
-        let claimed: Vec<String> = looked
+        // The look marked what it claimed as running (so nothing could remove or over-fill the
+        // workflow while its models were probed); the runs started here keep that mark, the
+        // others lose it.
+        let claimed: Vec<(String, String)> = looked
             .found
             .iter()
             .flat_map(|found| &found.starts)
             .map(|start| match start {
-                Start::Run { run, .. } | Start::Resume { run } => run.workflow_id.clone(),
-                Start::Refused { workflow_id, .. } => workflow_id.clone(),
+                Start::Run { run, .. } | Start::Resume { run } => {
+                    (run.workflow_id.clone(), run.id.clone())
+                }
+                Start::Refused {
+                    workflow_id,
+                    run_id,
+                    ..
+                } => (workflow_id.clone(), run_id.clone()),
             })
             .collect();
-        // A look that was going when the app began to quit finds nothing to start.
-        if !self.runner.is_quitting()
-            && let Some(found) = looked.found
-        {
-            self.apply_found(found, cx);
+        // A look that was going when the app began to quit finds nothing to start. A queued run
+        // it promoted was written as `running`: it goes back in the queue, so the next start
+        // finds it waiting instead of a record of a run that never ran.
+        if let Some(found) = looked.found {
+            // A claim left more requests behind it: the next look claims them without waiting
+            // for the clock.
+            if found.more_requests && !self.runner.is_quitting() {
+                self.signals.request_check_now();
+            }
+            if self.runner.is_quitting() {
+                for start in found.starts {
+                    if let Start::Run { run, failure: None } = start
+                        && run.status == RunStatus::Running
+                        && run.queued_at.is_some()
+                    {
+                        self.requeue_refused(run, cx);
+                    }
+                }
+            } else {
+                self.apply_found(found, cx);
+            }
         }
-        for workflow_id in claimed {
-            if !self.runner.is_running(&workflow_id) {
-                self.signals.set_running(&workflow_id, false);
+        for (workflow_id, run_id) in claimed {
+            if !self.runner.is_run_live(&run_id) {
+                self.signals.release_run(&workflow_id, &run_id);
             }
         }
         if !self.runner.is_quitting() && std::mem::take(&mut self.checks.again) {
@@ -185,7 +212,10 @@ impl Workflows {
 
     fn apply_found(&mut self, found: Found, cx: &mut Context<Self>) {
         for workflow_id in &found.stops {
-            self.stop_run(workflow_id);
+            self.stop_run(workflow_id, None);
+        }
+        for (workflow_id, run_id) in &found.stop_runs {
+            self.stop_run(workflow_id, Some(run_id));
         }
         for start in found.starts {
             match start {
@@ -229,20 +259,42 @@ impl Workflows {
                     // The runner writes every run it takes. When it refuses one that already failed
                     // (and was announced above), the record is written here so it is not lost.
                     let kept = failed.then(|| run.clone());
-                    if !self.start_run(run, cx)
-                        && let Some(run) = kept
-                    {
-                        let save = self.workflow_host(cx).save_run(run);
-                        cx.spawn(async move |_, _| {
-                            if let Err(error) = save.await {
-                                eprintln!("Could not save a failed workflow run: {error}");
-                            }
-                        })
-                        .detach();
+                    // A promoted run is `running` in the file already: when the runner refuses
+                    // it (the app is quitting, or the slot went), it goes back to the queue.
+                    let promoted = (!failed && run.queued_at.is_some()).then(|| run.clone());
+                    if !self.start_run(run, cx) {
+                        if let Some(run) = kept {
+                            let save = self.workflow_host(cx).save_run(run);
+                            cx.spawn(async move |_, _| {
+                                if let Err(error) = save.await {
+                                    eprintln!("Could not save a failed workflow run: {error}");
+                                }
+                            })
+                            .detach();
+                        }
+                        if let Some(run) = promoted {
+                            self.requeue_refused(run, cx);
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+impl Workflows {
+    /// Puts a promoted run the runner refused back in the queue (see `queue::requeue`).
+    pub(crate) fn requeue_refused(&mut self, run: WorkflowRun, cx: &mut Context<Self>) {
+        let dir = self.dir.clone();
+        let signals = self.signals.clone();
+        cx.background_executor()
+            .spawn(async move {
+                match monocode_core::mono::workflows::queue::requeue(&dir, &run) {
+                    Ok(_) => signals.release_run(&run.workflow_id, &run.id),
+                    Err(error) => eprintln!("Could not put a refused workflow run back: {error}"),
+                }
+            })
+            .detach();
     }
 }
 

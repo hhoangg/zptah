@@ -3,8 +3,9 @@
 //! summary reaches a Mono's chat only through `Monos::workflow_post`.
 use super::sync::race;
 use super::{
-    CloudInstanceInfo, DecisionRequest, ExtractRequest, Fut, Outcome, STOPPED_BY_USER,
-    SessionFacts, SessionInfo, SessionRequest, StartedSession, Summary, WaitNotice, WorkflowHost,
+    CloudInstanceInfo, DecisionRequest, ExtractRequest, Fut, Outcome, RunWorktreeRequest,
+    STOPPED_BY_USER, SessionFacts, SessionInfo, SessionRequest, StartedSession, Summary,
+    WaitNotice, WorkflowHost,
 };
 use crate::conversation::{Conversation, SessionChanged, TurnEnd, WorkflowTurn};
 use crate::runtime::locked;
@@ -15,7 +16,8 @@ use monocode_core::{
     mono::workflows::{
         command::{self, CommandResult},
         global::WorkflowsDir,
-        model::WorkflowRun,
+        model::{RunWorktree, WorkflowRun},
+        run_worktree,
         store::update_runs,
     },
     provider::Kind,
@@ -663,6 +665,78 @@ impl WorkflowHost for AppHost {
             )
         })
         .flatten()
+    }
+
+    fn create_run_worktree(&self, request: RunWorktreeRequest) -> Fut<Result<RunWorktree, String>> {
+        let store = self.with(|w, _| w.store.clone());
+        let work = self.cx.background_executor().spawn(async move {
+            let store = store.ok_or("The app is closing")?;
+            let tree = run_worktree::create_run_worktree(
+                std::path::Path::new(&request.project),
+                &request.base_branch,
+                &request.slug,
+                request.number,
+            )?;
+            // Marked at once: from here on no session removal may take it.
+            monocode_core::session_worktree::mark_workflow_worktree(
+                &*locked(&store)?,
+                &tree.path,
+                &request.run_id,
+            )?;
+            Ok(tree)
+        });
+        Box::pin(work)
+    }
+
+    fn fork_branch_worktree(
+        &self,
+        run_id: &str,
+        run: RunWorktree,
+        group: String,
+        index: usize,
+    ) -> Fut<Result<RunWorktree, String>> {
+        let store = self.with(|w, _| w.store.clone());
+        let run_id = run_id.to_string();
+        let work = self.cx.background_executor().spawn(async move {
+            let store = store.ok_or("The app is closing")?;
+            let tree = run_worktree::fork_branch_worktree(&run, &group, index)?;
+            monocode_core::session_worktree::mark_workflow_worktree(
+                &*locked(&store)?,
+                &tree.path,
+                &run_id,
+            )?;
+            Ok(tree)
+        });
+        Box::pin(work)
+    }
+
+    fn restore_worktree(
+        &self,
+        run_id: &str,
+        tree: RunWorktree,
+    ) -> Fut<Result<RunWorktree, String>> {
+        let store = self.with(|w, _| w.store.clone());
+        let run_id = run_id.to_string();
+        let (workflows, mut cx) = (self.workflows.clone(), self.cx.clone());
+        let work = self.cx.background_executor().spawn(async move {
+            let store = store.ok_or("The app is closing")?;
+            let tree = run_worktree::restore_worktree(&tree)?;
+            let db = locked(&store)?;
+            monocode_core::session_worktree::mark_workflow_worktree(&db, &tree.path, &run_id)?;
+            // The sessions that worked there when it was removed work there again.
+            let back = db.reattach_worktree(&tree.path).unwrap_or_default();
+            Ok::<_, String>((tree, back))
+        });
+        Box::pin(async move {
+            let (tree, back) = work.await?;
+            let path = tree.path.clone();
+            let _ = workflows.update(&mut cx, |w, cx| {
+                if let Some(shell) = w.shell.upgrade() {
+                    shell.update(cx, |shell, cx| shell.worktree_reattached(back, &path, cx));
+                }
+            });
+            Ok(tree)
+        })
     }
 
     fn save_run(&self, run: WorkflowRun) -> Fut<Result<(), String>> {

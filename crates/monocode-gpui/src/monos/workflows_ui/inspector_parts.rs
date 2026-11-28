@@ -807,6 +807,7 @@ impl Monos {
             );
         }
         inputs = inputs.child(self.board_add_input_row(w, window, cx));
+        let workspace = self.board_workspace_section(scope, w, window, cx);
         let requires = self.board_requires_section(w, window, cx);
         let decisions = self.board_decisions_section(w, cx);
         let summary = self.board_summary_section(w, window, cx);
@@ -816,10 +817,105 @@ impl Monos {
             .child(name)
             .child(description)
             .child(inputs)
+            .child(workspace)
             .child(requires)
             .child(decisions)
             .child(summary)
             .into_any_element()
+    }
+
+    /// Where a run works and how many go at once: whether each run gets a worktree of its own,
+    /// of which project (an app project, or a project input) and from which branch, and the
+    /// number of runs at the same time (1 to 10). D51: edited here, not on the board.
+    fn board_workspace_section(
+        &mut self,
+        scope: &Scope,
+        w: &Workflow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        use monocode_core::mono::workflows::model::{CONCURRENCY_LIMIT, WorkspaceMode};
+        let mode = match w.workspace.mode {
+            WorkspaceMode::PerRun => "perRun",
+            WorkspaceMode::None => "none",
+        };
+        let mode_row = self.choice_row(
+            "Each run works",
+            BoardPick::WorkspaceMode,
+            vec![
+                ("perRun".into(), "In its own worktree".into()),
+                ("none".into(), "In the project folder".into()),
+            ],
+            mode,
+            cx,
+        );
+        // An app project by path, or one of the workflow's project inputs.
+        let current = w.workspace.project.clone();
+        let mut options: Vec<(String, String)> = vec![(String::new(), "None".into())];
+        options.extend(scope.projects.iter().map(|p| (p.clone(), basename(p))));
+        options.extend(
+            w.inputs
+                .iter()
+                .filter(|(_, input)| input.ty == InputType::Project)
+                .map(|(name, _)| (format!("{{{{inputs.{name}}}}}"), format!("Input {name}"))),
+        );
+        if !current.is_empty() && !options.iter().any(|(value, _)| *value == current) {
+            options.push((current.clone(), basename(&current)));
+        }
+        let project_row = self.choice_row(
+            "Project",
+            BoardPick::WorkspaceProject,
+            options,
+            &current,
+            cx,
+        );
+        let per_run = w.workspace.mode == WorkspaceMode::PerRun;
+        let branch = w.workspace.base_branch.clone().unwrap_or_default();
+        let branch_row = per_run.then(|| {
+            self.text_row(
+                "Base branch",
+                BoardField::BaseBranch,
+                &branch,
+                "main",
+                window,
+                cx,
+            )
+        });
+        let limit = w.concurrency.limit();
+        let limits: Vec<(String, String)> = (1..=CONCURRENCY_LIMIT)
+            .map(|n| (n.to_string(), n.to_string()))
+            .collect();
+        let concurrency_row = self.choice_row(
+            "Runs at the same time",
+            BoardPick::Concurrency,
+            limits,
+            &limit.to_string(),
+            cx,
+        );
+        section("Workspace", None)
+            .id("wf-workspace")
+            .debug_selector(|| "wf-workspace".into())
+            .child(
+                div()
+                    .px_2()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .pb_1()
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .text_color(content(0.35))
+                            .child(
+                                "A run in its own worktree starts from the base branch of the project, and its branch and worktree stay after the run until you remove them. Runs that wait for a free slot start in the order they were asked.",
+                            ),
+                    )
+                    .child(mode_row)
+                    .child(project_row)
+                    .children(branch_row)
+                    .child(concurrency_row),
+            )
     }
 
     /// The model that answers the workflow's AI decisions (an If, a Switch or a loop the AI

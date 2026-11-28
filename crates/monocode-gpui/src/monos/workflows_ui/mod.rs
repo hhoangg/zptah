@@ -14,6 +14,7 @@ pub(in crate::monos) mod actions;
 mod app_page;
 #[cfg(test)]
 mod app_page_tests;
+mod ask_dialogs;
 mod board;
 #[cfg(test)]
 mod board_canvas_tests;
@@ -41,6 +42,8 @@ mod page_tests;
 mod requirements;
 pub(in crate::monos) mod review;
 #[cfg(test)]
+mod review_fix_tests;
+#[cfg(test)]
 mod review_tests;
 mod run_details;
 mod run_gate;
@@ -52,6 +55,9 @@ mod run_model_tests;
 mod run_page;
 #[cfg(test)]
 mod run_tests;
+mod run_tree_dialog;
+#[cfg(test)]
+mod run_tree_tests;
 #[cfg(test)]
 pub(in crate::monos) mod tests;
 pub(in crate::monos) mod view;
@@ -132,6 +138,8 @@ pub(super) struct WorkflowsUi {
     loaded: Option<Vec<Workflow>>,
     /// The runs of the workflows that need them (the open page), by workflow.
     runs: HashMap<String, Vec<WorkflowRun>>,
+    /// How many runs of each workflow wait in its queue (only the workflows that have any).
+    queued: HashMap<String, usize>,
     /// Whether the files were asked for already.
     requested: bool,
     /// Where the Ask Mono picker opens from.
@@ -169,6 +177,12 @@ pub(super) struct WorkflowsUi {
     run: run_page::RunPage,
     /// The open board editor.
     board: Option<board::BoardState>,
+    /// The open "Remove worktree" confirmation of the run page.
+    tree: Option<run_tree_dialog::TreeDialog>,
+    /// The open "Which run should stop?" and "Remove this workflow?" confirmations.
+    stop_ask: Option<ask_dialogs::StopAsk>,
+    remove_ask: Option<ask_dialogs::RemoveAsk>,
+    cancel_ask: Option<ask_dialogs::CancelAsk>,
     /// The open Run or Resume dialog, and the number of the last check it asked for.
     gate: Option<run_gate::RunGate>,
     gate_generation: u64,
@@ -301,6 +315,7 @@ impl Monos {
         // The open page also shows the workflow's recent runs.
         // A run the runner holds is shown from there, not from its file.
         let wanted = match &self.wf.route {
+            Some(WfRoute::Run(_, run)) if self.workflows.with_run_id(run, |_| ()).is_some() => None,
             Some(WfRoute::Workflow(id) | WfRoute::Board(id) | WfRoute::Run(id, _)) => {
                 Some(id.clone())
             }
@@ -308,10 +323,20 @@ impl Monos {
         };
         let work = cx.background_executor().spawn(async move {
             let workflows = load_workflows(&dir)?.workflows;
+            // The queue of each workflow that ran, for "N running / M queued".
+            let queued: HashMap<String, usize> = workflows
+                .iter()
+                .filter(|w| w.last_run_id.is_some())
+                .filter_map(|w| {
+                    let n = monocode_core::mono::workflows::store::queued_count_of(&dir, &w.id)
+                        .unwrap_or(0);
+                    (n > 0).then(|| (w.id.clone(), n))
+                })
+                .collect();
             let runs = wanted
                 .filter(|id| workflows.iter().any(|w| &w.id == id))
                 .and_then(|id| load_runs(&dir, &id).ok().map(|runs| (id, runs)));
-            Ok::<_, String>((workflows, runs))
+            Ok::<_, String>((workflows, runs, queued))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -320,7 +345,10 @@ impl Monos {
                     return;
                 }
                 match result {
-                    Ok((workflows, runs)) => this.workflows_loaded(workflows, runs, cx),
+                    Ok((workflows, runs, queued)) => {
+                        this.wf.queued = queued;
+                        this.workflows_loaded(workflows, runs, cx)
+                    }
                     Err(error) => eprintln!("Could not read the workflows: {error}"),
                 }
             });

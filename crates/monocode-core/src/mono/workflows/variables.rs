@@ -132,6 +132,20 @@ const SCOPE_VARS: &[(&str, &str, &str, VariableKind, When)] = &[
         VariableKind::Text,
         When::Always,
     ),
+    (
+        "run",
+        "run.worktree",
+        "Folder of the run's worktree (empty without one)",
+        VariableKind::Text,
+        When::Always,
+    ),
+    (
+        "run",
+        "run.branch",
+        "Branch of the run's worktree (empty without one)",
+        VariableKind::Text,
+        When::Always,
+    ),
     // Event items: the validator takes any path under `trigger.item`.
     (
         "item",

@@ -106,6 +106,7 @@ fn command_node(id: &str) -> Node {
             command: "true".into(),
             cwd: None,
             timeout_minutes: None,
+            on_failure: None,
         },
     )
 }

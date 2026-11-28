@@ -11,9 +11,9 @@ use super::board_model::{
 };
 use super::engine::looped_node_ids;
 use super::model::{
-    Checkout, Cwd, Decide, DecisionModel, Handle, InputValue, LoopSpec, Node, NodeId, NodeKind,
-    OutputField, ReportTo, Requirement, Workflow, WorkflowInput, DECIDE_AI, TRIGGERS_MAX,
-    WORKFLOWS_MAX,
+    Checkout, Concurrency, Cwd, Decide, DecisionModel, Handle, InputValue, LoopSpec, Node, NodeId,
+    NodeKind, OutputField, ReportTo, Requirement, Workflow, WorkflowInput, Workspace, DECIDE_AI,
+    TRIGGERS_MAX, WORKFLOWS_MAX,
 };
 use super::models::{workflow_issues, ModelCatalog};
 use super::ordered::OrderedMap;
@@ -48,6 +48,8 @@ pub struct Meta {
     pub decision_model: Option<DecisionModel>,
     pub report_to: Option<ReportTo>,
     pub summary_template: Option<String>,
+    pub workspace: Workspace,
+    pub concurrency: Concurrency,
 }
 
 impl Meta {
@@ -62,6 +64,8 @@ impl Meta {
             decision_model: w.decision_model.clone(),
             report_to: w.report_to.clone(),
             summary_template: w.summary_template.clone(),
+            workspace: w.workspace.clone(),
+            concurrency: w.concurrency,
         }
     }
 }
@@ -78,6 +82,8 @@ pub fn current(base: &Workflow, flow: &Flow, meta: &Meta) -> Workflow {
     w.decision_model = meta.decision_model.clone();
     w.report_to = meta.report_to.clone();
     w.summary_template = meta.summary_template.clone();
+    w.workspace = meta.workspace.clone();
+    w.concurrency = meta.concurrency;
     w
 }
 
@@ -102,7 +108,7 @@ pub fn problems_of(w: &Workflow, catalog: &ModelCatalog) -> Vec<WorkflowIssue> {
                 .node_id
                 .as_deref()
                 .is_some_and(|id| unset.contains(&id))
-                && issue.message.starts_with("project must be exactly");
+                && issue.message.starts_with("project is not set");
             if missing {
                 WorkflowIssue {
                     message: "Choose a project".into(),
@@ -161,6 +167,8 @@ pub fn merged(stored: Option<&Workflow>, next: &Workflow, now: u64) -> Workflow 
     base.decision_model = next.decision_model.clone();
     base.report_to = next.report_to.clone();
     base.summary_template = next.summary_template.clone();
+    base.workspace = next.workspace.clone();
+    base.concurrency = next.concurrency;
     base.nodes = next
         .nodes
         .iter()
@@ -822,31 +830,43 @@ pub fn toggle_in_report(fields: &OrderedMap<OutputField>, key: &str) -> OrderedM
 
 pub fn checkout_value(checkout: &Checkout) -> String {
     match checkout {
+        Checkout::Run => "run".into(),
         Checkout::Root => "root".into(),
         Checkout::NewWorktree => "newWorktree".into(),
         Checkout::WorktreeOf(id) => format!("worktree:{id}"),
+        Checkout::Existing(path) => format!("existing:{path}"),
     }
 }
 
 pub fn parse_checkout(value: &str) -> Checkout {
-    match value.strip_prefix("worktree:") {
-        Some(id) => Checkout::WorktreeOf(id.to_string()),
-        None if value == "newWorktree" => Checkout::NewWorktree,
-        None => Checkout::Root,
+    if let Some(id) = value.strip_prefix("worktree:") {
+        return Checkout::WorktreeOf(id.to_string());
+    }
+    if let Some(path) = value.strip_prefix("existing:") {
+        return Checkout::Existing(path.to_string());
+    }
+    match value {
+        "run" => Checkout::Run,
+        "newWorktree" => Checkout::NewWorktree,
+        _ => Checkout::Root,
     }
 }
 
+/// No cwd means the run worktree (the project folder when the workspace makes none).
 pub fn cwd_value(cwd: Option<&Cwd>) -> String {
     match cwd {
+        None => "run".into(),
+        Some(Cwd::Root) => "root".into(),
         Some(Cwd::WorktreeOf(id)) => format!("worktree:{id}"),
-        _ => "root".into(),
     }
 }
 
 pub fn parse_cwd(value: &str) -> Option<Cwd> {
-    value
-        .strip_prefix("worktree:")
-        .map(|id| Cwd::WorktreeOf(id.to_string()))
+    match value.strip_prefix("worktree:") {
+        Some(id) => Some(Cwd::WorktreeOf(id.to_string())),
+        None if value == "root" => Some(Cwd::Root),
+        None => None,
+    }
 }
 
 /// The session nodes other than `except`: what a worktree or a nest can be of.

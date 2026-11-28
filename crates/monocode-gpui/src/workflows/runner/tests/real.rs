@@ -554,7 +554,7 @@ fn the_app_starts_a_run_through_the_real_host_and_stops_it(cx: &mut TestAppConte
     });
     // The step's session is a plain one in the project, in the workflow's folder.
     assert_eq!(folders_of(&s, cx).folders[0].name, "Ship it");
-    let stopped = cx.update(|cx| workflows.update(cx, |w, _| w.stop_run(WF)));
+    let stopped = cx.update(|cx| workflows.update(cx, |w, _| w.stop_run(WF, None)));
     assert!(stopped);
     cx.run_until_parked();
     cx.update(|cx| {
@@ -584,7 +584,7 @@ fn run_and_stop(s: &Setup, cx: &mut TestAppContext, run: WorkflowRun) {
     let workflows = workflows_of(s, cx);
     assert!(cx.update(|cx| workflows.update(cx, |w, cx| w.start_run(run, cx))));
     cx.run_until_parked();
-    assert!(cx.update(|cx| workflows.update(cx, |w, _| w.stop_run(WF))));
+    assert!(cx.update(|cx| workflows.update(cx, |w, _| w.stop_run(WF, None))));
     cx.run_until_parked();
 }
 

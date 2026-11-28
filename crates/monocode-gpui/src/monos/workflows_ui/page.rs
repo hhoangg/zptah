@@ -21,6 +21,8 @@ pub(in crate::monos) fn value_text(value: Option<&InputValue>) -> String {
 /// How a run reads in the history: its label and the colour of its dot.
 pub(super) fn run_status(status: RunStatus, mono_color: u32) -> (&'static str, gpui::Hsla) {
     match status {
+        RunStatus::Queued => ("Queued", content(0.55)),
+        RunStatus::Skipped => ("Skipped", content(0.4)),
         RunStatus::Running => ("Running", rgb(mono_color).into()),
         RunStatus::Done => ("Finished", gpui::Hsla::from(rgb(0x34d399)).opacity(0.8)),
         RunStatus::DoneWithFailures => (

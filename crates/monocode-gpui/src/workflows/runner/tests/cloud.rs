@@ -307,7 +307,7 @@ fn stopping_while_the_instance_starts_launches_nothing_later(cx: &mut TestAppCon
     rig.start(cx, &build_then_check());
     cx.run_until_parked();
     assert_eq!(rig.fake.world().starts.len(), 1);
-    assert!(rig.runner.stop(WF));
+    assert!(rig.runner.stop(WF, None));
     cx.run_until_parked();
     assert_eq!(rig.last_run().status, RunStatus::Stopped);
     // The start returns after the stop: its session is ended, nothing is sent, and the second
@@ -359,7 +359,7 @@ fn a_stopped_run_lists_the_instances_it_used_and_leaves_them_alone(cx: &mut Test
         node(&rig.last_run(), "build").session_id.as_deref(),
         Some("s1")
     );
-    assert!(rig.runner.stop(WF));
+    assert!(rig.runner.stop(WF, None));
     cx.run_until_parked();
     let w = rig.fake.world();
     assert_eq!(w.stops, ["s1"]);
@@ -872,7 +872,7 @@ fn a_resumed_run_that_is_stopped_names_the_instances_of_the_interrupted_one_and_
     let host: Rc<dyn WorkflowHost> = Rc::new(rig.fake.clone());
     assert!(rig.runner.resume(host, &cx.to_async(), &interrupted));
     cx.run_until_parked();
-    assert!(rig.runner.stop(WF));
+    assert!(rig.runner.stop(WF, None));
     cx.run_until_parked();
     let w = rig.fake.world();
     // Only sessions were stopped (the old one's queued prompt, then the running turn): the fake

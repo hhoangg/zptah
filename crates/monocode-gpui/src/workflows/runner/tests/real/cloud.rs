@@ -365,7 +365,7 @@ fn stored_run(s: &Setup, cx: &mut TestAppContext) -> WorkflowRun {
 
 fn stop_run(s: &Setup, cx: &mut TestAppContext) -> bool {
     let workflows = workflows_of(s, cx);
-    cx.update(|cx| workflows.update(cx, |w, _| w.stop_run(WF)))
+    cx.update(|cx| workflows.update(cx, |w, _| w.stop_run(WF, None)))
 }
 
 #[gpui::test]

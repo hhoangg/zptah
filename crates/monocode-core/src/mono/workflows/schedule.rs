@@ -55,12 +55,13 @@ pub struct Due<'a> {
 
 /// Workflows to run now, and ones whose schedule only has to move on.
 /// Like habits, one that came due long ago (the app was closed) is not run, and one that
-/// comes due while its previous run is going is skipped: it runs again at its next time.
-/// A requested run waits for the current one to end instead of being dropped.
+/// comes due while a run of it already waits in the queue is skipped: it runs again at its next
+/// time. A requested run is never dropped: when no slot is free the claim queues it.
+/// `queued(id)` says whether a run of the workflow waits in the queue.
 pub fn due_workflows<'a>(
     workflows: &'a [Workflow],
     now: u64,
-    is_running: impl Fn(&str) -> bool,
+    queued: impl Fn(&str) -> bool,
 ) -> Due<'a> {
     let mut due = Due {
         run: Vec::new(),
@@ -72,13 +73,11 @@ pub fn due_workflows<'a>(
         if workflow.needs_review {
             continue;
         }
-        let busy = is_running(&workflow.id);
         if workflow.run_requested {
-            if !busy {
-                due.run.push(workflow);
-            }
+            due.run.push(workflow);
             continue;
         }
+        let busy = queued(&workflow.id);
         let times = next_times(workflow);
         if !workflow.enabled || times.is_empty() {
             continue;
@@ -133,6 +132,13 @@ pub fn after_claim(workflow: &Workflow, now: u64, run_id: Option<&str>) -> Workf
     next.run_caller = None;
     // The values were for the run that is being claimed now; they never carry to a later one.
     next.run_values = None;
+    // The next request asked for behind it becomes the pending one, so it is claimed in its turn.
+    if !next.run_backlog.is_empty() {
+        let following = next.run_backlog.remove(0);
+        next.run_requested = true;
+        next.run_caller = following.caller;
+        next.run_values = following.values;
+    }
     // A stop asked for before a run started was meant for an earlier one. Moving the schedule
     // past a workflow whose run is still going must keep a stop written for that run.
     next.stop_requested = workflow.stop_requested && run_id.is_none();
@@ -161,6 +167,8 @@ pub fn after_claim(workflow: &Workflow, now: u64, run_id: Option<&str>) -> Workf
     }
     if let Some(id) = run_id {
         next.last_run_id = Some(id.to_string());
+        // The claimed run takes the next number of the workflow.
+        next.run_counter = workflow.run_counter + 1;
     }
     next
 }
@@ -200,6 +208,32 @@ mod tests {
 
     mod after_claim_tests {
         use super::*;
+
+        #[test]
+        fn a_claim_promotes_the_next_request_asked_for_behind_it() {
+            use crate::mono::workflows::model::RunRequest;
+            let mut w = workflow();
+            w.run_requested = true;
+            w.run_backlog = vec![
+                RunRequest {
+                    caller: None,
+                    values: None,
+                },
+                RunRequest {
+                    caller: None,
+                    values: None,
+                },
+            ];
+            // Each claim answers one request and the one behind it becomes the pending one.
+            let first = after_claim(&w, now(), Some("run-1"));
+            assert!(first.run_requested);
+            assert_eq!(first.run_backlog.len(), 1);
+            let second = after_claim(&first, now(), Some("run-2"));
+            assert!(second.run_requested);
+            assert!(second.run_backlog.is_empty());
+            let third = after_claim(&second, now(), Some("run-3"));
+            assert!(!third.run_requested);
+        }
 
         #[test]
         fn a_claim_clears_the_run_request_and_any_stop_asked_for_before_it() {
@@ -341,15 +375,16 @@ mod tests {
         }
 
         #[test]
-        fn runs_a_requested_workflow_when_idle_and_waits_while_busy() {
+        fn a_requested_workflow_is_always_claimed_even_with_a_run_queued() {
+            // The claim decides between a slot and the queue; a request is never held back here.
             let mut w = workflow();
             w.run_requested = true;
             w.enabled = false;
             w.next_run_at = None;
             let list = [w];
             assert_eq!(due_workflows(&list, now(), never).run.len(), 1);
-            let busy = due_workflows(&list, now(), |_| true);
-            assert!(busy.run.is_empty() && busy.advance.is_empty());
+            let queued = due_workflows(&list, now(), |_| true);
+            assert_eq!(queued.run.len(), 1);
         }
 
         #[test]

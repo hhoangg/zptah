@@ -38,12 +38,18 @@ pub mod parse;
 pub mod preflight;
 #[cfg(test)]
 mod preflight_tests;
+pub mod queue;
+#[cfg(test)]
+mod queue_tests;
 pub mod report;
 #[cfg(test)]
 mod report_tests;
 pub mod run_graph_model;
 #[cfg(test)]
 mod run_graph_model_tests;
+pub mod run_worktree;
+#[cfg(test)]
+mod run_worktree_tests;
 pub mod schedule;
 pub mod session_facts;
 #[cfg(test)]
@@ -63,6 +69,8 @@ pub mod validate;
 pub mod variables;
 #[cfg(test)]
 mod variables_tests;
+#[cfg(test)]
+mod workspace_tests;
 pub mod yaml;
 pub(crate) mod yaml_emit;
 pub(crate) mod yaml_read;

@@ -212,6 +212,12 @@ impl Monos {
                 .global_workflow(&id)
                 .is_some_and(|w| !is_new && w.run_requested);
         let busy = running || starting;
+        // "2 running / 1 queued" when several go or any waits.
+        let slots = if is_new {
+            None
+        } else {
+            super::list::slots_subtitle(self.workflow_slots(&id))
+        };
         let focus = self.wf.focus_canvas;
         let run_anchor = self.wf.run_anchor.clone();
         let stop_id = id.clone();
@@ -352,13 +358,21 @@ impl Monos {
             )
             .child(modes)
             .child(div().flex_1().min_w_0())
+            .children(slots.map(|text| {
+                div()
+                    .flex_shrink_0()
+                    .px_1p5()
+                    .text_size(px(11.))
+                    .text_color(content(0.45))
+                    .debug_selector(|| "wf-slots".into())
+                    .child(text)
+            }))
             .when(running, |d| {
                 d.child(
                     icon_button("mono-workflow-stop", "Stop", "square")
                         .debug_selector(|| "mono-workflow-stop".into())
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.stop_workflow_run(&stop_id);
-                            cx.notify();
+                            this.workflow_stop_clicked(&stop_id, cx)
                         })),
                 )
             })
@@ -537,6 +551,10 @@ impl Monos {
             .flatten();
         let leaving = self.board_leave_dialog(window, cx);
         let gate = self.run_gate_dialog(scope, window, cx);
+        let tree = self.run_tree_dialog(window, cx);
+        let stopping = self.stop_ask_dialog(window, cx);
+        let removing = self.remove_ask_dialog(window, cx);
+        let cancelling = self.cancel_ask_dialog(window, cx);
         div()
             .id("wf-board")
             .debug_selector(|| "wf-board".into())
@@ -572,6 +590,10 @@ impl Monos {
             .children(problems)
             .children(leaving)
             .children(gate)
+            .children(tree)
+            .children(stopping)
+            .children(removing)
+            .children(cancelling)
             .into_any_element()
     }
 
@@ -719,89 +741,112 @@ impl Monos {
     /// and the whole list when opened. A problem picked selects its node.
     fn wf_problems_bar(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let b = self.wf.board.as_ref()?;
-        if b.issues.is_empty() {
+        if b.issues.is_empty() && b.warnings.is_empty() {
             return None;
         }
+        // Problems keep the workflow from running; warnings are advice that never blocks (D51).
         let count = b.issues.len();
-        let first = b.issues[0].message.clone();
+        let advice = b.warnings.len();
+        let first = b
+            .issues
+            .first()
+            .or(b.warnings.first())
+            .map(|i| i.message.clone())
+            .unwrap_or_default();
         let open = b.show_issues;
         let (saving, enabled) = (b.saving, b.meta.enabled);
-        let rows: Vec<(usize, String, Option<String>)> = b
+        let blocked = count > 0;
+        let rows: Vec<(usize, String, Option<String>, bool)> = b
             .issues
             .iter()
+            .map(|i| (i, false))
+            .chain(b.warnings.iter().map(|i| (i, true)))
             .enumerate()
-            .map(|(at, i)| (at, i.message.clone(), i.node_id.clone()))
+            .map(|(at, (i, warning))| (at, i.message.clone(), i.node_id.clone(), warning))
             .collect();
-        let mut bar =
-            div()
-                .id("wf-board-issues")
-                .debug_selector(|| "wf-board-issues".into())
-                .w_full()
-                .flex_shrink_0()
-                .border_t_1()
-                .border_color(content(0.1))
-                .px_4()
-                .py_1p5()
-                .text_size(px(11.))
-                .line_height(px(16.))
-                .text_color(content(0.6))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .id("wf-board-issues-toggle")
-                                .debug_selector(|| "wf-board-issues-toggle".into())
-                                .role(Role::Button)
-                                .aria_expanded(open)
-                                .cursor_pointer()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .items_center()
-                                .gap_1p5()
-                                .child(
-                                    div()
-                                        .size(px(6.))
-                                        .flex_shrink_0()
-                                        .rounded_full()
-                                        .bg(gpui::Hsla::from(rgb(0xef4444)).opacity(0.7)),
-                                )
-                                .child(div().flex_shrink_0().text_color(content(0.8)).child(
-                                    format!(
-                                        "{count} {}",
-                                        if count == 1 { "problem" } else { "problems" }
-                                    ),
-                                ))
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_color(content(0.45))
-                                        .child(first),
-                                )
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(b) = this.wf.board.as_mut() {
-                                        b.show_issues = !b.show_issues;
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .when(enabled, |d| {
-                            d.child(
-                                super::board_ui::banner_button(
-                                    "wf-board-issues-paused",
-                                    "Save paused",
-                                    !saving,
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| this.board_save(true, false, false, cx),
-                                )),
+        let headline = match (count, advice) {
+            (0, advice) => format!(
+                "{advice} {}",
+                if advice == 1 { "warning" } else { "warnings" }
+            ),
+            (count, 0) => format!(
+                "{count} {}",
+                if count == 1 { "problem" } else { "problems" }
+            ),
+            (count, advice) => format!(
+                "{count} {} \u{b7} {advice} {}",
+                if count == 1 { "problem" } else { "problems" },
+                if advice == 1 { "warning" } else { "warnings" }
+            ),
+        };
+        let dot = if blocked {
+            gpui::Hsla::from(rgb(0xef4444)).opacity(0.7)
+        } else {
+            gpui::Hsla::from(rgb(0xfbbf24)).opacity(0.8)
+        };
+        let mut bar = div()
+            .id("wf-board-issues")
+            .debug_selector(|| "wf-board-issues".into())
+            .w_full()
+            .flex_shrink_0()
+            .border_t_1()
+            .border_color(content(0.1))
+            .px_4()
+            .py_1p5()
+            .text_size(px(11.))
+            .line_height(px(16.))
+            .text_color(content(0.6))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("wf-board-issues-toggle")
+                            .debug_selector(|| "wf-board-issues-toggle".into())
+                            .role(Role::Button)
+                            .aria_expanded(open)
+                            .cursor_pointer()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(div().size(px(6.)).flex_shrink_0().rounded_full().bg(dot))
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_color(content(0.8))
+                                    .child(headline),
                             )
-                        }),
-                );
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(content(0.45))
+                                    .child(first),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(b) = this.wf.board.as_mut() {
+                                    b.show_issues = !b.show_issues;
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .when(enabled && blocked, |d| {
+                        d.child(
+                            super::board_ui::banner_button(
+                                "wf-board-issues-paused",
+                                "Save paused",
+                                !saving,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| this.board_save(true, false, false, cx),
+                            )),
+                        )
+                    }),
+            );
         if open {
             bar = bar.child(
                 div()
@@ -813,11 +858,12 @@ impl Monos {
                     .pb_0p5()
                     .flex()
                     .flex_col()
-                    .children(rows.into_iter().map(|(at, message, node)| {
+                    .children(rows.into_iter().map(|(at, message, node, warning)| {
                         let picked = node.clone();
+                        let kind = if warning { "wf-warning" } else { "wf-problem" };
                         div()
-                            .id(SharedString::from(format!("wf-problem-{at}")))
-                            .debug_selector(move || format!("wf-problem-{at}"))
+                            .id(SharedString::from(format!("{kind}-{at}")))
+                            .debug_selector(move || format!("{kind}-{at}"))
                             .role(Role::Button)
                             .aria_label(message.clone())
                             .cursor_pointer()
@@ -825,6 +871,9 @@ impl Monos {
                             .pl_3()
                             .pr_1()
                             .py_0p5()
+                            .when(warning, |d| {
+                                d.text_color(gpui::Hsla::from(rgb(0xfbbf24)).opacity(0.85))
+                            })
                             .hover(|s| s.bg(content(0.06)).text_color(content(1.)))
                             .child(message)
                             .on_click(cx.listener(move |this, _, _, cx| {

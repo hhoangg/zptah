@@ -94,6 +94,8 @@ pub(in crate::monos) fn session_detail(preview: &ImportPreview, node: &Node) -> 
         return None;
     };
     let where_ = match checkout {
+        Checkout::Run => "Run worktree".to_string(),
+        Checkout::Existing(path) => format!("Folder {}", visible(path)),
         Checkout::Root => "Project folder".to_string(),
         Checkout::NewWorktree => "New worktree".to_string(),
         Checkout::WorktreeOf(of) => {
@@ -338,6 +340,41 @@ impl Monos {
                     .when(!problems_hint.is_empty(), |d| {
                         d.child(hint(problems_hint.to_string()))
                     })
+                    .into_any_element(),
+            );
+        }
+        // Advice that never blocks: shown so the user can accept the risk knowingly (D51).
+        let warnings = monocode_core::mono::workflows::yaml::draft_warnings(&preview.workflow);
+        if !warnings.is_empty() {
+            let amber = gpui::Hsla::from(rgb(0xfbbf24));
+            out.push(
+                section("Warnings", None)
+                    .id("mono-workflow-warnings")
+                    .debug_selector(|| "mono-workflow-warnings".into())
+                    .child(div().px_2().flex().flex_col().gap_1().children(
+                        warnings.iter().map(|issue| {
+                            div()
+                                .flex()
+                                .items_start()
+                                .gap_1p5()
+                                .text_size(px(11.))
+                                .line_height(px(16.))
+                                .text_color(amber.opacity(0.85))
+                                .child(
+                                    div()
+                                        .mt(px(6.))
+                                        .size(px(6.))
+                                        .flex_shrink_0()
+                                        .rounded_full()
+                                        .bg(amber.opacity(0.8)),
+                                )
+                                .child(div().min_w_0().child(visible(&issue.message)))
+                        }),
+                    ))
+                    .child(hint(
+                        "Warnings do not stop the workflow from running; they name a risk you may accept."
+                            .to_string(),
+                    ))
                     .into_any_element(),
             );
         }

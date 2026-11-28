@@ -88,6 +88,10 @@ fn run_of(w: &Workflow, sessions: &[(&str, &str)]) -> WorkflowRun {
             title: "Done".into(),
             text: "All good".into(),
         }),
+        number: None,
+        queued_at: None,
+        worktree: None,
+        branch_worktrees: Default::default(),
     }
 }
 
@@ -769,4 +773,119 @@ fn a_device_that_sees_none_of_the_projects_sees_nothing() {
         panic!("expected a list");
     };
     assert!(list.is_empty());
+}
+
+#[test]
+fn the_workspace_project_and_existing_folders_count_for_visibility() {
+    use monocode_core::mono::workflows::model::{Checkout, Workspace};
+    let known = vec!["/work/a".to_owned(), "/work/b".to_owned()];
+    let only_a = web(Some(vec![project_id("/work/a")]), None);
+    // A literal workspace project the device does not see hides the workflow.
+    let mut w = workflow("w", &["/work/a"]);
+    w.workspace = Workspace {
+        project: "/work/b".into(),
+        ..Default::default()
+    };
+    assert!(!workflow_visible(&only_a, &known, &w));
+    w.workspace.project = "/work/a".into();
+    assert!(workflow_visible(&only_a, &known, &w));
+    // A workspace project from a variable, or an input without a value, cannot be told.
+    w.workspace.project = "{{s0.path}}".into();
+    assert!(!workflow_visible(&only_a, &known, &w));
+    w.workspace.project = "{{inputs.nope}}".into();
+    assert!(!workflow_visible(&only_a, &known, &w));
+    // A step sent to an existing folder: only inside a project (or its worktrees) the device sees.
+    let mut w = workflow("w", &["/work/a"]);
+    let set = |w: &mut Workflow, path: &str| {
+        if let NodeKind::Session { checkout, .. } = &mut w.nodes[0].kind {
+            *checkout = Checkout::Existing(path.into());
+        }
+    };
+    set(&mut w, "/work/a-worktrees/feature");
+    assert!(workflow_visible(&only_a, &known, &w));
+    set(&mut w, "/work/b-worktrees/feature");
+    assert!(!workflow_visible(&only_a, &known, &w));
+    set(&mut w, "/elsewhere/tree");
+    assert!(!workflow_visible(&only_a, &known, &w));
+    set(&mut w, "{{inputs.p0}}/x");
+    assert!(!workflow_visible(&only_a, &known, &w));
+}
+
+#[test]
+fn a_run_worktree_path_never_reaches_a_device_but_its_branch_may() {
+    use monocode_core::mono::workflows::model::RunWorktree;
+    let w = workflow("w", &["/work/a"]);
+    let mut run = run_of(&w, &[("s0", "persisted-1")]);
+    let tree = |path: &str, branch: &str| RunWorktree {
+        path: path.into(),
+        branch: branch.into(),
+        base: "abc".into(),
+        removed_at: None,
+    };
+    run.worktree = Some(tree("/work/a-worktrees/wf-x-1", "wf/x-1"));
+    run.branch_worktrees.insert(
+        "each#0".into(),
+        tree("/work/a-worktrees/wf-x-1-each-0", "wf/x-1-each-0"),
+    );
+    run.summary = Some(RunSummary {
+        title: "Done".into(),
+        text: "Worked in /work/a-worktrees/wf-x-1-each-0 on wf/x-1".into(),
+    });
+    run.error = Some("failed in /work/a-worktrees/wf-x-1".into());
+    run.nodes[0].output = Json::parse(
+        r#"{"note":"see /work/a-worktrees/wf-x-1/src","branch":"wf/x-1"}"#,
+    )
+    .and_then(|j| match j {
+        Json::Object(map) => Some(map),
+        _ => None,
+    });
+    let value = reply_of(&web(None, None), runs_of(&w, vec![run]), &Links::new());
+    let text = value.to_string();
+    assert!(!text.contains("a-worktrees"), "{text}");
+    assert!(!text.contains("\"worktree\""), "{text}");
+    assert!(
+        text.contains("wf/x-1"),
+        "a branch name is not a path: {text}"
+    );
+    // The allow-list of a run did not grow.
+    assert!(!RUN_KEYS.contains(&"worktree") && !RUN_KEYS.contains(&"branchWorktrees"));
+}
+
+#[test]
+fn only_whole_paths_are_hidden_and_the_disk_spelling_counts() {
+    use monocode_core::mono::workflows::model::RunWorktree;
+    let dir = std::env::temp_dir().join(format!("wf-hide-{}", monocode_core::mono::new_id()));
+    let tree = dir.join("app-worktrees").join("wf-x-1");
+    std::fs::create_dir_all(&tree).unwrap();
+    let real = tree.canonicalize().unwrap();
+    let w = workflow("w", &["/work/a"]);
+    let mut run = run_of(&w, &[]);
+    // Recorded through the symlinked spelling; text may carry the real one (or the reverse).
+    run.worktree = Some(RunWorktree {
+        path: tree.to_string_lossy().into_owned(),
+        branch: "wf/x-1".into(),
+        base: "abc".into(),
+        removed_at: None,
+    });
+    let longer = format!("{}-each-0", real.display());
+    run.summary = Some(RunSummary {
+        title: "t".into(),
+        text: format!(
+            "in {} and {} and {longer} and x{}",
+            real.display(),
+            tree.display(),
+            real.display()
+        ),
+    });
+    let value = reply_of(&web(None, None), runs_of(&w, vec![run]), &Links::new());
+    let text = value["runs"][0]["summary"]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(!text.contains(&format!("{} ", real.display())), "{text}");
+    assert_eq!(text.matches("(worktree)").count(), 2, "{text}");
+    // A longer path that merely starts with it, and a path glued to other text, stay as written.
+    assert!(text.contains(&longer), "{text}");
+    assert!(text.contains(&format!("x{}", real.display())), "{text}");
+    std::fs::remove_dir_all(dir).unwrap();
 }

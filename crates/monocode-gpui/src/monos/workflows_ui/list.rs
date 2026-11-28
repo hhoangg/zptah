@@ -55,6 +55,12 @@ pub(in crate::monos) fn workflow_trigger_label(workflow: &Workflow) -> String {
 /// What the empty list says.
 pub(in crate::monos) const EMPTY_MESSAGE: &str = "Chain sessions, commands and decisions into a workflow. Ask a Mono to build one, or create one here.";
 
+/// "2 running / 1 queued" for a workflow that has several runs going or any waiting; `None` when
+/// the ordinary subtitle says enough (no run, or one run and an empty queue).
+pub(in crate::monos) fn slots_subtitle((running, queued): (usize, usize)) -> Option<String> {
+    (running > 1 || queued > 0).then(|| format!("{running} running / {queued} queued"))
+}
+
 /// What a row says under the name.
 pub(in crate::monos) fn workflow_subtitle(
     workflow: &Workflow,
@@ -151,6 +157,14 @@ impl Monos {
         self.workflows.is_running(id)
     }
 
+    /// How many runs of the workflow go and how many wait in its queue.
+    pub(in crate::monos) fn workflow_slots(&self, id: &str) -> (usize, usize) {
+        (
+            self.workflows.live_count(id),
+            self.wf.queued.get(id).copied().unwrap_or(0),
+        )
+    }
+
     /// What the runner knows of the workflow's run: its branches at work and when it started.
     pub(super) fn workflow_glance(&self, id: &str) -> Option<(usize, u64)> {
         self.workflows
@@ -190,6 +204,9 @@ impl Monos {
             .collect::<Vec<_>>();
         let notice = this.wf.notice.clone();
         let gate = self.run_gate_dialog(scope, window, cx);
+        let stopping = self.stop_ask_dialog(window, cx);
+        let removing = self.remove_ask_dialog(window, cx);
+        let cancelling = self.cancel_ask_dialog(window, cx);
         div()
             .size_full()
             .min_w_0()
@@ -209,6 +226,9 @@ impl Monos {
                     .children(rows),
             )
             .children(gate)
+            .children(stopping)
+            .children(removing)
+            .children(cancelling)
             .into_any_element()
     }
 
@@ -216,7 +236,9 @@ impl Monos {
         let id = w.id.clone();
         let running = self.workflow_running(&w.id);
         let glance = self.workflow_glance(&w.id);
-        let subtitle = workflow_subtitle(w, glance, running, now_ms());
+        let slots = self.workflow_slots(&w.id);
+        let subtitle = slots_subtitle(slots)
+            .unwrap_or_else(|| workflow_subtitle(w, glance, running, now_ms()));
         let starting = !running && w.run_requested;
         let lit = w.enabled || running;
         div()
@@ -374,10 +396,9 @@ impl Monos {
                         let suffix = suffix.clone();
                         move || format!("mono-workflow-stop{suffix}")
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.stop_workflow_run(&stop);
-                        cx.notify();
-                    })),
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.workflow_stop_clicked(&stop, cx)),
+                    ),
                 )
             })
             .child(
@@ -451,10 +472,13 @@ impl Monos {
         );
     }
 
-    pub(in crate::monos) fn workflow_remove_clicked(
+    /// Removes the workflow now; `cancel_queued` first cancels the runs that wait (the user was
+    /// asked and agreed).
+    pub(super) fn workflow_remove_now(
         &mut self,
         id: &str,
         page: bool,
+        cancel_queued: bool,
         cx: &mut Context<Self>,
     ) {
         let id = id.to_string();
@@ -463,7 +487,12 @@ impl Monos {
             move |host| {
                 // Read before the history goes: it is the only place that names them.
                 let left = actions::left_instances(host, &id);
-                (actions::remove(host, &id), left)
+                let notice = if cancel_queued {
+                    actions::remove_cancelling_queue(host, &id)
+                } else {
+                    actions::remove(host, &id)
+                };
+                (notice, left)
             },
             move |this, (notice, left), cx| {
                 let mut page = page;

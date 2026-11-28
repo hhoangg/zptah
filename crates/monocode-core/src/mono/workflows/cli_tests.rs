@@ -51,6 +51,10 @@ struct Memory {
     stored: Vec<Workflow>,
     runs: HashMap<String, Vec<WorkflowRun>>,
     live: HashSet<String>,
+    /// How many runs of a workflow go, when more than the one `live` stands for.
+    live_n: HashMap<String, usize>,
+    /// The queued runs `cancel_queued` was asked to cancel.
+    cancelled: Vec<(String, String)>,
     checks: usize,
     updates: usize,
     cleared: Vec<String>,
@@ -91,7 +95,17 @@ impl WorkflowHost for Memory {
         catalog()
     }
     fn is_running(&self, workflow_id: &str) -> bool {
-        self.live.contains(workflow_id)
+        self.live_runs(workflow_id) > 0
+    }
+    fn live_runs(&self, workflow_id: &str) -> usize {
+        self.live_n
+            .get(workflow_id)
+            .copied()
+            .unwrap_or_else(|| usize::from(self.live.contains(workflow_id)))
+    }
+    fn cancel_queued(&mut self, workflow_id: &str, run_id: &str) -> Result<bool, String> {
+        self.cancelled.push((workflow_id.into(), run_id.into()));
+        Ok(true)
     }
     fn request_check_now(&mut self) {
         self.checks += 1;
@@ -142,6 +156,7 @@ fn definition(extra: Value) -> Value {
         "name": "Ticket review",
         "inputs": {"project": {"type": "project"}},
         "inputValues": {"project": "/code/app"},
+        "workspace": {"mode": "perRun", "project": "{{inputs.project}}"},
         "nodes": [
             {"id": "start", "type": "schedule", "schedule": {"kind": "weekdays", "time": "09:00"}},
             {
@@ -195,6 +210,10 @@ fn run(id: &str, status: RunStatus, workflow: &str) -> WorkflowRun {
         report_posted_at: None,
         error: None,
         cloud_instances: Vec::new(),
+        number: None,
+        queued_at: None,
+        worktree: None,
+        branch_worktrees: Default::default(),
         summary: None,
     }
 }
@@ -284,7 +303,7 @@ fn add_rejects_unknown_fields() {
     );
     assert!(e.contains("Unknown workflow fields: extra"), "{e}");
     assert!(
-        e.contains("Allowed: name, description, inputs, requires, decisionModel, summaryTemplate, reportTo, inputValues, nodes, edges;"),
+        e.contains("Allowed: name, description, inputs, requires, decisionModel, summaryTemplate, reportTo, inputValues, nodes, edges, workspace, concurrency;"),
         "{e}"
     );
     for field in [
@@ -817,13 +836,19 @@ fn run_sets_run_requested_and_calls_check_now() {
 }
 
 #[test]
-fn run_refuses_a_workflow_that_is_running_or_cannot_run() {
+fn run_refuses_a_workflow_that_cannot_run() {
     let mut f = Fx::new();
     let id = id_of(&f.add(definition(json!({}))));
+    f.ok("workflows.resume", json!({"id": id}));
+    // A run going does not refuse another one: a free slot starts it.
     f.host.live.insert(id.clone());
-    let e = f.err("workflows.run", json!({"id": id}));
-    assert!(e.contains("already running"), "{e}");
+    let result = f.ok("workflows.run", json!({"id": id}));
+    assert!(!flag(&result, "queued"));
     f.host.live.clear();
+    f.host.checks = 0;
+    for w in f.host.stored.iter_mut() {
+        w.run_requested = false;
+    }
     let broken = id_of(&f.add(definition(
         json!({"edges": [{"from": "start", "to": "ghost"}]}),
     )));
@@ -1841,7 +1866,13 @@ fn the_store_host_saves_to_the_mono_files_and_signals_the_runner() {
     assert!(load_workflows(&dir).unwrap().workflows[0].run_requested);
     assert!(signals.take_check_now());
     assert!(!signals.take_check_now(), "a check is taken once");
-    // Nothing is running until the runner says so.
+    // Nothing is running until the runner says so: stopping takes the request back.
+    let taken = call("workflows.stop", json!({"id": id})).unwrap();
+    assert_eq!(
+        taken.get("cancelledRequests").and_then(Json::as_f64),
+        Some(1.0)
+    );
+    assert!(!load_workflows(&dir).unwrap().workflows[0].run_requested);
     let e = call("workflows.stop", json!({"id": id})).unwrap_err();
     assert!(e.contains("not running"), "{e}");
     signals.set_running(&id, true);
@@ -2629,9 +2660,9 @@ fn a_secret_in_the_environment_never_reaches_a_result_a_run_file_or_a_failure_te
         &disk,
         &super::tick::Tick {
             now: now(),
-            is_running: &|_| false,
+            live_runs: &|_| 0,
             probe: no_probe,
-            on_claim: &|_| {},
+            on_claim: &|_, _| {},
             preflight: &judge,
         },
     )
@@ -3236,4 +3267,579 @@ fn a_yaml_import_shows_what_the_import_changed() {
         .contains("The Report node \"report\" was removed"));
     let checked = f.ok("workflows.validate", json!({"yaml": OLD_REPORT_FILE}));
     assert_eq!(list(&checked, "importWarnings").len(), 1);
+}
+
+// ---- workspace, concurrency, the queue ---------------------------------------------------
+
+fn running_workflow(f: &mut Fx, extra: Value) -> String {
+    let id = id_of(&f.add(definition(extra)));
+    f.ok("workflows.resume", json!({"id": id}));
+    id
+}
+
+fn queued(id: &str, workflow: &str, at: u64) -> WorkflowRun {
+    let mut run = run(id, RunStatus::Queued, workflow);
+    run.nodes.clear();
+    run.queued_at = Some(at);
+    run.started_at = at;
+    run
+}
+
+#[test]
+fn add_reads_the_workspace_and_concurrency_and_get_returns_them() {
+    let mut f = Fx::new();
+    let result = f.add(definition(json!({
+        "workspace": {"mode": "perRun", "project": "{{inputs.project}}", "baseBranch": "develop"},
+        "concurrency": {"max": 5}
+    })));
+    assert!(
+        list(&result, "issues").is_empty(),
+        "{}",
+        result.stringify(false)
+    );
+    let saved = &f.stored()[0];
+    assert_eq!(saved.workspace.mode, WorkspaceMode::PerRun);
+    assert_eq!(saved.workspace.project, "{{inputs.project}}");
+    assert_eq!(saved.workspace.base(), "develop");
+    assert_eq!(saved.concurrency.limit(), 5);
+    let id = saved.id.clone();
+    let got = f.ok("workflows.get", json!({"id": id}));
+    assert_eq!(
+        got.get("workspace").unwrap().to_value(),
+        json!({"mode": "perRun", "project": "{{inputs.project}}", "baseBranch": "develop"})
+    );
+    assert_eq!(
+        got.get("concurrency").unwrap().to_value(),
+        json!({"max": 5})
+    );
+}
+
+#[test]
+fn a_workflow_without_them_defaults_to_a_per_run_workspace_and_three_runs_at_once() {
+    let mut f = Fx::new();
+    f.add(without(definition(json!({})), "workspace"));
+    let saved = &f.stored()[0];
+    assert_eq!(saved.workspace, Workspace::default());
+    assert_eq!(saved.workspace.mode, WorkspaceMode::PerRun);
+    assert_eq!(saved.workspace.base(), "main");
+    assert_eq!(saved.concurrency.limit(), 3);
+    // Nothing is written for the defaults.
+    let id = saved.id.clone();
+    let got = f.ok("workflows.get", json!({"id": id}));
+    assert!(got.get("workspace").is_none() && got.get("concurrency").is_none());
+}
+
+#[test]
+fn a_bad_workspace_or_concurrency_is_refused_or_reported() {
+    let mut f = Fx::new();
+    let e = f.err(
+        "workflows.add",
+        json!({"workflow": definition(json!({"workspace": {"mode": "everywhere"}}))}),
+    );
+    assert!(e.contains("workflow.workspace must be"), "{e}");
+    let e = f.err(
+        "workflows.add",
+        json!({"workflow": definition(json!({"concurrency": "lots"}))}),
+    );
+    assert!(e.contains("workflow.concurrency must be"), "{e}");
+    let result = f.add(definition(json!({"concurrency": {"max": 11}})));
+    assert!(joined(&result).contains("concurrency.max must be a whole number from 1 to 10"));
+}
+
+#[test]
+fn validate_warns_when_steps_that_can_run_at_the_same_time_write_into_one_worktree() {
+    let mut f = Fx::new();
+    let parallel = definition(json!({
+        "workspace": {"mode": "perRun", "project": "{{inputs.project}}"},
+        "nodes": [
+            {"id": "start", "type": "manual"},
+            {"id": "a", "type": "session", "prompt": "x"},
+            {"id": "b", "type": "session", "prompt": "y"}
+        ],
+        "edges": [{"from": "start", "to": "a"}, {"from": "start", "to": "b"}]
+    }));
+    let result = f.ok("workflows.validate", json!({"workflow": parallel}));
+    assert!(
+        list(&result, "issues").is_empty(),
+        "{}",
+        result.stringify(false)
+    );
+    let warnings: Vec<String> = list(&result, "warnings")
+        .iter()
+        .map(|w| text(w, "message"))
+        .collect();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("\"a\" and \"b\" can run at the same time"));
+    // One after the other is fine.
+    let in_order = definition(json!({
+        "workspace": {"mode": "perRun", "project": "{{inputs.project}}"},
+        "nodes": [
+            {"id": "start", "type": "manual"},
+            {"id": "a", "type": "session", "prompt": "x"},
+            {"id": "b", "type": "session", "prompt": "y"}
+        ],
+        "edges": [{"from": "start", "to": "a"}, {"from": "a", "to": "b"}]
+    }));
+    let result = f.ok("workflows.validate", json!({"workflow": in_order}));
+    assert!(list(&result, "warnings").is_empty());
+}
+
+#[test]
+fn run_starts_now_when_a_slot_is_free_and_reports_the_queue_place_when_not() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({"concurrency": {"max": 2}}));
+    f.host.live_n.insert(id.clone(), 1);
+    let result = f.ok("workflows.run", json!({"id": id}));
+    assert!(!flag(&result, "queued"));
+    assert_eq!(text(&result, "note"), "It starts now, on its own.");
+    // A request nobody picked up yet does not refuse the next one: it waits behind it.
+    let second = f.ok("workflows.run", json!({"id": id}));
+    assert!(flag(&second, "queued"));
+    assert_eq!(f.host.stored[0].run_backlog.len(), 1);
+    f.host.stored[0].run_requested = false;
+    f.host.stored[0].run_backlog.clear();
+    // Both slots taken, one run already waits: this one is second.
+    f.host.live_n.insert(id.clone(), 2);
+    f.host.runs.insert(id.clone(), vec![queued("q1", &id, 1)]);
+    let result = f.ok("workflows.run", json!({"id": id}));
+    assert!(flag(&result, "queued"));
+    assert_eq!(result.get("position").and_then(Json::as_f64), Some(2.0));
+    assert!(text(&result, "note").contains("place 2"));
+}
+
+#[test]
+fn run_is_refused_when_fifty_runs_already_wait() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({"concurrency": {"max": 1}}));
+    f.host.live.insert(id.clone());
+    f.host.runs.insert(
+        id.clone(),
+        (0..50)
+            .map(|n| queued(&format!("q{n}"), &id, n + 1))
+            .collect(),
+    );
+    let e = f.err("workflows.run", json!({"id": id}));
+    assert!(e.contains("50 runs waiting"), "{e}");
+    assert!(!f.stored()[0].run_requested);
+}
+
+#[test]
+fn stop_with_several_runs_going_names_them_and_a_run_id_stops_one() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({}));
+    f.host.live_n.insert(id.clone(), 2);
+    f.host.runs.insert(
+        id.clone(),
+        vec![
+            run("run-b", RunStatus::Running, &id),
+            run("run-a", RunStatus::Running, &id),
+        ],
+    );
+    let e = f.err("workflows.stop", json!({"id": id}));
+    assert!(
+        e.contains("2 runs") && e.contains("run-a") && e.contains("run-b"),
+        "{e}"
+    );
+    assert!(!f.stored()[0].stop_requested && f.stored()[0].stop_run_ids.is_empty());
+    f.ok("workflows.stop", json!({"id": id, "runId": "run-a"}));
+    assert_eq!(f.stored()[0].stop_run_ids, vec!["run-a".to_string()]);
+    assert!(!f.stored()[0].stop_requested);
+    assert_eq!(f.host.checks, 1);
+    // A run that is not there or not going is refused.
+    let e = f.err("workflows.stop", json!({"id": id, "runId": "nobody"}));
+    assert!(e.contains("No run with that id"), "{e}");
+}
+
+#[test]
+fn stop_with_exactly_one_run_going_stops_it_without_a_run_id() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({}));
+    f.host.live.insert(id.clone());
+    f.host
+        .runs
+        .insert(id.clone(), vec![run("run-a", RunStatus::Running, &id)]);
+    f.ok("workflows.stop", json!({"id": id}));
+    assert!(f.stored()[0].stop_requested);
+}
+
+#[test]
+fn stop_with_a_queued_run_id_cancels_it_and_never_touches_the_runs_that_go() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({}));
+    f.host.live.insert(id.clone());
+    f.host.runs.insert(
+        id.clone(),
+        vec![queued("q1", &id, 5), run("run-a", RunStatus::Running, &id)],
+    );
+    let result = f.ok("workflows.stop", json!({"id": id, "runId": "q1"}));
+    assert!(text(&result, "note").contains("never started"));
+    assert_eq!(f.host.cancelled, vec![(id.clone(), "q1".to_string())]);
+    assert!(!f.stored()[0].stop_requested && f.stored()[0].stop_run_ids.is_empty());
+    // With nothing going and runs waiting, a stop without an id says which ones wait.
+    f.host.live.clear();
+    let e = f.err("workflows.stop", json!({"id": id}));
+    assert!(e.contains("only queued ones") && e.contains("q1"), "{e}");
+}
+
+#[test]
+fn resume_run_needs_a_free_slot_not_an_idle_workflow() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({"concurrency": {"max": 2}}));
+    f.host
+        .runs
+        .insert(id.clone(), vec![run("run-1", RunStatus::Interrupted, &id)]);
+    f.host.live_n.insert(id.clone(), 2);
+    let e = f.err("workflows.resumeRun", json!({"id": id, "runId": "run-1"}));
+    assert!(e.contains("2 runs going"), "{e}");
+    f.host.live_n.insert(id.clone(), 1);
+    f.ok("workflows.resumeRun", json!({"id": id, "runId": "run-1"}));
+    assert_eq!(f.stored()[0].resume_run_id.as_deref(), Some("run-1"));
+}
+
+#[test]
+fn remove_is_refused_while_runs_go_or_wait() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({}));
+    f.host.live_n.insert(id.clone(), 2);
+    let e = f.err("workflows.remove", json!({"id": id}));
+    assert!(e.contains("Stop the workflow"), "{e}");
+    f.host.live_n.clear();
+    f.host
+        .runs
+        .insert(id.clone(), vec![queued("q2", &id, 6), queued("q1", &id, 5)]);
+    let e = f.err("workflows.remove", json!({"id": id}));
+    assert!(e.contains("2 queued runs"), "{e}");
+    assert_eq!(f.stored().len(), 1);
+    assert!(f.host.cleared.is_empty());
+    f.host.runs.clear();
+    f.ok("workflows.remove", json!({"id": id}));
+    assert!(f.stored().is_empty());
+}
+
+#[test]
+fn runs_report_their_number_worktree_and_queue_place() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({}));
+    let mut done = run("run-1", RunStatus::Done, &id);
+    done.number = Some(4);
+    done.worktree = Some(RunWorktree {
+        path: "/code/app-worktrees/wf-x-4".into(),
+        branch: "wf/x-4".into(),
+        base: "abc".into(),
+        removed_at: None,
+    });
+    f.host.runs.insert(
+        id.clone(),
+        vec![queued("q2", &id, 6), queued("q1", &id, 5), done],
+    );
+    let result = f.ok("workflows.runs", json!({"id": id}));
+    let runs = list(&result, "runs");
+    assert_eq!(
+        runs[0].get("queuePosition").and_then(Json::as_f64),
+        Some(2.0)
+    );
+    assert_eq!(
+        runs[1].get("queuePosition").and_then(Json::as_f64),
+        Some(1.0)
+    );
+    assert_eq!(runs[2].get("number").and_then(Json::as_f64), Some(4.0));
+    assert_eq!(
+        runs[2].get("worktree").unwrap().to_value(),
+        json!({"path": "/code/app-worktrees/wf-x-4", "branch": "wf/x-4"})
+    );
+}
+
+#[test]
+fn a_mono_that_changes_the_workspace_or_concurrency_hands_the_workflow_back_for_review() {
+    let (mut f, mine, _) = mono_fx();
+    let definition = in_project("/code/app");
+    for change in [
+        json!({"concurrency": {"max": 8}}),
+        json!({"workspace": {"mode": "none"}}),
+    ] {
+        f.host.stored[0].needs_review = false;
+        f.host.stored[0].enabled = true;
+        f.host.stored[0].workspace = Workspace::default();
+        f.host.stored[0].concurrency = Concurrency::default();
+        let mut next = definition.clone();
+        for (k, v) in change.as_object().unwrap() {
+            next[k] = v.clone();
+        }
+        let result = f.ok("workflows.update", json!({"id": mine, "workflow": next}));
+        assert_eq!(
+            result.get("needsReview"),
+            Some(&Json::Bool(true)),
+            "{change}"
+        );
+        assert!(f.host.stored[0].needs_review && !f.host.stored[0].enabled);
+    }
+}
+
+#[test]
+fn the_workspace_project_counts_in_a_monos_project_scope() {
+    let (mut f, _, _) = mono_fx();
+    // The steps are the Mono's, the workspace project is not: refused.
+    let e = f.err(
+        "workflows.add",
+        json!({"workflow": definition(json!({
+            "workspace": {"mode": "perRun", "project": "/code/other"}
+        }))}),
+    );
+    assert!(
+        e.contains("/code/other") && e.contains("not this Mono's"),
+        "{e}"
+    );
+    // A project input as the workspace project is covered by the input's value.
+    f.add(definition(json!({
+        "workspace": {"mode": "perRun", "project": "{{inputs.project}}"}
+    })));
+}
+
+#[test]
+fn the_store_host_cancels_a_queued_run_in_the_file_and_counts_live_runs_per_run() {
+    let (mut host, signals, root) = store_host();
+    let dir = WorkflowsDir::new(root.join("workflows"));
+    let id = id_of(
+        &handle(
+            "workflows.add",
+            &Json::from(&json!({"workflow": manual_workflow()})),
+            &mut host,
+        )
+        .unwrap(),
+    );
+    handle(
+        "workflows.resume",
+        &Json::from(&json!({"id": id})),
+        &mut host,
+    )
+    .unwrap();
+    let mut waiting = run("q-1", RunStatus::Queued, &id);
+    waiting.nodes.clear();
+    waiting.queued_at = Some(5);
+    super::store::update_runs(&dir, &id, |_| Ok((vec![waiting.clone()], ()))).unwrap();
+    // Two runs of the workflow go: each counts, and it is running until both are released.
+    signals.claim_run(&id, "run-a");
+    signals.claim_run(&id, "run-b");
+    assert_eq!(signals.live_runs(&id), 2);
+    signals.release_run(&id, "run-a");
+    assert!(signals.is_running(&id));
+    signals.release_run(&id, "run-b");
+    assert!(!signals.is_running(&id));
+    // A stop with the queued run's id cancels it in the file, with nothing going.
+    let result = handle(
+        "workflows.stop",
+        &Json::from(&json!({"id": id, "runId": "q-1"})),
+        &mut host,
+    )
+    .unwrap();
+    assert!(text(&result, "note").contains("never started"));
+    let stored = load_runs(&dir, &id).unwrap();
+    assert_eq!(stored[0].status, RunStatus::Stopped);
+    assert!(stored[0].ended_at.is_some());
+    // Cancelled once: a second try says it is no longer queued.
+    let again = handle(
+        "workflows.stop",
+        &Json::from(&json!({"id": id, "runId": "q-1"})),
+        &mut host,
+    )
+    .unwrap_err();
+    assert!(again.contains("not going or queued"), "{again}");
+}
+
+#[test]
+fn several_runs_asked_in_one_turn_each_queue_in_order_and_none_is_refused() {
+    let mut f = Fx::new();
+    let id = running_workflow(
+        &mut f,
+        json!({
+            "inputs": {"project": {"type": "project"}, "n": {"type": "string"}},
+            "inputValues": {"project": "/code/app", "n": "0"}
+        }),
+    );
+    for n in ["1", "2", "3"] {
+        f.ok("workflows.run", json!({"id": id, "values": {"n": n}}));
+    }
+    let w = &f.stored()[0];
+    assert!(w.run_requested);
+    // The first request is the pending one; the others wait behind it, oldest first.
+    assert_eq!(
+        w.run_values.as_ref().and_then(|v| v.get("n")).cloned(),
+        Some(InputValue::String("1".into()))
+    );
+    let waiting: Vec<_> = w
+        .run_backlog
+        .iter()
+        .map(|r| r.values.as_ref().and_then(|v| v.get("n")).cloned())
+        .collect();
+    assert_eq!(
+        waiting,
+        [
+            Some(InputValue::String("2".into())),
+            Some(InputValue::String("3".into()))
+        ]
+    );
+    // The queue cap counts what has not been claimed yet.
+    for _ in 0..QUEUED_RUNS_MAX {
+        let _ = f.call("workflows.run", json!({"id": id}));
+    }
+    let w = &f.stored()[0];
+    assert!(w.run_backlog.len() < QUEUED_RUNS_MAX);
+    let e = f.err("workflows.run", json!({"id": id}));
+    assert!(e.contains("runs waiting"), "{e}");
+}
+
+#[test]
+fn stopping_a_run_by_id_names_that_run_in_the_answer() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({"concurrency": {"max": 2}}));
+    f.host.live.insert(id.clone());
+    f.host
+        .runs
+        .insert(id.clone(), vec![run("run-7", RunStatus::Running, &id)]);
+    let result = f.ok("workflows.stop", json!({"id": id, "runId": "run-7"}));
+    assert_eq!(text(&result, "runId"), "run-7");
+    assert_eq!(f.stored()[0].stop_run_ids, ["run-7"]);
+}
+
+#[test]
+fn removing_a_workflow_names_the_worktrees_its_runs_leave_on_disk() {
+    let mut f = Fx::new();
+    let id = id_of(&f.add(definition(json!({}))));
+    let tree = |path: &str, branch: &str, removed: Option<u64>| RunWorktree {
+        path: path.into(),
+        branch: branch.into(),
+        base: "abc".into(),
+        removed_at: removed,
+    };
+    let mut kept = run("run-1", RunStatus::Done, &id);
+    kept.worktree = Some(tree("/code/app-worktrees/wf-x-1", "wf/x-1", None));
+    kept.branch_worktrees.insert(
+        "each#0".into(),
+        tree("/code/app-worktrees/wf-x-1-each-0", "wf/x-1-each-0", None),
+    );
+    let mut gone = run("run-2", RunStatus::Done, &id);
+    gone.worktree = Some(tree("/code/app-worktrees/wf-x-2", "wf/x-2", Some(9)));
+    f.host.runs.insert(id.clone(), vec![gone, kept]);
+    let result = f.ok("workflows.remove", json!({"id": id}));
+    let left = list(&result, "worktreesKept");
+    assert_eq!(left.len(), 2, "{}", result.stringify(false));
+    let note = text(&result, "worktreesNote");
+    assert!(
+        note.contains("2 worktrees") && note.contains("wf/x-1-each-0"),
+        "{note}"
+    );
+    assert!(
+        !note.contains("wf/x-2"),
+        "a removed worktree is not on disk: {note}"
+    );
+    // Nothing to say when none stay.
+    let mut f = Fx::new();
+    let id = id_of(&f.add(definition(json!({}))));
+    let result = f.ok("workflows.remove", json!({"id": id}));
+    assert!(result.get("worktreesKept").is_none());
+}
+
+#[test]
+fn resuming_a_run_whose_removed_worktree_has_no_repository_or_branch_is_refused() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({}));
+    let mut stopped = run("run-1", RunStatus::Interrupted, &id);
+    stopped.worktree = Some(RunWorktree {
+        path: "/nowhere/app-worktrees/wf-x-1".into(),
+        branch: "wf/x-1".into(),
+        base: "abc".into(),
+        removed_at: Some(5),
+    });
+    f.host.runs.insert(id.clone(), vec![stopped]);
+    let e = f.err("workflows.resumeRun", json!({"id": id, "runId": "run-1"}));
+    assert!(e.contains("cannot continue"), "{e}");
+    assert!(f.stored()[0].resume_run_id.is_none());
+}
+
+#[test]
+fn a_request_pushed_while_another_waits_goes_behind_it_and_none_is_overwritten() {
+    let mut w = Workflow::new("wf-x", "x");
+    let ask = |n: f64| {
+        let mut values = OrderedMap::new();
+        values.insert("n".to_string(), InputValue::Number(n));
+        RunRequest {
+            caller: None,
+            values: Some(values),
+        }
+    };
+    let mono = RunRequest {
+        caller: Some(RunCaller::mono("mono-1", "start")),
+        values: None,
+    };
+    w.push_run_request(mono.clone());
+    w.push_run_request(ask(1.));
+    assert!(w.run_requested);
+    assert_eq!(w.run_caller, mono.caller, "the Mono's request stays first");
+    assert_eq!(w.run_backlog, vec![ask(1.)]);
+    assert_eq!(w.pending_requests(), 2);
+    assert_eq!(w.cancel_requests(), 2);
+    assert!(!w.run_requested && w.run_backlog.is_empty() && w.run_caller.is_none());
+}
+
+#[test]
+fn stopping_a_workflow_with_only_unclaimed_requests_takes_them_back_and_runs_lists_them() {
+    let mut f = Fx::new();
+    let id = running_workflow(&mut f, json!({}));
+    for _ in 0..3 {
+        f.ok("workflows.run", json!({"id": id}));
+    }
+    let result = f.ok("workflows.runs", json!({"id": id}));
+    assert_eq!(
+        result.get("pendingRequests").and_then(Json::as_f64),
+        Some(3.0)
+    );
+    let stopped = f.ok("workflows.stop", json!({"id": id}));
+    assert_eq!(
+        stopped.get("cancelledRequests").and_then(Json::as_f64),
+        Some(3.0)
+    );
+    assert_eq!(f.stored()[0].pending_requests(), 0);
+    let result = f.ok("workflows.runs", json!({"id": id}));
+    assert!(result.get("pendingRequests").is_none());
+}
+
+#[test]
+fn a_mono_that_stops_takes_back_only_its_own_requests_and_hears_about_queued_runs() {
+    let (mut f, mine, _) = mono_fx();
+    let theirs = RunCaller::mono("mono-2", "start");
+    let me = RunCaller::mono("mono-1", "start");
+    f.host.stored[0].push_run_request(RunRequest {
+        caller: Some(theirs.clone()),
+        values: None,
+    });
+    f.host.stored[0].push_run_request(RunRequest {
+        caller: Some(me),
+        values: None,
+    });
+    f.host.stored[0].push_run_request(RunRequest {
+        caller: None,
+        values: None,
+    });
+    f.host
+        .runs
+        .insert(mine.clone(), vec![queued("q1", &mine, 1)]);
+    let result = f.ok("workflows.stop", json!({"id": mine}));
+    assert_eq!(
+        result.get("cancelledRequests").and_then(Json::as_f64),
+        Some(1.0)
+    );
+    assert_eq!(
+        result.get("queuedRemaining").and_then(Json::as_f64),
+        Some(1.0)
+    );
+    assert!(text(&result, "note").contains("1 queued run still waits"));
+    // The other Mono's request is the pending one now, and the user's waits behind it.
+    let w = &f.stored()[0];
+    assert!(w.run_requested);
+    assert_eq!(w.run_caller, Some(theirs));
+    assert_eq!(w.run_backlog.len(), 1);
+    assert!(w.run_backlog[0].caller.is_none());
+    // Nothing of its own left: it is told the workflow is not running.
+    let e = f.err("workflows.stop", json!({"id": mine}));
+    assert!(e.contains("not running") || e.contains("queued"), "{e}");
 }

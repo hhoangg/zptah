@@ -21,6 +21,91 @@ impl Shell {
         }
     }
 
+    /// The sessions that work inside `path`, unless something there is in use: a terminal pane
+    /// open in it, or a session of it that is busy. Err says which. The one guard behind removing
+    /// a worktree, from the Settings and from a workflow run.
+    pub(crate) fn worktree_users(&self, path: &str, cx: &App) -> Result<Vec<i64>, String> {
+        use monocode_core::files::is_equal_or_inside;
+        if self
+            .terminals
+            .values()
+            .flatten()
+            .any(|t| is_equal_or_inside(&t.read(cx).cwd, path))
+        {
+            return Err("Close the terminals using this worktree first.".into());
+        }
+        let ids = self
+            .session_summaries
+            .keys()
+            .filter(|id| is_equal_or_inside(self.session_working_copy(**id, cx), path))
+            .copied()
+            .collect::<Vec<_>>();
+        if ids
+            .iter()
+            .any(|id| self.sessions.get(id).is_some_and(|v| v.read(cx).busy))
+        {
+            return Err("Stop the running sessions using this worktree first.".into());
+        }
+        Ok(ids)
+    }
+
+    /// Shows the sessions `detach_worktree` moved off a removed worktree: they keep their history
+    /// and no longer point into the folder that is gone.
+    pub(crate) fn worktree_detached(
+        &mut self,
+        detached: Vec<(
+            monocode_core::store::Session,
+            monocode_core::agent::Settings,
+        )>,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) {
+        use monocode_core::files::is_equal_or_inside;
+        for (summary, settings) in detached {
+            self.session_summaries.insert(summary.id, summary.clone());
+            self.session_worktrees
+                .insert(summary.id, settings.worktree_cwd.clone());
+            if let Some(view) = self.sessions.get(&summary.id) {
+                view.update(cx, |v, cx| v.worktree_deleted(summary, settings, cx));
+            }
+        }
+        self.worktree_focus
+            .retain(|_, focus| !is_equal_or_inside(&focus.path, path));
+    }
+
+    /// Why a worktree a workflow run owns cannot be deleted now: the run is going, stopping, or
+    /// about to start or resume. `None` for any other worktree, and for a run that is over.
+    pub(crate) fn workflow_run_holds(&self, path: &str, cx: &App) -> Option<String> {
+        let owner = crate::runtime::locked(&self.store)
+            .ok()
+            .and_then(|db| monocode_core::session_worktree::workflow_worktree_owner(&db, path))?;
+        let workflows = self.workflows()?;
+        workflows.read(cx).run_is_held(&owner).then(|| {
+            "A workflow run is using this worktree. Stop it, or wait until it ends, first.".into()
+        })
+    }
+
+    /// Shows the sessions `reattach_worktree` gave their folder back, so a resumed run goes on in
+    /// the conversation it had.
+    pub(crate) fn worktree_reattached(
+        &mut self,
+        back: Vec<(
+            monocode_core::store::Session,
+            monocode_core::agent::Settings,
+        )>,
+        _path: &str,
+        cx: &mut Context<Self>,
+    ) {
+        for (summary, settings) in back {
+            self.session_summaries.insert(summary.id, summary.clone());
+            self.session_worktrees
+                .insert(summary.id, settings.worktree_cwd.clone());
+            if let Some(view) = self.sessions.get(&summary.id) {
+                view.update(cx, |v, cx| v.worktree_restored(summary, settings, cx));
+            }
+        }
+    }
+
     pub(super) fn working_copy(&self) -> &str {
         self.worktree_focus
             .get(&self.workspace.project)

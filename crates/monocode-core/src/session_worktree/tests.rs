@@ -388,3 +388,56 @@ fn session_facts_map_the_api_fields_and_only_read_asks_git() {
     assert_eq!(gone[&id]["worktreePath"], recorded_path);
     assert!(gone[&id]["worktreeDirty"].is_null());
 }
+
+#[test]
+fn a_worktree_a_workflow_run_owns_is_never_planned_for_removal_with_a_session() {
+    let f = Fixture::new();
+    let (id, path) = f.session();
+    // Without the mark the session's worktree can go with it.
+    assert!(plan(&f.store, id).is_ok());
+    mark_workflow_worktree(&f.store, &path.to_string_lossy(), "run-1").unwrap();
+    assert!(is_workflow_worktree(&f.store, &path.to_string_lossy()));
+    let error = plan(&f.store, id).unwrap_err();
+    assert!(error.contains("workflow run"), "{error}");
+    // Nothing changed on disk, and unmarking (the run page removed it) gives the plan back.
+    assert!(path.is_dir());
+    unmark_workflow_worktree(&f.store, &path.to_string_lossy()).unwrap();
+    assert!(!is_workflow_worktree(&f.store, &path.to_string_lossy()));
+    assert!(plan(&f.store, id).is_ok());
+}
+
+#[test]
+fn the_mark_holds_for_the_real_path_and_for_another_spelling_of_it() {
+    let f = Fixture::new();
+    let (_, path) = f.session();
+    // The fixture's path is canonical, so on Windows it is a verbatim `\\?\` path, which
+    // takes `..` literally. Spell the folder another way from its plain form.
+    let spelled = format!(
+        "{}/../{}",
+        strip_verbatim_prefix(&path.to_string_lossy()),
+        path.file_name().unwrap().to_string_lossy()
+    );
+    mark_workflow_worktree(&f.store, &path.to_string_lossy(), "run-1").unwrap();
+    assert!(is_workflow_worktree(&f.store, &spelled));
+    assert!(!is_workflow_worktree(&f.store, &f.repo.to_string_lossy()));
+}
+
+#[test]
+fn the_windows_verbatim_prefix_is_stripped_on_every_os() {
+    assert_eq!(strip_verbatim_prefix(r"\\?\D:\work\app"), r"D:\work\app");
+    assert_eq!(strip_verbatim_prefix("//?/D:/work/app"), "D:/work/app");
+    assert_eq!(
+        strip_verbatim_prefix(r"\\?\UNC\host\share\app"),
+        r"\\host\share\app"
+    );
+    assert_eq!(strip_verbatim_prefix("//?/UNC/host/share"), r"\\host/share");
+    // Anything else is left alone.
+    for plain in [r"D:\work", "/home/me/app", r"\\host\share", ""] {
+        assert_eq!(strip_verbatim_prefix(plain), plain);
+    }
+    // And it meets the plain spelling in a key.
+    assert_eq!(
+        crate::files::path_key(&strip_verbatim_prefix(r"\\?\D:\Work\App")),
+        crate::files::path_key(r"d:\work\app")
+    );
+}

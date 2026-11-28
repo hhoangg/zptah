@@ -17,21 +17,22 @@ use super::guide::workflow_guide;
 use super::model::{
     definition_fingerprint, interrupted_instances, left_instances_text, new_workflow_id,
     with_run_values, Edge, InputValue, Node, NodeKind, ReportTo, RequirementKind, RunCaller,
-    RunInstance, RunStatus, Workflow, WorkflowRun, WORKFLOWS_MAX, WORKFLOW_DEFINITION_MAX_BYTES,
-    WORKFLOW_DESCRIPTION_MAX, WORKFLOW_NAME_MAX,
+    RunInstance, RunRequest, RunStatus, Workflow, WorkflowRun, QUEUED_RUNS_MAX, WORKFLOWS_MAX,
+    WORKFLOW_DEFINITION_MAX_BYTES, WORKFLOW_DESCRIPTION_MAX, WORKFLOW_NAME_MAX,
 };
 use super::models::{harnesses_used, native_probe, workflow_issues, ModelCatalog, Probe};
 use super::ordered::{js_number_text, Json, OrderedMap};
 use super::parse::{
-    drop_stray_handles, parse_decision_model, parse_edge, parse_inputs, parse_node,
-    parse_report_to, read_requires,
+    drop_stray_handles, parse_concurrency, parse_decision_model, parse_edge, parse_inputs,
+    parse_node, parse_report_to, parse_workspace, read_requires,
 };
 use super::preflight::{likely_clis, native_preflight, union_requires, Preflight};
+use super::queue::{cancel_queued, queue_position, queued_count, queued_fifo};
 use super::store::{
     clear_runs, load_runs, load_workflows, to_json, update_workflows, workflow_json,
 };
 use super::template::js_trim;
-use super::validate::WorkflowIssue;
+use super::validate::{workflow_warnings, WorkflowIssue};
 use super::yaml::{
     anchor_node, export_path_problem, export_workflow, finish_import, input_value_problems,
     preview_import, review_texts, summary_review_prompt, ReviewCommand, ReviewPrompt,
@@ -65,6 +66,14 @@ pub trait WorkflowHost: Sized {
     fn catalog(&mut self, w: &Workflow) -> ModelCatalog;
     /// Whether a run of the workflow is going.
     fn is_running(&self, workflow_id: &str) -> bool;
+    /// How many runs of the workflow are going (claims included).
+    fn live_runs(&self, workflow_id: &str) -> usize {
+        usize::from(self.is_running(workflow_id))
+    }
+    /// Cancels a queued run of the workflow: false when it is not queued (any more).
+    fn cancel_queued(&mut self, _workflow_id: &str, _run_id: &str) -> Result<bool, String> {
+        Ok(false)
+    }
     /// Asks the runner to look at the workflow files now instead of at its next tick.
     fn request_check_now(&mut self);
     /// Milliseconds since the epoch.
@@ -74,6 +83,11 @@ pub trait WorkflowHost: Sized {
     fn preflight(&mut self, w: &Workflow) -> Preflight;
     /// The assigned project an input value names (a full path, or a folder name), if any.
     fn project_path(&self, input: &str) -> Option<String>;
+    /// The app's project paths, when the host knows them (the app's own pages do). Without them
+    /// a project named in a workflow is not checked against the app until the run starts.
+    fn app_projects(&self) -> Option<Vec<String>> {
+        None
+    }
     /// Why a cloud step cannot run with the Claude account `selector` (it names no account, or
     /// one without the setup token or API key an instance needs), if the host can tell. The
     /// answer never holds a credential. A host without the account book says nothing and the
@@ -138,31 +152,75 @@ pub fn account_issues<H: WorkflowHost>(host: &mut H, w: &Workflow) -> Vec<Workfl
     issues
 }
 
-/// What the runner and the actions tell each other, shared as an `Arc`: the runner calls
-/// `set_running` when a run starts and ends, and an action that wrote a request (`run`, `stop`,
-/// `resumeRun`) calls `request_check_now`, which sets a flag and rings the waker the scheduler
-/// installed, so the request is picked up at once and not on its next look.
+/// What the runner and the actions tell each other, shared as an `Arc`: the runner marks a run
+/// live when it starts and releases it when it ends, and an action that wrote a request (`run`,
+/// `stop`, `resumeRun`) calls `request_check_now`, which sets a flag and rings the waker the
+/// scheduler installed, so the request is picked up at once and not on its next look.
 #[derive(Default)]
 pub struct Signals {
-    running: Mutex<HashSet<String>>,
+    /// The live runs of each workflow, by run id.
+    running: Mutex<std::collections::HashMap<String, HashSet<String>>>,
     check_now: AtomicBool,
     waker: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
+/// The id a `set_running(workflow, true)` call is counted under: one live run without an id.
+const ANONYMOUS_RUN: &str = "";
+
 impl Signals {
-    pub fn set_running(&self, workflow_id: &str, running: bool) {
-        let mut ids = self.running.lock().unwrap_or_else(|e| e.into_inner());
-        if running {
-            ids.insert(workflow_id.to_string());
-        } else {
-            ids.remove(workflow_id);
-        }
-    }
-    pub fn is_running(&self, workflow_id: &str) -> bool {
+    /// Counts `run_id` as live in the workflow (a claim or a start).
+    pub fn claim_run(&self, workflow_id: &str, run_id: &str) {
         self.running
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .contains(workflow_id)
+            .entry(workflow_id.to_string())
+            .or_default()
+            .insert(run_id.to_string());
+    }
+    /// The run is over (or never started): it no longer counts.
+    pub fn release_run(&self, workflow_id: &str, run_id: &str) {
+        let mut all = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(runs) = all.get_mut(workflow_id) {
+            runs.remove(run_id);
+            if runs.is_empty() {
+                all.remove(workflow_id);
+            }
+        }
+    }
+    /// Marks the workflow as having one live run without naming it (all or nothing).
+    pub fn set_running(&self, workflow_id: &str, running: bool) {
+        if running {
+            self.claim_run(workflow_id, ANONYMOUS_RUN);
+        } else {
+            self.release_run(workflow_id, ANONYMOUS_RUN);
+        }
+    }
+    pub fn is_running(&self, workflow_id: &str) -> bool {
+        self.live_runs(workflow_id) > 0
+    }
+    /// Whether `run_id` is counted as live in any workflow (claimed or started).
+    pub fn has_run_anywhere(&self, run_id: &str) -> bool {
+        self.running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .any(|runs| runs.contains(run_id))
+    }
+    /// Whether `run_id` is counted as live in the workflow (claimed or started).
+    pub fn has_run(&self, workflow_id: &str, run_id: &str) -> bool {
+        self.running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(workflow_id)
+            .is_some_and(|runs| runs.contains(run_id))
+    }
+    /// How many runs of the workflow are live.
+    pub fn live_runs(&self, workflow_id: &str) -> usize {
+        self.running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(workflow_id)
+            .map_or(0, HashSet::len)
     }
     /// Rung by every `request_check_now`. It must not block (it runs inside an action).
     pub fn set_waker(&self, wake: impl Fn() + Send + Sync + 'static) {
@@ -196,6 +254,8 @@ pub struct StoreHost {
     /// Where the Monos' old per-Mono folders are, to recognise an old workflow id.
     legacy_root: Option<PathBuf>,
     accounts: Option<AccountCheck>,
+    /// The app's project paths, when known.
+    projects: Option<Vec<String>>,
 }
 
 impl StoreHost {
@@ -208,11 +268,17 @@ impl StoreHost {
             caller: None,
             legacy_root: None,
             accounts: None,
+            projects: None,
         }
     }
     /// Replaces how requirements are checked (tests must never reach real CLIs or shells).
     pub fn with_preflight(mut self, preflight: fn(&Workflow) -> Preflight) -> Self {
         self.preflight = preflight;
+        self
+    }
+    /// The app's project paths: a project a workflow names must be one of them.
+    pub fn with_app_projects(mut self, projects: Vec<String>) -> Self {
+        self.projects = Some(projects);
         self
     }
     /// How cloud step accounts are judged (the app's account book is not in this crate).
@@ -262,6 +328,12 @@ impl WorkflowHost for StoreHost {
     fn is_running(&self, workflow_id: &str) -> bool {
         self.signals.is_running(workflow_id)
     }
+    fn live_runs(&self, workflow_id: &str) -> usize {
+        self.signals.live_runs(workflow_id)
+    }
+    fn cancel_queued(&mut self, workflow_id: &str, run_id: &str) -> Result<bool, String> {
+        cancel_queued(&self.dir, workflow_id, run_id, crate::time::now_ms())
+    }
     fn request_check_now(&mut self) {
         self.signals.request_check_now();
     }
@@ -276,6 +348,9 @@ impl WorkflowHost for StoreHost {
             None => Some(input.to_string()),
             Some(caller) => crate::mono::resolve_project(&caller.projects, input).ok(),
         }
+    }
+    fn app_projects(&self) -> Option<Vec<String>> {
+        self.projects.clone()
     }
     fn account_problem(&mut self, selector: &str) -> Option<String> {
         self.accounts.as_ref().and_then(|check| check(selector))
@@ -302,7 +377,7 @@ impl WorkflowHost for StoreHost {
 }
 
 /// The fields of a workflow definition the CLI accepts; the app owns everything else.
-const DEFINITION_FIELDS: [&str; 10] = [
+const DEFINITION_FIELDS: [&str; 12] = [
     "name",
     "description",
     "inputs",
@@ -313,6 +388,8 @@ const DEFINITION_FIELDS: [&str; 10] = [
     "inputValues",
     "nodes",
     "edges",
+    "workspace",
+    "concurrency",
 ];
 const NOT_ENABLED: &str = "Resume the workflow before running it.";
 const NEEDS_REVIEW: &str = "This workflow came from a file or from a Mono and the user has not reviewed it yet. Ask the user to review it and enable it in Workflows.";
@@ -324,8 +401,9 @@ const RUNS_MAX: f64 = 20.0;
 pub fn fields(action: &str) -> Option<&'static str> {
     Some(match action {
         "workflows.list" | "workflows.guide" => "project",
-        "workflows.get" | "workflows.stop" | "workflows.pause" | "workflows.resume"
-        | "workflows.remove" | "workflows.export" => "id project",
+        "workflows.stop" => "id runId project",
+        "workflows.get" | "workflows.pause" | "workflows.resume" | "workflows.remove"
+        | "workflows.export" => "id project",
         "workflows.run" => "id values project",
         "workflows.add" => "workflow yaml values project",
         "workflows.validate" => "id workflow yaml values project",
@@ -463,6 +541,9 @@ fn problems<H: WorkflowHost>(host: &mut H, w: &Workflow) -> Vec<WorkflowIssue> {
             }),
     );
     issues.extend(account_issues(host, w));
+    if let Some(projects) = host.app_projects() {
+        issues.extend(super::validate::unknown_project_issues(w, &projects));
+    }
     issues
 }
 
@@ -521,6 +602,16 @@ fn run_summary_fields(run: &WorkflowRun) -> Vec<(&'static str, Json)> {
         ("caller", ser(&run.caller)),
         ("startedAt", st(stamp(run.started_at))),
     ];
+    if let Some(number) = run.number {
+        fields.push(("number", Json::Number(number as f64)));
+    }
+    if let Some(tree) = &run.worktree {
+        let mut shown = vec![("path", st(&tree.path)), ("branch", st(&tree.branch))];
+        if let Some(at) = tree.removed_at {
+            shown.push(("removedAt", st(stamp(at))));
+        }
+        fields.push(("worktree", Json::Object(shown.into_iter().collect())));
+    }
     if let Some(ended) = run.ended_at.filter(|at| *at != 0) {
         fields.push(("endedAt", st(stamp(ended))));
     }
@@ -606,11 +697,19 @@ pub fn workflow_projects(w: &Workflow) -> (Vec<String>, bool) {
         }
     }
     let mut dynamic = false;
-    for node in &w.nodes {
-        let project = match &node.kind {
-            NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => project,
-            _ => continue,
-        };
+    // The workspace project counts like a step's: a run works in it, so a Mono may only add,
+    // change and run workflows whose workspace project is its own.
+    let steps = w
+        .nodes
+        .iter()
+        .filter_map(|node| match &node.kind {
+            NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => {
+                Some(project.as_str())
+            }
+            _ => None,
+        })
+        .chain(std::iter::once(w.workspace.project.as_str()));
+    for project in steps {
         let project = project.trim();
         match project
             .strip_prefix("{{")
@@ -630,12 +729,46 @@ pub fn workflow_projects(w: &Workflow) -> (Vec<String>, bool) {
 /// or from an input that is not declared or has no value. The mobile link hides such a workflow
 /// from a device that sees only some projects.
 pub fn has_unresolved_project(w: &Workflow) -> bool {
-    w.nodes.iter().any(|node| {
-        let (NodeKind::Session { project, .. } | NodeKind::Command { project, .. }) = &node.kind
-        else {
-            return false;
-        };
-        let project = project.trim();
+    // A folder a step is sent to that is made from a variable cannot be told either.
+    let existing_unknown = w.nodes.iter().any(|node| {
+        matches!(
+            &node.kind,
+            NodeKind::Session { checkout: super::model::Checkout::Existing(path), .. }
+                if path.contains("{{")
+        )
+    });
+    // The workspace project may be empty (the steps name theirs), but when it is set it counts.
+    let workspace_unknown = !w.workspace.project.trim().is_empty()
+        && project_unresolved(w, w.workspace.project.trim(), false);
+    existing_unknown
+        || workspace_unknown
+        || w.nodes.iter().any(|node| {
+            let (NodeKind::Session { project, .. } | NodeKind::Command { project, .. }) =
+                &node.kind
+            else {
+                return false;
+            };
+            project_unresolved(w, project.trim(), true)
+        })
+}
+
+/// The literal folders steps are sent to with `checkout: existing`.
+pub fn workflow_existing_paths(w: &Workflow) -> Vec<String> {
+    w.nodes
+        .iter()
+        .filter_map(|node| match &node.kind {
+            NodeKind::Session {
+                checkout: super::model::Checkout::Existing(path),
+                ..
+            } if !path.contains("{{") && !path.trim().is_empty() => Some(path.trim().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether the project text of a step (or of the workspace) cannot be told from the definition.
+fn project_unresolved(w: &Workflow, project: &str, empty_is_unknown: bool) -> bool {
+    {
         match project
             .strip_prefix("{{")
             .and_then(|rest| rest.strip_suffix("}}"))
@@ -648,25 +781,27 @@ pub fn has_unresolved_project(w: &Workflow) -> bool {
                 ),
                 None => true,
             },
-            None => project.contains("{{") || project.is_empty(),
+            None => project.contains("{{") || (empty_is_unknown && project.is_empty()),
         }
-    })
+    }
 }
 
 /// Whether a step names `{{inputs.<name>}}` as its `project`, whatever the input's declared type.
 fn used_as_project(w: &Workflow, name: &str) -> bool {
-    w.nodes.iter().any(|node| match &node.kind {
-        NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => {
-            project
-                .trim()
-                .strip_prefix("{{")
-                .and_then(|rest| rest.strip_suffix("}}"))
-                .map(str::trim)
-                .and_then(|r| r.strip_prefix("inputs."))
-                == Some(name)
-        }
-        _ => false,
-    })
+    let names = |project: &str| {
+        project
+            .trim()
+            .strip_prefix("{{")
+            .and_then(|rest| rest.strip_suffix("}}"))
+            .map(str::trim)
+            .and_then(|r| r.strip_prefix("inputs."))
+            == Some(name)
+    };
+    names(&w.workspace.project)
+        || w.nodes.iter().any(|node| match &node.kind {
+            NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => names(project),
+            _ => false,
+        })
 }
 
 /// Why the calling Mono may not add, change or run `w`, if it may not. The user is never limited.
@@ -774,6 +909,8 @@ struct Parsed {
     decision_model_given: bool,
     summary_template_given: bool,
     report_to_given: bool,
+    workspace_given: bool,
+    concurrency_given: bool,
 }
 
 /// The longest `summaryTemplate` the CLI takes.
@@ -888,6 +1025,11 @@ fn definition_from(raw: Option<&Json>, now: u64, allowed: &[&str]) -> Result<Par
         Some(report_to) => report_to,
         None => return Err("workflow.reportTo must be {\"mono\": \"<Mono id>\"}".into()),
     };
+    let workspace = parse_workspace(map.get("workspace")).ok_or(
+        "workflow.workspace must be {\"mode\": \"perRun\" | \"none\", \"project\"?: <path or {{inputs.x}}>, \"baseBranch\"?: <branch>}",
+    )?;
+    let concurrency = parse_concurrency(map.get("concurrency"))
+        .ok_or("workflow.concurrency must be {\"max\": <1 to 10>}")?;
     Ok(Parsed {
         report_to,
         definition: WorkflowDraft {
@@ -898,6 +1040,8 @@ fn definition_from(raw: Option<&Json>, now: u64, allowed: &[&str]) -> Result<Par
             decision_model,
             summary_template,
             ui: None,
+            workspace,
+            concurrency,
             nodes,
             edges,
         },
@@ -906,6 +1050,8 @@ fn definition_from(raw: Option<&Json>, now: u64, allowed: &[&str]) -> Result<Par
         decision_model_given: map.contains_key("decisionModel"),
         summary_template_given: map.contains_key("summaryTemplate"),
         report_to_given: map.contains_key("reportTo"),
+        workspace_given: map.contains_key("workspace"),
+        concurrency_given: map.contains_key("concurrency"),
     })
 }
 
@@ -974,6 +1120,8 @@ fn new_workflow_from(
     draft.decision_model = definition.decision_model;
     draft.summary_template = definition.summary_template;
     draft.report_to = report_to;
+    draft.workspace = definition.workspace;
+    draft.concurrency = definition.concurrency;
     draft.input_values = values;
     draft.nodes = definition.nodes;
     draft.edges = definition.edges;
@@ -1121,7 +1269,13 @@ fn get<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         let check = host.preflight(w);
         out.push(("requiresStatus", requires_status(&check)));
     }
-    for key in ["decisionModel", "reportTo", "summaryTemplate"] {
+    for key in [
+        "decisionModel",
+        "reportTo",
+        "summaryTemplate",
+        "workspace",
+        "concurrency",
+    ] {
         if !matches!(part(key), Json::Null) {
             out.push((key, part(key)));
         }
@@ -1129,6 +1283,14 @@ fn get<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
     out.push(("nodes", part("nodes")));
     out.push(("edges", part("edges")));
     out.push(("issues", issues_json(&problems(host, w))));
+    let warnings = workflow_warnings(w);
+    if !warnings.is_empty() {
+        out.push(("warnings", issues_json(&warnings)));
+    }
+    let waiting = queued_count(&runs);
+    if waiting > 0 {
+        out.push(("queuedRuns", Json::Number(waiting as f64)));
+    }
     out.push((
         "runs",
         Json::Array(runs.iter().take(5).map(run_summary).collect()),
@@ -1165,6 +1327,10 @@ fn add<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json, St
             ("issues", issues_json(&issues)),
             ("note", st(add_note(&issues, review.is_some()))),
         ];
+        let warnings = workflow_warnings(&draft);
+        if !warnings.is_empty() {
+            result.push(("warnings", issues_json(&warnings)));
+        }
         if let Some(review) = &review {
             result.push(("commands", commands_json(&review.commands)));
             result.push(("prompts", prompts_json(&review.prompts)));
@@ -1175,6 +1341,24 @@ fn add<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json, St
         list.push(draft.clone());
         Ok((list, Json::Object(result.into_iter().collect())))
     })
+}
+
+/// Every warning about a definition: the structural ones (`workflow_warnings`) and the CLIs a
+/// command seems to call without declaring them.
+fn all_warnings(w: &Workflow) -> Json {
+    let mut out: Vec<Json> = workflow_warnings(w)
+        .iter()
+        .map(|warning| {
+            obj([
+                ("nodeId", warning.node_id.as_deref().map_or(Json::Null, st)),
+                ("message", st(&warning.message)),
+            ])
+        })
+        .collect();
+    if let Json::Array(clis) = undeclared_cli_warnings(w) {
+        out.extend(clis);
+    }
+    Json::Array(out)
 }
 
 /// Command steps that seem to call a CLI that `requires` does not declare. Advice only: it never
@@ -1260,7 +1444,7 @@ fn validate<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Jso
     prompts.extend(summary_review_prompt(draft.summary_template.as_deref()));
     Ok(obj([
         ("issues", issues_json(&issues)),
-        ("warnings", undeclared_cli_warnings(&draft)),
+        ("warnings", all_warnings(&draft)),
         ("commands", commands_json(&commands)),
         ("prompts", prompts_json(&prompts)),
         (
@@ -1303,6 +1487,12 @@ fn update<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
         if parsed.report_to_given {
             draft.report_to = parsed.report_to.clone();
         }
+        if parsed.workspace_given {
+            draft.workspace = parsed.definition.workspace.clone();
+        }
+        if parsed.concurrency_given {
+            draft.concurrency = parsed.definition.concurrency;
+        }
         draft.nodes = parsed.definition.nodes.clone();
         draft.edges = parsed.definition.edges.clone();
         // Values of inputs the new definition dropped go with them; given ones are checked as given.
@@ -1344,6 +1534,10 @@ fn update<H: WorkflowHost>(host: &mut H, input: &Json, now: u64) -> Result<Json,
         ]);
         if let (true, Json::Object(map)) = (redefined, &mut result) {
             map.insert("needsReview", Json::Bool(true));
+        }
+        let warnings = workflow_warnings(&next);
+        if let (false, Json::Object(map)) = (warnings.is_empty(), &mut result) {
+            map.insert("warnings", issues_json(&warnings));
         }
         Ok((replace(list, next), result))
     })
@@ -1453,8 +1647,14 @@ fn run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
     if current.needs_review {
         return Err(NEEDS_REVIEW.into());
     }
-    if host.is_running(&current.id) {
-        return Err("That workflow is already running; its summary arrives when it ends".into());
+    // A workflow starts up to concurrency.max runs at once and queues the rest.
+    let waiting = queued_count(&host.runs(&current.id)?);
+    // Requests not claimed yet will queue too: they count against the cap.
+    let unclaimed = usize::from(current.run_requested) + current.run_backlog.len();
+    if waiting + unclaimed >= QUEUED_RUNS_MAX {
+        return Err(format!(
+            "That workflow already has {QUEUED_RUNS_MAX} runs waiting in its queue, the most it keeps. Wait for some to start, or cancel some with workflows.stop and a runId"
+        ));
     }
     let values = run_values(host, &current, input)?;
     let mut asked = current.clone();
@@ -1488,34 +1688,160 @@ fn run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         if !latest.enabled {
             return Err(NOT_ENABLED.into());
         }
-        latest.run_requested = true;
-        latest.run_caller = run_caller_of(caller.as_ref(), &latest);
-        // Only for the run that is about to start; never written to the stored input values.
-        latest.run_values = (!values.is_empty()).then(|| values.clone());
+        let request = RunRequest {
+            caller: run_caller_of(caller.as_ref(), &latest),
+            // Only for the run that is about to start; never written to the stored input values.
+            values: (!values.is_empty()).then(|| values.clone()),
+        };
+        // Several calls in one turn: each waits behind the one before it.
+        if latest.run_requested && latest.run_backlog.len() + 1 + waiting >= QUEUED_RUNS_MAX {
+            return Err(format!(
+                "That workflow already has {QUEUED_RUNS_MAX} runs waiting, the most it keeps. Wait for some to start, or cancel some with workflows.stop and a runId"
+            ));
+        }
+        latest.push_run_request(request);
         Ok((replace(list, latest), ()))
     })?;
     host.request_check_now();
-    let note = if host.caller().is_some() {
-        "It starts now, on its own. Its summary is posted to your chat when it finishes."
+    let queued =
+        waiting + unclaimed > 0 || host.live_runs(&current.id) >= current.concurrency.limit();
+    let mut result = vec![("id", st(&current.id))];
+    if queued {
+        let position = waiting + unclaimed + 1;
+        result.push(("queued", Json::Bool(true)));
+        result.push(("position", Json::Number(position as f64)));
+        result.push((
+            "note",
+            st(format!(
+                "All {} slots are busy, so the run waits in the queue (place {position}) and starts on its own when a run ends.",
+                current.concurrency.limit()
+            )),
+        ));
     } else {
-        "It starts now, on its own."
-    };
-    Ok(obj([("id", st(&current.id)), ("note", st(note))]))
+        result.push(("queued", Json::Bool(false)));
+        result.push((
+            "note",
+            st(if host.caller().is_some() {
+                "It starts now, on its own. Its summary is posted to your chat when it finishes."
+            } else {
+                "It starts now, on its own."
+            }),
+        ));
+    }
+    Ok(Json::Object(result.into_iter().collect()))
 }
 
 fn stop<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
     let workflows = host.load()?;
     let current = find(&workflows, input)?.clone();
     check_scope(host.caller(), &current)?;
-    if !host.is_running(&current.id) {
-        return Err("That workflow is not running".into());
+    let runs = host.runs(&current.id).unwrap_or_default();
+    // One run of the workflow, named by its id; a queued one is cancelled on the spot.
+    let named = match input.get("runId") {
+        None | Some(Json::Null) => None,
+        given => Some(text(given, "runId", 128)?),
+    };
+    if let Some(run_id) = &named {
+        let run = runs
+            .iter()
+            .find(|r| r.id == *run_id)
+            .ok_or("No run with that id; run workflows.runs")?;
+        match run.status {
+            RunStatus::Queued => {
+                if !host.cancel_queued(&current.id, run_id)? {
+                    return Err("That run is no longer queued".into());
+                }
+                return Ok(obj([
+                    ("id", st(&current.id)),
+                    ("runId", st(run_id)),
+                    (
+                        "note",
+                        st("The queued run was cancelled; it never started."),
+                    ),
+                ]));
+            }
+            RunStatus::Running if host.is_running(&current.id) => {}
+            _ => return Err("That run is not going or queued".into()),
+        }
+    } else {
+        // A Mono takes back only the runs it asked for; the user takes back all of them.
+        let mine = host.caller().map(|c| c.id.clone());
+        let pending = match &mine {
+            Some(mono) => current.pending_requests_of(mono),
+            None => current.pending_requests(),
+        };
+        if !host.is_running(&current.id) && pending > 0 {
+            // Runs asked for and not claimed yet: stopping them takes the requests back.
+            let dropped = host.update(|_, list| {
+                let mut dropped = 0;
+                let list = list
+                    .into_iter()
+                    .map(|mut w| {
+                        if w.id == current.id {
+                            dropped = match &mine {
+                                Some(mono) => w.cancel_requests_of(mono),
+                                None => w.cancel_requests(),
+                            };
+                        }
+                        w
+                    })
+                    .collect();
+                Ok((list, dropped))
+            })?;
+            let waiting = queued_count(&runs);
+            let mut note =
+                "The runs that were asked for and had not started were cancelled.".to_string();
+            if waiting > 0 {
+                note.push_str(&format!(
+                    " {waiting} queued run{} still wait{}; cancel with workflows.stop and a runId.",
+                    if waiting == 1 { "" } else { "s" },
+                    if waiting == 1 { "s" } else { "" }
+                ));
+            }
+            return Ok(obj([
+                ("id", st(&current.id)),
+                ("cancelledRequests", Json::Number(dropped as f64)),
+                ("queuedRemaining", Json::Number(waiting as f64)),
+                ("note", st(note)),
+            ]));
+        }
+        if !host.is_running(&current.id) {
+            let waiting: Vec<String> = queued_fifo(&runs).iter().map(|r| r.id.clone()).collect();
+            return Err(if waiting.is_empty() {
+                "That workflow is not running".into()
+            } else {
+                format!(
+                    "That workflow has no run going, only queued ones. Pass runId to cancel one: {}",
+                    waiting.join(", ")
+                )
+            });
+        }
+        let going: Vec<&str> = runs
+            .iter()
+            .filter(|r| r.status == RunStatus::Running)
+            .map(|r| r.id.as_str())
+            .collect();
+        if going.len() > 1 {
+            return Err(format!(
+                "{} runs of that workflow are going. Pass runId to stop one: {}",
+                going.len(),
+                going.join(", ")
+            ));
+        }
     }
     host.update(|_, list| {
         let list = list
             .into_iter()
             .map(|mut w| {
                 if w.id == current.id {
-                    w.stop_requested = true;
+                    match &named {
+                        Some(run_id) => {
+                            if !w.stop_run_ids.contains(run_id) {
+                                w.stop_run_ids.push(run_id.clone());
+                            }
+                        }
+                        None => w.stop_requested = true,
+                    }
                 }
                 w
             })
@@ -1527,12 +1853,15 @@ fn stop<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         ("id", st(&current.id)),
         ("note", st("Stop requested; the run ends within seconds.")),
     ];
+    if let Some(run_id) = &named {
+        result.push(("runId", st(run_id)));
+    }
     // A stop never stops or deletes a cloud instance: say which ones the run leaves.
-    let running = host
-        .runs(&current.id)
-        .ok()
-        .and_then(|runs| runs.into_iter().find(|r| r.status == RunStatus::Running));
-    if let Some(run) = running.filter(|r| !r.cloud_instances.is_empty()) {
+    let stopping = runs.iter().find(|r| match &named {
+        Some(run_id) => r.id == *run_id,
+        None => r.status == RunStatus::Running,
+    });
+    if let Some(run) = stopping.filter(|r| !r.cloud_instances.is_empty()) {
         result.push(("cloudInstances", instances_json(&run.cloud_instances)));
         result.push((
             "cloudInstancesNote",
@@ -1581,8 +1910,13 @@ fn resume_run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, Strin
         return Err(NEEDS_REVIEW.into());
     }
     check_scope(host.caller(), &current)?;
-    if host.is_running(&current.id) {
-        return Err("That workflow is already running".into());
+    let max = current.concurrency.limit();
+    if host.live_runs(&current.id) >= max {
+        return Err(if max == 1 {
+            "That workflow is already running".to_string()
+        } else {
+            format!("That workflow already has {max} runs going, the most it allows")
+        });
     }
     let run = host
         .runs(&current.id)?
@@ -1595,6 +1929,11 @@ fn resume_run<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, Strin
             "Only an interrupted run can be resumed; this one is {}",
             status.as_str().unwrap_or_default()
         ));
+    }
+    // A worktree the user removed is made again from its branch; without the branch the run
+    // has nowhere to continue.
+    if let Some(problem) = super::run_worktree::resume_problem(&run) {
+        return Err(problem);
     }
     // What the run was made with and what the workflow asks now both have to be there.
     // The run executes its own snapshot with its effective values, so that is what is checked.
@@ -1634,6 +1973,13 @@ fn remove<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
     if host.is_running(&current.id) {
         return Err("Stop the workflow before removing it".into());
     }
+    let waiting = queued_count(&host.runs(&current.id).unwrap_or_default());
+    if waiting > 0 {
+        return Err(format!(
+            "Cancel its {waiting} queued run{} before removing it (workflows.stop with a runId)",
+            if waiting == 1 { "" } else { "s" }
+        ));
+    }
     host.update(|_, list| {
         Ok((
             list.into_iter().filter(|w| w.id != current.id).collect(),
@@ -1642,10 +1988,25 @@ fn remove<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
     })?;
     // An interrupted run never reported, so its history is the only place that names the cloud
     // instances it left. They are not stopped or deleted: they are named in the answer.
-    let left = interrupted_instances(&host.runs(&current.id).unwrap_or_default());
+    let history = host.runs(&current.id).unwrap_or_default();
+    let left = interrupted_instances(&history);
+    // The worktrees of its runs stay on disk: the history that named them goes with the workflow.
+    let trees = worktrees_left(&history);
     // The history of a workflow that is gone is of no use; losing the cleanup is harmless.
     host.clear_runs(&current.id);
     let mut result = vec![("removed", st(&current.name))];
+    if !trees.is_empty() {
+        result.push((
+            "worktreesKept",
+            Json::Array(
+                trees
+                    .iter()
+                    .map(|(path, branch)| obj([("path", st(path)), ("branch", st(branch))]))
+                    .collect(),
+            ),
+        ));
+        result.push(("worktreesNote", st(worktrees_left_text(&trees))));
+    }
     if !left.is_empty() {
         result.push(("cloudInstances", instances_json(&left)));
         result.push((
@@ -1657,6 +2018,31 @@ fn remove<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         ));
     }
     Ok(Json::Object(result.into_iter().collect()))
+}
+
+/// The worktrees the runs of a workflow leave on disk, as `(path, branch)`, each once.
+pub fn worktrees_left(runs: &[WorkflowRun]) -> Vec<(String, String)> {
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for tree in runs.iter().flat_map(super::run_worktree::kept_worktrees) {
+        if !seen.contains(&tree) {
+            seen.push(tree);
+        }
+    }
+    seen
+}
+
+/// What the removal of a workflow says about the worktrees its runs leave.
+pub fn worktrees_left_text(trees: &[(String, String)]) -> String {
+    let list: Vec<String> = trees
+        .iter()
+        .map(|(path, branch)| format!("{path} ({branch})"))
+        .collect();
+    format!(
+        "{} worktree{} of its runs stay on disk, with their branches, because the run history that names them is removed: {}. Remove them with git when you no longer need them.",
+        trees.len(),
+        if trees.len() == 1 { "" } else { "s" },
+        list.join("; ")
+    )
 }
 
 fn export<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
@@ -1715,8 +2101,20 @@ fn runs<H: WorkflowHost>(host: &mut H, input: &Json) -> Result<Json, String> {
         Some(_) => return Err(format!("limit must be a whole number from 1 to {RUNS_MAX}")),
     };
     let runs = host.runs(&current.id)?;
-    Ok(obj([(
-        "runs",
-        Json::Array(runs.iter().take(limit as usize).map(run_detail).collect()),
-    )]))
+    let detailed = runs.iter().take(limit as usize).map(|run| {
+        let mut detail = run_detail(run);
+        if let (Some(place), Json::Object(map)) = (queue_position(&runs, &run.id), &mut detail) {
+            map.insert("queuePosition", Json::Number(place as f64));
+        }
+        detail
+    });
+    let mut out = vec![("runs", Json::Array(detailed.collect()))];
+    // Runs asked for that no claim has answered yet; workflows.stop takes them back.
+    if current.pending_requests() > 0 {
+        out.push((
+            "pendingRequests",
+            Json::Number(current.pending_requests() as f64),
+        ));
+    }
+    Ok(Json::Object(out.into_iter().collect()))
 }

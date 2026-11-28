@@ -20,17 +20,19 @@ use monocode_core::mono::workflows::{
     model::{
         Checkout, Cwd, DEFAULT_COMMAND_TIMEOUT_MINUTES, DEFAULT_SESSION_TIMEOUT_MINUTES, Node,
         NodeKind, NodeRun, NodeStatus, OutputField, RunInstance, RunStatus, RunSummary,
-        SessionMode, SessionTarget, TEMPLATABLE_TARGET_OPTIONS, TargetInstance, WorkflowRun,
+        RunWorktree, SessionMode, SessionTarget, TEMPLATABLE_TARGET_OPTIONS, TargetInstance,
+        WorkflowRun, parse_branch,
     },
     ordered::{Json, OrderedMap, js_number_text},
     output::{check_output_value, output_hint, parse_workflow_output},
     report::{compose_report, decision_prompt, parse_decision},
+    run_worktree::{branch_key, slug_of},
     template::render_template,
     validate::{DecisionModelSource, decision_model_for},
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     future::Future,
     pin::Pin,
     rc::Rc,
@@ -129,6 +131,8 @@ struct Exec {
     waits: Waits,
     /// Sessions start one at a time so the first makes the run's folder and the rest reuse it.
     starts: Gate,
+    /// Worktrees of For each branches are made one at a time, so a branch gets exactly one.
+    trees: Gate,
     registry: Registry,
     signals: Arc<Signals>,
     /// The app is quitting: the run writes nothing more, so the file keeps saying
@@ -136,6 +140,7 @@ struct Exec {
     quitting: Cell<bool>,
 }
 
+/// The live runs by run id: a workflow may have several going.
 type Registry = Rc<RefCell<HashMap<String, Rc<Exec>>>>;
 
 impl Exec {
@@ -263,6 +268,149 @@ impl Exec {
             .iter()
             .find(|n| n.id == node_id)
             .cloned()
+    }
+
+    /// A step's project text: its own, else the workflow's `workspace.project`.
+    fn project_text(&self, own: &str) -> String {
+        if own.trim().is_empty() {
+            self.state.borrow().run.definition.workspace.project.clone()
+        } else {
+            own.to_string()
+        }
+    }
+
+    /// Whether `project_path` is the project the run worktree was made from.
+    fn is_workspace_project(&self, project_path: &str) -> bool {
+        let workspace = self.state.borrow().run.definition.workspace.project.clone();
+        self.project_for(&workspace, "", "").is_some_and(|path| {
+            monocode_core::files::path_key(&path) == monocode_core::files::path_key(project_path)
+        })
+    }
+
+    /// `workspace.mode = perRun`: makes the run's worktree, once (a resumed run keeps its own).
+    /// Err is why the run cannot start.
+    async fn prepare_workspace(self: &Rc<Self>) -> Result<(), String> {
+        let (workspace, name, number, run_id, current) = {
+            let state = self.state.borrow();
+            let run = &state.run;
+            (
+                run.definition.workspace.clone(),
+                run.definition.name.clone(),
+                run.number,
+                run.id.clone(),
+                run.worktree.clone(),
+            )
+        };
+        if !workspace.per_run() {
+            return Ok(());
+        }
+        match current {
+            Some(tree) if !tree.is_removed() => return Ok(()),
+            // The user removed it and the run is resumed: it comes back from its branch, so the
+            // work the run committed is there again (D48).
+            Some(tree) => {
+                let again = self
+                    .host
+                    .restore_worktree(&run_id, tree)
+                    .await
+                    .map_err(|error| format!("Could not make the run's worktree again: {error}"))?;
+                self.state.borrow_mut().run.worktree = Some(again);
+                self.save();
+                return Ok(());
+            }
+            None => {}
+        }
+        let Some(project) = self.project_for(&workspace.project, "", "") else {
+            return Err(format!(
+                "The workspace project \"{}\" is not one of the app's projects",
+                workspace.project
+            ));
+        };
+        let tree = self
+            .host
+            .create_run_worktree(RunWorktreeRequest {
+                project,
+                base_branch: workspace.base().to_string(),
+                slug: slug_of(&name),
+                number: number.unwrap_or(1),
+                run_id,
+            })
+            .await
+            .map_err(|error| format!("Could not make the run's worktree: {error}"))?;
+        // Kept on the run even when it was stopped meanwhile: the folder exists now, and the
+        // user finds it from the run's page.
+        self.state.borrow_mut().run.worktree = Some(tree);
+        self.save();
+        Ok(())
+    }
+
+    /// The worktree a step in `branch` works in by default: the branch's own inside a For each
+    /// (forked from the run worktree when the branch first needs it, then reused for every round
+    /// and every later step), else the run's. `None` when the run has no worktree.
+    async fn run_tree(self: &Rc<Self>, branch: &str) -> Result<Option<RunWorktree>, String> {
+        let Some(run_tree) = self
+            .state
+            .borrow()
+            .run
+            .worktree
+            .clone()
+            .filter(|t| !t.is_removed())
+        else {
+            return Ok(None);
+        };
+        let Some(split) = parse_branch(branch) else {
+            return Ok(Some(run_tree));
+        };
+        let key = branch_key(&split.group_id, split.index);
+        let known = |this: &Self| {
+            this.state
+                .borrow()
+                .run
+                .branch_worktrees
+                .get(&key)
+                .filter(|t| !t.is_removed())
+                .cloned()
+        };
+        let removed = |this: &Self| {
+            this.state
+                .borrow()
+                .run
+                .branch_worktrees
+                .get(&key)
+                .filter(|t| t.is_removed())
+                .cloned()
+        };
+        if let Some(tree) = known(self) {
+            return Ok(Some(tree));
+        }
+        let _turn = self.trees.turn().await;
+        // Another step of the branch may have made it while this one waited.
+        if let Some(tree) = known(self) {
+            return Ok(Some(tree));
+        }
+        let run_id = self.state.borrow().run.id.clone();
+        // One the user removed comes back from its branch instead of forking a second one.
+        let tree = match removed(self) {
+            Some(gone) => self
+                .host
+                .restore_worktree(&run_id, gone)
+                .await
+                .map_err(|error| {
+                    format!("Could not make the worktree of this branch again: {error}")
+                })?,
+            None => self
+                .host
+                .fork_branch_worktree(&run_id, run_tree, split.group_id.clone(), split.index)
+                .await
+                .map_err(|error| format!("Could not make the worktree of this branch: {error}"))?,
+        };
+        self.state
+            .borrow_mut()
+            .run
+            .branch_worktrees
+            .insert(key, tree.clone());
+        self.save();
+        Ok(Some(tree))
     }
 
     /// The session a node ran in this branch, or at the top level.
@@ -632,6 +780,7 @@ impl Exec {
         else {
             return;
         };
+        let project = self.project_text(&project);
         let Some(project_path) = self.project_for(&project, &node_id, &branch) else {
             return self.fail(
                 &node_id,
@@ -686,6 +835,29 @@ impl Exec {
                 Some(Err(error)) => return self.fail(&node_id, &branch, error),
             };
             let mut worktree_cwd = None;
+            // The run's own worktree (or its branch's), when the step is in the workspace project.
+            let mut run_base = None;
+            if target.is_none() && checkout == Checkout::Run {
+                match self.run_tree(&branch).await {
+                    Ok(Some(tree)) => {
+                        if !self.is_workspace_project(&project_path) {
+                            return self.fail(
+                                &node_id,
+                                &branch,
+                                "This step works in another project than the run worktree: use checkout root, newWorktree or existing",
+                            );
+                        }
+                        worktree_cwd = Some(tree.path.clone());
+                        run_base = Some(tree.base);
+                    }
+                    Ok(None) => {}
+                    Err(error) => return self.fail(&node_id, &branch, error),
+                }
+            }
+            if let Checkout::Existing(path) = &checkout {
+                let scope = run_scope(&self.state.borrow().run, &branch, Some(&node_id));
+                worktree_cwd = Some(render_template(path, &scope, false));
+            }
             if let Checkout::WorktreeOf(source_node) = &checkout {
                 worktree_cwd = self
                     .session_of(source_node, &branch)
@@ -717,8 +889,14 @@ impl Exec {
                 }
             }
             if !is_cloud {
-                let dir = worktree_cwd.clone().unwrap_or_else(|| project_path.clone());
-                base = self.host.head_commit(dir).await;
+                // In the run worktree the changes are measured from where the run started (D18).
+                base = match run_base {
+                    Some(base) => Some(base),
+                    None => {
+                        let dir = worktree_cwd.clone().unwrap_or_else(|| project_path.clone());
+                        self.host.head_commit(dir).await
+                    }
+                };
             }
             let request = SessionRequest {
                 project: project_path.clone(),
@@ -1172,6 +1350,7 @@ impl Exec {
                     project,
                     cwd,
                     timeout_minutes,
+                    on_failure,
                     ..
                 },
             ..
@@ -1179,6 +1358,7 @@ impl Exec {
         else {
             return;
         };
+        let project = self.project_text(&project);
         let Some(mut dir) = self.project_for(&project, &node_id, &branch) else {
             return self.fail(
                 &node_id,
@@ -1199,6 +1379,14 @@ impl Exec {
                         format!("No worktree is available from \"{source_node}\""),
                     );
                 }
+            }
+        }
+        // Without a cwd the command runs in the run worktree (or its branch's).
+        if cwd.is_none() && self.is_workspace_project(&dir) {
+            match self.run_tree(&branch).await {
+                Ok(Some(tree)) => dir = tree.path,
+                Ok(None) => {}
+                Err(error) => return self.fail(&node_id, &branch, error),
             }
         }
         let minutes = timeout_minutes.unwrap_or(DEFAULT_COMMAND_TIMEOUT_MINUTES as f64);
@@ -1237,7 +1425,8 @@ impl Exec {
                 ),
             );
         }
-        if result.exit_code != Some(0) {
+        let carry_on = on_failure.as_deref() == Some("continue");
+        if result.exit_code != Some(0) && !carry_on {
             let detail = [result.stderr.trim(), result.stdout.trim()]
                 .into_iter()
                 .find(|text| !text.is_empty())
@@ -1257,7 +1446,16 @@ impl Exec {
             );
         }
         let mut output = OrderedMap::new();
-        output.insert("exitCode", Json::Number(0.0));
+        // A failed command only gets here with `onFailure: continue`; a process that left no
+        // exit code (killed by a signal) reads as -1.
+        output.insert(
+            "exitCode",
+            Json::Number(f64::from(result.exit_code.unwrap_or(if carry_on {
+                -1
+            } else {
+                0
+            }))),
+        );
         output.insert("stdout", Json::String(result.stdout));
         output.insert("stderr", Json::String(result.stderr));
         self.apply(EngineEvent::NodeFinished {
@@ -1275,7 +1473,7 @@ impl Exec {
         let nodes = self.state.borrow().run.definition.nodes.clone();
         let project_of = |node: &Node| match &node.kind {
             NodeKind::Session { project, .. } | NodeKind::Command { project, .. } => {
-                self.project_for(project, &node.id, branch)
+                self.project_for(&self.project_text(project), &node.id, branch)
             }
             _ => None,
         };
@@ -1608,6 +1806,18 @@ impl Exec {
         // The record exists before anything runs, so a failure to save is known up front.
         self.save();
         self.saved().await;
+        // The run's own worktree comes first: every step defaults to it.
+        if let Err(error) = self.prepare_workspace().await
+            && self.live()
+        {
+            {
+                let mut state = self.state.borrow_mut();
+                state.run.status = RunStatus::Failed;
+                state.run.ended_at = Some(now());
+                state.run.error = Some(error);
+            }
+            self.save();
+        }
         while self.live() {
             self.pump();
             if !self.live() {
@@ -1664,16 +1874,19 @@ impl Exec {
         for id in sessions {
             self.host.release_session(id);
         }
-        self.signals.set_running(&self.workflow_id, false);
-        self.registry.borrow_mut().remove(&self.workflow_id);
+        self.signals.release_run(&self.workflow_id, &run.id);
+        self.registry.borrow_mut().remove(&run.id);
+        // A slot is free: a run that waits in the queue may start now.
+        self.signals.request_check_now();
         run
     }
 }
 
 // --- the runner ---------------------------------------------------------------------------------
 
-/// The live runs of the app, one per workflow. Clones share the runs: the quit path keeps one so
-/// it can reach the runner without updating the app's entities.
+/// The live runs of the app: a workflow may have several, each in the registry under its run id.
+/// Clones share the runs: the quit path keeps one so it can reach the runner without updating the
+/// app's entities.
 #[derive(Clone)]
 pub(crate) struct WorkflowRunner {
     live: Registry,
@@ -1681,6 +1894,20 @@ pub(crate) struct WorkflowRunner {
     limits: Limits,
     /// The app is quitting: nothing new starts.
     quitting: Rc<Cell<bool>>,
+    /// Runs whose worktrees are being removed: none of them starts or resumes meanwhile.
+    removing: Rc<RefCell<HashSet<String>>>,
+}
+
+/// Held while a run's worktrees are removed; the run cannot start or resume until it drops.
+pub(crate) struct RemovalGuard {
+    removing: Rc<RefCell<HashSet<String>>>,
+    run_id: String,
+}
+
+impl Drop for RemovalGuard {
+    fn drop(&mut self) {
+        self.removing.borrow_mut().remove(&self.run_id);
+    }
 }
 
 impl WorkflowRunner {
@@ -1690,7 +1917,33 @@ impl WorkflowRunner {
             signals,
             limits: Limits::default(),
             quitting: Default::default(),
+            removing: Default::default(),
         }
+    }
+
+    /// Takes the run for the removal of its worktrees. Err says why the run is still using them:
+    /// it is going or stopping, a start or a resume was claimed for it, or a removal is going.
+    pub(crate) fn begin_removal(
+        &self,
+        workflow_id: &str,
+        run_id: &str,
+    ) -> Result<RemovalGuard, String> {
+        if self.is_run_live(run_id) {
+            return Err(
+                "The run is still going or stopping. Wait until it ends, then remove its worktree"
+                    .into(),
+            );
+        }
+        if self.signals.has_run(workflow_id, run_id) {
+            return Err("The run is about to start or resume. Try again in a moment".into());
+        }
+        if !self.removing.borrow_mut().insert(run_id.to_string()) {
+            return Err("This run's worktree is being removed already".into());
+        }
+        Ok(RemovalGuard {
+            removing: self.removing.clone(),
+            run_id: run_id.to_string(),
+        })
     }
 
     #[cfg(test)]
@@ -1699,17 +1952,68 @@ impl WorkflowRunner {
         self
     }
 
-    pub(crate) fn is_running(&self, workflow_id: &str) -> bool {
-        self.live.borrow().contains_key(workflow_id)
+    /// The live runs of `workflow_id`, oldest first.
+    fn execs_of(&self, workflow_id: &str) -> Vec<Rc<Exec>> {
+        let mut execs: Vec<Rc<Exec>> = self
+            .live
+            .borrow()
+            .values()
+            .filter(|exec| exec.workflow_id == workflow_id)
+            .cloned()
+            .collect();
+        execs.sort_by_key(|exec| exec.state.borrow().run.started_at);
+        execs
     }
 
-    /// Reads the workflow's run while the runner has it, without copying it out.
+    /// Whether the workflow has a run going.
+    pub(crate) fn is_running(&self, workflow_id: &str) -> bool {
+        self.live_count(workflow_id) > 0
+    }
+
+    /// How many runs of the workflow are going.
+    pub(crate) fn live_count(&self, workflow_id: &str) -> usize {
+        self.live
+            .borrow()
+            .values()
+            .filter(|exec| exec.workflow_id == workflow_id)
+            .count()
+    }
+
+    /// The runs of the workflow that are going, oldest first, as `(run id, run number, start
+    /// time)`, for a page that asks which one to stop.
+    pub(crate) fn live_runs_of(&self, workflow_id: &str) -> Vec<(String, Option<u64>, u64)> {
+        self.execs_of(workflow_id)
+            .iter()
+            .map(|exec| {
+                let state = exec.state.borrow();
+                (state.run.id.clone(), state.run.number, state.run.started_at)
+            })
+            .collect()
+    }
+
+    /// Whether the run is going.
+    pub(crate) fn is_run_live(&self, run_id: &str) -> bool {
+        self.live.borrow().contains_key(run_id)
+    }
+
+    /// Reads the newest run the runner has of the workflow, without copying it out.
     pub(crate) fn with_run<R>(
         &self,
         workflow_id: &str,
         read: impl FnOnce(&WorkflowRun) -> R,
     ) -> Option<R> {
-        let exec = self.live.borrow().get(workflow_id).cloned()?;
+        let exec = self.execs_of(workflow_id).pop()?;
+        let state = exec.state.borrow();
+        Some(read(&state.run))
+    }
+
+    /// Reads one run the runner has, by its id.
+    pub(crate) fn with_run_id<R>(
+        &self,
+        run_id: &str,
+        read: impl FnOnce(&WorkflowRun) -> R,
+    ) -> Option<R> {
+        let exec = self.live.borrow().get(run_id).cloned()?;
         let state = exec.state.borrow();
         Some(read(&state.run))
     }
@@ -1771,12 +2075,13 @@ impl WorkflowRunner {
         self.live
             .borrow()
             .iter()
-            .map(|(workflow, exec)| (workflow.clone(), exec.state.borrow().run.id.clone()))
+            .map(|(run, exec)| (exec.workflow_id.clone(), run.clone()))
             .collect()
     }
 
-    /// Runs `run` (made by the engine's `start_run` or `resume_run`). False when the workflow
-    /// already has a run going; a run that is already over is only written.
+    /// Runs `run` (made by the engine's `start_run` or `resume_run`). False when the run is
+    /// going already or the workflow has all the slots of its `concurrency.max` taken; a run
+    /// that is already over is only written.
     pub(crate) fn start(
         &self,
         host: Rc<dyn WorkflowHost>,
@@ -1784,7 +2089,12 @@ impl WorkflowRunner {
         run: WorkflowRun,
     ) -> bool {
         let workflow_id = run.workflow_id.clone();
-        if self.quitting.get() || self.is_running(&workflow_id) {
+        let run_id = run.id.clone();
+        if self.quitting.get()
+            || self.removing.borrow().contains(&run_id)
+            || self.is_run_live(&run_id)
+            || self.live_count(&workflow_id) >= run.definition.concurrency.limit()
+        {
             return false;
         }
         let exec = Rc::new(Exec {
@@ -1808,14 +2118,13 @@ impl WorkflowRunner {
             flushed: Nudge::default(),
             waits: Default::default(),
             starts: Gate::default(),
+            trees: Gate::default(),
             registry: self.live.clone(),
             signals: self.signals.clone(),
             quitting: Cell::new(false),
         });
-        self.live
-            .borrow_mut()
-            .insert(workflow_id.clone(), exec.clone());
-        self.signals.set_running(&workflow_id, true);
+        self.live.borrow_mut().insert(run_id.clone(), exec.clone());
+        self.signals.claim_run(&workflow_id, &run_id);
         cx.spawn(async move |_| {
             exec.execute().await;
         })
@@ -1823,8 +2132,8 @@ impl WorkflowRunner {
         true
     }
 
-    /// Continues an interrupted run from where it stopped. False when the workflow is running or
-    /// the run was not interrupted.
+    /// Continues an interrupted run from where it stopped. False when the workflow has no free
+    /// slot or the run was not interrupted.
     pub(crate) fn resume(
         &self,
         host: Rc<dyn WorkflowHost>,
@@ -1834,10 +2143,25 @@ impl WorkflowRunner {
         stored.status == RunStatus::Interrupted && self.start(host, cx, resume_run(stored))
     }
 
-    /// Stops the workflow's run. False when none is going or it is already stopping.
-    pub(crate) fn stop(&self, workflow_id: &str) -> bool {
-        let exec = self.live.borrow().get(workflow_id).cloned();
-        exec.is_some_and(|exec| exec.request_stop())
+    /// Stops runs of the workflow: the one named by `run_id`, or, without one, every run it has
+    /// going. False when none was going or each is already stopping.
+    pub(crate) fn stop(&self, workflow_id: &str, run_id: Option<&str>) -> bool {
+        let execs = match run_id {
+            Some(run_id) => self
+                .live
+                .borrow()
+                .get(run_id)
+                .filter(|exec| exec.workflow_id == workflow_id)
+                .cloned()
+                .into_iter()
+                .collect(),
+            None => self.execs_of(workflow_id),
+        };
+        let mut stopped = false;
+        for exec in execs {
+            stopped |= exec.request_stop();
+        }
+        stopped
     }
 
     /// The app is quitting. Every run lets go at once and writes nothing more: its file keeps

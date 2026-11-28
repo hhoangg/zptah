@@ -2069,6 +2069,21 @@ impl Conversation {
         cx.emit(SessionChanged);
         cx.notify();
     }
+    /// The worktree this session worked in is back (a workflow run made it again from its
+    /// branch): the session works there again.
+    pub(crate) fn worktree_restored(
+        &mut self,
+        summary: Session,
+        settings: Settings,
+        cx: &mut Context<Self>,
+    ) {
+        self.summary = summary;
+        self.settings = settings;
+        self.status = String::new();
+        self.refresh_git(cx);
+        cx.emit(SessionChanged);
+        cx.notify();
+    }
     pub(crate) fn execution_cwd(&self) -> &str {
         self.settings.execution_cwd(&self.summary.cwd)
     }
