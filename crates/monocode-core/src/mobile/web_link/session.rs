@@ -890,6 +890,7 @@ mod tests {
                 "mentionedFiles2",
                 "fileTransfer",
                 "slashCommands",
+                "workflows",
                 "monoEmoji",
                 "visualControls"
             ])
@@ -907,6 +908,7 @@ mod tests {
                 "mentionedFiles2",
                 "fileTransfer",
                 "slashCommands",
+                "workflows",
                 "monoEmoji",
                 "visualControls"
             ])
@@ -934,7 +936,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ])
         );
         policy::set_flags(PolicyFlags {
@@ -949,7 +952,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ])
         );
         policy::set_flags(before);
@@ -971,7 +975,7 @@ mod tests {
                 "state": "confirmed",
                 "permission": "read",
                 "proto": 1,
-                "capabilities": ["cloud", "mentionedFiles", "mentionedFiles2", "fileTransfer", "slashCommands", "monoEmoji", "visualControls"],
+                "capabilities": ["cloud", "mentionedFiles", "mentionedFiles2", "fileTransfer", "slashCommands", "workflows", "monoEmoji", "visualControls"],
                 "desktop": {"name": "Test Desktop", "version": "1.2.3"},
             })]
         );
@@ -1009,7 +1013,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ])
         );
         assert_eq!(
@@ -1020,7 +1025,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ])
         );
     }

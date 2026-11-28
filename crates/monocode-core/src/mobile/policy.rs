@@ -469,6 +469,8 @@ pub const METHODS: &[Entry] = &[
     app("cloud.cancelMove", Class::Control),
     app("desktop.updateStatus", Class::Read),
     app("desktop.update", Class::Control),
+    app("workflows.list", Class::Read),
+    app("workflows.runs", Class::Read),
     host("device.enroll", Class::Denied),
     host("device.leave", Class::Read),
     host("workspace.list", Class::Read),
@@ -929,6 +931,8 @@ fn capabilities_with(flags: &PolicyFlags, approvals_gate: bool) -> Vec<String> {
     list.push("fileTransfer".to_owned());
     // `commands.list` (a read) and `commands.run` (Control): the `/` menu of a session composer.
     list.push("slashCommands".to_owned());
+    // `workflows.list` and `workflows.runs` (reads): the read-only Workflows screen.
+    list.push("workflows".to_owned());
     list
 }
 
@@ -938,6 +942,16 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
+
+    #[test]
+    fn the_workflow_reads_are_plain_reads_and_have_a_capability() {
+        for method in ["workflows.list", "workflows.runs"] {
+            assert_eq!(classify(method, &json!({})), Some(Access::Read), "{method}");
+            assert!(APP_METHODS.contains(&method), "{method}");
+        }
+        let flags = PolicyFlags::default();
+        assert!(capabilities_with(&flags, false).contains(&"workflows".to_owned()));
+    }
 
     #[test]
     fn every_app_and_host_method_has_a_class() {
@@ -1603,7 +1617,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ]
         );
         assert_eq!(
@@ -1616,7 +1631,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ]
         );
         // The gate alone does not list approvals: the desktop toggle is needed too.
@@ -1627,7 +1643,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ]
         );
         let toggle = PolicyFlags {
@@ -1641,7 +1658,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ]
         );
         assert_eq!(
@@ -1652,7 +1670,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ]
         );
         assert_eq!(
@@ -1666,7 +1685,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ]
         );
     }
@@ -1689,7 +1709,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ]
         );
         assert_eq!(
@@ -1700,7 +1721,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ]
         );
         assert_eq!(
@@ -1713,7 +1735,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ]
         );
         assert_eq!(
@@ -1723,7 +1746,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ]
         );
     }
@@ -1804,7 +1828,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ]
         );
         assert_eq!(
@@ -1815,7 +1840,8 @@ mod tests {
                 "mentionedFiles",
                 "mentionedFiles2",
                 "fileTransfer",
-                "slashCommands"
+                "slashCommands",
+                "workflows"
             ]
         );
     }

@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { Icon } from "@/ui/Icon";
 import { Slot } from "@/ui/slots";
 import { stripEmoTokens } from "@/features/monos/emoji";
+import { WorkflowsNavItem } from "@/features/workflows/WorkflowsNavItem";
 import { markMonoSeen, useCatalogUnreadMonos } from "./monoSeen";
 import { projectColor } from "./projectColors";
 import { ProjectMascot } from "./ProjectMascot";
@@ -187,6 +188,8 @@ export function WorkspaceNav({ desktopId, onNavigate, onNewMono, railed = false 
       {railed ? null : (
         <div className="flex flex-col gap-0.5 border-t border-stroke p-1.5">
           <Slot name="desktop-nav-items" desktopId={desktopId} />
+          {/* The slot holds one component and Cloud has it, so Workflows sits beside it. */}
+          <WorkflowsNavItem desktopId={desktopId} onNavigate={onNavigate} />
           <Link
             to="/settings/desktops/$id"
             params={{ id: desktopId }}

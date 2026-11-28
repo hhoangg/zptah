@@ -26,6 +26,8 @@ export const KNOWN_CAPABILITIES = [
   "monoReset",
   /** The desktop answers `visual.dispatch`: the controls of an inline visual (tabs, slider, button...) work on the web. */
   "visualControls",
+  /** The desktop answers `workflows.list` and `workflows.runs`: the read-only Workflows screen. */
+  "workflows",
 ] as const;
 export type KnownCapability = (typeof KNOWN_CAPABILITIES)[number];
 

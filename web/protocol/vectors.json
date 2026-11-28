@@ -812,7 +812,8 @@
       "slashCommands",
       "monoEmoji",
       "monoReset",
-      "visualControls"
+      "visualControls",
+      "workflows"
     ],
     "messages": [
       {
@@ -839,7 +840,8 @@
           "slashCommands",
           "monoEmoji",
           "monoReset",
-          "visualControls"
+          "visualControls",
+          "workflows"
         ],
         "desktop": {
           "name": "Example Desktop",

@@ -41,6 +41,7 @@ describe("FEATURES", () => {
       terminal: "The terminal",
       slashCommands: "The / menu",
       visualControls: "Controls in visuals",
+      workflows: "Workflows",
     });
   });
 });

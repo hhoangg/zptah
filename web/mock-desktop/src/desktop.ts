@@ -126,6 +126,7 @@ function requiredCapability(method: MethodName): string | undefined {
   if (method === "mono.emoji") return "monoEmoji";
   if (method === "mono.reset") return "monoReset";
   if (method === "visual.dispatch") return "visualControls";
+  if (method.startsWith("workflows.")) return "workflows";
   return undefined;
 }
 

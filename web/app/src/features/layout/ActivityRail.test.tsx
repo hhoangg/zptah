@@ -9,7 +9,7 @@ import { getLinkStore, resetLinkStore, useLink } from "@/link/store";
 import type * as LinkModule from "@/link";
 import type * as KeysModule from "@/link/keys";
 
-const h = vi.hoisted(() => ({ cloud: true, terminal: false, getDeviceKeyInfo: vi.fn() }));
+const h = vi.hoisted(() => ({ cloud: true, workflows: false, terminal: false, getDeviceKeyInfo: vi.fn() }));
 vi.mock("@/link", async (importOriginal) => {
   const actual = await importOriginal<typeof LinkModule>();
   return {
@@ -18,7 +18,7 @@ vi.mock("@/link", async (importOriginal) => {
   };
 });
 vi.mock("@/link/keys", async (importOriginal) => ({ ...(await importOriginal<typeof KeysModule>()), getDeviceKeyInfo: h.getDeviceKeyInfo }));
-vi.mock("@/version", () => ({ useCapability: (name: string) => (name === "terminal" ? h.terminal : h.cloud) }));
+vi.mock("@/version", () => ({ useCapability: (name: string) => (name === "terminal" ? h.terminal : name === "workflows" ? h.workflows : h.cloud) }));
 
 import { ActivityRail } from "./ActivityRail";
 
@@ -32,6 +32,7 @@ function Rail() {
 
 beforeEach(() => {
   h.cloud = true;
+  h.workflows = false;
   h.terminal = false;
   h.getDeviceKeyInfo.mockResolvedValue({ deviceId: "dev1", publicKey: new Uint8Array(32).fill(7) });
   localStorage.clear();
@@ -230,6 +231,14 @@ describe("activity rail", () => {
     mountSlot(<Rail />);
     const actions = await screen.findByTestId("rail-actions");
     expect([...actions.querySelectorAll("a, button")].map((el) => el.getAttribute("aria-label"))).toEqual(["Desktop settings", "Account"]);
+  });
+
+  it("adds Workflows after Cloud only when the desktop advertises it", async () => {
+    h.workflows = true;
+    mountSlot(<Rail />);
+    const actions = await screen.findByTestId("rail-actions");
+    expect([...actions.querySelectorAll("a, button")].map((el) => el.getAttribute("aria-label"))).toEqual(["Cloud", "Workflows", "Desktop settings", "Account"]);
+    expect(within(actions).getByRole("link", { name: "Workflows" })).toHaveAttribute("href", "/d/d1/workflows");
   });
 
   it("opens the account menu with Settings, Desktops and Install app, and has no monitor or download icon on the rail", async () => {

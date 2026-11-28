@@ -69,4 +69,6 @@ export const SAMPLE_PARAMS: Record<MethodName, Record<string, unknown>> = {
   "terminal.close": { terminalId: "term-unknown" },
   "desktop.updateStatus": {},
   "desktop.update": {},
+  "workflows.list": {},
+  "workflows.runs": { workflowId: "wf-nightly" },
 };

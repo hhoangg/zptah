@@ -457,6 +457,19 @@ pub fn load_runs(files: &impl MonoFiles, workflow_id: &str) -> Result<Vec<Workfl
         .unwrap_or_default())
 }
 
+/// Like [`load_runs`], but a file that is not a JSON list is an `Err` (the history is unknown),
+/// so a reader can tell it from a workflow that never ran.
+pub fn load_runs_checked(
+    files: &impl MonoFiles,
+    workflow_id: &str,
+) -> Result<Vec<WorkflowRun>, String> {
+    let path = runs_path(workflow_id);
+    let file = files.read(&path)?;
+    let runs = read_runs_file(file.text.as_deref().unwrap_or(""))
+        .ok_or_else(|| unreadable_error(&path, "its runs"))?;
+    Ok(runs.runs.into_iter().map(|s| s.run).collect())
+}
+
 /// The newest run's status and start time. `Ok(None)` means the workflow never ran (no file, an
 /// empty file or an empty list). A file that is not a JSON list, or holds only entries this app
 /// cannot read, is an `Err`: the history is unknown, which is not the same as never having run.

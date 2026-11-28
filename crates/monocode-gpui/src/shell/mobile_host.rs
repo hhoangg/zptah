@@ -1122,7 +1122,9 @@ impl Shell {
                         .find(|m| m.habit_sessions.contains(&session))
                 })
                 .map(|mono| Some(mono.id.as_str()));
-            // A session hidden for a Mono workflow has no single owner here.
+            // A session hidden for a workflow's question to a Mono has no single owner here. The
+            // sessions a workflow run starts are ordinary project sessions and are not in the
+            // roster, so this rule does not touch them.
             let owner = owner.or_else(|| {
                 monos
                     .roster
@@ -1253,6 +1255,7 @@ impl Shell {
             "accounts.usage" => self.mobile_usage(request, cx),
             "desktop.updateStatus" | "desktop.update" => self.mobile_update(request, cx),
             "visual.dispatch" => self.mobile_visual_dispatch(request, cx),
+            "workflows.list" | "workflows.runs" => self.mobile_workflows(request, cx),
             "mono.document" => self.mobile_document(request, cx),
             "mono.profile" | "mono.update" | "mono.delete" | "mono.create" => {
                 self.mobile_mono(request, cx)
@@ -4134,6 +4137,9 @@ mod cloud_start_tests;
 #[cfg(test)]
 mod cloud_tests;
 mod slash;
+mod workflows;
+#[cfg(test)]
+mod workflows_tests;
 
 #[cfg(test)]
 mod tests {
