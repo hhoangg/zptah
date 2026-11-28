@@ -784,7 +784,7 @@ impl Shell {
         let preferred = if draft {
             monocode_core::surface::Surface::Chat
         } else {
-            monocode_core::surface::automation_surface(kind, &cwd, self.provider_surface(kind))
+            monocode_core::surface::session_surface(kind, &cwd, self.provider_surface(kind))
         };
         let store = self.store.clone();
         self.navigation_revision += 1;

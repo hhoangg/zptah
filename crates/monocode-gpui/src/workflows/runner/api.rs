@@ -206,3 +206,14 @@ pub(crate) trait WorkflowHost {
     /// Writes the run into the workflow's run history.
     fn save_run(&self, run: WorkflowRun) -> Fut<Result<(), String>>;
 }
+
+/// What a `workflow.output` call changed, for its reply.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RecordedOutput {
+    pub node_id: String,
+    pub round: u32,
+    /// The fields this call set.
+    pub recorded: Vec<String>,
+    /// Declared fields the step still has no value for.
+    pub missing: Vec<String>,
+}

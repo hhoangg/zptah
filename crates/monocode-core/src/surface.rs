@@ -68,9 +68,9 @@ pub fn new_session_surface(_kind: Kind, cwd: &str, preferred: Surface) -> Surfac
     }
 }
 
-/// The surface an automation run opens in: a terminal only where it can honour
+/// The surface a workflow or Inbox session opens in: a terminal only where it can honour
 /// the run, since a CLI that cannot take a first prompt would drop the prompt.
-pub fn automation_surface(kind: Kind, cwd: &str, preferred: Surface) -> Surface {
+pub fn session_surface(kind: Kind, cwd: &str, preferred: Surface) -> Surface {
     if preferred.is_tui() && tui_caps(kind).initial_prompt && !is_remote(cwd) {
         Surface::Tui
     } else {
@@ -148,19 +148,19 @@ mod tests {
     #[test]
     fn automations_open_a_terminal_only_when_it_can_take_the_prompt() {
         assert_eq!(
-            automation_surface(Kind::Claude, "/repo", Surface::Tui),
+            session_surface(Kind::Claude, "/repo", Surface::Tui),
             Surface::Tui
         );
         assert_eq!(
-            automation_surface(Kind::Claude, "/repo", Surface::Chat),
+            session_surface(Kind::Claude, "/repo", Surface::Chat),
             Surface::Chat
         );
         assert_eq!(
-            automation_surface(Kind::Codex, "/repo", Surface::Tui),
+            session_surface(Kind::Codex, "/repo", Surface::Tui),
             Surface::Chat
         );
         assert_eq!(
-            automation_surface(Kind::Claude, "remote://env/repo", Surface::Tui),
+            session_surface(Kind::Claude, "remote://env/repo", Surface::Tui),
             Surface::Chat
         );
     }

@@ -299,10 +299,11 @@ struct RunsFile {
     unreadable: Vec<Json>,
 }
 
-const NODE_STATUSES: [&str; 7] = [
+const NODE_STATUSES: [&str; 8] = [
     "pending",
     "running",
     "waitingApproval",
+    "waitingForUser",
     "done",
     "failed",
     "skipped",

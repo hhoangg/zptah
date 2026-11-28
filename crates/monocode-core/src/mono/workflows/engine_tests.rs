@@ -391,7 +391,7 @@ fn schedule_trigger_exposes_started_at() {
 }
 
 #[test]
-fn appends_the_output_instruction_to_the_prompt_only_when_fields_are_declared() {
+fn the_engine_never_adds_an_output_contract_to_the_prompt() {
     let run = begin(&def(
         vec![
             trigger(),
@@ -399,8 +399,9 @@ fn appends_the_output_instruction_to_the_prompt_only_when_fields_are_declared() 
         ],
         vec![e("start", "a")],
     ));
+    // The hint about declared outputs is the runner's: it knows the app command to name.
     let actions = next_actions(&run);
-    assert!(prompt_of(&actions[0]).starts_with("Do a\n\nWhen you are finished"));
+    assert_eq!(prompt_of(&actions[0]), "Do a");
     let bare = begin(&def(vec![trigger(), plain("a")], vec![e("start", "a")]));
     assert_eq!(prompt_of(&next_actions(&bare)[0]), "Do a");
 }

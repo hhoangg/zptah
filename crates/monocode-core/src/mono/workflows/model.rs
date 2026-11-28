@@ -107,6 +107,63 @@ impl OutputField {
     }
 }
 
+/// How a session node ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionMode {
+    /// The node finishes when the first turn ends.
+    #[default]
+    Auto,
+    /// The first turn ends, then the user chats on and continues or fails the step.
+    WaitForMe,
+}
+
+impl SessionMode {
+    pub const ALL: [(&str, Self); 2] = [("auto", Self::Auto), ("waitForMe", Self::WaitForMe)];
+    /// Absent means `auto`; None for a value that is not a mode.
+    pub fn parse(text: Option<&str>) -> Option<Self> {
+        match text {
+            None => Some(Self::Auto),
+            Some(text) => Self::ALL
+                .iter()
+                .find(|(name, _)| *name == text)
+                .map(|(_, mode)| *mode),
+        }
+    }
+}
+
+/// How a session node is shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionSurface {
+    #[default]
+    Chat,
+    /// The provider's own CLI in a terminal pane (core `Surface::Tui`).
+    Terminal,
+}
+
+impl SessionSurface {
+    pub const ALL: [(&str, Self); 2] = [("chat", Self::Chat), ("terminal", Self::Terminal)];
+    /// Absent means `chat`; None for a value that is not a surface.
+    pub fn parse(text: Option<&str>) -> Option<Self> {
+        match text {
+            None => Some(Self::Chat),
+            Some(text) => Self::ALL
+                .iter()
+                .find(|(name, _)| *name == text)
+                .map(|(_, surface)| *surface),
+        }
+    }
+    pub fn is_terminal(self) -> bool {
+        self == Self::Terminal
+    }
+    /// The surface the app opens the session in.
+    pub fn core(self) -> crate::surface::Surface {
+        match self {
+            Self::Chat => crate::surface::Surface::Chat,
+            Self::Terminal => crate::surface::Surface::Tui,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Checkout {
@@ -389,7 +446,17 @@ pub enum NodeKind {
         project: String,
         prompt: String,
         checkout: Checkout,
+        /// The fields the node declares (`outputs` in the file; `output` is read too). They
+        /// reach the run through `workflow.output` or the app's fallback extraction.
+        #[serde(rename = "outputs")]
         output: OrderedMap<OutputField>,
+        /// `auto` (default: the node ends when the turn ends) or `waitForMe`. Kept as written
+        /// so validation can name a value it does not know; see `SessionMode`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
+        /// `chat` (default) or `terminal`; see `SessionSurface`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        surface: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         harness: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -467,6 +534,22 @@ pub enum NodeKind {
 }
 
 impl NodeKind {
+    /// A session node's mode; `auto` for anything else, and for a value validation reports.
+    pub fn session_mode(&self) -> SessionMode {
+        match self {
+            Self::Session { mode, .. } => SessionMode::parse(mode.as_deref()).unwrap_or_default(),
+            _ => SessionMode::Auto,
+        }
+    }
+    /// A session node's surface; `chat` for anything else, and for a value validation reports.
+    pub fn session_surface(&self) -> SessionSurface {
+        match self {
+            Self::Session { surface, .. } => {
+                SessionSurface::parse(surface.as_deref()).unwrap_or_default()
+            }
+            _ => SessionSurface::Chat,
+        }
+    }
     /// The `type` tag as written in the file.
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -803,6 +886,9 @@ pub enum NodeStatus {
     Pending,
     Running,
     WaitingApproval,
+    /// A "Wait for me" session whose first turn ended: the user chats on and then continues or
+    /// fails the step. Not the same as `WaitingApproval` (a tool permission).
+    WaitingForUser,
     Done,
     Failed,
     Skipped,
@@ -903,6 +989,10 @@ pub struct NodeRun {
     /// Key order is kept as written (a prompt shows it), so this is not a serde_json map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<OrderedMap<Json>>,
+    /// What the node's session wrote through `workflow.output` this round, last value per field.
+    /// Cleared when the node starts a round; the runner merges it into `output` at the end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_output: Option<OrderedMap<Json>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -929,6 +1019,7 @@ impl NodeRun {
             reuse_session_id: None,
             interrupted_sessions: None,
             output: None,
+            pending_output: None,
             error: None,
             decision: None,
             started_at: None,

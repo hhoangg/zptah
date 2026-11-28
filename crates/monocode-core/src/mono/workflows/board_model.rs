@@ -691,6 +691,8 @@ pub fn new_node(ty: NodeType, w: &Workflow) -> Node {
             prompt: String::new(),
             checkout: Checkout::Root,
             output: OrderedMap::new(),
+            mode: None,
+            surface: None,
             harness: None,
             model: None,
             effort: None,

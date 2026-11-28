@@ -18,7 +18,7 @@
           "project": "/code/app",
           "prompt": "Do {{trigger.x}}",
           "checkout": "root",
-          "output": {
+          "outputs": {
             "pr_url": {
               "type": "string"
             }
@@ -109,7 +109,7 @@
           "project": "/code/app",
           "prompt": "Do {{trigger.x}}",
           "checkout": "root",
-          "output": {
+          "outputs": {
             "pr_url": {
               "type": "string"
             }

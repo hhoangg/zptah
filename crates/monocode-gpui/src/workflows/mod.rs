@@ -235,6 +235,24 @@ impl Workflows {
         self.runner.resume(host, &cx.to_async(), stored)
     }
 
+    /// A `workflow.output` call (see `WorkflowRunner::record_output`): the step the caller
+    /// session is running gets the values, and the reply says what it still lacks. `ids` are
+    /// every id the caller goes by (its local id and the persisted one).
+    pub(crate) fn accept_output(
+        &mut self,
+        ids: &[String],
+        input: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let values = monocode_core::mono::workflows::ordered::Json::from(input);
+        let done = self.runner.record_output(ids, &values)?;
+        Ok(serde_json::json!({
+            "step": done.node_id,
+            "round": done.round,
+            "recorded": done.recorded,
+            "missing": done.missing,
+        }))
+    }
+
     /// Stops the workflow's run. False when none is going.
     pub(crate) fn stop_run(&mut self, workflow_id: &str) -> bool {
         self.runner.stop(workflow_id)

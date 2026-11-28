@@ -3,9 +3,11 @@
 use super::condition::condition_syntax_problem;
 use super::model::{
     is_node_id, Checkout, Cwd, Handle, Node, NodeId, NodeKind, Requirement, RequirementKind,
-    SessionTarget, TargetInstance, Workflow, MAX_PARALLEL_LIMIT, MAX_ROUNDS_LIMIT,
-    MAX_TIMEOUT_MINUTES, SWITCH_DEFAULT, TEMPLATABLE_TARGET_OPTIONS, TRIGGERS_MAX,
+    SessionMode, SessionSurface, SessionTarget, TargetInstance, Workflow, MAX_PARALLEL_LIMIT,
+    MAX_ROUNDS_LIMIT, MAX_TIMEOUT_MINUTES, SWITCH_DEFAULT, TEMPLATABLE_TARGET_OPTIONS,
+    TRIGGERS_MAX,
 };
+use super::output::{is_builtin_name, session_builtins, COMMAND_BUILTINS};
 use super::parse::{is_ai_decide, is_map_key, is_name};
 use super::template::{js_space, js_trim, shell_template_problems, template_vars};
 use crate::mono::habits::Schedule;
@@ -24,7 +26,6 @@ const RUN_VARS: [&str; 3] = ["round", "id", "startedAt"];
 const RESERVED_NODE_IDS: [&str; 4] = ["run", "inputs", "results", "trigger"];
 /// Extra `run` fields only the summary template gets (see `compose_report`).
 const REPORT_RUN_VARS: [&str; 4] = ["name", "status", "statusLabel", "endedAt"];
-const COMMAND_FIELDS: [&str; 3] = ["exitCode", "stdout", "stderr"];
 /// The fields of `{{trigger.*}}`: the trigger node that fired, what kind of caller started the run
 /// and, for an event run, the item. "trigger" is a reserved node id, so nothing else shares it.
 const TRIGGER_VARS: [&str; 3] = ["node", "kind", "item"];
@@ -237,18 +238,54 @@ impl<'a> Graph<'a> {
 
 struct Checker<'a> {
     w: &'a Workflow,
+    /// Whether the app runs on Windows, where a terminal session has no hooks to tell when its
+    /// turn ended. A parameter so the rule is tested on every platform.
+    windows: bool,
     g: Graph<'a>,
     issues: Vec<WorkflowIssue>,
     ancestors_cache: RefCell<HashMap<String, HashSet<&'a str>>>,
     descendants_cache: RefCell<HashMap<String, HashSet<&'a str>>>,
 }
 
+/// The names `{{node.<name>}}` may use for `node`: the built-in outputs and what a session
+/// declares.
 fn output_fields(node: &Node) -> Vec<String> {
     match &node.kind {
-        NodeKind::Session { output, .. } => output.keys().cloned().collect(),
-        NodeKind::Command { .. } => COMMAND_FIELDS.iter().map(|s| s.to_string()).collect(),
+        NodeKind::Session { output, target, .. } => {
+            let mut fields: Vec<String> =
+                session_builtins(node.kind.session_surface(), target.is_some())
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect();
+            fields.extend(output.keys().filter(|k| !is_builtin_name(k)).cloned());
+            fields
+        }
+        NodeKind::Command { .. } => COMMAND_BUILTINS
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect(),
         NodeKind::ForEach { .. } => FOR_EACH_FIELDS.iter().map(|s| s.to_string()).collect(),
         _ => Vec::new(),
+    }
+}
+
+/// Why a session node lacks a built-in field it would have elsewhere, for the issue message.
+fn builtin_gap(node: &Node, field: &str) -> Option<&'static str> {
+    let NodeKind::Session { target, .. } = &node.kind else {
+        return None;
+    };
+    if !super::output::SESSION_BUILTINS
+        .iter()
+        .any(|(n, _)| *n == field)
+    {
+        return None;
+    }
+    if target.is_some() {
+        Some("a cloud step has only the reply and sessionId built-ins")
+    } else if field == "reply" {
+        Some("only a chat session has a reply")
+    } else {
+        None
     }
 }
 
@@ -269,6 +306,17 @@ fn json_has_template(value: &super::ordered::Json) -> bool {
         Json::Object(map) => map.values().any(json_has_template),
         _ => false,
     }
+}
+
+fn builtin_list() -> String {
+    let mut names: Vec<&str> = super::output::SESSION_BUILTINS
+        .iter()
+        .chain(COMMAND_BUILTINS.iter())
+        .map(|(name, _)| *name)
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names.join(", ")
 }
 
 fn is_whole(n: f64) -> bool {
@@ -433,11 +481,12 @@ impl<'a> Checker<'a> {
                         .iter()
                         .any(|f| Some(f.as_str()) == field)
                 {
+                    let missing = field.unwrap_or("");
+                    let why = builtin_gap(node, missing)
+                        .map(|why| format!(" ({why})"))
+                        .unwrap_or_default();
                     self.add(
-                        format!(
-                            "{label}: \"{head}\" has no output field \"{}\"",
-                            field.unwrap_or("")
-                        ),
+                        format!("{label}: \"{head}\" has no output field \"{missing}\"{why}"),
                         node_id,
                     );
                 }
@@ -516,7 +565,7 @@ impl<'a> Checker<'a> {
                 }
                 for (name, field) in output.iter() {
                     if let Some(d) = &field.description {
-                        fields.push((format!("output.{name}.description"), d, false));
+                        fields.push((format!("outputs.{name}.description"), d, false));
                     }
                 }
                 for (label, value) in [
@@ -832,6 +881,69 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `mode` and `surface` of a session node. A terminal session is the provider's own CLI: only
+    /// Claude takes a first prompt there, it is local, and it needs the hooks that tell when a
+    /// turn ended, which Windows has not.
+    fn check_mode_and_surface(
+        &mut self,
+        node: &Node,
+        harness: Option<&str>,
+        model: Option<&str>,
+        cloud: bool,
+    ) {
+        let NodeKind::Session { mode, surface, .. } = &node.kind else {
+            return;
+        };
+        let at = Some(node.id.as_str());
+        if SessionMode::parse(mode.as_deref()).is_none() {
+            self.add(
+                format!(
+                    "mode \"{}\" is not valid: use auto or waitForMe",
+                    mode.as_deref().unwrap_or("")
+                ),
+                at,
+            );
+        }
+        match SessionSurface::parse(surface.as_deref()) {
+            None => self.add(
+                format!(
+                    "surface \"{}\" is not valid: use chat or terminal",
+                    surface.as_deref().unwrap_or("")
+                ),
+                at,
+            ),
+            Some(SessionSurface::Terminal) => {
+                if cloud {
+                    self.add(
+                        "A terminal step runs on this computer: it cannot have a cloud target",
+                        at,
+                    );
+                }
+                if self.windows {
+                    self.add(
+                        "A terminal step is not available on Windows: use a chat step",
+                        at,
+                    );
+                }
+                if let Some(h) = harness.filter(|h| !h.is_empty() && *h != "claude") {
+                    self.add(
+                        format!("harness \"{h}\": a terminal step runs Claude only"),
+                        at,
+                    );
+                } else if let Some(owner) = model
+                    .and_then(super::models::id_harness)
+                    .filter(|h| *h != "claude")
+                {
+                    self.add(
+                        format!("model: a terminal step runs Claude only, but the model belongs to \"{owner}\""),
+                        at,
+                    );
+                }
+            }
+            Some(SessionSurface::Chat) => {}
+        }
+    }
+
     fn check_timeout(&mut self, node: &Node, timeout: Option<f64>) {
         let Some(t) = timeout else { return };
         // Parsed numbers are finite, so `<=` is the negation of `>` here.
@@ -888,8 +1000,19 @@ impl<'a> Checker<'a> {
                             format!("Invalid output field name \"{name}\": use letters, digits and underscores"),
                             Some(&node.id),
                         );
+                    } else if is_builtin_name(name) {
+                        self.add(
+                            format!("Output field \"{name}\" is a built-in output (the built-ins are {}); use another name", builtin_list()),
+                            Some(&node.id),
+                        );
                     }
                 }
+                self.check_mode_and_surface(
+                    node,
+                    harness.as_deref(),
+                    model.as_deref(),
+                    target.is_some(),
+                );
                 if let Checkout::WorktreeOf(of) = checkout {
                     self.check_session_ref(of, "checkout worktreeOf", node);
                     if target.is_none() && self.runs_in_cloud(of) {
@@ -1201,8 +1324,14 @@ fn requirement_problem(r: &Requirement) -> Option<String> {
 }
 
 pub fn validate_workflow(w: &Workflow) -> Vec<WorkflowIssue> {
+    validate_workflow_on(w, cfg!(windows))
+}
+
+/// `validate_workflow` for an app that runs on Windows or not.
+pub fn validate_workflow_on(w: &Workflow, windows: bool) -> Vec<WorkflowIssue> {
     let mut c = Checker {
         w,
+        windows,
         g: Graph::new(w),
         issues: Vec::new(),
         ancestors_cache: RefCell::default(),

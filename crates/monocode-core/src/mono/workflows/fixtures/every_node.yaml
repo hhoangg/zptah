@@ -52,7 +52,7 @@ nodes:
     reuseSession: false
     timeoutMinutes: 30
     prompt: Do it
-    output:
+    outputs:
       a:
         type: number
         inReport: true

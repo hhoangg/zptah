@@ -4,7 +4,10 @@ use super::condition::{condition_syntax_problem, eval_condition, parse_condition
 use super::fixtures::*;
 use super::model::*;
 use super::ordered::{js_number_text, Json, OrderedMap};
-use super::output::{output_instruction, output_reask, parse_workflow_output, OUTPUT_FENCE};
+use super::output::{
+    check_output_value, extraction_prompt, is_builtin_name, output_hint, parse_workflow_output,
+    session_builtins, OUTPUT_FENCE,
+};
 use super::parse::{parse_workflows, read_workflow_file};
 use super::template::{
     lookup, render_template, shell_dash_problems, shell_quote, shell_template_problems,
@@ -2784,51 +2787,103 @@ fn output_zero_fields_still_validates_a_present_block() {
 }
 
 #[test]
-fn output_instruction_lists_each_field_name_and_type() {
+fn output_hint_is_one_short_paragraph_naming_the_fields_and_the_command() {
     let fields = out_fields();
-    let text = output_instruction(&fields);
-    assert!(text.contains(OUTPUT_FENCE));
-    for (name, field) in fields.iter() {
-        assert!(text.contains(name.as_str()));
-        let ty = match field.ty {
-            OutputFieldType::String => "string",
-            OutputFieldType::Number => "number",
-            OutputFieldType::Boolean => "boolean",
-            OutputFieldType::List => "list",
-            OutputFieldType::Object => "object",
-        };
-        assert!(text.contains(ty));
+    let text = output_hint(&fields, "\"/opt/zptah/zptah\"");
+    for (name, _) in fields.iter() {
+        assert!(text.contains(&format!("- {name} (")), "{name}");
     }
     assert!(text.contains("One line summary"));
+    assert!(text.contains(
+        "\"/opt/zptah/zptah\" app workflow.output '{\"summary\": \"...\", \"count\": 0, \"done\": true, \"items\": [], \"meta\": {}}'"
+    ));
+    // It tells the agent to run a command, never to shape its replies.
+    let lower = text.to_lowercase();
+    for banned in [
+        "every reply",
+        "each reply",
+        "end your",
+        "fenced",
+        "workflow-output",
+    ] {
+        assert!(!lower.contains(banned), "{banned}");
+    }
+    // One paragraph: no blank line anywhere in it.
+    assert!(!text.contains("\n\n"));
+    assert_eq!(output_hint(&OrderedMap::new(), "app"), "");
 }
 
 #[test]
-fn output_reask_carries_the_problem_and_the_contract() {
-    let text = output_reask(&out_fields(), "field count must be a number");
-    assert!(text.contains("field count must be a number"));
-    assert!(text.contains(OUTPUT_FENCE));
-    assert!(text.contains("summary"));
+fn check_output_value_accepts_a_subset_of_declared_fields_of_the_right_types() {
+    let fields = out_fields();
+    let ok = |text: &str| check_output_value(&fields, &jv(text));
+    assert_eq!(
+        ok(r#"{"count":2}"#).map(Json::Object),
+        Ok(jv(r#"{"count":2}"#))
+    );
+    assert_eq!(
+        ok(r#"{"summary":"s","done":false,"items":[1],"meta":{"a":1}}"#).map(Json::Object),
+        Ok(jv(
+            r#"{"summary":"s","done":false,"items":[1],"meta":{"a":1}}"#
+        ))
+    );
+    for bad in [
+        r#"{"count":"2"}"#,
+        r#"{"done":"yes"}"#,
+        r#"{"summary":1}"#,
+        r#"{"items":{}}"#,
+        r#"{"meta":[]}"#,
+    ] {
+        assert!(ok(bad).unwrap_err().contains("must be"), "{bad}");
+    }
 }
 
 #[test]
-fn output_instruction_and_reask_have_the_exact_ts_text() {
-    let mut fields = OrderedMap::new();
-    let mut summary = OutputField::new(OutputFieldType::String);
-    summary.description = Some("One line".into());
-    fields.insert("summary", summary);
-    fields.insert("n", OutputField::new(OutputFieldType::Number));
-    let instruction = "When you are finished, end your final reply with exactly one fenced code block whose info string is `workflow-output`.\nIt must contain a single JSON object with these fields:\n- summary (string): One line\n- n (number)\nExample shape:\n```workflow-output\n{ ... }\n```";
-    assert_eq!(output_instruction(&fields), instruction);
+fn check_output_value_rejects_undeclared_keys_listing_the_allowed_ones() {
+    let err = check_output_value(&out_fields(), &jv(r#"{"count":1,"extra":2}"#)).unwrap_err();
     assert_eq!(
-        output_reask(&fields, "boom"),
-        format!("Your last reply did not satisfy the output contract: boom\n\nReply again with the result as one fenced code block, nothing else required.\n{instruction}")
+        err,
+        "\"extra\" is not an output field of this step; the fields are: summary, count, done, items, meta."
     );
-    assert_eq!(output_instruction(&OrderedMap::new()), "");
-    // No fields: the reask ends with the empty instruction, i.e. a trailing newline.
+    assert!(check_output_value(&out_fields(), &jv("[]")).is_err());
+    assert!(check_output_value(&out_fields(), &jv("{}")).is_err());
+    let none = check_output_value(&OrderedMap::new(), &jv(r#"{"a":1}"#)).unwrap_err();
+    assert!(none.contains("declares no output fields"));
+}
+
+#[test]
+fn extraction_prompt_carries_the_fields_and_the_transcript_and_reads_back() {
+    let fields = out_fields();
+    let text = extraction_prompt(&fields, "user: hi\nassistant: all done, 3 files");
+    assert!(text.contains("- count (number)"));
+    assert!(text.contains("One line summary"));
+    assert!(text.contains("<transcript>\nuser: hi\nassistant: all done, 3 files\n</transcript>"));
+    assert!(text.contains("`workflow-output`"));
+    // The answer it asks for is what parse_workflow_output reads.
+    let answer = block(r#"{"summary":"s","count":3,"done":true,"items":[],"meta":{}}"#);
+    assert!(parsed(&answer, &fields).is_ok());
+}
+
+#[test]
+fn built_in_outputs_depend_on_the_surface_and_the_target() {
+    use super::model::SessionSurface::{Chat, Terminal};
     assert_eq!(
-        output_reask(&OrderedMap::new(), "boom"),
-        "Your last reply did not satisfy the output contract: boom\n\nReply again with the result as one fenced code block, nothing else required.\n"
+        session_builtins(Chat, false),
+        [
+            "reply",
+            "sessionId",
+            "worktree",
+            "branch",
+            "commit",
+            "changedFiles",
+            "diffStat"
+        ]
     );
+    assert!(!session_builtins(Terminal, false).contains(&"reply"));
+    assert!(session_builtins(Terminal, false).contains(&"diffStat"));
+    assert_eq!(session_builtins(Chat, true), ["reply", "sessionId"]);
+    assert!(is_builtin_name("exitCode") && is_builtin_name("reply"));
+    assert!(!is_builtin_name("verdict"));
 }
 
 #[test]

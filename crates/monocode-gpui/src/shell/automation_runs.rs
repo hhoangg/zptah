@@ -359,7 +359,7 @@ impl Shell {
         // A terminal run follows the provider's surface when its CLI takes a first
         // prompt, and never continues a session: a resumed CLI already has its
         // first prompt, so it would drop this one.
-        let surface = monocode_core::surface::automation_surface(
+        let surface = monocode_core::surface::session_surface(
             kind,
             &automation.cwd,
             self.provider_surface(kind),

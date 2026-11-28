@@ -439,8 +439,8 @@ fn string_options_may_hold_templates_that_are_checked_like_a_prompt() {
     }
     // Upstream outputs and loop variables are in scope as in a prompt.
     no_issues(&chain(vec![
-        session_json("a", value!({"output": {"branch": {"type": "string"}}})),
-        cloud("b", value!({"kind": "codespace", "branch": "{{a.branch}}"})),
+        session_json("a", value!({"output": {"base": {"type": "string"}}})),
+        cloud("b", value!({"kind": "codespace", "branch": "{{a.base}}"})),
     ]));
 }
 
@@ -505,8 +505,8 @@ fn an_unknown_template_path_in_an_option_is_an_issue() {
     assert!(has(&w, "{{ghost.out}} is unknown"));
     // A node that is not upstream has no output to read yet.
     let w = chain(vec![
-        cloud("a", value!({"kind": "codespace", "branch": "{{b.branch}}"})),
-        session_json("b", value!({"output": {"branch": {"type": "string"}}})),
+        cloud("a", value!({"kind": "codespace", "branch": "{{b.base}}"})),
+        session_json("b", value!({"output": {"base": {"type": "string"}}})),
     ]);
     assert!(has(&w, "not upstream of this node"));
 }

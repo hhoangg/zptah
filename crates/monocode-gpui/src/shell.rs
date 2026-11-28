@@ -107,6 +107,7 @@ mod web_link;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod window_chrome;
 mod workflow_bridge;
+mod workflow_output;
 #[cfg(test)]
 mod workflows_entry_tests;
 mod worktrees;

@@ -12,17 +12,18 @@
 use gpui::AsyncApp;
 use monocode_core::cloud_sessions::CloudBackendKind;
 use monocode_core::mono::workflows::{
+    active::{ActiveNode, find_active, record_output as record_active_output},
     cli::Signals,
     engine::{
         EngineAction, EngineEvent, apply_event, is_asking, next_actions, resume_run, run_scope,
     },
     model::{
         Checkout, Cwd, DEFAULT_COMMAND_TIMEOUT_MINUTES, DEFAULT_SESSION_TIMEOUT_MINUTES, Node,
-        NodeKind, NodeRun, NodeStatus, RunInstance, RunStatus, RunSummary, SessionTarget,
-        TEMPLATABLE_TARGET_OPTIONS, TargetInstance, WorkflowRun,
+        NodeKind, NodeRun, NodeStatus, OutputField, RunInstance, RunStatus, RunSummary,
+        SessionTarget, TEMPLATABLE_TARGET_OPTIONS, TargetInstance, WorkflowRun,
     },
     ordered::{Json, OrderedMap, js_number_text},
-    output::{output_reask, parse_workflow_output},
+    output::{output_hint, parse_workflow_output},
     report::{compose_report, decision_prompt, parse_decision},
     template::render_template,
     validate::{DecisionModelSource, decision_model_for},
@@ -607,6 +608,30 @@ impl Exec {
         };
         let timeout_ms =
             (timeout_minutes.unwrap_or(DEFAULT_SESSION_TIMEOUT_MINUTES as f64) * 60_000.0) as u64;
+        // A terminal step opens the provider's CLI instead of a chat. The runner does not do that
+        // yet, and running it as a chat would quietly change what the step does.
+        if self
+            .node_of(&node_id)
+            .is_some_and(|n| n.kind.session_surface().is_terminal())
+        {
+            return self.fail(
+                &node_id,
+                &branch,
+                "Terminal steps are not available in this build yet",
+            );
+        }
+        // The declared outputs are recorded by a command the session runs. A cloud session
+        // cannot reach this app, so it gets no hint and is read by the fallback instead.
+        let prompt = if target.is_none() {
+            let hint = output_hint(&output, &text::app_cli());
+            if hint.is_empty() {
+                prompt
+            } else {
+                format!("{prompt}\n\n{hint}")
+            }
+        } else {
+            prompt
+        };
 
         let (session_id, turn): (String, Fut<Outcome>) = if let Some(reuse) = reuse_session_id {
             let turn = self.host.send(&reuse, prompt);
@@ -741,7 +766,7 @@ impl Exec {
         let session = session_id.clone();
         self.patch_node(&node_id, &branch, |n| n.session_id = Some(session));
 
-        let mut outcome = self
+        let outcome = self
             .watch_turn(&node_id, &branch, &session_id, turn, timeout_ms)
             .await;
         if !self.live() {
@@ -766,44 +791,15 @@ impl Exec {
                 }),
             );
         }
-        let reply_of = |done: &Outcome| {
+        let reply = {
             let reply = self.host.final_reply(&session_id);
             if reply.is_empty() {
-                done.text.clone()
+                outcome.text
             } else {
                 reply
             }
         };
-
-        // A node with nothing declared has no contract to enforce, whatever its reply ends with.
-        if output.is_empty() {
-            return self.apply(EngineEvent::NodeFinished {
-                node_id,
-                branch,
-                output: OrderedMap::new(),
-                at: now(),
-            });
-        }
-        let mut parsed = parse_workflow_output(&reply_of(&outcome), &output);
-        if let Err(problem) = &parsed {
-            self.patch_node(&node_id, &branch, |n| n.reasked = Some(true));
-            let turn = self.host.send(&session_id, output_reask(&output, problem));
-            outcome = self
-                .watch_turn(&node_id, &branch, &session_id, turn, timeout_ms)
-                .await;
-            if !self.live() {
-                return;
-            }
-            if outcome.status != Status::Completed {
-                return self.fail(
-                    &node_id,
-                    &branch,
-                    outcome.error.unwrap_or_else(|| problem.clone()),
-                );
-            }
-            parsed = parse_workflow_output(&reply_of(&outcome), &output);
-        }
-        match parsed {
+        match self.on_turn_end(&node_id, &branch, &reply, &output) {
             Err(problem) => self.fail(&node_id, &branch, problem),
             Ok(value) => self.apply(EngineEvent::NodeFinished {
                 node_id,
@@ -812,6 +808,88 @@ impl Exec {
                 at: now(),
             }),
         }
+    }
+
+    /// A session step's turn ended: what the node's output is. Everything a step reports meets
+    /// here, so the built-in fields, "Wait for me" and the fallback extraction hook in at this
+    /// one place. For now it is what the session recorded with `workflow.output`, completed from
+    /// a `workflow-output` block in the reply when the session wrote one anyway.
+    fn on_turn_end(
+        &self,
+        node_id: &str,
+        branch: &str,
+        reply: &str,
+        declared: &OrderedMap<OutputField>,
+    ) -> Result<OrderedMap<Json>, String> {
+        let mut output = self.pending_output(node_id, branch);
+        let missing: Vec<&String> = declared
+            .keys()
+            .filter(|name| !output.contains_key(name))
+            .collect();
+        if missing.is_empty() {
+            return Ok(output);
+        }
+        match parse_workflow_output(reply, declared) {
+            Ok(block) => {
+                for (name, value) in block.iter() {
+                    if !output.contains_key(name) {
+                        output.insert(name.clone(), value.clone());
+                    }
+                }
+                Ok(output)
+            }
+            Err(_) => Err(format!(
+                "The session did not record these output fields with workflow.output: {}",
+                missing
+                    .iter()
+                    .map(|name| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+
+    /// What the node's session wrote with `workflow.output` this round.
+    fn pending_output(&self, node_id: &str, branch: &str) -> OrderedMap<Json> {
+        self.state
+            .borrow()
+            .run
+            .nodes
+            .iter()
+            .find(|n| n.node_id == node_id && n.branch == branch)
+            .and_then(|n| n.pending_output.clone())
+            .unwrap_or_default()
+    }
+
+    /// Records what a session wrote with `workflow.output` into the run record, when `target` is
+    /// still the step it is running.
+    fn record_output(
+        self: &Rc<Self>,
+        target: &ActiveNode,
+        values: &Json,
+    ) -> Result<Vec<String>, String> {
+        if !self.live() {
+            return Err(monocode_core::mono::workflows::active::ActiveError::Ended.to_string());
+        }
+        let recorded = {
+            let mut state = self.state.borrow_mut();
+            let mut next = record_active_output(&state.run, target, values)?;
+            if let Some(node) = next
+                .nodes
+                .iter_mut()
+                .find(|n| n.node_id == target.node_id && n.branch == target.branch)
+                && let Some(pending) = &node.pending_output
+            {
+                node.pending_output = Some(cap_map(pending));
+            }
+            state.run = next;
+            values
+                .as_object()
+                .map(|given| given.keys().cloned().collect())
+                .unwrap_or_default()
+        };
+        self.save();
+        Ok(recorded)
     }
 
     async fn run_command(self: &Rc<Self>, node_id: String, branch: String, command: String) {
@@ -1209,7 +1287,7 @@ impl Exec {
             for node in &state.run.nodes {
                 let busy = matches!(
                     node.status,
-                    NodeStatus::Running | NodeStatus::WaitingApproval
+                    NodeStatus::Running | NodeStatus::WaitingApproval | NodeStatus::WaitingForUser
                 );
                 if let Some(id) = &node.session_id
                     && busy
@@ -1361,6 +1439,43 @@ impl WorkflowRunner {
         let exec = self.live.borrow().get(workflow_id).cloned()?;
         let state = exec.state.borrow();
         Some(read(&state.run))
+    }
+
+    /// A `workflow.output` call: records `values` as output of the step whose active session is
+    /// one of `ids` (the caller's local id and persisted id). Err says why the call belongs to no
+    /// running step, or what is wrong with the values.
+    pub(crate) fn record_output(
+        &self,
+        ids: &[String],
+        values: &Json,
+    ) -> Result<RecordedOutput, String> {
+        let execs: Vec<Rc<Exec>> = self.live.borrow().values().cloned().collect();
+        let runs: Vec<WorkflowRun> = execs.iter().map(|e| e.state.borrow().run.clone()).collect();
+        let refs: Vec<&WorkflowRun> = runs.iter().collect();
+        let target = find_active(&refs, ids).map_err(|e| e.to_string())?;
+        let exec = execs
+            .iter()
+            .find(|e| e.state.borrow().run.id == target.run_id)
+            .ok_or_else(|| "The workflow run is no longer going".to_string())?;
+        let recorded = exec.record_output(&target, values)?;
+        let missing = {
+            let state = exec.state.borrow();
+            let declared = match state.run.definition.node(&target.node_id).map(|n| &n.kind) {
+                Some(NodeKind::Session { output, .. }) => output.keys().cloned().collect(),
+                _ => Vec::new(),
+            };
+            let have = exec.pending_output(&target.node_id, &target.branch);
+            declared
+                .into_iter()
+                .filter(|name: &String| !have.contains_key(name))
+                .collect()
+        };
+        Ok(RecordedOutput {
+            node_id: target.node_id,
+            round: target.round,
+            recorded,
+            missing,
+        })
     }
 
     /// The runs going, as `(workflow id, run id)`.

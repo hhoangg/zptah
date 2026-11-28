@@ -166,8 +166,7 @@ impl Automations {
             .and_then(|p| p.provider_surfaces.get(kind.id()).copied())
             .unwrap_or_default();
         self.terminal_sessions
-            && monocode_core::surface::automation_surface(kind, &editor.draft.cwd, preferred)
-                .is_tui()
+            && monocode_core::surface::session_surface(kind, &editor.draft.cwd, preferred).is_tui()
     }
     fn select_control(
         &self,

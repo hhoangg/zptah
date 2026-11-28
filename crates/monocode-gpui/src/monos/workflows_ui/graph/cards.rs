@@ -954,6 +954,8 @@ mod tests {
                 prompt: "Build it\nthen test".into(),
                 checkout: Checkout::Root,
                 output: OrderedMap::new(),
+                mode: None,
+                surface: None,
                 harness: None,
                 model: None,
                 effort: None,

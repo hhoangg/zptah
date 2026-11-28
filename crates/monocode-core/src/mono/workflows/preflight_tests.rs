@@ -118,6 +118,8 @@ fn session_node(id: &str) -> Node {
             prompt: "go".into(),
             checkout: super::model::Checkout::Root,
             output: Default::default(),
+            mode: None,
+            surface: None,
             harness: None,
             model: None,
             effort: None,

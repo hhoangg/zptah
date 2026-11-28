@@ -114,7 +114,16 @@ impl Shell {
         }
         let worktree = self.session_worktrees.get(&id).cloned().flatten();
         let store = self.store.clone();
-        let tui = cx.new(|_| TuiSession::new(&summary, store, worktree));
+        let app_env = self
+            .app_bridge
+            .as_ref()
+            .map(|bridge| bridge.environment(id))
+            .unwrap_or_default();
+        let tui = cx.new(|_| {
+            let mut tui = TuiSession::new(&summary, store, worktree);
+            tui.set_app_environment(app_env);
+            tui
+        });
         self.tui_events.insert(
             id,
             cx.subscribe(&tui, move |this, _, event: &TuiEvent, cx| {

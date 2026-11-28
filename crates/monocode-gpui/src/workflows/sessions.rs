@@ -170,6 +170,8 @@ impl Workflows {
                     prompt: String::new(),
                     checkout: Checkout::Root,
                     output: OrderedMap::new(),
+                    mode: None,
+                    surface: None,
                     harness: harness.clone(),
                     model: req.model.clone(),
                     effort: req.effort.clone(),

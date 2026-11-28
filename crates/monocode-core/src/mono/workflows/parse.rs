@@ -181,7 +181,10 @@ pub fn parse_node(raw: &Json) -> Option<Node> {
             project: str_of(raw, "project")?,
             prompt: str_of(raw, "prompt")?,
             checkout: parse_checkout(raw.get("checkout"))?,
-            output: parse_output(raw.get("output"))?,
+            // `outputs` is what is written; `output` is what older files and the first design say.
+            output: parse_output(raw.get("outputs").or_else(|| raw.get("output")))?,
+            mode: str_of(raw, "mode"),
+            surface: str_of(raw, "surface"),
             harness: str_of(raw, "harness"),
             model: str_of(raw, "model"),
             effort: str_of(raw, "effort"),

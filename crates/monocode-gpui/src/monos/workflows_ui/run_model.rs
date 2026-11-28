@@ -147,7 +147,12 @@ pub(super) fn default_selection(run: &WorkflowRun) -> Option<String> {
             .iter()
             .any(|n| n.id == id && matches!(n.kind, NodeKind::ForEach { .. }))
     };
-    let live = |n: &&NodeRun| matches!(n.status, NodeStatus::Running | NodeStatus::WaitingApproval);
+    let live = |n: &&NodeRun| {
+        matches!(
+            n.status,
+            NodeStatus::Running | NodeStatus::WaitingApproval | NodeStatus::WaitingForUser
+        )
+    };
     let running = run
         .nodes
         .iter()

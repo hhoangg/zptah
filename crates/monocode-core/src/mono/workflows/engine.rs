@@ -17,7 +17,6 @@
 use super::condition::eval_condition;
 use super::model::*;
 use super::ordered::{js_number_text, Json, OrderedMap};
-use super::output::output_instruction;
 use super::parse::is_ai_decide;
 use super::template::{
     js_space, js_trim, lookup, render_template, shell_dash_problems, shell_template_problems,
@@ -96,6 +95,14 @@ pub enum EngineEvent {
         branch: BranchKey,
         waiting: bool,
     },
+    /// A "Wait for me" session finished its first turn (`waiting`), or the user chatted on and
+    /// the session works again (`!waiting`). Continue and Fail step end the node with
+    /// `NodeFinished` and `NodeFailed`.
+    WaitingForUser {
+        node_id: NodeId,
+        branch: BranchKey,
+        waiting: bool,
+    },
     ReportPosted {
         at: u64,
     },
@@ -113,7 +120,7 @@ impl EngineEvent {
             | Self::Decided { at, .. }
             | Self::ReportPosted { at }
             | Self::Stopped { at } => Some(*at),
-            Self::WaitingApproval { .. } => None,
+            Self::WaitingApproval { .. } | Self::WaitingForUser { .. } => None,
         }
     }
 }
@@ -351,7 +358,10 @@ fn unsettled(g: &Graph, r: &NodeRun) -> bool {
     }
     matches!(
         r.status,
-        NodeStatus::Pending | NodeStatus::Running | NodeStatus::WaitingApproval
+        NodeStatus::Pending
+            | NodeStatus::Running
+            | NodeStatus::WaitingApproval
+            | NodeStatus::WaitingForUser
     ) || open_loop(g, r)
 }
 
@@ -656,6 +666,7 @@ fn reset_loop(d: &mut Draft, from: usize, to: &str) {
         r.started_at = None;
         r.ended_at = None;
         r.reasked = None;
+        r.pending_output = None;
         if d.g.is_type(&id, is_for_each_kind) && !dropped.contains(&id) {
             dropped.push(id);
         }
@@ -1207,11 +1218,11 @@ pub fn next_actions(run: &WorkflowRun) -> Vec<EngineAction> {
         match &node.kind {
             NodeKind::Session {
                 prompt,
-                output,
                 reuse_session,
                 ..
             } => {
-                let instruction = output_instruction(output);
+                // The prompt is the node's own text. The hint about its declared outputs is
+                // added by the runner, which knows the app command to name.
                 let prompt = render_template(prompt, &scope, false);
                 let reuse = r
                     .session_id
@@ -1222,12 +1233,11 @@ pub fn next_actions(run: &WorkflowRun) -> Vec<EngineAction> {
                     node_id: r.node_id.clone(),
                     branch: r.branch.clone(),
                     round: r.round,
-                    prompt: if instruction.is_empty() {
-                        prompt
-                    } else {
-                        format!("{prompt}\n\n{instruction}")
-                    },
-                    reuse_session_id: if *reuse_session != Some(false) && r.round > 1 {
+                    prompt,
+                    reuse_session_id: if *reuse_session != Some(false)
+                        && !node.kind.session_surface().is_terminal()
+                        && r.round > 1
+                    {
                         reuse.cloned()
                     } else {
                         None
@@ -1304,7 +1314,7 @@ fn stop_run(run: &WorkflowRun, at: u64) -> WorkflowRun {
     out.ended_at = Some(at);
     for n in &mut out.nodes {
         match n.status {
-            NodeStatus::Running | NodeStatus::WaitingApproval => {
+            NodeStatus::Running | NodeStatus::WaitingApproval | NodeStatus::WaitingForUser => {
                 n.status = NodeStatus::Stopped;
                 n.ended_at = Some(at);
             }
@@ -1321,7 +1331,10 @@ fn stop_run(run: &WorkflowRun, at: u64) -> WorkflowRun {
 fn unstarted(status: NodeStatus) -> bool {
     matches!(
         status,
-        NodeStatus::Pending | NodeStatus::Running | NodeStatus::WaitingApproval
+        NodeStatus::Pending
+            | NodeStatus::Running
+            | NodeStatus::WaitingApproval
+            | NodeStatus::WaitingForUser
     )
 }
 
@@ -1361,6 +1374,9 @@ pub fn apply_event(run: &WorkflowRun, event: &EngineEvent) -> WorkflowRun {
         }
         | EngineEvent::WaitingApproval {
             node_id, branch, ..
+        }
+        | EngineEvent::WaitingForUser {
+            node_id, branch, ..
         } => (node_id, branch),
         EngineEvent::ReportPosted { .. } | EngineEvent::Stopped { .. } => return run.clone(),
     };
@@ -1380,6 +1396,7 @@ pub fn apply_event(run: &WorkflowRun, event: &EngineEvent) -> WorkflowRun {
                 r.started_at = Some(*at);
                 r.ended_at = None;
                 r.reuse_session_id = None;
+                r.pending_output = None;
                 if let Some(id) = session_id {
                     r.session_id = Some(id.clone());
                 }
@@ -1410,6 +1427,20 @@ pub fn apply_event(run: &WorkflowRun, event: &EngineEvent) -> WorkflowRun {
             if *waiting && status == NodeStatus::Running && !is_asking(&d.run.nodes[i]) {
                 d.run.nodes[i].status = NodeStatus::WaitingApproval;
             } else if !*waiting && status == NodeStatus::WaitingApproval {
+                d.run.nodes[i].status = NodeStatus::Running;
+            } else {
+                return run.clone();
+            }
+        }
+        EngineEvent::WaitingForUser { waiting, .. } => {
+            let is_session = matches!(node.kind, NodeKind::Session { .. });
+            if *waiting
+                && is_session
+                && matches!(status, NodeStatus::Running | NodeStatus::WaitingApproval)
+                && !is_asking(&d.run.nodes[i])
+            {
+                d.run.nodes[i].status = NodeStatus::WaitingForUser;
+            } else if !*waiting && status == NodeStatus::WaitingForUser {
                 d.run.nodes[i].status = NodeStatus::Running;
             } else {
                 return run.clone();
@@ -1475,7 +1506,10 @@ pub fn mark_interrupted(run: &WorkflowRun) -> WorkflowRun {
     let mut out = run.clone();
     out.status = RunStatus::Interrupted;
     for n in &mut out.nodes {
-        if n.status != NodeStatus::Running && n.status != NodeStatus::WaitingApproval {
+        if !matches!(
+            n.status,
+            NodeStatus::Running | NodeStatus::WaitingApproval | NodeStatus::WaitingForUser
+        ) {
             continue;
         }
         // A For each group is bookkeeping: its branches carry the real state.

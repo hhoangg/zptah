@@ -206,7 +206,7 @@ pub fn status_of(r: Option<&NodeRun>) -> RunNodeStatus {
         return RunNodeStatus::Pending;
     };
     match r.status {
-        NodeStatus::WaitingApproval => RunNodeStatus::Waiting,
+        NodeStatus::WaitingApproval | NodeStatus::WaitingForUser => RunNodeStatus::Waiting,
         NodeStatus::Running if is_asking(r) => RunNodeStatus::Waiting,
         NodeStatus::Running => RunNodeStatus::Running,
         NodeStatus::Pending => RunNodeStatus::Pending,
@@ -660,8 +660,12 @@ fn edge_state(def: &Edge, branch: &str, by_key: &ByKey, branching: bool) -> RunE
             return RunEdgeState::Idle;
         }
     }
-    if target.is_some_and(|t| matches!(t.status, NodeStatus::Running | NodeStatus::WaitingApproval))
-    {
+    if target.is_some_and(|t| {
+        matches!(
+            t.status,
+            NodeStatus::Running | NodeStatus::WaitingApproval | NodeStatus::WaitingForUser
+        )
+    }) {
         return RunEdgeState::Active;
     }
     RunEdgeState::Taken

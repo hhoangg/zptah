@@ -21,6 +21,7 @@ use monocode_core::{
     tui_launch::{self, EARLY_EXIT, Exit, LaunchInput, TuiLaunch},
 };
 use std::{
+    collections::HashMap,
     ffi::OsString,
     path::{Path, PathBuf},
     time::Instant,
@@ -100,6 +101,9 @@ pub(crate) struct Request {
     /// The CLI's first prompt, for a conversation that has none yet.
     pub initial_prompt: Option<String>,
     pub hooks: bool,
+    /// The app capability of the session (`MONOCODE_APP_*`), so the CLI can call `app` actions
+    /// such as `workflow.output`. Empty when the app has no bridge.
+    pub app_env: HashMap<String, String>,
     pub book: Book,
     pub root: PathBuf,
     pub binary: fn(Kind) -> Result<PathBuf, String>,
@@ -136,6 +140,7 @@ pub(crate) fn prepare(request: Request) -> Result<Prepared, String> {
         fresh,
         initial_prompt,
         hooks,
+        app_env,
         book,
         root,
         binary,
@@ -186,7 +191,10 @@ pub(crate) fn prepare(request: Request) -> Result<Prepared, String> {
             Some((cli, tui_hook::spool_dir(data_dir.as_deref()?)))
         })
         .flatten();
-    let (env_set, env_remove) = profile.env(kind)?;
+    let (mut env_set, env_remove) = profile.env(kind)?;
+    let mut app_env: Vec<_> = app_env.into_iter().collect();
+    app_env.sort();
+    env_set.extend(app_env.into_iter().map(|(key, value)| (key, value.into())));
     let launch = tui_launch::build(LaunchInput {
         kind,
         binary,
@@ -272,6 +280,8 @@ pub(crate) struct TuiSession {
     /// The last title this pane wrote, so the CLI keeps following itself.
     pub(crate) last_cli_title: Option<String>,
     focus_pending: bool,
+    /// The app capability this pane's CLI is launched with (see `Request::app_env`).
+    app_env: HashMap<String, String>,
 }
 impl EventEmitter<TuiEvent> for TuiSession {}
 
@@ -308,7 +318,13 @@ impl TuiSession {
             busy: false,
             last_cli_title: None,
             focus_pending: false,
+            app_env: HashMap::new(),
         }
+    }
+
+    /// The app capability (`MONOCODE_APP_*`) the CLI is launched with; set before it is shown.
+    pub(crate) fn set_app_environment(&mut self, env: HashMap<String, String>) {
+        self.app_env = env;
     }
 
     /// The conversation the CLI runs; the id Claude's hooks report.
@@ -456,6 +472,7 @@ impl TuiSession {
             fresh,
             initial_prompt: self.initial_prompt.clone(),
             hooks,
+            app_env: self.app_env.clone(),
             book,
             root,
             binary: default_binary,

@@ -22,7 +22,7 @@ nodes:
     model: claude:sonnet-5
     checkout: root
     prompt: List open tickets assigned to me in {{inputs.clickupList}}.
-    output:
+    outputs:
       tickets:
         type: list
     ui:
@@ -42,7 +42,7 @@ nodes:
     prompt: |
       Implement {{item.title}} ({{item.url}}) and open a PR.
       {{#if review}}Fix these review issues: {{review.issues}}{{/if}}
-    output:
+    outputs:
       pr_url:
         type: string
       summary:
@@ -57,7 +57,7 @@ nodes:
       worktreeOf: dev
     nestUnder: dev
     prompt: Review {{dev.pr_url}}. List blocking issues only.
-    output:
+    outputs:
       verdict:
         type: string
       issues:

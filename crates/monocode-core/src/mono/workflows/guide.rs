@@ -51,7 +51,7 @@ const EXAMPLE_0: &str = r##"{
       "model": "claude:sonnet-5",
       "checkout": "root",
       "prompt": "Read the git history of the last day and summarize what changed, grouped by area. Mention anything that looks risky.",
-      "output": {
+      "outputs": {
         "summary": {
           "type": "string",
           "description": "The digest, in Markdown"
@@ -95,7 +95,7 @@ const EXAMPLE_1: &str = r##"{
       "model": "claude:sonnet-5",
       "checkout": "root",
       "prompt": "List the open tickets assigned to me in {{inputs.list}}. Give each one a title and a url.",
-      "output": {
+      "outputs": {
         "tickets": {
           "type": "list",
           "description": "Objects with title and url"
@@ -119,7 +119,7 @@ const EXAMPLE_1: &str = r##"{
       "model": "claude:sonnet-5",
       "checkout": "newWorktree",
       "prompt": "Implement the ticket {{ticket.title}} ({{ticket.url}}) and open a pull request.\n{{#if review}}Round {{run.round}}. Fix these review issues first: {{review.issues}}{{/if}}",
-      "output": {
+      "outputs": {
         "pr_url": {
           "type": "string",
           "description": "URL of the pull request"
@@ -138,7 +138,7 @@ const EXAMPLE_1: &str = r##"{
       },
       "nestUnder": "dev",
       "prompt": "Review the pull request {{dev.pr_url}} for {{ticket.title}}. Report blocking issues only. Answer approve when there are none.",
-      "output": {
+      "outputs": {
         "verdict": {
           "type": "string",
           "description": "approve or changes"
@@ -216,7 +216,7 @@ const EXAMPLE_2: &str = r##"{
       "model": "claude:sonnet-5",
       "checkout": "root",
       "prompt": "These are the latest commits under {{inputs.pathspec}}:\n{{recent.stdout}}\nSay in a few sentences what changed and whether any commit is risky.",
-      "output": {
+      "outputs": {
         "summary": {
           "type": "string",
           "description": "What changed, in a few sentences"
@@ -241,7 +241,7 @@ const EXAMPLE_2: &str = r##"{
       "model": "claude:opus-5",
       "checkout": "root",
       "prompt": "Review the risky commits in depth. Context:\n{{assess.summary}}",
-      "output": {
+      "outputs": {
         "notes": {
           "type": "string",
           "description": "Findings, most serious first"
@@ -300,7 +300,7 @@ const EXAMPLE_3: &str = r##"{
         "machine": "basicLinux32gb"
       },
       "prompt": "Build the project and run its tests. Report whether they pass.",
-      "output": {
+      "outputs": {
         "passed": {
           "type": "boolean",
           "description": "True when the build and the tests pass"
@@ -321,7 +321,7 @@ const EXAMPLE_3: &str = r##"{
         }
       },
       "prompt": "The build passed: {{build.passed}}. Look at the build output in this codespace and list anything surprising.",
-      "output": {
+      "outputs": {
         "notes": {
           "type": "string",
           "description": "What looked surprising"
@@ -379,7 +379,7 @@ const EXAMPLE_4: &str = r##"{
       "model": "claude:sonnet-5",
       "checkout": "root",
       "prompt": "List the open issues of the project and group them by theme. This run was started by {{trigger.kind}}.",
-      "output": {
+      "outputs": {
         "themes": {
           "type": "string",
           "description": "The themes, one line each"
@@ -405,7 +405,7 @@ const EXAMPLE_4: &str = r##"{
       "model": "claude:opus-5",
       "checkout": "root",
       "prompt": "Propose a short plan for the urgent themes:\n{{triage.themes}}",
-      "output": {
+      "outputs": {
         "plan": {
           "type": "string",
           "description": "The plan, in Markdown"
@@ -585,7 +585,9 @@ pub fn workflow_guide() -> String {
             "",
             r##"`session`"##,
             r##"- `project` (required, `{{inputs.<name>}}`), `prompt` (required, a template), `checkout` (required): `"root"` (the project's own checkout), `"newWorktree"` (a fresh worktree) or `{"worktreeOf": "<session node id>"}` (continue in the worktree of an earlier session of the same branch; that node must be a session)."##,
-            r##"- `output`: the fields the session reports back (see the output contract below). May be `{}`."##,
+            r##"- `outputs`: the fields the session reports back (see Passing data between steps below). May be `{}`; a file that says `output` is read too."##,
+            r##"- `surface` (optional): `"chat"` (default) or `"terminal"` (the provider's own CLI in a terminal pane, so slash commands such as `/ship` work). A terminal step needs Claude, a local project and not Windows; it has no `reply`, and `reuseSession` is ignored (each round opens a new terminal)."##,
+            r##"- `mode` (optional): `"auto"` (default: the step ends when the session's first turn ends) or `"waitForMe"` (the first turn ends, then the user chats on in the session and presses Continue or Fail step on the banner; waiting more than 12 hours fails the step)."##,
             r##"- `harness`, `model`, `effort` (optional): see Models."##,
             r##"- `target` (optional): run this step in a cloud instance (a GitHub codespace or a Docker sandbox) instead of on this computer: `{"kind": "codespace" | "sandbox", "instance"?: "new" | {"sameAs": "<session node id>"}, ...options}`. `account` (optional, only with a `target`): the Claude account a new instance runs with. See Cloud steps."##,
             format!(r##"- `reuseSession` (default true): in a loop, later rounds continue in the same session instead of starting a new one. `nestUnder` (optional): the id of another session node; this session is shown under it in the sidebar. `timeoutMinutes` (default {DEFAULT_SESSION_TIMEOUT_MINUTES}, above 0, at most {MAX_TIMEOUT_MINUTES})."##).as_str(),
@@ -625,7 +627,7 @@ pub fn workflow_guide() -> String {
             r##"- `inputs.<name>`: a declared input."##,
             r##"- `run.round`, `run.id`, `run.startedAt`.
 - `trigger.node`, `trigger.kind`, `trigger.item.<path>`: what started the run (see the trigger nodes)."##,
-            r##"- `<nodeId>.<field>` for a node upstream of this one (over non-loop edges), and inside a loop for any node of the loop body. Outputs: a session's declared fields; a command's `exitCode`, `stdout`, `stderr`; a For each's `results`. An unknown field is an issue."##,
+            r##"- `<nodeId>.<field>` for a node upstream of this one (over non-loop edges), and inside a loop for any node of the loop body. Outputs: a session's built-in fields (`reply`, `sessionId`, `worktree`, `branch`, `commit`, `changedFiles`, `diffStat`) and its declared fields; a command's `exitCode`, `stdout`, `stderr`; a For each's `results`. An unknown field is an issue."##,
             r##"- `<as>.<path>` (default `item`) inside a For each; steps inside it also read everything upstream of the group."##,
             "",
             r##"The summary template is narrower. It reads `inputs.*`, `trigger.*`, `run.round|id|startedAt` plus `run.name`, `run.status`, `run.statusLabel` and `run.endedAt`, `results`, and the outputs of top-level nodes. It cannot read steps inside a For each or the loop variable; their data reaches the summary through `{{results}}` or `{{<forEachId>.results}}`. `{{results}}` is a list with one entry per piece of work: `branch`, `name`, `status`, `rounds`, `maxRoundsReached`, `errors` and `output` (the item's last session output). It starts with a `Run` entry for the work outside any For each, and has extra entries for earlier loop rounds that failed or ran out of rounds. Templates have no loops, so `{{results}}` prints as JSON; when you want a readable list, leave the template out and mark the fields to show with `inReport`."##,
@@ -656,11 +658,15 @@ pub fn workflow_guide() -> String {
     add(
         &mut sections,
         &[
+            r##"## Passing data between steps"##,
+            "",
+            r##"A step hands data to the next ones in two ways, and you can mix them."##,
+            "",
+            r##"1. Built-in outputs, which need nothing from the agent. A session has `reply` (the final reply text; chat sessions only), `sessionId`, `worktree`, `branch`, `commit` (HEAD), `changedFiles` (list) and `diffStat`. A command has `exitCode`, `stdout` and `stderr`. Read them like any output: `Review the changes on {{build.branch}}`. A cloud step has only `reply` and `sessionId`; the git fields on it are an issue. A declared field may not use a built-in name."##,
+            "",
+            r##"2. Declared `outputs`: an object of fields such as `{"verdict": {"type": "string", "description": "approve or changes", "inReport": true}}`. The type is `string`, `number`, `boolean`, `list` or `object`; the name uses letters, digits and underscores. The app adds one short paragraph to the session's first prompt naming the fields and the command `app workflow.output '{"verdict": "approve"}'`, which the session runs to record them (no run id is needed: the app finds the step from the session; any subset may be given, the call may be repeated and the last value of each field wins; an undeclared field or a wrong type is refused). Do not write that instruction in the prompt yourself; describe what each field means in its `description`. The reply stays free text, so the user can chat on in the session. A call after the step finished is refused. If a declared field is still missing when the step ends, the app asks the same harness and model, in a hidden one-shot call over the session transcript, and fails the step with the reason if that does not work. A terminal step gets no `reply` and no extraction."##,
+            "",
             r##"## Session output and the run summary"##,
-            "",
-            r##"A session node's `output` is an object of fields: `{"verdict": {"type": "string", "description": "approve or changes", "inReport": true}}`. The type is `string`, `number`, `boolean`, `list` or `object`; the name uses letters, digits and underscores."##,
-            "",
-            r##"The app appends the contract to the prompt for you: the session must end its last reply with one fenced code block whose info string is `workflow-output` and whose body is a JSON object with every declared field, each of the declared type. Do not write that instruction in the prompt yourself; describe what each field means in its `description` instead. If the block is missing or wrong the session is asked once to fix it, and the node fails if it still does not comply. A session with no output fields needs no block."##,
             "",
             r##"Without a `summaryTemplate`, the app writes the summary: for every For each item the status, errors, loop rounds used and the reported fields of the item's last session node, plus a `Run` entry for the work outside any For each (shown when it failed or has something to show; next to a For each it lists the reported fields of every top-level session). `inReport: true` shows a field, `inReport: false` hides it; unset, string fields are shown and the rest are hidden. If the summary must contain something from an earlier step of an item, repeat it in a field of the last session, as `pr_url` does in the ticket example below."##,
             "",
@@ -977,7 +983,11 @@ mod tests {
             "workflows.add",
             "workflows.update",
             "saved paused",
-            "workflow-output",
+            "workflow.output",
+            "Passing data between steps",
+            "waitForMe",
+            "`surface`",
+            "diffStat",
             "inReport",
             "{{#if",
             "not empty",
