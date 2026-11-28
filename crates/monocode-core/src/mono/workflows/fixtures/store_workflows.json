@@ -48,7 +48,7 @@
         "project": "{{inputs.repo}}",
         "prompt": "Do it",
         "checkout": "root",
-        "output": {
+        "outputs": {
           "pr": {
             "type": "string",
             "inReport": true

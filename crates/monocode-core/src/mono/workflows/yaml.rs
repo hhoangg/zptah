@@ -12,7 +12,7 @@ use super::model::{
 };
 use super::models::{workflow_issues, ModelCatalog};
 use super::ordered::{Json, OrderedMap};
-use super::output::output_instruction;
+use super::output::output_hint;
 use super::parse::{
     drop_stray_handles, parse_decision_model, parse_edge, parse_inputs, parse_node, read_requires,
 };
@@ -149,6 +149,8 @@ fn export_node(node: &Node) -> Doc {
             prompt,
             checkout,
             output,
+            mode,
+            surface,
             harness,
             model,
             effort,
@@ -162,6 +164,8 @@ fn export_node(node: &Node) -> Doc {
             put(&mut out, "harness", harness.as_deref().map(text));
             put(&mut out, "model", model.as_deref().map(text));
             put(&mut out, "effort", effort.as_deref().map(text));
+            put(&mut out, "surface", surface.as_deref().map(text));
+            put(&mut out, "mode", mode.as_deref().map(text));
             put(
                 &mut out,
                 "checkout",
@@ -177,7 +181,7 @@ fn export_node(node: &Node) -> Doc {
             put(&mut out, "target", target.as_ref().map(export_target));
             put(&mut out, "account", account.as_deref().map(text));
             put(&mut out, "prompt", Some(text(prompt)));
-            put(&mut out, "output", Some(export_output(output)));
+            put(&mut out, "outputs", Some(export_output(output)));
         }
         NodeKind::Command {
             project,
@@ -432,13 +436,15 @@ pub fn review_texts(nodes: &[Node]) -> (Vec<ReviewCommand>, Vec<ReviewPrompt>) {
             NodeKind::Session {
                 prompt: p, output, ..
             } => {
-                let instruction = output_instruction(output);
+                // The hint the app adds to the first prompt, with the app's command written by
+                // its name (a session is given the app's own path there).
+                let hint = output_hint(output, crate::brand::NATIVE_PRODUCT);
                 prompt(
                     node,
-                    if instruction.is_empty() {
+                    if hint.is_empty() {
                         p.clone()
                     } else {
-                        format!("{p}\n\n{instruction}")
+                        format!("{p}\n\n{hint}")
                     },
                 );
             }

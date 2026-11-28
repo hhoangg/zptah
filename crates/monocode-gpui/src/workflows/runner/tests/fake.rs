@@ -42,6 +42,24 @@ pub(super) struct World {
     pub(super) released: Vec<String>,
     /// Every AI decision the run asked for.
     pub(super) decisions: Vec<DecisionRequest>,
+    /// What `session_facts` answers; `None` is a plausible checkout of the session.
+    facts: Option<SessionFacts>,
+    /// The commit `head_commit` finds; `None` is no repository.
+    head: Option<Option<String>>,
+    /// Answers of the extraction call, in order.
+    extractions: VecDeque<Option<Result<String, String>>>,
+    /// Extraction calls wait for this before they answer.
+    extract_gate: Option<Receiver<()>>,
+    /// While set, a session has a turn running: `turn_ends` waits for it to close.
+    busy_gate: Option<Receiver<()>>,
+    /// The sessions `turn_ends` was asked about.
+    pub(super) turn_end_calls: Vec<String>,
+    pub(super) head_calls: Vec<String>,
+    pub(super) fact_calls: Vec<(String, Option<String>)>,
+    pub(super) extract_calls: Vec<ExtractRequest>,
+    /// The steps that asked the user, and the sessions whose banner went.
+    pub(super) waits: Vec<WaitNotice>,
+    pub(super) wait_overs: Vec<String>,
     pub(super) commands: Vec<(String, String, u64, String)>,
     pub(super) cancelled: Vec<String>,
     pub(super) posts: Vec<Summary>,
@@ -99,6 +117,32 @@ impl FakeHost {
                 name: Some(name.into()),
             },
         );
+    }
+    pub(super) fn facts_are(&self, facts: SessionFacts) {
+        self.0.borrow_mut().facts = Some(facts);
+    }
+    pub(super) fn head_is(&self, head: Option<&str>) {
+        self.0.borrow_mut().head = Some(head.map(str::to_owned));
+    }
+    /// The next extraction call answers with this.
+    pub(super) fn extraction(&self, answer: Result<String, String>) {
+        self.0.borrow_mut().extractions.push_back(Some(answer));
+    }
+    /// Extraction calls wait for this to be closed before they answer.
+    pub(super) fn extraction_gate(&self) -> Hold {
+        let (hold, rx) = self.gate();
+        self.0.borrow_mut().extract_gate = Some(rx);
+        hold
+    }
+    /// Sessions have a turn running until this is closed.
+    pub(super) fn busy(&self) -> Hold {
+        let (hold, rx) = self.gate();
+        self.0.borrow_mut().busy_gate = Some(rx);
+        hold
+    }
+    /// The next extraction call never answers.
+    pub(super) fn hang_next_extraction(&self) {
+        self.0.borrow_mut().extractions.push_back(None);
     }
     pub(super) fn answer(&self, reply: Result<String, String>) {
         self.0.borrow_mut().answers.push_back(Some(reply));
@@ -335,6 +379,64 @@ impl WorkflowHost for FakeHost {
                 None => std::future::pending().await,
             }
         })
+    }
+
+    fn head_commit(&self, dir: String) -> Fut<Option<String>> {
+        let mut w = self.0.borrow_mut();
+        w.head_calls.push(dir);
+        let head = w.head.clone().unwrap_or_else(|| Some("base0".into()));
+        Box::pin(async move { head })
+    }
+
+    fn session_facts(&self, session_id: &str, base: Option<String>) -> Fut<SessionFacts> {
+        let mut w = self.0.borrow_mut();
+        w.fact_calls.push((session_id.into(), base));
+        let facts = w.facts.clone().unwrap_or_else(|| SessionFacts {
+            worktree: format!("/code/app-wt-{session_id}"),
+            branch: "feature".into(),
+            commit: "abc123".into(),
+            changed_files: vec!["src/a.rs".into()],
+            diff_stat: " src/a.rs | 1 +".into(),
+        });
+        Box::pin(async move { facts })
+    }
+
+    fn extract(&self, request: ExtractRequest) -> Fut<Result<String, String>> {
+        let mut w = self.0.borrow_mut();
+        w.extract_calls.push(request);
+        let answer = w
+            .extractions
+            .pop_front()
+            .unwrap_or_else(|| Some(Err("The fake host has no extraction answer".into())));
+        let gate = w.extract_gate.clone();
+        Box::pin(async move {
+            if let Some(gate) = gate {
+                let _ = gate.recv().await;
+            }
+            match answer {
+                Some(answer) => answer,
+                None => std::future::pending().await,
+            }
+        })
+    }
+
+    fn wait_for_user(&self, notice: WaitNotice) {
+        self.0.borrow_mut().waits.push(notice);
+    }
+
+    fn turn_ends(&self, session_id: &str) -> Fut<()> {
+        let mut w = self.0.borrow_mut();
+        w.turn_end_calls.push(session_id.into());
+        let gate = w.busy_gate.clone();
+        Box::pin(async move {
+            if let Some(gate) = gate {
+                let _ = gate.recv().await;
+            }
+        })
+    }
+
+    fn wait_over(&self, session_id: &str) {
+        self.0.borrow_mut().wait_overs.push(session_id.into());
     }
 
     fn post(&self, summary: Summary) {

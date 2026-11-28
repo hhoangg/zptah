@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 
 mod cloud;
+mod data;
 mod fake;
 mod real;
 use fake::*;
@@ -342,12 +343,18 @@ fn node<'a>(run: &'a WorkflowRun, id: &str) -> &'a NodeRun {
     run.nodes.iter().find(|n| n.node_id == id).unwrap()
 }
 
+/// The declared fields of a node's output, as `name=value`; the built-ins have their own tests.
 fn output_of(run: &WorkflowRun, id: &str) -> String {
     node(run, id)
         .output
         .as_ref()
         .unwrap()
         .iter()
+        .filter(|(name, _)| {
+            !monocode_core::mono::workflows::output::SESSION_BUILTINS
+                .iter()
+                .any(|(builtin, _)| builtin == name)
+        })
         .map(|(k, v)| format!("{k}={}", v.stringify(false)))
         .collect::<Vec<_>>()
         .join(",")
@@ -379,7 +386,7 @@ fn a_run_starts_a_session_per_node_and_posts_one_report(cx: &mut TestAppContext)
     let request = &w.starts[0];
     assert_eq!(request.project, "/code/app");
     assert!(!request.new_worktree);
-    assert!(request.prompt.contains("Do dev") && request.prompt.contains("workflow-output"));
+    assert!(request.prompt.contains("Do dev") && request.prompt.contains("app workflow.output"));
     // The session is filed in the workflow's own folder, named after it.
     assert_eq!(request.folder_name.as_deref(), Some("Ship it"));
 
@@ -448,34 +455,76 @@ fn the_record_is_written_before_anything_runs(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn it_re_asks_once_for_missing_output_then_fails_the_node(cx: &mut TestAppContext) {
-    let rig = Rig::new(&["I did it.", "Still no block."]);
+fn it_never_asks_the_session_again_when_declared_output_is_missing(cx: &mut TestAppContext) {
+    let rig = Rig::new(&["I did it.", "Never sent."]);
     rig.start(cx, &simple(json!({"summary": {"type": "string"}})));
     cx.run_until_parked();
     let w = rig.fake.world();
-    assert_eq!(w.sends.len(), 1);
-    assert_eq!(w.sends[0].0, "s1");
-    assert!(w.sends[0].1.contains("did not satisfy the output contract"));
-    assert_eq!(w.posts[0].title, "Ship it · failed");
+    assert!(w.sends.is_empty(), "no follow-up in the user's session");
+    assert_eq!(w.extract_calls.len(), 1, "the hidden call reads it instead");
+    assert_eq!(w.posts[0].title, "Ship it \u{b7} failed");
     drop(w);
     let run = rig.last_run();
     assert_eq!(run.status, RunStatus::Failed);
     let dev = node(&run, "dev");
     assert_eq!(dev.status, NodeStatus::Failed);
-    assert_eq!(dev.reasked, Some(true));
-    assert!(dev.error.as_deref().unwrap().contains("workflow-output"));
+    assert_eq!(dev.reasked, None);
+    let error = dev.error.as_deref().unwrap();
+    assert!(
+        error.contains("summary") && error.contains("no extraction answer"),
+        "{error}"
+    );
 }
 
 #[gpui::test]
-fn it_accepts_the_re_asked_reply_when_it_has_the_block(cx: &mut TestAppContext) {
-    let rig = Rig::new(&["no block", &fenced(json!({"summary": "second try"}))]);
+fn it_takes_what_the_session_recorded_with_workflow_output(cx: &mut TestAppContext) {
+    let rig = Rig::new(&["Finished, nothing fenced."]);
+    let hold = rig.fake.hold();
+    rig.start(cx, &simple(json!({"summary": {"type": "string"}})));
+    cx.run_until_parked();
+    let values = Json::from(&json!({"summary": "from the command"}));
+    let done = rig
+        .runner
+        .record_output(&["s1".to_string()], &values)
+        .unwrap();
+    assert_eq!((done.node_id.as_str(), done.round), ("dev", 1));
+    assert_eq!(done.recorded, ["summary"]);
+    assert!(done.missing.is_empty());
+    // Another session is not a step of this run, and a value of the wrong type is refused.
+    assert!(
+        rig.runner
+            .record_output(&["s9".to_string()], &values)
+            .is_err()
+    );
+    let wrong = Json::from(&json!({"summary": 3}));
+    assert!(
+        rig.runner
+            .record_output(&["s1".to_string()], &wrong)
+            .is_err()
+    );
+    hold.close();
+    cx.run_until_parked();
+    let run = rig.last_run();
+    assert_eq!(run.status, RunStatus::Done);
+    assert_eq!(output_of(&run, "dev"), "summary=\"from the command\"");
+    assert!(rig.fake.world().sends.is_empty());
+    // The run is over: nothing more can be recorded.
+    assert!(
+        rig.runner
+            .record_output(&["s1".to_string()], &values)
+            .is_err()
+    );
+}
+
+#[gpui::test]
+fn it_still_reads_a_block_the_session_wrote_on_its_own(cx: &mut TestAppContext) {
+    let rig = Rig::new(&[&fenced(json!({"summary": "second try"}))]);
     rig.start(cx, &simple(json!({"summary": {"type": "string"}})));
     cx.run_until_parked();
     let run = rig.last_run();
     assert_eq!(run.status, RunStatus::Done);
-    assert_eq!(rig.fake.world().sends.len(), 1);
+    assert!(rig.fake.world().sends.is_empty());
     assert_eq!(output_of(&run, "dev"), "summary=\"second try\"");
-    assert_eq!(node(&run, "dev").reasked, Some(true));
 }
 
 #[gpui::test]

@@ -19,6 +19,11 @@ mod tests;
 pub(crate) const CLOUD_ARCHIVING: &str =
     "This cloud session is being archived; the message would be lost. Nothing was sent.";
 
+/// The action a workflow step's session calls to record its declared outputs. It is not an
+/// Operator action: any session the app started may call it, and the app only accepts it from the
+/// active session of a running step (see `workflow_output_call`).
+pub(super) const WORKFLOW_OUTPUT: &str = "workflow.output";
+
 type Placement = Option<(i64, Edge)>;
 enum Effect {
     None,
@@ -53,7 +58,7 @@ impl Shell {
             Err(error) => self.error = Some(format!("Operator app access: {error}")),
         }
     }
-    fn finish_app_call(
+    pub(super) fn finish_app_call(
         &mut self,
         call: Call,
         result: Result<Value, String>,
@@ -250,8 +255,15 @@ impl Shell {
         }
         Ok(())
     }
-    fn handle_app_call(&mut self, call: Call, window: &mut Window, cx: &mut Context<Self>) {
-        let allowed = if monocode_core::today::actions::session_action(&call.action) {
+    pub(super) fn handle_app_call(
+        &mut self,
+        call: Call,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let allowed = if call.action == WORKFLOW_OUTPUT {
+            Self::check_request_id(&call)
+        } else if monocode_core::today::actions::session_action(&call.action) {
             self.authorize_session_today(&call, cx).map(drop)
         } else if call.action.starts_with("terminals.") {
             self.authorize_session_terminals(&call, cx).map(drop)
@@ -433,6 +445,10 @@ impl Shell {
         self.persist(cx);
     }
     fn dispatch_app_call(&mut self, call: Call, window: &mut Window, cx: &mut Context<Self>) {
+        if call.action == WORKFLOW_OUTPUT {
+            self.workflow_output_call(call, cx);
+            return;
+        }
         if monocode_core::today::actions::session_action(&call.action) {
             match self.authorize_session_today(&call, cx) {
                 Ok(roots) => {

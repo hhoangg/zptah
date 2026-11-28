@@ -124,6 +124,8 @@ fn branch_status(runs: &[&NodeRun]) -> &'static str {
         "stopped"
     } else if has(NodeStatus::WaitingApproval) {
         "waiting for approval"
+    } else if has(NodeStatus::WaitingForUser) {
+        "waiting for you"
     } else if has(NodeStatus::Running) {
         "running"
     } else if has(NodeStatus::Pending) {

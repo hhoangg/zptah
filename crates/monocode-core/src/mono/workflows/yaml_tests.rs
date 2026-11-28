@@ -269,8 +269,8 @@ const EVERY_NODE: &str = r#"[
     "cwd": { "worktreeOf": "work" }, "timeoutMinutes": 5 },
   { "id": "work", "type": "session", "project": "{{inputs.project}}", "harness": "claude",
     "model": "claude:opus-5", "effort": "high", "checkout": "newWorktree", "reuseSession": false,
-    "nestUnder": "work", "prompt": "Do it",
-    "output": { "a": { "type": "number", "inReport": true, "description": "A number" } },
+    "nestUnder": "work", "prompt": "Do it", "surface": "terminal", "mode": "waitForMe",
+    "outputs": { "a": { "type": "number", "inReport": true, "description": "A number" } },
     "timeoutMinutes": 30 },
   { "id": "loop", "type": "forEach", "in": "{{work.a}}" }
 ]"#;

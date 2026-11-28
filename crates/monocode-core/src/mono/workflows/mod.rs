@@ -1,5 +1,8 @@
 //! Workflows: a graph of trigger, session, command, If, Switch and For each nodes.
 //! The definition, lenient parsing and validation are pure; files and running come later.
+pub mod active;
+#[cfg(test)]
+mod active_tests;
 pub mod board_edit;
 #[cfg(test)]
 mod board_edit_tests;
@@ -13,6 +16,8 @@ mod cli_tests;
 mod cloud_target_tests;
 pub mod command;
 pub mod condition;
+#[cfg(test)]
+mod data_passing_tests;
 pub mod engine;
 #[cfg(test)]
 mod engine_tests;
@@ -40,6 +45,9 @@ pub mod run_graph_model;
 #[cfg(test)]
 mod run_graph_model_tests;
 pub mod schedule;
+pub mod session_facts;
+#[cfg(test)]
+mod session_facts_tests;
 pub mod store;
 #[cfg(test)]
 mod store_tests;

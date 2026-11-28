@@ -105,3 +105,10 @@ pub(super) fn workflow_folder_name(workflow_name: &str) -> String {
     }
     utf16_head(&name, 100).to_string()
 }
+
+/// The app executable as a shell word, for the command a session is told to run.
+pub(super) fn app_cli() -> String {
+    std::env::current_exe()
+        .map(|exe| crate::runtime::shlex_quote(&exe.to_string_lossy()))
+        .unwrap_or_else(|_| "zptah".into())
+}

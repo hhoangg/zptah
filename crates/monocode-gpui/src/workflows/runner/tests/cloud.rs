@@ -523,7 +523,7 @@ fn branch_then_build(target: Value, extra: Value) -> Workflow {
     workflow(
         vec![
             trigger(),
-            session("fetch", json!({"branch": {"type": "string"}}), json!({})),
+            session("fetch", json!({"base": {"type": "string"}}), json!({})),
             session("build", json!({}), build),
         ],
         vec![edge("start", "fetch"), edge("fetch", "build")],
@@ -533,10 +533,10 @@ fn branch_then_build(target: Value, extra: Value) -> Workflow {
 #[gpui::test]
 fn a_template_in_an_option_is_filled_in_from_the_run_before_the_start(cx: &mut TestAppContext) {
     let def = branch_then_build(
-        json!({"kind": "codespace", "branch": "{{fetch.branch}}", "machine": "m-{{run.id}}"}),
+        json!({"kind": "codespace", "branch": "{{fetch.base}}", "machine": "m-{{run.id}}"}),
         json!({}),
     );
-    let rig = Rig::new(&[&fenced(json!({"branch": "feature-x"})), "built"]);
+    let rig = Rig::new(&[&fenced(json!({"base": "feature-x"})), "built"]);
     assert!(rig.start(cx, &def));
     cx.run_until_parked();
     assert_eq!(rig.last_run().status, RunStatus::Done);
@@ -568,7 +568,7 @@ fn a_template_in_an_option_is_filled_in_from_the_run_before_the_start(cx: &mut T
     };
     assert_eq!(
         target.options.get("branch"),
-        Some(&Json::String("{{fetch.branch}}".into()))
+        Some(&Json::String("{{fetch.base}}".into()))
     );
 }
 
@@ -578,23 +578,23 @@ fn a_rendered_option_that_is_not_valid_fails_the_step_before_anything_is_started
 ) {
     for (target, branch, message) in [
         (
-            json!({"kind": "codespace", "branch": "{{fetch.branch}}"}),
+            json!({"kind": "codespace", "branch": "{{fetch.base}}"}),
             "two words",
             "target.branch is not a valid branch name",
         ),
         (
-            json!({"kind": "codespace", "machine": "{{fetch.branch}}"}),
+            json!({"kind": "codespace", "machine": "{{fetch.base}}"}),
             "not a machine",
             "target.machine is not a valid machine name",
         ),
         (
-            json!({"kind": "sandbox", "memory": "{{fetch.branch}}"}),
+            json!({"kind": "sandbox", "memory": "{{fetch.base}}"}),
             "lots",
             "target.memory",
         ),
     ] {
         let def = branch_then_build(target, json!({}));
-        let rig = Rig::new(&[&fenced(json!({"branch": branch})), "never sent"]);
+        let rig = Rig::new(&[&fenced(json!({"base": branch})), "never sent"]);
         assert!(rig.start(cx, &def));
         cx.run_until_parked();
         let run = rig.last_run();

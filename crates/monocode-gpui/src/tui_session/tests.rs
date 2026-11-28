@@ -58,6 +58,7 @@ fn request(store: &Database, summary: &Session) -> Request {
         fresh: false,
         initial_prompt: None,
         hooks: false,
+        app_env: HashMap::new(),
         book: Book::default(),
         root: temp("accounts"),
         binary: fake_binary,
@@ -146,6 +147,52 @@ fn an_id_that_looks_like_a_flag_is_replaced_not_resumed() {
         Some(minted.as_str())
     );
     assert!(!prepared.reused_id, "a replaced id is not a resumed one");
+}
+
+#[test]
+fn a_launch_carries_the_app_capability_so_the_cli_can_call_app_actions() {
+    let store = store_in(&temp("app-env"));
+    let summary = terminal_session(&store, "claude", None);
+    let env = HashMap::from([
+        (
+            "MONOCODE_APP_ENDPOINT".to_string(),
+            "127.0.0.1:1".to_string(),
+        ),
+        (
+            "MONOCODE_APP_TOKEN".to_string(),
+            "not-a-real-token".to_string(),
+        ),
+        ("MONOCODE_APP_SESSION".to_string(), summary.id.to_string()),
+    ]);
+    let prepared = prepare(Request {
+        app_env: env,
+        ..request(&store, &summary)
+    })
+    .unwrap();
+    let value = |key: &str| {
+        prepared
+            .env_set
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.to_string_lossy().into_owned())
+    };
+    assert_eq!(value("MONOCODE_APP_SESSION"), Some(summary.id.to_string()));
+    assert_eq!(
+        value("MONOCODE_APP_TOKEN").as_deref(),
+        Some("not-a-real-token")
+    );
+    assert_eq!(
+        value("MONOCODE_APP_ENDPOINT").as_deref(),
+        Some("127.0.0.1:1")
+    );
+    // Without a bridge nothing is added.
+    let bare = prepare(request(&store, &summary)).unwrap();
+    assert!(
+        !bare
+            .env_set
+            .iter()
+            .any(|(name, _)| name.starts_with("MONOCODE_APP_"))
+    );
 }
 
 #[test]

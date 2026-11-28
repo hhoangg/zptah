@@ -936,3 +936,25 @@ fn last_run_of_tells_never_ran_from_unreadable() {
     d.save(RUNS, "[{\"junk\": true}]", Some(&h)).unwrap();
     assert!(last_run_of(&d, ID).is_err());
 }
+
+#[test]
+fn a_run_file_whose_definition_uses_the_old_output_key_still_loads() {
+    let root = temp_root();
+    let disk = dir(&root);
+    let mut old = serde_json::to_value(run("old")).unwrap();
+    old["definition"]["nodes"] = json!([
+        {"id": "start", "type": "manual"},
+        {"id": "dev", "type": "session", "project": "{{inputs.project}}", "prompt": "Go",
+         "checkout": "root", "output": {"verdict": {"type": "string"}}},
+    ]);
+    old["definition"]["edges"] = json!([{"from": "start", "to": "dev"}]);
+    put(&disk, RUNS, &json!([old]).to_string());
+    let runs = load_runs(&disk, ID).unwrap();
+    assert_eq!(runs.len(), 1);
+    let Some(NodeKind::Session { output, .. }) = runs[0].definition.node("dev").map(|n| &n.kind)
+    else {
+        panic!("the session node was lost")
+    };
+    assert_eq!(output.keys().cloned().collect::<Vec<_>>(), ["verdict"]);
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -20,7 +20,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "one line",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s1",
@@ -28,7 +28,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "two\nlines",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s2",
@@ -36,7 +36,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "ends with newline\n",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s3",
@@ -44,7 +44,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "ends with two\n\n",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s4",
@@ -52,7 +52,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "ends with three\n\n\n",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s5",
@@ -60,7 +60,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "\nstarts with newline",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s6",
@@ -68,7 +68,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "\n\nstarts with two",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s7",
@@ -76,7 +76,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "  starts with spaces\nsecond",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s8",
@@ -84,7 +84,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "\n  newline then spaces\nx",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s9",
@@ -92,7 +92,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": " \n x\n",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s10",
@@ -100,7 +100,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "text\n \n",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s11",
@@ -108,7 +108,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "text\n   ",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s12",
@@ -116,7 +116,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "text\n\t",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s13",
@@ -124,7 +124,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "text   \nmore",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s14",
@@ -132,7 +132,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "a\n\n\nb\n\n\nc",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s15",
@@ -140,7 +140,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "a\n  b\n    c\n",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s16",
@@ -148,7 +148,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "\n",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s17",
@@ -156,7 +156,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "\n\n",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s18",
@@ -164,7 +164,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "- list\n- like\n",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s19",
@@ -172,7 +172,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "key: value\nother: v2\n",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s20",
@@ -180,7 +180,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "#comment\nline",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s21",
@@ -188,7 +188,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "line\n#comment",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s22",
@@ -196,7 +196,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "---\ndoc",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s23",
@@ -204,7 +204,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "text\n---\nmore",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s24",
@@ -212,7 +212,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "text\n...\nmore",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s25",
@@ -220,7 +220,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "%directive\nx",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s26",
@@ -228,7 +228,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "tab\there\nsecond\tline",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s27",
@@ -236,7 +236,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "ctrl\u0001\nsecond",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s28",
@@ -244,7 +244,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ny z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z y z \n",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s29",
@@ -252,7 +252,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "unicode 日本語\nand more 🎉\n",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s30",
@@ -260,7 +260,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "cr\r\nlf",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "s31",
@@ -268,7 +268,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "last line has trailing space \n",
-      "output": {}
+      "outputs": {}
     }
   ],
   "edges": [],

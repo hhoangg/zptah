@@ -359,7 +359,7 @@ impl Shell {
         // A terminal run follows the provider's surface when its CLI takes a first
         // prompt, and never continues a session: a resumed CLI already has its
         // first prompt, so it would drop this one.
-        let surface = monocode_core::surface::automation_surface(
+        let surface = monocode_core::surface::session_surface(
             kind,
             &automation.cwd,
             self.provider_surface(kind),
@@ -668,10 +668,7 @@ impl Shell {
             }
             self.persist_automation_folder(&automation.cwd, cx);
         }
-        if !self.workspace.tabs.contains(&id) {
-            self.workspace.tabs.push(id);
-            self.workspace.title_order.push(TitleTab::Session(id));
-        }
+        self.place_background_tab(id);
     }
 
     pub(super) fn automation_session_changed(&mut self, id: i64, cx: &mut Context<Self>) {

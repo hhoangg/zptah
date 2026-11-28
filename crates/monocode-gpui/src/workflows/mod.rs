@@ -17,13 +17,19 @@ use monocode_core::{
 use std::sync::Arc;
 
 mod decide;
+mod extract;
 mod runner;
 mod schedule;
 mod sessions;
 mod summary;
+mod terminal;
+mod waits;
 
-pub(crate) use runner::{Live, WorkflowRunner};
+pub(crate) use runner::{Live, WaitChoice, WorkflowRunner};
+#[cfg(test)]
+pub(crate) use runner::{SessionRequest, WaitNotice};
 pub(crate) use schedule::begin_quit;
+pub(crate) use waits::WaitBanner;
 
 /// The persisted ids of every session the run files name, for the zap badge. Blocks (reads the
 /// files): use it off the UI thread.
@@ -233,6 +239,24 @@ impl Workflows {
     pub(crate) fn resume_run(&mut self, stored: &WorkflowRun, cx: &mut Context<Self>) -> bool {
         let host = self.workflow_host(cx);
         self.runner.resume(host, &cx.to_async(), stored)
+    }
+
+    /// A `workflow.output` call (see `WorkflowRunner::record_output`): the step the caller
+    /// session is running gets the values, and the reply says what it still lacks. `ids` are
+    /// every id the caller goes by (its local id and the persisted one).
+    pub(crate) fn accept_output(
+        &mut self,
+        ids: &[String],
+        input: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let values = monocode_core::mono::workflows::ordered::Json::from(input);
+        let done = self.runner.record_output(ids, &values)?;
+        Ok(serde_json::json!({
+            "step": done.node_id,
+            "round": done.round,
+            "recorded": done.recorded,
+            "missing": done.missing,
+        }))
     }
 
     /// Stops the workflow's run. False when none is going.

@@ -21,7 +21,7 @@
       "project": "{{inputs.project}}",
       "checkout": "root",
       "prompt": "Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. Read the ticket and write a careful, complete implementation with tests, then open a PR. ",
-      "output": {}
+      "outputs": {}
     },
     {
       "id": "q",

@@ -37,7 +37,7 @@
       "model": "claude:sonnet-5",
       "checkout": "root",
       "prompt": "List open tickets assigned to me in {{inputs.clickupList}}.",
-      "output": {
+      "outputs": {
         "tickets": {
           "type": "list"
         }
@@ -62,7 +62,7 @@
       "model": "claude:sonnet-5",
       "checkout": "newWorktree",
       "prompt": "Implement {{item.title}} ({{item.url}}) and open a PR.\n{{#if review}}Fix these review issues: {{review.issues}}{{/if}}\n",
-      "output": {
+      "outputs": {
         "pr_url": {
           "type": "string"
         },
@@ -83,7 +83,7 @@
       },
       "nestUnder": "dev",
       "prompt": "Review {{dev.pr_url}}. List blocking issues only.",
-      "output": {
+      "outputs": {
         "verdict": {
           "type": "string"
         },

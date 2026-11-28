@@ -22,8 +22,10 @@ pub(in crate::monos) fn active_branches(run: &WorkflowRun) -> usize {
         .nodes
         .iter()
         .filter(|n| {
-            matches!(n.status, NodeStatus::Running | NodeStatus::WaitingApproval)
-                && !groups.contains(n.node_id.as_str())
+            matches!(
+                n.status,
+                NodeStatus::Running | NodeStatus::WaitingApproval | NodeStatus::WaitingForUser
+            ) && !groups.contains(n.node_id.as_str())
         })
         .map(|n| n.branch.as_str())
         .collect();

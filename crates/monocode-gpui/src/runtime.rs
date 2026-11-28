@@ -1267,7 +1267,7 @@ fn terminals_read_preamble(cli: &str) -> String {
     )
 }
 
-fn shlex_quote(text: &str) -> String {
+pub(crate) fn shlex_quote(text: &str) -> String {
     format!(
         "\"{}\"",
         text.replace('\\', "\\\\")

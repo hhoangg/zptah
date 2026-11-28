@@ -13,6 +13,7 @@ use monocode_core::{
 };
 
 mod cloud;
+mod extraction;
 
 pub(super) fn request(s: &Setup) -> SessionRequest {
     SessionRequest {
@@ -26,6 +27,7 @@ pub(super) fn request(s: &Setup) -> SessionRequest {
         parent_session_id: None,
         folder_name: None,
         target: None,
+        terminal: false,
     }
 }
 

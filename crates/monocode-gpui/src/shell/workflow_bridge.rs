@@ -94,6 +94,7 @@ impl Shell {
         &self,
         project: &str,
         harness: Option<Kind>,
+        surface: Surface,
         cx: &App,
     ) -> WorkflowDefaults {
         let choice = match harness {
@@ -104,12 +105,7 @@ impl Shell {
         };
         let kind = choice.kind;
         WorkflowDefaults {
-            defaults: session_loading::NewSessionDefaults::read(
-                choice,
-                project,
-                monocode_core::surface::Surface::Chat,
-                cx,
-            ),
+            defaults: session_loading::NewSessionDefaults::read(choice, project, surface, cx),
             kind,
         }
     }
