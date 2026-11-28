@@ -58,6 +58,20 @@ impl WorkflowsPage {
         });
     }
 
+    /// The session folders of each app project, as (id, name).
+    pub(crate) fn set_session_folders(
+        &mut self,
+        folders: std::collections::HashMap<String, Vec<(String, String)>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.monos.update(cx, |monos, cx| {
+            if monos.wf.folders != folders {
+                monos.wf.folders = folders;
+                cx.notify();
+            }
+        });
+    }
+
     /// The page is on screen (or no longer is).
     pub(crate) fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
         self.monos

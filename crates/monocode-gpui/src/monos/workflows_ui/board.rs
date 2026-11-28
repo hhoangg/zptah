@@ -156,6 +156,9 @@ pub(in crate::monos) enum BoardPick {
     EventKind(String),
     EventProject(String),
     EventSpace(String),
+    /// The access, and the session folder, of a session step.
+    Access(String),
+    Folder(String),
 }
 
 /// The loop being asked for after a connection back up a branch.

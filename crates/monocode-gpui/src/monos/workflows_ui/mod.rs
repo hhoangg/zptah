@@ -30,6 +30,9 @@ mod inspector_event;
 #[cfg(test)]
 mod inspector_event_tests;
 mod inspector_parts;
+mod inspector_policy;
+#[cfg(test)]
+mod inspector_policy_tests;
 #[cfg(test)]
 mod inspector_tests;
 mod inspector_variables;
@@ -154,6 +157,8 @@ pub(super) struct WorkflowsUi {
     ask_anchor: AnchorSlot,
     /// What the Inbox tells the event inspector (see `inspector_event`).
     events: inspector_event::EventSources,
+    /// The session folders of each app project, as (id, name), for the step's folder picker.
+    folders: HashMap<String, Vec<(String, String)>>,
     /// The open page, or the list when `None`.
     route: Option<WfRoute>,
     /// The template the next new board is filled from (see `start_from_template`).

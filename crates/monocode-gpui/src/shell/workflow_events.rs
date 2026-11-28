@@ -49,9 +49,11 @@ impl Shell {
     /// Keeps the Inbox polling in the background while an enabled workflow has an event trigger.
     /// Called once, when the shell is made.
     pub(super) fn watch_workflow_event_inbox(&mut self, cx: &mut Context<Self>) {
-        // A test looks by calling `sync_workflow_event_inbox` itself: a timer that waits in the
-        // background would change when the other tests of the shell settle.
-        if cfg!(test) {
+        let watch = self
+            .workflows
+            .as_ref()
+            .is_some_and(|workflows| workflows.read(cx).probes().watch_event_inbox);
+        if !watch {
             return;
         }
         let look = cx.spawn(async move |this, cx| {

@@ -550,7 +550,19 @@ impl Shell {
         }
         let project = self.workspace.project.clone();
         let default = self.workflow_default_choice(&project, None);
+        let folders = projects
+            .iter()
+            .map(|path| {
+                let groups = self.mono_groups(path);
+                let list = groups
+                    .folders
+                    .iter()
+                    .map(|f| (f.id.clone(), f.name.clone()));
+                (path.clone(), list.collect())
+            })
+            .collect();
         view.update(cx, |page, cx| {
+            page.set_session_folders(folders, cx);
             page.set_context(projects, project, default, cx)
         });
     }

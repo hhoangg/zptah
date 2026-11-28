@@ -580,6 +580,7 @@ fn probes(models: fn(Kind) -> Probe) -> Probes {
         models,
         requirements: preflight_met,
         draft_sessions: true,
+        watch_event_inbox: false,
     }
 }
 

@@ -20,7 +20,7 @@ use std::{cell::Cell, collections::HashMap, rc::Rc};
 const W: &str = "wf-events02";
 
 /// event -> session. The trigger listens for GitHub pull requests in the test project.
-fn flow(s: &Setup, extra: Value, session: Value) -> Workflow {
+pub(super) fn flow(s: &Setup, extra: Value, session: Value) -> Workflow {
     let mut all = json!({
         "id": W, "name": "On new PR", "workspace": {"mode": "none"}, "ui": {"direction": "lr"},
     });
@@ -45,7 +45,7 @@ fn flow(s: &Setup, extra: Value, session: Value) -> Workflow {
     )
 }
 
-fn item(s: &Setup, number: i64, minute: u32) -> Item {
+pub(super) fn item(s: &Setup, number: i64, minute: u32) -> Item {
     Item {
         provider: "github".into(),
         kind: "pr".into(),
@@ -74,7 +74,7 @@ fn feed(s: &Setup, visual: &mut VisualTestContext, on: &[&str], items: Vec<Item>
     settle(s, visual);
 }
 
-fn open_event(
+pub(super) fn open_event(
     s: &Setup,
     w: &Workflow,
     on: &[&str],
