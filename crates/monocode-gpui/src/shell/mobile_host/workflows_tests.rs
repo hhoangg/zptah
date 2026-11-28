@@ -1,11 +1,17 @@
 //! The Workflows reads of the web app: who sees which workflow, and which sessions a run links.
-use super::workflows::{Loaded, bound_runs, workflow_visible};
+use super::workflows::{
+    CALLER_KEYS, LastRun, Links, Loaded, NODE_KEYS, RUN_KEYS, bound_runs, read_files, reply_of,
+    session_ids_of, workflow_visible,
+};
 use super::*;
 use monocode_core::mobile::{DeviceKind, Permission};
+use monocode_core::mono::workflows::global::WorkflowsDir;
 use monocode_core::mono::workflows::model::{
-    CallerKind, Checkout, InputType, InputValue, Node, NodeKind, NodeRun, NodeStatus, RunCaller,
-    RunStatus, RunSummary, Workflow, WorkflowInput, WorkflowRun,
+    CallerKind, Checkout, Decision, InputType, InputValue, Node, NodeKind, NodeRun, NodeStatus,
+    RoundRecord, RunCaller, RunStatus, RunSummary, Workflow, WorkflowInput, WorkflowRun,
 };
+use monocode_core::mono::workflows::ordered::Json;
+use monocode_core::mono::workflows::store::{update_runs, update_workflows};
 
 fn web(projects: Option<Vec<String>>, monos: Option<Vec<String>>) -> DeviceContext {
     DeviceContext {
@@ -25,6 +31,8 @@ fn session_node(id: &str, project: &str) -> Node {
             prompt: "p".into(),
             checkout: Checkout::Root,
             output: Default::default(),
+            mode: None,
+            surface: None,
             harness: None,
             model: None,
             effort: None,
@@ -141,6 +149,28 @@ fn project_of(shell: &Shell, session: i64, cx: &App) -> String {
         .expect("the session lives in a rail project")
 }
 
+/// What `mobile_workflows` does after reading: resolve the sessions on the UI thread, then shape.
+fn reply(shell: &mut Shell, cx: &App, device: &DeviceContext, loaded: Loaded) -> Value {
+    let links = shell.workflow_links(device, session_ids_of(&loaded), cx);
+    reply_of(device, loaded, &links)
+}
+
+fn runs_of(w: &Workflow, runs: Vec<WorkflowRun>) -> Loaded {
+    Loaded::Runs(Some((w.clone(), runs)))
+}
+
+fn keys(value: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
+fn sorted(keys: &[&str]) -> Vec<String> {
+    let mut keys: Vec<String> = keys.iter().map(|k| (*k).to_owned()).collect();
+    keys.sort();
+    keys
+}
+
 #[gpui::test]
 fn runs_link_only_the_sessions_a_device_may_see(cx: &mut gpui::TestAppContext) {
     let (window, a, b) = super::super::tests::window(cx);
@@ -167,95 +197,62 @@ fn runs_link_only_the_sessions_a_device_may_see(cx: &mut gpui::TestAppContext) {
                     .collect()
             };
 
-            // Both projects: the workflow is visible and links the sessions that exist.
+            // Both projects: the sessions that exist are linked.
             let both = web(Some(vec![project_id(&path_a), project_id(&path_b)]), None);
-            let reply =
-                shell.workflows_reply(&both, Loaded::Runs(Some(w.clone()), vec![run.clone()]), cx);
-            assert_eq!(sessions_of(&reply), vec![wire_a.clone(), wire_b.clone()]);
-            assert_eq!(reply["runs"][0]["durationMs"], 3_000);
-            assert_eq!(reply["runs"][0]["summary"]["text"], "All good");
+            let reply_both = reply(shell, cx, &both, runs_of(&w, vec![run.clone()]));
             assert_eq!(
-                reply["runs"][0]["nodes"][0]["sessions"],
+                sessions_of(&reply_both),
+                vec![wire_a.clone(), wire_b.clone()]
+            );
+            assert_eq!(reply_both["runs"][0]["durationMs"], 3_000);
+            assert_eq!(reply_both["runs"][0]["summary"]["text"], "All good");
+            assert_eq!(
+                reply_both["runs"][0]["nodes"][0]["sessions"],
                 json!([wire_a.clone()])
             );
 
             // Only the workflow's project: b's session is not linked.
             let just_a = web(Some(vec![project_id(&path_a)]), None);
-            let reply = shell.workflows_reply(
-                &just_a,
-                Loaded::Runs(Some(w.clone()), vec![run.clone()]),
-                cx,
-            );
-            assert_eq!(sessions_of(&reply), vec![wire_a.clone()]);
+            let reply_a = reply(shell, cx, &just_a, runs_of(&w, vec![run.clone()]));
+            assert_eq!(sessions_of(&reply_a), vec![wire_a.clone()]);
 
-            // A phone and a device with no selection see them all.
-            let reply = shell.workflows_reply(
-                &web(None, None),
-                Loaded::Runs(Some(w.clone()), vec![run.clone()]),
-                cx,
-            );
-            assert_eq!(sessions_of(&reply), vec![wire_a.clone(), wire_b.clone()]);
-
-            // A device that sees only the other project sees nothing, not even the name.
-            let just_b = web(Some(vec![project_id(&path_b)]), None);
-            let reply = shell.workflows_reply(
-                &just_b,
-                Loaded::Runs(Some(w.clone()), vec![run.clone()]),
-                cx,
-            );
-            assert_eq!(reply, json!({"workflow": null, "runs": []}));
-            let reply = shell.workflows_reply(
-                &web(Some(vec![]), None),
-                Loaded::Runs(Some(w.clone()), vec![run]),
-                cx,
-            );
-            assert_eq!(reply, json!({"workflow": null, "runs": []}));
-            // A workflow that does not exist looks the same.
-            let reply = shell.workflows_reply(&both, Loaded::Runs(None, Vec::new()), cx);
-            assert_eq!(reply, json!({"workflow": null, "runs": []}));
+            // A device with no selection sees them all.
+            let reply_all = reply(shell, cx, &web(None, None), runs_of(&w, vec![run]));
+            assert_eq!(sessions_of(&reply_all), vec![wire_a, wire_b]);
         })
         .unwrap();
 }
 
 #[gpui::test]
-fn the_list_hides_workflows_over_projects_the_device_cannot_see(cx: &mut gpui::TestAppContext) {
-    let (window, a, b) = super::super::tests::window(cx);
+fn the_list_shows_what_a_device_may_see_and_its_last_run(cx: &mut gpui::TestAppContext) {
+    let (window, a, _b) = super::super::tests::window(cx);
     window
         .update(cx, |shell, _, cx| {
-            let (path_a, path_b) = (project_of(shell, a, cx), project_of(shell, b, cx));
+            let path_a = project_of(shell, a, cx);
             let mut mine = workflow("mine", &[&path_a]);
             mine.enabled = true;
             mine.next_run_at = Some(9_000);
-            let shared = workflow("shared", &[&path_a, &path_b]);
-            let list = |shell: &mut Shell, device: &DeviceContext, cx: &App| {
-                let loaded = Loaded::List(vec![
-                    (mine.clone(), Some((json!("done"), 5))),
-                    (shared.clone(), None),
-                ]);
-                let reply = shell.workflows_reply(device, loaded, cx);
-                reply["workflows"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|w| w["id"].as_str().unwrap().to_owned())
-                    .collect::<Vec<_>>()
-            };
-            let just_a = web(Some(vec![project_id(&path_a)]), None);
-            assert_eq!(list(shell, &just_a, cx), vec!["mine"]);
-            assert!(list(shell, &web(Some(vec![project_id(&path_b)]), None), cx).is_empty());
-            assert!(list(shell, &web(Some(vec![]), None), cx).is_empty());
-            assert_eq!(list(shell, &web(None, None), cx), vec!["mine", "shared"]);
-
-            let reply = shell.workflows_reply(
-                &just_a,
-                Loaded::List(vec![(mine.clone(), Some((json!("done"), 5)))]),
+            let reply = reply(
+                shell,
                 cx,
+                &web(None, None),
+                Loaded::List(vec![
+                    (mine.clone(), LastRun::Seen(json!("done"), 5)),
+                    (workflow("never", &[&path_a]), LastRun::Never),
+                    (workflow("bad", &[&path_a]), LastRun::Unreadable),
+                ]),
             );
             let entry = &reply["workflows"][0];
             assert_eq!(entry["enabled"], true);
             assert_eq!(entry["nextRunAt"], 9_000);
             assert_eq!(entry["lastRun"], json!({"status": "done", "startedAt": 5}));
             assert_eq!(entry["triggers"], json!([]));
+            assert!(entry.get("lastRunUnreadable").is_none());
+            assert_eq!(reply["workflows"][1]["lastRun"], Value::Null);
+            assert!(reply["workflows"][1].get("lastRunUnreadable").is_none());
+            // A history that cannot be read is not "never run".
+            assert_eq!(reply["workflows"][2]["lastRunUnreadable"], true);
+            assert_eq!(reply["workflows"][2]["lastRun"], Value::Null);
         })
         .unwrap();
 }
@@ -278,12 +275,8 @@ fn monos_own_sessions_stay_hidden_but_run_sessions_are_ordinary(cx: &mut gpui::T
             let run = run_of(&w, &[("s0", &wire_a), ("s1", &wire_b)]);
             let projects = vec![project_id(&path_a), project_id(&path_b)];
             let linked = |shell: &mut Shell, device: &DeviceContext, cx: &App| {
-                let reply = shell.workflows_reply(
-                    device,
-                    Loaded::Runs(Some(w.clone()), vec![run.clone()]),
-                    cx,
-                );
-                reply["runs"][0]["sessions"].clone()
+                let value = reply(shell, cx, device, runs_of(&w, vec![run.clone()]));
+                value["runs"][0]["sessions"].clone()
             };
             // The run's own session is linked although a Mono selection is set.
             let other_mono = web(Some(projects.clone()), Some(vec!["other".into()]));
@@ -295,37 +288,469 @@ fn monos_own_sessions_stay_hidden_but_run_sessions_are_ordinary(cx: &mut gpui::T
         .unwrap();
 }
 
+#[gpui::test]
+fn a_node_output_session_id_is_mapped_like_a_run_session_and_the_worktree_is_dropped(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (window, a, b) = super::super::tests::window(cx);
+    window
+        .update(cx, |shell, _, cx| {
+            let path_a = project_of(shell, a, cx);
+            let (wire_a, wire_b) = (shell.mobile_session_id(a), shell.mobile_session_id(b));
+            let w = workflow("w", &[&path_a]);
+            let output = |session: &str| {
+                let text = json!({
+                    "sessionId": session,
+                    "worktree": "/Users/someone/work/tree",
+                    "branch": "feat/x",
+                    "commit": "abc123",
+                    "changedFiles": ["a.rs"],
+                    "diffStat": "1 file changed",
+                    "reply": "ok",
+                    "custom": 3,
+                })
+                .to_string();
+                match Json::parse(&text).unwrap() {
+                    Json::Object(map) => map,
+                    _ => unreachable!(),
+                }
+            };
+            let mut mine = run_of(&w, &[("s0", &wire_a)]);
+            mine.nodes[0].output = Some(output(&wire_a));
+            let mut other = run_of(&w, &[("s0", &wire_b)]);
+            other.nodes[0].output = Some(output(&wire_b));
+            let device = web(Some(vec![project_id(&path_a)]), None);
+            let value = reply(shell, cx, &device, runs_of(&w, vec![mine, other]));
+            let seen = &value["runs"][0]["nodes"][0]["output"];
+            assert_eq!(
+                keys(seen),
+                sorted(&[
+                    "sessionId",
+                    "branch",
+                    "commit",
+                    "changedFiles",
+                    "diffStat",
+                    "reply",
+                    "custom"
+                ])
+            );
+            assert_eq!(seen["sessionId"], json!(wire_a));
+            assert_eq!(seen["branch"], "feat/x");
+            // A session the device may not see is not named in the output either.
+            let hidden = &value["runs"][1]["nodes"][0]["output"];
+            assert!(hidden.get("sessionId").is_none());
+            assert!(hidden.get("worktree").is_none());
+            assert_eq!(hidden["reply"], "ok");
+            assert!(!value.to_string().contains("/Users/someone"));
+        })
+        .unwrap();
+}
+
 #[test]
-fn long_values_are_cut_and_the_oldest_outputs_go_first_when_the_reply_is_too_big() {
-    let big = "é".repeat(10_000);
-    let run = |id: &str| {
+fn only_allow_listed_keys_reach_a_device() {
+    let mut w = workflow("w", &["/work/a"]);
+    w.nodes[0].title = Some("Build".into());
+    let mut run = run_of(&w, &[("s0", "persisted-1")]);
+    run.caller = RunCaller::mono("mono-1", "manual");
+    run.caller.item = Json::parse(
+        r##"{"source":"github","kind":"pr","ref":"#7","title":"t","url":"https://x/y","repo":"a/b","localPath":"/Users/me/x","token":"nope"}"##,
+    );
+    run.items
+        .insert("s0".into(), vec![Json::String("/Users/me/x".into())]);
+    run.cloud_instances = Vec::new();
+    run.error = Some("boom".into());
+    let node = &mut run.nodes[0];
+    node.reuse_session_id = Some("reuse".into());
+    node.interrupted_sessions = Some(vec!["old".into()]);
+    node.reasked = Some(true);
+    node.started_at = Some(1_100);
+    node.ended_at = Some(1_900);
+    node.error = Some("bad".into());
+    node.decision = Some(Decision {
+        value: "yes".into(),
+        reason: Some("because".into()),
+    });
+    node.pending_output = Json::parse(r#"{"x":"/Users/me/pending"}"#).and_then(|j| match j {
+        Json::Object(map) => Some(map),
+        _ => None,
+    });
+    node.history = Some(vec![RoundRecord {
+        round: 1,
+        status: NodeStatus::Done,
+        session_id: Some("persisted-2".into()),
+        error: None,
+        decision: None,
+        started_at: None,
+        ended_at: None,
+    }]);
+    let mut links = Links::new();
+    links.insert("persisted-1".into(), Some("wire-1".into()));
+    links.insert("persisted-2".into(), Some("wire-2".into()));
+    let selected = web(None, Some(vec!["mono-1".into()]));
+    let value = reply_of(&selected, runs_of(&w, vec![run.clone()]), &links);
+    let run_value = &value["runs"][0];
+    let mut run_keys = RUN_KEYS.to_vec();
+    run_keys.push("sessions");
+    assert_eq!(keys(run_value), sorted(&run_keys));
+    assert_eq!(
+        keys(&run_value["caller"]),
+        sorted(&["kind", "monoId", "triggerNode", "item"])
+    );
+    assert_eq!(
+        keys(&run_value["caller"]["item"]),
+        sorted(&["source", "kind", "ref", "title", "url", "repo"])
+    );
+    assert_eq!(keys(&run_value["summary"]), sorted(&["title", "text"]));
+    let node_value = &run_value["nodes"][0];
+    let mut node_keys = NODE_KEYS.to_vec();
+    node_keys.retain(|k| *k != "output" || node_value.get("output").is_some());
+    node_keys.extend(["title", "type", "sessions"]);
+    assert_eq!(keys(node_value), sorted(&node_keys));
+    assert_eq!(keys(&node_value["decision"]), sorted(&["value", "reason"]));
+    assert_eq!(node_value["sessions"], json!(["wire-2", "wire-1"]));
+    assert_eq!(run_value["sessions"], json!(["wire-2", "wire-1"]));
+    assert_eq!(CALLER_KEYS, ["kind", "monoId", "triggerNode"]);
+    // Nothing local or internal leaks, wherever it sits.
+    let text = value.to_string();
+    for secret in [
+        "/Users/me",
+        "reuse",
+        "persisted-",
+        "localPath",
+        "token",
+        "/work/a",
+    ] {
+        assert!(!text.contains(secret), "{secret} reached the device");
+    }
+}
+
+#[test]
+fn a_mono_the_device_did_not_select_is_not_named_as_the_caller() {
+    let w = workflow("w", &["/work/a"]);
+    let mut run = run_of(&w, &[]);
+    run.caller = RunCaller::mono("mono-1", "manual");
+    let caller = |device: &DeviceContext| {
+        reply_of(device, runs_of(&w, vec![run.clone()]), &Links::new())["runs"][0]["caller"].clone()
+    };
+    let named = caller(&web(None, Some(vec!["mono-1".into()])));
+    assert_eq!(named["monoId"], "mono-1");
+    assert_eq!(named["kind"], "mono");
+    let hidden = caller(&web(None, Some(vec!["other".into()])));
+    assert!(hidden.get("monoId").is_none());
+    assert_eq!(hidden["kind"], "mono");
+    assert_eq!(caller(&web(None, None))["monoId"], "mono-1");
+}
+
+#[test]
+fn run_sessions_are_deduplicated_even_when_not_adjacent() {
+    let w = workflow("w", &["/work/a"]);
+    let run = run_of(&w, &[("s0", "p1"), ("s0", "p2"), ("s0", "p1")]);
+    let mut links = Links::new();
+    links.insert("p1".into(), Some("w1".into()));
+    links.insert("p2".into(), Some("w2".into()));
+    let value = reply_of(&web(None, None), runs_of(&w, vec![run]), &links);
+    assert_eq!(value["runs"][0]["sessions"], json!(["w1", "w2"]));
+}
+
+fn text_of(len: usize) -> String {
+    "é".repeat(len)
+}
+
+#[test]
+fn every_string_is_capped_and_the_reply_stays_under_the_budget() {
+    let big = text_of(10_000);
+    let mut w = workflow("w", &["/work/a"]);
+    w.nodes[0].title = Some(big.clone());
+    let mut run = run_of(&w, &[("s0", "p1")]);
+    run.summary = Some(RunSummary {
+        title: big.clone(),
+        text: big.clone(),
+    });
+    run.error = Some(big.clone());
+    run.caller = RunCaller::new(CallerKind::Event, big.clone());
+    run.caller.item = Json::parse(&json!({"title": big, "url": big}).to_string());
+    run.nodes[0].branch = big.clone();
+    run.nodes[0].error = Some(big.clone());
+    run.nodes[0].decision = Some(Decision {
+        value: big.clone(),
+        reason: Some(big.clone()),
+    });
+    let value = reply_of(&web(None, None), runs_of(&w, vec![run]), &Links::new());
+    let run_value = &value["runs"][0];
+    let cut = |v: &Value, max: usize| {
+        let s = v.as_str().unwrap();
+        assert!(s.ends_with("[truncated]"), "{s:.20}");
+        assert!(s.len() <= max + 20, "{} > {max}", s.len());
+    };
+    cut(&run_value["summary"]["title"], 256);
+    cut(&run_value["summary"]["text"], 8 * 1024);
+    cut(&run_value["error"], 4 * 1024);
+    cut(&run_value["caller"]["triggerNode"], 256);
+    cut(&run_value["caller"]["item"]["title"], 256);
+    cut(&run_value["caller"]["item"]["url"], 256);
+    let node = &run_value["nodes"][0];
+    cut(&node["title"], 256);
+    cut(&node["branch"], 256);
+    cut(&node["error"], 4 * 1024);
+    cut(&node["decision"]["reason"], 4 * 1024);
+    cut(&node["decision"]["value"], 256);
+}
+
+fn big_run(id: &str, nodes: usize, output_len: usize) -> Value {
+    let node = |n: usize| {
         json!({
-            "id": id,
-            "error": big,
-            "summary": {"title": "t", "text": big},
-            "nodes": [{"nodeId": "n", "error": big, "output": {"a": big, "b": [big]}}],
+            "nodeId": format!("n{n}"),
+            "status": "done",
+            "output": {"a": "x".repeat(output_len)},
         })
     };
-    let mut runs = vec![run("new"), run("old")];
-    bound_runs(&mut runs, usize::MAX);
-    let text = runs[0]["nodes"][0]["output"]["a"].as_str().unwrap();
-    assert!(text.ends_with("[truncated]") && text.len() < 4_200);
-    assert!(
-        runs[0]["nodes"][0]["error"]
-            .as_str()
-            .unwrap()
-            .ends_with("[truncated]")
-    );
-    assert!(runs[0]["summary"]["text"].as_str().unwrap().len() < 8_300);
-    assert!(runs[0].get("outputsDropped").is_none());
+    json!({
+        "id": id,
+        "status": "done",
+        "nodes": (0..nodes).map(node).collect::<Vec<_>>(),
+    })
+}
 
-    // A budget a little under the whole drops the older run's outputs, which is enough.
+#[test]
+fn the_oldest_outputs_go_first_and_only_those_runs_are_marked() {
+    let mut runs = vec![big_run("new", 1, 4_000), big_run("old", 1, 4_000)];
+    bound_runs(&mut runs, usize::MAX);
+    assert!(runs[0].get("outputsDropped").is_none());
+    assert!(runs[1].get("outputsDropped").is_none());
+
+    // A budget a little under the whole: the older run's outputs go, which is enough.
     let total = serde_json::to_vec(&runs).unwrap().len();
     bound_runs(&mut runs, total - 100);
     assert!(runs[0]["nodes"][0].get("output").is_some());
     assert!(runs[1]["nodes"][0].get("output").is_none());
     assert_eq!(runs[1]["outputsDropped"], true);
     assert!(runs[0].get("outputsDropped").is_none());
-    // The run itself, its status and its sessions survive.
     assert_eq!(runs[1]["id"], "old");
+
+    // A run with no output to lose is not marked.
+    let mut runs = vec![big_run("a", 1, 4_000), json!({"id": "b", "nodes": []})];
+    let total = serde_json::to_vec(&runs).unwrap().len();
+    bound_runs(&mut runs, total - 100);
+    assert_eq!(runs.len(), 2);
+    assert!(runs[1].get("outputsDropped").is_none());
+}
+
+#[test]
+fn the_budget_is_hard_the_oldest_runs_go_then_the_newest_runs_tail() {
+    let budget = 20_000;
+    let size = |runs: &[Value]| serde_json::to_vec(runs).unwrap().len();
+
+    // Even without outputs the runs do not fit: the oldest are dropped, the newest stays.
+    let mut runs: Vec<Value> = (0..30)
+        .map(|n| big_run(&format!("r{n}"), 40, 100))
+        .collect();
+    bound_runs(&mut runs, budget);
+    assert!(size(&runs) <= budget);
+    assert!(!runs.is_empty());
+    assert_eq!(runs[0]["id"], "r0");
+    assert!(runs.len() < 30);
+
+    // One run whose steps alone are too many loses its tail.
+    let mut runs = vec![big_run("only", 2_000, 10)];
+    bound_runs(&mut runs, budget);
+    assert!(size(&runs) <= budget);
+    assert_eq!(runs[0]["nodesTruncated"], true);
+    assert_eq!(runs[0]["nodes"][0]["nodeId"], "n0");
+    assert!(runs[0]["nodes"].as_array().unwrap().len() < 2_000);
+}
+
+#[test]
+fn a_real_reply_of_huge_runs_fits_one_mebibyte() {
+    let w = workflow("w", &["/work/a"]);
+    let big = text_of(10_000);
+    let runs: Vec<WorkflowRun> = (0..20)
+        .map(|n| {
+            let mut run = run_of(&w, &[]);
+            run.id = format!("run-{n}");
+            run.nodes = (0..60)
+                .map(|i| {
+                    let mut node = NodeRun::new(format!("n{i}"), "");
+                    node.status = NodeStatus::Done;
+                    node.error = Some(big.clone());
+                    node.output = Json::parse(&json!({"stdout": big, "stderr": big}).to_string())
+                        .and_then(|j| match j {
+                            Json::Object(map) => Some(map),
+                            _ => None,
+                        });
+                    node
+                })
+                .collect();
+            run
+        })
+        .collect();
+    let value = reply_of(&web(None, None), runs_of(&w, runs), &Links::new());
+    assert!(serde_json::to_vec(&value).unwrap().len() <= 1024 * 1024);
+    assert_eq!(value["runs"][0]["id"], "run-0");
+}
+
+// --- the background read ---
+
+fn temp_dir() -> WorkflowsDir {
+    let dir = std::env::temp_dir().join(format!(
+        "monocode-wf-mobile-{}",
+        monocode_core::mono::new_id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    WorkflowsDir::new(dir)
+}
+
+fn save(dir: &WorkflowsDir, workflows: Vec<Workflow>) {
+    update_workflows(dir, |_| Ok((workflows.clone(), ()))).unwrap();
+}
+
+fn save_runs(dir: &WorkflowsDir, id: &str, runs: Vec<WorkflowRun>) {
+    update_runs(dir, id, |_| Ok((runs.clone(), ()))).unwrap();
+}
+
+fn run_with(w: &Workflow, id: &str, started: u64, snapshot: &Workflow) -> WorkflowRun {
+    let mut run = run_of(w, &[]);
+    run.id = id.into();
+    run.started_at = started;
+    run.definition = snapshot.clone();
+    run
+}
+
+const ID_A: &str = "wf-aaaaaaaa";
+const ID_B: &str = "wf-bbbbbbbb";
+const ID_GONE: &str = "wf-cccccccc";
+
+fn expect_runs(loaded: Result<Loaded, &'static str>) -> Option<(Workflow, Vec<WorkflowRun>)> {
+    match loaded {
+        Ok(Loaded::Runs(runs)) => runs,
+        _ => panic!("expected a runs read"),
+    }
+}
+
+#[test]
+fn a_hidden_workflow_and_a_missing_one_get_the_same_reply_and_their_runs_are_never_read() {
+    let dir = temp_dir();
+    let known = vec!["/work/a".to_owned(), "/work/b".to_owned()];
+    let device = web(Some(vec![project_id("/work/a")]), None);
+    let (visible, hidden) = (workflow(ID_A, &["/work/a"]), workflow(ID_B, &["/work/b"]));
+    save(&dir, vec![visible.clone(), hidden.clone()]);
+    // The hidden workflow's runs file cannot be read: reading it would show as an error.
+    std::fs::create_dir_all(dir.root().join("runs")).unwrap();
+    std::fs::write(
+        dir.root().join("runs").join(format!("{ID_B}.json")),
+        "not json",
+    )
+    .unwrap();
+
+    let hidden_reply = reply_of(
+        &device,
+        read_files(&dir, Some(ID_B), &device, &known).unwrap(),
+        &Links::new(),
+    );
+    let missing_reply = reply_of(
+        &device,
+        read_files(&dir, Some(ID_GONE), &device, &known).unwrap(),
+        &Links::new(),
+    );
+    assert_eq!(hidden_reply, missing_reply);
+    assert_eq!(hidden_reply, json!({"workflow": null, "runs": []}));
+
+    // The list names only the visible one.
+    let Ok(Loaded::List(list)) = read_files(&dir, None, &device, &known) else {
+        panic!("expected a list");
+    };
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].0.id, ID_A);
+}
+
+#[test]
+fn a_runs_file_that_cannot_be_read_is_an_error_without_a_path_and_not_never_run() {
+    let dir = temp_dir();
+    let known = vec!["/work/a".to_owned()];
+    let device = web(None, None);
+    save(&dir, vec![workflow(ID_A, &["/work/a"])]);
+    std::fs::create_dir_all(dir.root().join("runs")).unwrap();
+    std::fs::write(
+        dir.root().join("runs").join(format!("{ID_A}.json")),
+        "not json",
+    )
+    .unwrap();
+
+    let Err(error) = read_files(&dir, Some(ID_A), &device, &known) else {
+        panic!("a runs file that cannot be read is an error");
+    };
+    assert!(!error.contains('/') && !error.contains("wf-"), "{error}");
+
+    let Ok(Loaded::List(list)) = read_files(&dir, None, &device, &known) else {
+        panic!("expected a list");
+    };
+    assert!(matches!(list[0].1, LastRun::Unreadable));
+    // A narrowed device sees the same.
+    let narrowed = web(Some(vec![project_id("/work/a")]), None);
+    let Ok(Loaded::List(list)) = read_files(&dir, None, &narrowed, &known) else {
+        panic!("expected a list");
+    };
+    assert!(matches!(list[0].1, LastRun::Unreadable));
+
+    // No file at all is "never run".
+    let empty = temp_dir();
+    save(&empty, vec![workflow(ID_A, &["/work/a"])]);
+    let Ok(Loaded::List(list)) = read_files(&empty, None, &device, &known) else {
+        panic!("expected a list");
+    };
+    assert!(matches!(list[0].1, LastRun::Never));
+}
+
+#[test]
+fn a_run_whose_snapshot_used_a_project_outside_the_selection_is_dropped_but_the_workflow_shows() {
+    let dir = temp_dir();
+    let known = vec!["/work/a".to_owned(), "/work/b".to_owned()];
+    let narrowed = web(Some(vec![project_id("/work/a")]), None);
+    let current = workflow(ID_A, &["/work/a"]);
+    let older = workflow(ID_A, &["/work/b"]);
+    save(&dir, vec![current.clone()]);
+    // Newest first: the newest run used project b (not selected), the older one project a.
+    save_runs(
+        &dir,
+        ID_A,
+        vec![
+            run_with(&current, "run-new", 3_000, &older),
+            run_with(&current, "run-old", 1_000, &current),
+        ],
+    );
+
+    let (workflow, runs) =
+        expect_runs(read_files(&dir, Some(ID_A), &narrowed, &known)).expect("the workflow shows");
+    assert_eq!(workflow.id, ID_A);
+    assert_eq!(
+        runs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        ["run-old"]
+    );
+
+    // lastRun is the newest run the device may see, not the newest run.
+    let Ok(Loaded::List(list)) = read_files(&dir, None, &narrowed, &known) else {
+        panic!("expected a list");
+    };
+    match &list[0].1 {
+        LastRun::Seen(_, started) => assert_eq!(*started, 1_000),
+        _ => panic!("the visible run is the last run"),
+    }
+    // A device with no selection sees the newest.
+    let all = web(None, None);
+    let Ok(Loaded::List(list)) = read_files(&dir, None, &all, &known) else {
+        panic!("expected a list");
+    };
+    assert!(matches!(&list[0].1, LastRun::Seen(_, 3_000)));
+}
+
+#[test]
+fn a_device_that_sees_none_of_the_projects_sees_nothing() {
+    let dir = temp_dir();
+    let known = vec!["/work/a".to_owned()];
+    save(&dir, vec![workflow(ID_A, &["/work/a"])]);
+    let none = web(Some(vec![]), None);
+    assert!(expect_runs(read_files(&dir, Some(ID_A), &none, &known)).is_none());
+    let Ok(Loaded::List(list)) = read_files(&dir, None, &none, &known) else {
+        panic!("expected a list");
+    };
+    assert!(list.is_empty());
 }
