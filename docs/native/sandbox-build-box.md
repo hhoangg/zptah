@@ -48,7 +48,11 @@ scripts/sandbox/clean.sh
   commit in the sandbox, runs `git apply --index`, then `cargo fmt --check`, clippy
   `-D warnings`, and the tests **only if clippy passed**. `--filter` runs the tests that match a
   nextest filter expression, `--full` runs everything, and with neither only fmt and clippy run.
-  A patch that changes no Rust files skips cargo and runs only the node tests. If fmt fails,
+  A patch that changes no Rust files skips cargo and runs only the node tests; when the
+  changed-file list cannot be read or is empty, the Rust checks run instead (fail safe), and the
+  skip message names the base commit. A merge commit in your branch is fine: the patch is
+  taken against the merge base with the base ref, so it holds exactly your branch's changes.
+  An existing clone in the sandbox is re-pointed at `BOX_REPO_URL` on every warm/refresh. If fmt fails,
   the sandbox formats its tree (so clippy and the tests run on the formatted code), and the
   resulting diff is copied back to `~/.local/state/sandbox-build-box/fmt.patch`; `--apply-fmt`
   applies it to your working tree. The exit status is 0 only when every step passed.

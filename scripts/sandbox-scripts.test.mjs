@@ -285,3 +285,32 @@ test("inner.sh no longer pipes a download straight into tar and pins four hashes
   assert.doesNotMatch(source, /curl[^\n]*\|\s*tar|\\\n\s*\|\s*tar/);
   assert.equal((source.match(/\b[0-9a-f]{64}\b/g) ?? []).length, 4, "node and nextest, x86_64 and aarch64");
 });
+
+// --- inner.sh: rust_changed ------------------------------------------------------------------------
+test("rust_changed finds Rust in a huge file list (no SIGPIPE false negative) and fails safe", { skip }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "sandbox-rust-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = await readFile(join(dir, "inner.sh"), "utf8");
+  const fn = /^rust_changed\(\) \{[\s\S]*?^\}/m.exec(source)[0];
+  // Fake git: MODE=big lists a .rs file first and ~2 MB of docs after it (a `| grep -q` is killed
+  // by SIGPIPE), md lists docs only, fail exits 1, empty prints nothing.
+  await writeFile(join(root, "git"), `#!/bin/sh
+case "$MODE" in fail) exit 1 ;; empty) exit 0 ;; big) echo crates/a/src/lib.rs ;; esac
+i=0; while [ $i -lt 40000 ]; do echo docs/some/long/path/number-$i/file-$i.md; i=$((i+1)); done
+`);
+  await chmod(join(root, "git"), 0o755);
+  const status = (mode) => spawnSync("bash", ["-c", `set -uo pipefail\nts() { echo "$*" >&2; }\nBOX_BASE_SHA=abc\n${fn}\nrust_changed`], {
+    encoding: "utf8", env: { ...process.env, PATH: `${root}:${process.env.PATH}`, MODE: mode },
+  });
+  for (let i = 0; i < 5; i++) assert.equal(status("big").status, 0, "a Rust file in a big list is found");
+  assert.equal(status("md").status, 1, "docs only: Rust checks may be skipped");
+  const failed = status("fail");
+  assert.equal(failed.status, 0, "git failure runs the checks");
+  assert.match(failed.stderr, /running the Rust checks/);
+  assert.equal(status("empty").status, 0, "an empty list runs the checks");
+});
+
+test("inner.sh points an existing clone at BOX_REPO_URL", { skip }, async () => {
+  const source = await readFile(join(dir, "inner.sh"), "utf8");
+  assert.match(source, /remote set-url origin "\$BOX_REPO_URL"/);
+});
