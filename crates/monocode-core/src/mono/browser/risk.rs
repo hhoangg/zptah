@@ -1,8 +1,8 @@
 //! The risk lexicon, site data and classifier of the Browser gate (spec 7.2 to 7.4 and 7.6,
 //! Appendix A).
 //!
-//! The words and sites are JSON files in `extensions/zptah-browser/shared/`, embedded with
-//! `include_str!`, so the extension and the gate share one source of truth:
+//! The words and sites are JSON files in `risk/data/`, embedded with
+//! `include_str!`, so the gate and the generator share one source of truth:
 //!
 //! * [`normalize`]: diacritic-aware text normalization.
 //! * [`lexicon`]: the phrase lexicon and the control-name classifier.
@@ -35,12 +35,15 @@ pub enum Category {
     SoulRule,
     Tainted,
     Injection,
+    /// The gate could not read enough of the page to tell what the action does (an Ardia
+    /// backend category: the signals were incomplete). Always asks, never granted.
+    Unclear,
 }
 
 impl Category {
     /// The category with this id (`payment`, `send_unnamed`, ...), as the agent declares it.
     pub fn parse(id: &str) -> Option<Category> {
-        const ALL: [Category; 14] = [
+        const ALL: [Category; 15] = [
             Category::Payment,
             Category::Destructive,
             Category::AccountSecurity,
@@ -55,6 +58,7 @@ impl Category {
             Category::SoulRule,
             Category::Tainted,
             Category::Injection,
+            Category::Unclear,
         ];
         ALL.into_iter().find(|c| c.as_str() == id.trim())
     }
@@ -75,6 +79,7 @@ impl Category {
             Category::SoulRule => "soul_rule",
             Category::Tainted => "tainted",
             Category::Injection => "injection",
+            Category::Unclear => "unclear",
         }
     }
 }

@@ -1,0 +1,1 @@
+{"success":false,"data":null,"error":"Stale ref @e1: it was on \"Example Domain\"; `open` replaced it in this tab with \"Sign in - Test\". To keep both pages, open the second with `ardia browse tab new <url>`","code":"vocab_superseded","remedy":"ardia browse snapshot -i"}

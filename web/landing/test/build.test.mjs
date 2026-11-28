@@ -145,7 +145,7 @@ describe('remote control, reveal and hero layout', () => {
   });
 });
 
-describe('privacy page (spec 13.3)', () => {
+describe('privacy page (Ardia design, section 11)', () => {
   const privacy = (target) => readFileSync(path.join(out[target], 'landing', 'privacy', 'index.html'), 'utf8');
 
   it('is built for both targets, CSP-safe and self-contained', () => {
@@ -161,22 +161,35 @@ describe('privacy page (spec 13.3)', () => {
     }
   });
 
-  it('discloses what spec 13.3 requires', () => {
+  it('discloses what the Ardia design requires', () => {
     const html = privacy('prod');
     for (const re of [
+      /run[s]? the <code>ardia<\/code> command/,
       /content of the pages a Mono reads/,
-      /titles and addresses \(URLs\) of your tabs/,
-      /Only to the zptah app on your computer/,
+      /titles and addresses of its tabs/,
+      /No zptah server is involved in browsing/,
       /AI provider you configured/,
       /No analytics, no telemetry and no crash reports/,
       /No sale and no transfer/,
       /No advertising/,
       /creditworthiness or for lending/,
-      /extension storage: the pairing key/,
       /audit log/,
+      /Control is Ardia's own model/,
+      /any local program on your computer can drive Ardia/,
+      /private folder on your computer/,
+      /zptah's own calls to the local <code>ardia<\/code> command/,
+      /saving the steps of a session as a flow/,
+      /does not ask you first/,
+      /browser output folder on your computer/,
+      /conversation transcript on your computer/,
+      /neither is airtight/,
+      /caught after it happens/,
       /Contact and change log/,
-      /Limited Use/,
     ]) assert.match(html, re);
+    assert.doesNotMatch(html, /cannot reach Ardia except/);
+    for (const re of [/native messaging/i, /extension storage/i, /debugger/i, /Chrome Web Store/i, /Limited Use/]) {
+      assert.doesNotMatch(html, re);
+    }
   });
 
   it('prod: canonical, in the sitemap, linked from the footer; beta: noindex and absolute link', () => {

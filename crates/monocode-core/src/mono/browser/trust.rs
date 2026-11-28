@@ -24,7 +24,7 @@ use super::risk::signals::{
 };
 use super::risk::Category;
 use super::soul_rules::{ActionFacts, FactKind, Parsed};
-use super::{ALWAYS_BLOCKED_TOOLS, KNOWN_TOOLS, READ_ONLY_TOOLS};
+use super::ALWAYS_BLOCKED_TOOLS;
 use grants::GrantBook;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -87,39 +87,38 @@ impl<'de> Deserialize<'de> for BrowserLevel {
 }
 
 impl BrowserLevel {
-    /// The level as a number, for recipes (`min_level`): 1 reads, 2 acts.
-    pub fn level(self) -> u8 {
-        match self {
-            Self::ReadOnly => 1,
-            Self::Act => 2,
-        }
-    }
-
     /// The short explanation shown under the level.
     pub fn explanation(self) -> &'static str {
         match self {
-            Self::ReadOnly => "Looks only: opens pages, reads, takes screenshots and scrolls (with the Page Up, Page Down, Home, End and arrow keys). It cannot click, type or submit.",
-            Self::Act => "Clicks, types and navigates on its own. Asks you first only before risky steps such as payments, deletions, sending, posting and account changes.",
+            Self::ReadOnly => "Looks only: opens pages, reads them, takes screenshots, reads the console and scrolls. It cannot click, type or submit.",
+            Self::Act => "Reads, clicks, types, fills forms and uploads files on its own, and asks you first only before risky steps such as payments, deletions, sending, posting and account changes. It never types passwords or one-time codes, and an upload always asks.",
         }
     }
 
     /// What the app guarantees, shown once under the levels.
     pub const ENFORCEMENT_NOTE: &'static str = "zptah checks every step itself, before it runs and whatever the Mono was told. A payment always asks you, every time.";
 
-    /// The tools the harness must not offer at this level.
-    pub fn disabled_tools(self) -> Vec<&'static str> {
-        match self {
-            Self::ReadOnly => KNOWN_TOOLS
-                .into_iter()
-                .filter(|tool| !READ_ONLY_TOOLS.contains(tool))
-                .collect(),
-            Self::Act => ALWAYS_BLOCKED_TOOLS.to_vec(),
-        }
+    /// The tools a harness must not offer on an Ardia gate at this level: at read only the act
+    /// tools and the two gate-only tools (approval request, declared intent), always the tools no
+    /// level allows.
+    pub fn disabled_tools_ardia(self) -> Vec<&'static str> {
+        self.disabled_tools_ardia_for(true)
     }
 
-    /// Whether the gate lists `tool` to the agent at this level.
-    pub fn offers(self, tool: &str) -> bool {
-        KNOWN_TOOLS.contains(&tool) && !self.disabled_tools().contains(&tool)
+    /// [`Self::disabled_tools_ardia`] for a system that has (`uploads`) or has not a private
+    /// folder for the copies of uploaded files: without one `browser_upload` is disabled at every
+    /// level.
+    pub fn disabled_tools_ardia_for(self, uploads: bool) -> Vec<&'static str> {
+        let mut tools = ALWAYS_BLOCKED_TOOLS.to_vec();
+        if !uploads {
+            tools.push("browser_upload");
+        }
+        if self == Self::ReadOnly {
+            tools.extend(super::ardia::upstream::ACT_TOOLS);
+            tools.push(super::gate::APPROVAL_TOOL);
+            tools.push(super::defense::DECLARE_TOOL);
+        }
+        tools
     }
 }
 
@@ -347,6 +346,9 @@ pub struct TrustState {
     /// Words read from pages in this run, with the domain they came from. Memory only.
     read_tokens: BTreeMap<String, String>,
     injection: bool,
+    /// The grant book read once, for a check that evaluates many actions in a row (a flow).
+    /// While it is held, [`TrustState::evaluate`] uses it instead of reading the book again.
+    grant_snapshot: Option<BTreeMap<String, BTreeSet<Category>>>,
 }
 
 impl TrustState {
@@ -360,7 +362,17 @@ impl TrustState {
             seen_sensitive: BTreeSet::new(),
             read_tokens: BTreeMap::new(),
             injection: false,
+            grant_snapshot: None,
         }
+    }
+
+    /// Reads the grant book once; every [`TrustState::evaluate`] until [`TrustState::release_grants`]
+    /// uses that reading.
+    pub fn hold_grants(&mut self) {
+        self.grant_snapshot = Some(self.grants.snapshot());
+    }
+    pub fn release_grants(&mut self) {
+        self.grant_snapshot = None;
     }
 
     pub fn grants(&self) -> &GrantBook {
@@ -376,7 +388,11 @@ impl TrustState {
     pub fn begin_run(&mut self, user_message: &str) {
         self.read_tokens.clear();
         self.injection = false;
-        self.note_user_message(user_message);
+        // A run that was not started by a message the user typed (an automation, another Mono)
+        // brings no words of the user's own.
+        if !user_message.trim().is_empty() {
+            self.note_user_message(user_message);
+        }
     }
 
     /// A message the user typed: its domains become task domains.
@@ -457,6 +473,20 @@ impl TrustState {
             let token_digits: String = token.chars().filter(char::is_ascii_digit).collect();
             token_digits.len() >= 6 && digits.contains(&token_digits)
         })
+    }
+
+    /// What a value the Mono supplies (a flow parameter) would be on `site`, whatever field it
+    /// ends up in: a card number is credential entry, and something read on another site is
+    /// tainted. The value is looked at and dropped.
+    pub fn value_categories(&self, value: &str, site: &str) -> BTreeSet<Category> {
+        let mut out = BTreeSet::new();
+        if typed_value_is_card(value) {
+            out.insert(Category::CredentialEntry);
+        }
+        if self.carries_read_data(value, site) {
+            out.insert(Category::Tainted);
+        }
+        out
     }
 
     fn url_carries_read_data(&self, url: &str, dest: &str) -> bool {
@@ -599,6 +629,8 @@ impl TrustState {
         // A tier K action always asks: a grant never covers it.
         let covered = if tier == Tier::Always {
             BTreeSet::new()
+        } else if let Some(held) = &self.grant_snapshot {
+            held.get(&site).cloned().unwrap_or_default()
         } else {
             self.grants.covered(&site)
         };

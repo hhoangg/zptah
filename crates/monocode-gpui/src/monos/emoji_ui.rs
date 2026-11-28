@@ -312,8 +312,7 @@ impl Monos {
         open
     }
 
-    /// Changes the open Mono's own fields (the badge), saves the roster. The browser extension
-    /// hears about it through the roster save.
+    /// Changes the open Mono's own fields (the badge), saves the roster.
     fn mono_update(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Mono)) {
         let Some(id) = self.active.clone() else {
             return;

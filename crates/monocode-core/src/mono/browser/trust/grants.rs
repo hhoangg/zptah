@@ -12,6 +12,27 @@ use super::super::{MonoBrowserStore, BROWSER_TABLES, UNAVAILABLE};
 use rusqlite::params;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// How a grant key is shown to the user. A site is shown as it is; a flow grant
+/// (`flow:<name>@<site>:<hash>`, see the flow tools) as `Flow <name> on <site>`, never as the key.
+pub fn grant_label(key: &str) -> String {
+    let flow = key
+        .strip_prefix("flow:")
+        .and_then(|rest| rest.rsplit_once(':'))
+        .and_then(|(who, _hash)| who.split_once('@'));
+    match flow {
+        Some((name, site)) => {
+            let clean = |t: &str| -> String {
+                t.chars()
+                    .map(|c| if c.is_control() { ' ' } else { c })
+                    .take(80)
+                    .collect()
+            };
+            format!("Flow {} on {}", clean(name), clean(site))
+        }
+        None => key.to_owned(),
+    }
+}
+
 /// Grants of one conversation of one Mono. With a store they live in the database and are read on
 /// every call, so a Stop or a revoke from another handle takes effect at once. Without one (no
 /// database) they live in memory.
@@ -21,6 +42,9 @@ pub struct GrantBook {
     conversation: i64,
     store: Option<MonoBrowserStore>,
     memory: BTreeMap<String, BTreeSet<Category>>,
+    /// How many times the book was read (a test counts them).
+    #[cfg(test)]
+    reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl GrantBook {
@@ -30,6 +54,8 @@ impl GrantBook {
             conversation,
             store: None,
             memory: BTreeMap::new(),
+            #[cfg(test)]
+            reads: Default::default(),
         }
     }
 
@@ -37,6 +63,18 @@ impl GrantBook {
         Self {
             store: Some(store),
             ..Self::in_memory(mono_id, conversation)
+        }
+    }
+
+    /// A stored book when there is a store, else an in-memory one.
+    pub(crate) fn stored_or_memory(
+        store: &Option<MonoBrowserStore>,
+        mono_id: &str,
+        conversation: i64,
+    ) -> Self {
+        match store {
+            Some(store) => Self::stored(store.clone(), mono_id, conversation),
+            None => Self::in_memory(mono_id, conversation),
         }
     }
 
@@ -70,8 +108,35 @@ impl GrantBook {
         granted
     }
 
+    /// How many times the book was read (tests).
+    #[cfg(test)]
+    pub fn reads(&self) -> usize {
+        self.reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Every live grant of this conversation, by site: the whole book in one read.
+    pub fn snapshot(&self) -> BTreeMap<String, BTreeSet<Category>> {
+        #[cfg(test)]
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut by_site: BTreeMap<String, BTreeSet<Category>> = BTreeMap::new();
+        let listed = match &self.store {
+            Some(store) => store.list_grants(&self.mono_id, Some(self.conversation)),
+            None => self
+                .memory
+                .iter()
+                .flat_map(|(site, cats)| cats.iter().map(|c| (site.clone(), *c)))
+                .collect(),
+        };
+        for (site, category) in listed.into_iter().filter(|(_, c)| !never_granted(*c)) {
+            by_site.entry(site).or_default().insert(category);
+        }
+        by_site
+    }
+
     /// The categories a live grant covers on `site`.
     pub fn covered(&self, site: &str) -> BTreeSet<Category> {
+        #[cfg(test)]
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         match &self.store {
             Some(store) => store.grants_for(&self.mono_id, self.conversation, site),
             None => self.memory.get(site).cloned().unwrap_or_default(),

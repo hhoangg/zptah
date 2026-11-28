@@ -1,0 +1,1 @@
+{"success":true,"data":{"origin":"file://","refs":{"e2":{"name":"Confirm","role":"button"}},"snapshot":"- dialog \"Payment\"\n  - StaticText \"Pay 5,000,000 VND to Shop?\"\n  - button \"Confirm\" [ref=e2]","epoch":1,"modal":{"role":"dialog","name":"Payment","ref":null}},"error":null}

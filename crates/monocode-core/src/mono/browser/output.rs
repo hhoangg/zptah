@@ -1,10 +1,8 @@
 //! The Mono's browser output folder: page snapshots (`page-*.yml`), find results, screenshots,
 //! console logs and the files the Mono asks for with `filename`. The app writes them when it
-//! answers a tool call that came back from the zptah Browser extension. They hold page content
-//! from the user's logged-in Chrome, so they are sensitive: the folder is private to the user
+//! answers a tool call that came back from Ardia. They hold page content
+//! from the user's logged-in browser, so they are sensitive: the folder is private to the user
 //! (mode 0700), a `filename` the Mono gives is forced into it, and old files are removed.
-//!
-//! Recipes are kept elsewhere (see `recipe::store`), so a sweep here can never touch them.
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

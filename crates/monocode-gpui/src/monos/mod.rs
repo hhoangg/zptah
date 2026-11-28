@@ -4,10 +4,7 @@ pub(crate) mod avatar;
 mod browser_approval;
 #[cfg(test)]
 mod browser_approval_tests;
-mod browser_connect;
-#[cfg(test)]
-mod browser_connect_tests;
-mod browser_migration;
+mod browser_ardia;
 #[cfg(test)]
 mod browser_tests;
 mod browser_ui;
@@ -60,7 +57,6 @@ mod notifications;
 mod overview;
 mod panel_stack;
 mod panels;
-mod recipes_ui;
 mod reset;
 mod scheduler;
 mod search;
@@ -1201,14 +1197,16 @@ impl Monos {
                 let source = id.clone();
                 this.observations.push(cx.subscribe(
                     &view,
-                    move |this, _, _: &crate::conversation::UsageResumed, cx| {
+                    move |this, _, resumed: &crate::conversation::UsageResumed, cx| {
+                        let automatic = resumed.automatic;
                         let empty = this.roster.get(&source).is_none_or(|m| m.outbox.is_empty());
                         if empty {
                             this.enqueue(
                                 &source,
                                 "Continue from where you left off.".into(),
                                 Vec::new(),
-                                false,
+                                // Resumed by the app at the reset: not words the user wrote.
+                                automatic,
                                 cx,
                             );
                         } else {

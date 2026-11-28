@@ -1,19 +1,19 @@
-//! The approval side of the zptah Browser extension in the Mono manager (spec 8.2, 8.3, 7.5, 7.6).
+//! The approval side of the Mono's browser in the Mono manager.
 //!
 //! The act tools of a Mono park on its approval queue until the user answers. This file keeps one
-//! subscription per Mono (a queue nobody listens to denies at once), turns the queue, the stop flag
-//! and the rule status into the `Surface` the Mono's conversation shows, and answers what that
-//! surface emits (Resume, the rule prompt). The Settings > Browser cards live here too: the preview
+//! subscription per Mono (a queue nobody listens to denies at once), turns the queue, the running
+//! browser call and the rule status into the `Surface` the Mono's conversation shows, and answers
+//! what that surface emits (Stop, Quit, the rule prompt). The Settings > Browser cards live here too: the preview
 //! switch, the conversation grants, the soul rule confirmation and the app language.
 use super::browser_ui::{action, note};
 use super::panels::{card, setting};
 use super::*;
 use crate::conversation::browser_cards::{BrowserAction, ReviewPrompt, Surface};
+use monocode_core::mono::browser::MonoBrowser;
 use monocode_core::mono::browser::copy::{self, Lang};
 use monocode_core::mono::browser::risk::Category;
 use monocode_core::mono::browser::trust::approval::{self, Subscription};
 use monocode_core::mono::browser::trust::rules::{self, RuleStatus};
-use monocode_core::mono::browser::{MonoBrowser, gate};
 use std::time::Duration;
 
 /// The saved language choice.
@@ -102,7 +102,7 @@ pub(super) struct ApprovalUi {
     ticks: u64,
     /// "Keep the old rules" answers, by Mono: the changed lines the prompt was hidden for.
     kept: HashMap<String, Vec<String>>,
-    /// The last rule status of each Mono that uses the extension.
+    /// The last rule status of each Mono that has its browser on.
     rules: HashMap<String, RuleStatus>,
     /// What each conversation was last given, to skip identical pushes.
     keys: HashMap<String, String>,
@@ -198,8 +198,8 @@ impl Monos {
         }
     }
 
-    /// The Mono's browser is on (the extension is the only backend).
-    fn browser_uses_extension(&self, mono_id: &str) -> bool {
+    /// The Mono's browser is on.
+    fn browser_is_on(&self, mono_id: &str) -> bool {
         self.roster
             .get(mono_id)
             .and_then(|m| m.browser.as_ref())
@@ -209,6 +209,11 @@ impl Monos {
     fn browser_approval_tick(&mut self, cx: &mut Context<Self>) {
         self.browser_ui.approval.ticks += 1;
         let with_rules = self.browser_ui.approval.ticks.is_multiple_of(RULE_TICKS);
+        self.browser_surfaces_refresh(with_rules, cx);
+    }
+
+    /// Rebuilds the browser surface of every Mono that has its browser on.
+    pub(super) fn browser_surfaces_refresh(&mut self, with_rules: bool, cx: &mut Context<Self>) {
         let ids: Vec<String> = self
             .roster
             .monos
@@ -224,7 +229,7 @@ impl Monos {
     /// Reads the soul and the confirmed rules on a worker, then refreshes the Mono's surface.
     /// `rules::status` also records a first or pure-addition set as confirmed.
     fn browser_rules_reload(&mut self, mono_id: &str, cx: &mut Context<Self>) {
-        if !self.browser_uses_extension(mono_id) {
+        if !self.browser_is_on(mono_id) {
             self.browser_ui.approval.rules.remove(mono_id);
             return;
         }
@@ -261,7 +266,7 @@ impl Monos {
         with_rules: bool,
         cx: &mut Context<Self>,
     ) {
-        let uses = self.browser_uses_extension(mono_id);
+        let uses = self.browser_is_on(mono_id);
         if with_rules {
             self.browser_rules_reload(mono_id, cx);
         }
@@ -283,18 +288,21 @@ impl Monos {
                 mono_label: label,
                 changed_lines,
             });
+        let conversation = self.chats.get(mono_id).map(|chat| chat.read(cx).summary.id);
         let surface = Surface {
             cards: queue.pending(),
             notices: queue.notices(),
-            stopped: uses && gate::upstream_for(mono_id).is_some_and(|u| u.stopped()),
+            working: uses && conversation.is_some_and(|id| self.browser_ui.ops.browser_working(id)),
             review,
+            ardia_running: uses && self.browser_ui.ops.ardia_owned(),
         };
         let key = format!(
-            "{:?}|{:?}|{}|{:?}",
+            "{:?}|{:?}|{}|{:?}|{}",
             surface.cards.iter().map(|c| &c.id).collect::<Vec<_>>(),
             surface.notices.iter().map(|n| &n.id).collect::<Vec<_>>(),
-            surface.stopped,
-            surface.review
+            surface.working,
+            surface.review,
+            surface.ardia_running
         );
         let changed = self.browser_ui.approval.keys.get(mono_id) != Some(&key);
         let counting = !surface.cards.is_empty();
@@ -333,7 +341,7 @@ impl Monos {
         self.browser_ui.approval.keys.remove(mono_id);
     }
 
-    /// Resume, Confirm or Keep from a conversation's surface.
+    /// Stop, Quit, Confirm or Keep from a conversation's surface.
     pub(super) fn browser_action(
         &mut self,
         mono_id: &str,
@@ -341,23 +349,15 @@ impl Monos {
         cx: &mut Context<Self>,
     ) {
         match event {
-            BrowserAction::Resume => {
-                if let Some(upstream) = gate::upstream_for(mono_id) {
-                    let id = mono_id.to_owned();
-                    cx.spawn(async move |this, cx| {
-                        // The request goes over the link and can take a moment.
-                        let result = cx
-                            .background_executor()
-                            .spawn(async move { upstream.resume() })
-                            .await;
-                        let _ = this.update(cx, |this, cx| {
-                            this.browser_ui.approval.error = result.err();
-                            this.browser_approval_refresh(&id, false, cx);
-                        });
-                    })
-                    .detach();
+            BrowserAction::StopBrowser => {
+                let conversation = self.chats.get(mono_id).map(|chat| chat.read(cx).summary.id);
+                if let Some(conversation) = conversation {
+                    // Non-blocking: the process is killed and the holds are released on a thread.
+                    self.browser_ui.ops.stop_browser(mono_id, conversation);
                 }
+                self.browser_approval_refresh(mono_id, false, cx);
             }
+            BrowserAction::QuitArdia => self.browser_ardia_quit(cx),
             BrowserAction::ConfirmRules => self.browser_rules_confirm(mono_id, cx),
             BrowserAction::KeepRules => {
                 if let Some(status) = self.browser_ui.approval.rules.get(mono_id) {
@@ -469,8 +469,8 @@ impl Monos {
         self.browser_repaint_chats(cx);
     }
 
-    /// The cards of the Browser page that belong to the extension: language, rule review, grants.
-    pub(super) fn browser_extension_cards(
+    /// The cards of the Browser page of the Mono's browser: language, rule review, grants.
+    pub(super) fn browser_approval_cards(
         &mut self,
         mono: &Mono,
         browser: &MonoBrowser,
@@ -562,7 +562,11 @@ impl Monos {
             let target = site.clone();
             let row_id: SharedString = format!("mono-browser-grant-revoke-{ix}").into();
             grants_card = grants_card.child(setting(
-                &format!("{site}: {}", category_label(*category)),
+                &format!(
+                    "{}: {}",
+                    monocode_core::mono::browser::trust::grants::grant_label(site),
+                    category_label(*category)
+                ),
                 None,
                 crate::modal::ghost_button(row_id.clone(), "Revoke")
                     .debug_selector({

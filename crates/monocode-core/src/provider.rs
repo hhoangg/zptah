@@ -1510,6 +1510,13 @@ fn write_mcp_config(
     Ok(file)
 }
 
+/// The Claude rule that keeps a Mono's shell from running `ardia`, for a launch whose browser
+/// is not attached (an attached one carries it in `Runtime::claude_disallowed`).
+pub(crate) fn unattached_shell_deny(settings: &Settings, attached: bool) -> Option<&'static str> {
+    (!attached && settings.mono.is_some() && !settings.text_only)
+        .then_some(crate::mono::browser::SHELL_DENY)
+}
+
 /// Why the Chief does not run on another harness: only Claude Code can drop every built-in tool
 /// (`--tools ""`) and ignore the user's MCP servers (`--strict-mcp-config`). Codex keeps
 /// `apply_patch` and the servers of the user's own config however its features are set.
@@ -1570,6 +1577,19 @@ fn run_operation(
     {
         return Err(CHIEF_HARNESS_REFUSAL.into());
     }
+    // A Mono's shell command that runs `ardia` skips the browser gate: it is recorded in the audit.
+    let mut shell_audit = crate::mono::browser::ardia::shell::ShellAudit::new(
+        request.settings.mono.as_ref(),
+        process::owner(),
+    );
+    let mut emit = move |events: Vec<Event>| {
+        for event in &events {
+            if let Event::Tool(tool) = event {
+                shell_audit.see(tool);
+            }
+        }
+        emit(events)
+    };
     if request.kind == Kind::OpenCode {
         return opencode::run(request, cancel, controls, probe, compact, emit);
     }
@@ -1599,7 +1619,14 @@ fn run_operation(
     // A run is one agent turn: the gate starts its taint and intent tracking from the user's own
     // request text, never from anything a page returns.
     if let Some(runtime) = &browser {
-        runtime.begin_turn(&request.prompt);
+        // Never `request.prompt`: that is the assembled prompt (Mono context, attachments, note
+        // bodies, earlier assistant text, handoff briefs) and can carry words the user never wrote.
+        // An automation's stored prompt is the user's text (task words) but was not typed in this
+        // turn: it never lifts a Stop, only a message the user typed does (spec section 9).
+        runtime.begin_turn(
+            request.settings.user_prompt.as_deref().unwrap_or(""),
+            !request.settings.automated,
+        );
         // The extension backend asks through its own cards (`mono::browser::trust::approval`):
         // nobody can answer one in a plan run, at read-only access or without controls.
         runtime.set_can_answer(
@@ -1703,6 +1730,9 @@ fn run_operation(
                 allowed.push(browser.claude_allowed());
                 disallowed.push(browser.claude_disallowed());
             }
+            // The browser is off or could not be attached: the shell route to Ardia is closed
+            // all the same.
+            disallowed.extend(unattached_shell_deny(settings, browser.is_some()).map(String::from));
             let mut system = Vec::new();
             if let Some(mono) = settings.mono.as_ref().filter(|_| !settings.text_only) {
                 system.push(match &mono.role {
@@ -2270,8 +2300,7 @@ mod tests {
                 mono: crate::mono::Mono {
                     browser: Some(crate::mono::browser::MonoBrowser {
                         enabled: true,
-                        ready: true,
-                        profile_dir: "Default".into(),
+                        ardia_profile: "default".into(),
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -2297,8 +2326,7 @@ mod tests {
             mono: crate::mono::Mono {
                 browser: Some(crate::mono::browser::MonoBrowser {
                     enabled: true,
-                    ready: false,
-                    profile_dir: "Default".into(),
+                    ardia_profile: "default".into(),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -2308,6 +2336,27 @@ mod tests {
             browser_database: None,
             role: Default::default(),
         }
+    }
+    #[test]
+    fn every_claude_mono_launch_denies_the_ardia_shell_route() {
+        let mono = Settings {
+            mono: Some(browser_mono_context()),
+            ..Default::default()
+        };
+        // Browser off, unavailable or attached (the attached one has it in `claude_disallowed`).
+        assert_eq!(unattached_shell_deny(&mono, false), Some("Bash(ardia:*)"));
+        assert_eq!(unattached_shell_deny(&mono, true), None);
+        let plain = Settings::default();
+        assert_eq!(unattached_shell_deny(&plain, false), None, "not a Mono run");
+        let text_only = Settings {
+            text_only: true,
+            ..mono
+        };
+        assert_eq!(
+            unattached_shell_deny(&text_only, false),
+            None,
+            "no tools at all"
+        );
     }
     #[test]
     fn codex_is_told_why_an_enabled_browser_could_not_be_attached() {
@@ -2508,7 +2557,6 @@ mod tests {
                 },
                 reply,
                 abandoned: abandoned.clone(),
-                never: Default::default(),
             },
             can_answer,
         );
@@ -2557,42 +2605,6 @@ mod tests {
                 assert!(p.gate_asks.is_empty());
             }
         }
-    }
-    #[test]
-    fn the_recipe_suggestion_card_offers_never_for_this_site_through_the_session_answer() {
-        use crate::mono::browser::gate::{ApprovalRequest, Ask, Category, SUGGEST_ID_PREFIX};
-        let mut p = protocol(Kind::Claude);
-        let (reply, answer) = mpsc::channel();
-        let never = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let events = p.gate_ask(
-            Ask {
-                request: ApprovalRequest {
-                    category: Category::Suggestion,
-                    action: "Save it".into(),
-                    url: "https://shop.example".into(),
-                    details: String::new(),
-                },
-                reply,
-                abandoned: Default::default(),
-                never: never.clone(),
-            },
-            true,
-        );
-        let Event::Approval(card) = &events[0] else {
-            panic!("card")
-        };
-        assert!(card.id.starts_with(SUGGEST_ID_PREFIX) && card.can_remember);
-        let mut sink = Vec::new();
-        p.respond(
-            Control {
-                id: card.id.clone(),
-                decision: Decision::Session,
-            },
-            &mut sink,
-        )
-        .unwrap();
-        assert!(answer.recv().unwrap());
-        assert!(never.load(Ordering::SeqCst));
     }
     #[test]
     fn browser_gate_cards_are_denied_when_nobody_can_answer_and_when_the_user_denies() {

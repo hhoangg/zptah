@@ -92,7 +92,7 @@ How production serves it (`worker/src/landing.ts`, `run_worker_first` of `wrangl
 - `GET /` without a `__Host-mc_session` cookie: the landing page. With the cookie: the SPA, exactly as before. Presence check only: no
   D1 call, no validation (a stale cookie gets the SPA, whose auth guard sends it to `/login`). The cookie is `SameSite=Strict`, so a
   signed-in user who arrives from another site (a link in chat or search) sees the landing page once and uses "Sign in" or "Open web app".
-- `GET /privacy`: the privacy policy of the zptah Browser extension (`landing/privacy/`), for everyone, no cookie variance.
+- `GET /privacy`: the privacy policy of the Mono Browser (Ardia) (`landing/privacy/`), for everyone, no cookie variance.
 - `GET /home`: always the landing page. Both answers carry `Vary: Cookie` and `Cache-Control: no-store`; HEAD behaves the same.
 - The PWA `start_url` is `/app` (redirects to the last place, or to `/login` when signed out); `scope` and `id` stay `/`.
 - Service worker: `/`, `/home`, `/landing/` and `/privacy` are on the navigation denylist (queries included) and precaching has

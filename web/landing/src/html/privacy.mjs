@@ -1,33 +1,32 @@
-// The privacy policy page of the zptah Browser extension (https://zptah.app/privacy). Static text,
-// no script: it needs only landing.css. Conservative disclosure, see
-// docs/superpowers/specs/2026-11-25-zptah-browser-extension.md section 13.3 and decision 6.
-// Keep it in step with extensions/zptah-browser/store/listing.md, and bump UPDATED on any change.
+// The privacy policy page of zptah's Mono Browser (https://zptah.app/privacy). Static text, no
+// script: it needs only landing.css. Conservative disclosure, see
+// docs/superpowers/specs/2026-11-27-ardia-browser.md. Bump UPDATED on any change.
 import { APP_ICON } from '../data.mjs';
 import { BETA_SITE, SITE } from './page.mjs';
 
-export const UPDATED = '2026-11-26';
+export const UPDATED = '2026-11-28';
 const REPO = 'https://github.com/hhoangg/zptah';
 const ISSUES = `${REPO}/issues`;
 const CHANGELOG = `${REPO}/commits/main/web/landing/src/html/privacy.mjs`;
 
-const TITLE = 'Privacy policy - zptah Browser';
-const DESCRIPTION = 'What the zptah Browser extension handles, where it goes, what is never collected, and where data is stored.';
+const TITLE = 'Privacy policy - zptah Mono Browser';
+const DESCRIPTION = 'What zptah sends to the Ardia browser when a Mono uses it, what stays on your computer, what is never collected, and where data is stored.';
 
 const SECTIONS = [
   [
     'what',
-    'What the extension handles',
+    'What the Mono Browser handles',
     [
-      '<p>When you ask a Mono (an assistant in the zptah desktop app) to use your browser, the zptah Browser extension handles:</p>',
-      '<ul><li>the content of the pages a Mono reads, including text, links, form labels and screenshots of those pages;</li><li>the titles and addresses (URLs) of your tabs;</li><li>the targets of the actions a Mono takes (which button, field or link), and what it types when you asked it to.</li></ul>',
-      '<p>The extension never reads passwords: a Mono is refused when it tries to type into a password field. It does nothing on a page until a Mono reads or acts on it, and it does not work in private (Incognito) windows.</p>',
+      '<p>When you ask a Mono (an assistant in the zptah desktop app) to use your Ardia browser, zptah runs the <code>ardia</code> command on your computer for it. The zptah gate sends it what the Mono does, and some calls of its own:</p>',
+      '<ul><li>commands: open a page, read it, take a snapshot or a screenshot, click, type, fill, press a key, scroll, list or run a flow;</li><li>the addresses (URLs) the Mono opens;</li><li>text the Mono types or fills, when your Mono acts at the Act level (typing into an ordinary field does not ask you first; risky steps do), never a password or a one-time code (zptah refuses those);</li><li>flows: listing, reading and running Ardia flows with their parameters, and saving the steps of a session as a flow;</li><li>uploads: after you approve a file, a private copy of it is handed to Ardia and goes to the site you are on;</li><li>zptah\'s own calls to the local <code>ardia</code> command: checking that Ardia is running and Control is on, listing profiles, reading the target of a step again before every step, reading a flow before it runs, closing the tabs it opened, and asking Ardia to quit.</li></ul>',
+      '<p>What comes back is the content of the pages a Mono reads, including text, links, form labels and screenshots, and the titles and addresses of its tabs. A Mono only gets the tabs zptah opened for its conversation, and uses your own tab only when you ask it to and approve it.</p>',
     ],
   ],
   [
     'where',
     'Where it goes',
     [
-      '<p>Only to the zptah app on your computer, over Chrome native messaging. The extension has no server, makes no network requests of its own and has no update or onboarding downloads.</p>',
+      '<p>No zptah server is involved in browsing. Everything the gate does happens on your computer, between the zptah app and the Ardia browser you installed. zptah has no server that receives your browsing, and makes no network request of its own for the browser.</p>',
       '<p>Inside the app, what a Mono reads becomes part of that Mono\'s conversation. zptah sends that conversation to the AI provider you configured (for example Anthropic or OpenAI), as it does for everything else in the conversation. Which provider sees it, and under what terms, is your choice in zptah and is governed by that provider\'s own policy. The general privacy notes of zptah are in the <a href="' + REPO + '#readme">project readme</a>.</p>',
     ],
   ],
@@ -35,30 +34,28 @@ const SECTIONS = [
     'never',
     'What is never collected',
     [
-      '<ul><li>No analytics, no telemetry and no crash reports, in the extension or in the zptah app\'s browser path.</li><li>No servers of our own receive your browsing data.</li><li>No sale and no transfer of data to third parties, other than the AI provider you chose, as described above and only to provide the feature you asked for.</li><li>No advertising and no use of data for ads.</li><li>No use of data to decide creditworthiness or for lending.</li><li>No use of data for any purpose unrelated to the extension\'s single purpose.</li></ul>',
-      '<p>The extension\'s use of information received from Chrome follows the Chrome Web Store User Data Policy, including its Limited Use requirements.</p>',
+      '<ul><li>No analytics, no telemetry and no crash reports in the browser path of the zptah app.</li><li>No servers of our own receive your browsing data.</li><li>No sale and no transfer of data to third parties, other than the AI provider you chose, as described above and only to provide the feature you asked for.</li><li>No advertising and no use of data for ads.</li><li>No use of data to decide creditworthiness or for lending.</li><li>No use of data for any purpose unrelated to letting a Mono use your browser.</li></ul>',
     ],
   ],
   [
     'storage',
     'Where data is stored',
     [
-      '<ul><li>In the browser\'s extension storage: the pairing key with the zptah app, which Mono owns which tab, and your cursor settings.</li><li>In the zptah app on your computer: the audit log of the actions Monos took and the approvals you gave, kept for 90 days or 20,000 entries per Mono. It is not uploaded anywhere.</li></ul>',
-      '<p>Removing the extension deletes its storage.</p>',
+      '<ul><li>In the zptah app on your computer: the audit log of the actions Monos took and the approvals you gave, kept for 90 days or 20,000 entries per Mono. It records the tool, the address (origin and path, never the query) and a short summary, never typed text. It is not uploaded anywhere.</li><li>In a private folder on your computer: copies of the files a Mono uploads, made only after you approve each upload and deleted when the conversation ends. Where there is no private folder, uploads are not available.</li><li>In the Mono\'s browser output folder on your computer: screenshots, page snapshots and console logs a Mono took, swept regularly, and kept longer only for the screenshots an audit entry points to. It is not uploaded by zptah.</li><li>In the Mono\'s conversation transcript on your computer, which holds what the Mono read and did, like any other conversation.</li><li>In Ardia: your logins, cookies and history, as for any use of Ardia. zptah does not copy them.</li></ul>',
     ],
   ],
   [
-    'permissions',
-    'Why the extension asks for broad access',
+    'control',
+    'Ardia\'s Control and who can drive Ardia',
     [
-      '<p>The extension asks for access to all sites because Monos work on the sites you ask them to use, and it cannot know in advance which. Each Mono has its own allowed and blocked site lists in zptah, and risky steps (payments, deletions, account security, sharing, posting publicly, accepting terms, entering codes, uploads) need your approval first. The debugger permission is declared when you install the extension, because Chrome does not allow it to be optional, and Chrome shows its warning then. The extension does not use it unless you turn on "Use the debugger fallback" in its options, which is off by default. While it is on, it is used for sites that ignore simulated input, for rich text editors and for page dialogs: it may attach before a delete or payment step so the confirmation dialog can be read, stays attached while the assistant works in that tab, and is detached when the work ends, after two idle minutes or when you press Stop. Chrome shows its debugging bar while it is in use.</p>',
+      '<p>The <code>ardia</code> command works only while Control is on in Ardia (Settings > Advanced). Control is Ardia\'s own model, not zptah\'s: while it is on and Ardia is running, any local program on your computer can drive Ardia and its logged-in profiles through the same command, not only zptah. zptah keeps that window short: on macOS it opens Ardia in the background only when a Mono needs it, shows when it started Ardia and lets you quit it, and quits an Ardia it started after 10 idle minutes by default. zptah\'s browser tools apply its checks: they ask for your approval before risky steps (payments, deletions, account security, sharing, posting publicly, accepting terms, uploads), never type passwords or one-time codes, and refuse sites on your blocked list or outside your allowed list. These checks apply only to what goes through zptah\'s tools. Claude is blocked from running <code>ardia</code> in its shell and Codex is told not to, but neither is airtight. Navigation a page starts by itself to a site outside your lists is caught after it happens, not before.</p>',
     ],
   ],
   [
     'contact',
     'Contact and change log',
     [
-      '<p>Questions or requests: open an issue at <a href="' + ISSUES + '">' + ISSUES + '</a>. zptah is open source, so you can read exactly what the extension does in the <a href="' + REPO + '">repository</a>.</p>',
+      '<p>Questions or requests: open an issue at <a href="' + ISSUES + '">' + ISSUES + '</a>. zptah is open source, so you can read exactly what it does in the <a href="' + REPO + '">repository</a>.</p>',
       '<p>Changes to this policy are made in the repository, where every change is dated and listed in the <a href="' + CHANGELOG + '">history of this page</a>. Last updated: ' + UPDATED + '.</p>',
     ],
   ],
@@ -93,7 +90,7 @@ ${head}
 </head>
 <body>
 <header class="nav-top"><a class="logo" href="${home}"><img src="${APP_ICON}" alt="" width="26" height="26"><b>zptah</b></a><nav></nav><a class="gh" href="${REPO}">GitHub</a></header>
-<main id="top"><section class="sec doc"><div class="wrap"><h1>Privacy policy: zptah Browser</h1><p class="lead">The zptah Browser extension lets the Monos of your zptah desktop app read and use your browser tabs. This page says what it handles and what it does not. Last updated ${UPDATED}.</p>
+<main id="top"><section class="sec doc"><div class="wrap"><h1>Privacy policy: zptah Mono Browser</h1><p class="lead">The Mono Browser lets the Monos of your zptah desktop app read and use your Ardia browser. This page says what it handles and what it does not. Last updated ${UPDATED}.</p>
 <nav class="toc" aria-label="Contents">${SECTIONS.map(([id, t]) => `<a href="#${id}">${t}</a>`).join('')}</nav>
 ${SECTIONS.map(([id, t, body]) => `<section id="${id}"><h2>${t}</h2>\n${body.join('\n')}</section>`).join('\n')}
 </div></section></main>

@@ -493,6 +493,8 @@ fn run_turn_using(
         })?;
         // These providers parse slash arguments themselves. App context before
         // the command would turn it into an ordinary message instead.
+        // What the user typed, before anything is added to it (see `user_words`).
+        settings.user_prompt = user_words(&settings, &prompt);
         let prompt = settings.prepared_prompt.take().unwrap_or(prompt);
         let raw_native_command = matches!(kind, Kind::Omp | Kind::Devin)
             && provider::native_prompt(kind, &prompt)
@@ -1285,6 +1287,63 @@ fn shlex_quote(text: &str) -> String {
             .replace('$', "\\$")
             .replace('`', "\\`")
     )
+}
+
+/// The words the browser gate counts as the user's own for this turn: what the user typed, or
+/// the stored prompt of an automation (the user wrote it). A message from another Mono, from the
+/// app or from a scheduler or workflow brings none, and neither does a turn that only the app
+/// started: `None` there, so such a run does not lift a Stop either.
+fn user_words(settings: &Settings, prompt: &str) -> Option<String> {
+    (!settings.internal_message && !settings.automatic_resume).then(|| prompt.to_owned())
+}
+
+#[cfg(test)]
+mod user_words_tests {
+    use super::*;
+
+    #[test]
+    fn a_typed_message_and_an_automations_stored_prompt_are_the_users_words() {
+        let typed = Settings::default();
+        assert_eq!(
+            user_words(&typed, "open shop.example").as_deref(),
+            Some("open shop.example")
+        );
+        let automated = Settings {
+            automated: true,
+            ..Settings::default()
+        };
+        assert_eq!(
+            user_words(&automated, "check the dashboard at status.example").as_deref(),
+            Some("check the dashboard at status.example"),
+            "the stored automation prompt is the user's own text"
+        );
+    }
+
+    #[test]
+    fn the_automatic_usage_limit_resume_is_not_the_users_words() {
+        let automatic = Settings {
+            automatic_resume: true,
+            ..Settings::default()
+        };
+        assert_eq!(
+            user_words(&automatic, "Continue from where you left off."),
+            None
+        );
+        // A resume the user clicks is typed: it is not marked.
+        assert_eq!(
+            user_words(&Settings::default(), "Continue from where you left off.").as_deref(),
+            Some("Continue from where you left off.")
+        );
+    }
+
+    #[test]
+    fn internal_and_mono_to_mono_messages_are_not() {
+        let internal = Settings {
+            internal_message: true,
+            ..Settings::default()
+        };
+        assert_eq!(user_words(&internal, "message from another Mono"), None);
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,1 @@
+{"success":false,"data":null,"error":"the ardia browse daemon closed the connection without answering (it may have exited; see the session log)","code":"daemon_unreachable","remedy":"ardia browse session list"}

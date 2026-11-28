@@ -14,7 +14,6 @@
 //! * Detection ([`scan`]): known injection phrasings (several languages, light obfuscation,
 //!   base64) raise a warning and make every action of the turn ask. A signal, never the only
 //!   defense.
-use super::recipe::record::Trace;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -111,6 +110,38 @@ pub fn redact_secrets(text: &str) -> String {
     regex(&DIGITS, r"\d(?:[ -]?\d){12,18}")
         .replace_all(&text, "[redacted]")
         .into_owned()
+}
+
+/// Query or fragment parameters that carry credentials (OAuth `code`, tokens, keys, sessions).
+const SECRET_PARAMS: &str = r"code|token|access_token|id_token|refresh_token|auth|authorization|key|api_key|apikey|secret|client_secret|password|passwd|sig|signature|session|sessionid|sid|assertion|otp";
+
+/// `text` with the values of credential parameters (`?code=...`, `#access_token=...`) masked.
+pub fn redact_url_secrets(text: &str) -> String {
+    static PARAM: OnceLock<Regex> = OnceLock::new();
+    regex(
+        &PARAM,
+        &format!(r#"(?i)([?&#;](?:{SECRET_PARAMS})=)[^\s&#"'<>)\]]+"#),
+    )
+    .replace_all(text, "${1}[redacted]")
+    .into_owned()
+}
+
+/// What the Mono is shown of a page: invisible characters removed, credentials masked. Unlike
+/// [`redact_secrets`] it keeps long plain words, slugs and addresses (it does not mask every run
+/// of 24 or more characters), because that would garble ordinary page text. It keeps the known
+/// token shapes, `password: x` pairs, card numbers and credential parameters of addresses.
+pub fn redact_page_text(text: &str) -> String {
+    static PAIR: OnceLock<Regex> = OnceLock::new();
+    static DIGITS: OnceLock<Regex> = OnceLock::new();
+    let text = strip_invisible(text);
+    let text = crate::sandboxes::redact(&text);
+    let text = regex(
+        &PAIR,
+        r"(?i)\b(password|passwd|pwd|secret|token|api[ _-]?key|otp|pin|mat khau|mật khẩu)\b\s*[:=]\s*\S+",
+    )
+    .replace_all(&text, "$1=[redacted]");
+    let text = regex(&DIGITS, r"\d(?:[ -]?\d){12,18}").replace_all(&text, "[redacted]");
+    redact_url_secrets(&text)
 }
 
 /// Lower case with every run of white space (and invisible characters) as one space.
@@ -217,6 +248,12 @@ pub fn returns_content(tool: &str, text: &str) -> bool {
     matches!(
         tool,
         "browser_snapshot"
+            | "browser_open"
+            | "browser_back"
+            | "browser_forward"
+            | "browser_reload"
+            | "browser_console"
+            | "browser_errors"
             | "browser_find"
             | "browser_read"
             | "browser_tabs"
@@ -228,6 +265,9 @@ pub fn returns_content(tool: &str, text: &str) -> bool {
             | "browser_navigate"
             | "browser_navigate_back"
             | "browser_wait_for"
+            | "flow_list"
+            | "flow_show"
+            | "flow_run"
     ) || text.contains("```yaml")
         || text.contains("### Page")
         || text.contains("### Snapshot")
@@ -757,13 +797,6 @@ pub struct Turn {
     /// Skips the taint rule (tests of other features). The injection signal still applies.
     pub exempt: bool,
     pub hits: Vec<Hit>,
-    /// A suggestion card was shown this turn.
-    pub suggested: bool,
-    /// The user accepted "Save as recipe?": `recipe_record` goes without a second card.
-    pub save_ok: bool,
-    pub save_notice_due: bool,
-    /// Whether the shape of this task was done before (`None`: not looked up yet).
-    pub seen_before: Option<bool>,
 }
 
 impl Turn {
@@ -797,9 +830,7 @@ impl Turn {
     }
 
     /// Records a read of untrusted content and returns the hits of this read. `taint` is false
-    /// for a page a recipe step reads in the middle of its run: the user approved the steps, so
-    /// the run is not judged by what its own reads say, but the run's output (read after it) is
-    /// a taint like any other.
+    /// for a read that is not judged by what it says (the user approved the steps that made it).
     pub fn read(&mut self, text: &str, taint: bool) -> Vec<Hit> {
         self.content_origins.extend(host_key(&self.last_page));
         if taint && !self.tainted {
@@ -1075,7 +1106,7 @@ impl Turn {
         self.first_read.clone()
     }
 
-    /// Whether `value` (a recipe parameter) is in the page text this turn read but neither in
+    /// Whether `value` is in the page text this turn read but neither in
     /// the user's request nor in an approved intent: it came from the page.
     pub fn page_sourced(&self, value: &str) -> bool {
         let value = squeeze(value);
@@ -1188,124 +1219,6 @@ pub fn declare_tool_definition() -> Value {
 
 /// The tool a Mono declares its intents with.
 pub const DECLARE_TOOL: &str = "browser_declare_intent";
-
-// ---- Suggesting a recipe ----
-
-/// The sentence a card shows for the values a task typed: counts only, never the values.
-pub fn typed_summary(trace: &Trace) -> Vec<String> {
-    let mut lines = Vec::new();
-    for entry in &trace.entries {
-        let name = |entry: &super::recipe::record::Entry| {
-            entry
-                .node
-                .as_ref()
-                .map(|n| safe_snippet(&n.name, 40))
-                .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| "a field".into())
-        };
-        if let Some(text) = &entry.typed.text {
-            lines.push(format!(
-                "- text typed in {} (value hidden, {} characters)",
-                name(entry),
-                text.chars().count()
-            ));
-        }
-        for value in &entry.typed.values {
-            lines.push(format!(
-                "- option chosen in {} (value hidden, {} characters)",
-                name(entry),
-                value.chars().count()
-            ));
-        }
-        for field in &entry.typed.fields {
-            lines.push(format!(
-                "- form field {} (value hidden, {} characters)",
-                field
-                    .node
-                    .as_ref()
-                    .map(|n| safe_snippet(&n.name, 40))
-                    .unwrap_or_else(|| "a field".into()),
-                field.value.chars().count()
-            ));
-        }
-    }
-    lines.truncate(8);
-    lines
-}
-
-/// The tools of the steps that count: successful, and not an approval question.
-pub fn useful_steps(trace: &Trace) -> Vec<&str> {
-    trace
-        .entries
-        .iter()
-        .filter(|e| e.ok && e.tool != super::gate::APPROVAL_TOOL)
-        .map(|e| e.tool.as_str())
-        .collect()
-}
-
-/// The shape of a task: the sorted set of tools of its first three steps.
-pub fn shape_of(trace: &Trace) -> String {
-    let set: BTreeSet<&str> = useful_steps(trace).into_iter().take(3).collect();
-    set.into_iter().collect::<Vec<_>>().join(",")
-}
-
-const SHAPES_TABLE: &str = "CREATE TABLE IF NOT EXISTS mono_browser_task_shapes(
-  mono_id TEXT NOT NULL, origin TEXT NOT NULL, shape TEXT NOT NULL, seen INTEGER NOT NULL,
-  PRIMARY KEY(mono_id, origin, shape));
-CREATE TABLE IF NOT EXISTS mono_browser_no_suggest(
-  mono_id TEXT NOT NULL, origin TEXT NOT NULL, PRIMARY KEY(mono_id, origin));";
-
-impl super::MonoBrowserStore {
-    /// Counts this shape on this site and returns how many times it was seen before.
-    pub fn note_shape(&self, mono_id: &str, origin: &str, shape: &str) -> u32 {
-        let Ok(()) = Self::valid_id(mono_id) else {
-            return 0;
-        };
-        let Ok(Some(conn)) = self.open() else {
-            return 0;
-        };
-        if conn.execute_batch(SHAPES_TABLE).is_err() {
-            return 0;
-        }
-        let before: u32 = conn
-            .query_row(
-                "SELECT seen FROM mono_browser_task_shapes WHERE mono_id=?1 AND origin=?2 AND shape=?3",
-                rusqlite::params![mono_id, origin, shape],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        let _ = conn.execute(
-            "INSERT INTO mono_browser_task_shapes(mono_id,origin,shape,seen) VALUES(?1,?2,?3,1)
-             ON CONFLICT(mono_id,origin,shape) DO UPDATE SET seen=seen+1",
-            rusqlite::params![mono_id, origin, shape],
-        );
-        before
-    }
-    /// Whether the user said "Never for this site".
-    pub fn never_suggest(&self, mono_id: &str, origin: &str) -> bool {
-        let Ok(Some(conn)) = self.open() else {
-            return false;
-        };
-        conn.query_row(
-            "SELECT 1 FROM mono_browser_no_suggest WHERE mono_id=?1 AND origin=?2",
-            rusqlite::params![mono_id, origin],
-            |_| Ok(()),
-        )
-        .is_ok()
-    }
-    pub fn set_never_suggest(&self, mono_id: &str, origin: &str) -> Result<(), String> {
-        Self::valid_id(mono_id)?;
-        let conn = self.open()?.ok_or("Browser storage is unavailable.")?;
-        conn.execute_batch(SHAPES_TABLE)
-            .map_err(|_| "Browser storage is unavailable.")?;
-        conn.execute(
-            "INSERT OR IGNORE INTO mono_browser_no_suggest(mono_id,origin) VALUES(?1,?2)",
-            rusqlite::params![mono_id, origin],
-        )
-        .map(|_| ())
-        .map_err(|_| "Browser storage is unavailable.".into())
-    }
-}
 
 #[cfg(test)]
 mod tests;

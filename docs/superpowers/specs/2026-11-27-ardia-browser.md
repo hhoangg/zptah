@@ -129,7 +129,7 @@ then forgot keeps that door open with nobody watching. So zptah keeps the window
   which signal is reliable), zptah treats it as the user's: no idle quit, no Quit button, only the
   session tabs are closed.
 
-Linux and Windows launch and quit paths are still open for M0.
+Linux and Windows: no auto-launch in v1 (section 12b).
 
 ## 3. Settings
 
@@ -149,7 +149,7 @@ Migration: none. The extension was never used outside development (confirmed by 
 
 - Old fields in `mono-roster` are ignored on load (serde skips unknown keys) and dropped on the
   next save. A Mono with `enabled` but no `ardiaProfile` simply shows the profile picker.
-- The Playwright-era `migration.rs` and its settings keys are deleted with the code.
+- The Playwright-era `migration.rs` and its settings keys are deleted with the code. The one thing kept: the secret `playwright-extension-token` (shipped in v0.1.x) is still deleted from `mono_secrets` whenever the roster loads, cheap and idempotent.
 - Recipe tables (`mono_browser_recipe_*`) are no longer created; existing ones are dropped with
   `DROP TABLE IF EXISTS` at store open. `<mono>/recipes/` and `_shared_recipes/` are not touched.
 - Leftovers on development machines (native messaging manifests, keychain service
@@ -170,8 +170,11 @@ Migration: none. The extension was never used outside development (confirmed by 
 - Cleanup: the gate tracks the tab ids it opened and closes them with `ardia tabs close` when the
   conversation ends. `windows.close` alone is not enough: Ardia moved the tabs of a closed window
   into the remaining window, including a tab from another profile.
-- The user's own tab is used only when the Mono asks for it (`tab active`, act level only, with an
-  approval the first time per conversation).
+- The user's own tab is used only when the Mono asks for it (`browser_tabs adopt_active`, act level
+  only). The gate finds it without binding anything (`ardia call windows`: the active tab of the
+  focused window), refuses it unless it is in the Mono's Ardia profile, shows its address on the
+  approval card (once per conversation per tab id, recorded before the bind), and only then binds
+  that exact id (`tab <tab-id>`) and checks the id Ardia says it bound.
 - **Tab ownership.** For each session the gate keeps the set of tab ids it opened for that session,
   plus the user's active tab once the approval above is given (that exact tab id only). The gate
   binds (`tab <tab-id>`), switches to and acts in only tab ids in that set, and closes only the
@@ -277,6 +280,8 @@ tool the gate:
 4. asks if needed;
 5. runs the `ardia browse` command and audits its result, including the URL after it.
 
+When the gate cannot read enough of the page to tell what an action does (a destination it could not read, a bare word such as Confirm with no dialog or page text to explain it, a focus it could not identify), the action asks with its own category `unclear` (card line: "zptah could not read enough of this page to tell what this does."), which is never granted for the conversation.
+
 M0 documents how stable `@eN` refs are: whether they survive a re-snapshot, a scroll, a DOM update
 and a navigation, and whether a stale ref errors or silently points at another element. If a stale
 ref can silently resolve to another element, the gate passes a selector or a role-and-name locator
@@ -294,6 +299,10 @@ Always blocked, even when inside an allowed folder: dotfiles and dot folders (`.
 `.git/`, ...), `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.kube`, keychains
 (`~/Library/Keychains`, `*.keychain-db`) and the app's own data folders. Paths are checked after
 resolving symlinks.
+
+Where there is no private folder for the copies of uploaded files (Windows, and Linux without
+`XDG_RUNTIME_DIR`), `browser_upload` is not offered at all (left out of `tools/list`, disabled by name, left
+out of the prompt) and the Browser tab says "Uploads are not available on this system".
 
 ## 7. Flows
 
@@ -315,18 +324,24 @@ step. Policy for `flow_run`:
    changed in between, it is classified, and approved if needed, again.
 6. After the run, the origin checks of section 5 (detected after) apply to the tab the flow used.
 7. Read-only Monos cannot run flows.
+8. A flow with an `upload` step, or any step that names a file path, is never run (`browser_upload` is the only way a Mono sends a file, and it always asks).
 
 `flow heal` is not exposed in v1; the user heals flows from a terminal.
 
-Open: the format of `flow show` output and whether a flow is tied to a profile. The M0 spike
-records one flow and reads it back.
+Command form: a flow name matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` and goes after the `--`; a
+parameter is `--param`, `k=v` (two arguments before the `--`, `k` matching `^[A-Za-z_][A-Za-z0-9_]{0,63}$`
+so the `k=v` token can never be read as an option, whatever `v` says); `--yes` is the gate's and only
+for a flow with `writes: true`. A conversation grant for a flow is stored under `flow:<name>:<hash>`
+and covers that content only; `flow_save` always asks (never granted), and refuses a name that is not
+a flow name.
+
 
 ## 8. Defense
 
 - Ardia already wraps page content in nonce markers. The gate does not fence `ardia browse`
   output again; it still runs `strip_invisible`, `redact_secrets` and the injection scan on it,
   and keeps the per-turn taint guard.
-- `defense.rs` stays whole: the Chief spec reuses its helpers.
+- `defense.rs` stays except for the recipe-suggestion helpers (`typed_summary`, `useful_steps`, `shape_of`, the task-shape and no-suggest store methods) and four `Turn` fields (`suggested`, `save_ok`, `save_notice_due`, `seen_before`), which went with the recipe code (M4). The helpers the Chief spec reuses (`fence`, `neutralize`, `strip_invisible`, `redact_secrets`) stay.
 
 ## 9. Stop
 
@@ -368,7 +383,7 @@ Access checks, Show cursor, Recipes section.
 - `GPUI`: `monos/browser_connect*`, `monos/browser_migration.rs`, `monos/recipes_ui.rs`, the
   stopped banner in `conversation/browser_cards.rs`, Resume in `monos/browser_approval.rs`.
 - Cargo: `test-support` browser e2e feature and the `browser_e2e_app` example.
-- Store: recipe tables (dropped at store open, section 3).
+- Store: recipe tables and the two suggestion tables `mono_browser_task_shapes` and `mono_browser_no_suggest` (dropped at store open, section 3).
 
 Kept: `gate.rs` (with a new `Upstream`), `gate/guard.rs`, `gate/http.rs`, `defense.rs`, `trust/`,
 `risk/`, `soul_rules.rs`, `copy.rs`, `output.rs`, `server.rs`, `provider/browser_gate.rs`,
@@ -407,6 +422,183 @@ CI runs on Linux and Windows and has no Ardia, so no automated test needs a real
 - Real-Ardia checks are a manual macOS script (in `scripts/`, not run in CI) that drives an
   installed Ardia through the same commands and compares the shapes with the fixtures. It is run
   by hand when Ardia or its CLI updates.
+
+## 12b. M0 findings (2026-11-27)
+
+Measured on macOS with Ardia 0.2.49 and the `ardia` CLI 0.7.0, protocol 4, Ardia closed first and
+quit again afterwards. Only `example.com`, `iana.org` and local `file://` test pages were used, in
+the Secondary profile; every tab opened was closed. Linux and Windows were not run (no machine).
+The raw replies are checked in as fixtures (section 12a).
+
+**Decision (user, 2026-11-27): no auto-launch on Linux and Windows in v1.** The gate does not
+start or quit Ardia there; with Ardia closed a tool call fails with "Open Ardia" and the readiness
+row shows the same step. No idle quit and no Quit button on those platforms. macOS works as in
+section 2a.
+
+Tabs and profiles (section 4):
+
+- `ardia tabs open <url> --profile <id> --json` opens a background tab that belongs to that
+  profile, in the last window (whatever profile the window shows), without focusing the window,
+  changing its active tab or unhiding Ardia. Reply: `results[0].tabs[0]` is the `tab-...` id.
+  **This is the mechanism.**
+- Bind with `ardia browse --session <s> tab <tab-id> --json`. Right after opening, the bind can
+  fail with `code: "tab_asleep"` (Ardia keeps new background tabs asleep). `tabs.hold {session,
+  tabs, seconds}` before the bind loads it; the gate holds, binds, and retries a `tab_asleep` bind
+  a few times.
+- `ardia browse tab new` and `ardia browse open` with no bound tab open the tab in the **default**
+  profile, and `tab new` also made it the window's active tab. `read <url>`, `read-urls`,
+  `click --new-tab` and `window new` open tabs of their own too. The gate never sends those forms:
+  it creates every tab with `ardia tabs open --profile`, sends `open` only to a bound tab and
+  `read` without URLs.
+- `ardia browse tab list` lists every tab Ardia can drive (the user's, extension pages), marked
+  `openedBySession: false`; a bound tab opened with `tabs open` is also `openedBySession: false`.
+  `browser_tabs` filters by the gate's own set (section 4).
+- `ardia browse tab close` refuses a tab the session did not open (`command_failed`: "one of the
+  user's tabs"), so the gate closes its tabs with `ardia tabs close <tab-id> --json`.
+- `tabs.hold {untilDisconnect}` lasts only as long as the connection, and every `ardia call` is
+  its own connection, so the gate holds with `seconds` (120) and renews on every call;
+  `tabs.release {session}` at cleanup.
+- Ardia restores tabs at relaunch (`restoreSession` is on by default), with the same `tab-...`
+  ids. A tab left open when Ardia quit comes back, so the gate keeps the ids it opened in its own
+  state and closes leftovers on the next live check.
+- Session names must match `^[A-Za-z0-9._-]{1,64}$` (`tabs.hold`); the gate uses
+  `zptah-<monoId>-<conversationId>` when it fits and a short hash of it otherwise.
+
+Output and exit codes (section 5):
+
+- `ardia browse ... --json` prints `{success, data, error, code?, remedy?}`, exit 0 on success,
+  1 on a refused or failed command, 2 when Ardia or the browse daemon can't be reached. Codes
+  seen: `unknown_command`, `unknown_ref`, `stale_ref`, `vocab_superseded`, `not_visible`,
+  `tab_asleep`, `no_session_tab`, `no_flow`, `failed`, `command_failed`, `daemon_unreachable`.
+- `ardia call ... --json` prints the bare result; exit 1 on refusal (message on stderr), 2 when
+  unreachable (`ardia: Ardia isn't running, ...` on stderr). `ardia tabs open/close --json` reply
+  like `apply`: `{ok, applied, results, tabs, groups, windows}`.
+- Arguments (measured 2026-11-28): every option goes before the command and every value after a
+  `--`: `ardia browse --session <s> --json <cmd> [flags] -- <values...>`. After `--` everything
+  is taken literally, including `--json`, so nothing may follow the values. Without `--` a value
+  like `-5` or `--session=x` happened to be filled literally too, but the gate does not rely on
+  that. Checked with `fill`, `type`, `press`, `open`, `scroll`, `screenshot`, `get attr`, `click`,
+  `upload`, `hover`, `check`, `flow show`.
+- Act replies carry `changes` (`document`, `url {from,to}`, `title`, added/removed/changed nodes,
+  `network` with the POSTs caused). `fill` into a password field succeeds and reports
+  `verify.kind: "password"` after the fact: Ardia itself does not stop it.
+- **`--json` output has no `UNTRUSTED_PAGE_CONTENT` markers**; only the text output has them. The
+  gate uses `--json` and fences page fields itself with `defense.rs` (correcting section 8).
+- "Control is off." was not measured (Control was not switched off on the user's Ardia; it is
+  `cliControl` in `settings.schema` and the CLI cannot change it). The string is in Ardia's
+  bundle; the fixture assumes `ardia call` exits 1 with it on stderr.
+- Ardia has no per-caller restriction of Control (`hello` takes an informational `caller`), so
+  the shell block of section 1 stays a guard against mistakes (section 13).
+
+Refs and fields (section 6):
+
+- `@eN` refs are numbered per session and only grow. A ref survives a re-snapshot, a scroll and a
+  DOM insert (the new node gets a new ref). After a navigation or reload every older ref fails
+  with `vocab_superseded`; a removed element fails with `stale_ref`; an unknown one with
+  `unknown_ref`. No stale ref resolved to another element. A ref whose element changed its name
+  keeps the ref (`e8` "IANA" became `e8` "Changed"), so the gate still compares role and name
+  from the fresh read.
+- `snapshot` shows role and name only. `form` lists fields with `type` (`password`, `email`),
+  `name`, `label`, `value`, `required` and the submit buttons, not `autocomplete`.
+  `get attr @eN type|autocomplete|href|formaction` reads one attribute of a ref
+  (`one-time-code`, `current-password` came back). **So the first branch of "Passwords and
+  one-time codes" applies**: the gate refuses `browser_fill` and `browser_type` into a field whose
+  `type` is `password` or whose `autocomplete` is `current-password`, `new-password` or
+  `one-time-code`, and keeps the lexicon rule as a second check.
+- The enclosing form's `action` has no ref form; the gate reads the page's forms (`get attr form
+  action` and, if there are several, every form's action resolved against the page URL) and
+  treats any blocked one as a hit (leans to refusing).
+
+Act inputs (measured 2026-11-28, local test pages):
+
+- `snapshot` never marks the focused element. The gate reads focus with a fixed script of its own
+  through `eval --isolated -- '<script>'`. Without `--isolated` the script runs in the page's
+  world, and a page that replaced `JSON.stringify` made it report `{"tag":"BODY"}` for a focused
+  password field; with `--isolated` it reported `INPUT`/`password`. Every gate `eval` uses
+  `--isolated`; the Mono never gets `eval`.
+- `press @eN <key>` presses in that element (`{"pressed":"Enter","in":"@e3",...}`) and submitted
+  its form; `Control+Enter` is accepted the same way.
+- `type`/`fill`/`keyboard type` with a trailing newline did not submit a form on Ardia 0.7.0; the
+  gate still judges such text as typing then Enter.
+- `check @eN` on a button or a link clicks it (its script ran) and only then fails with
+  `command_failed`, so the gate allows check and uncheck only on checkable roles.
+- `get count form` and `get attr "form >> nth=<i>" action` read every form;
+  `form:nth-of-type(<i>)` misses forms under different parents. An absent attribute is
+  `value: null` with exit 0. On a page without forms `form` has no `submits` key.
+- With a dialog open, `snapshot -i` is scoped to it and the reply carries
+  `modal {role, name, ref}`; the full `snapshot` shows the dialog's text nested under its
+  `- dialog "<name>"` line. Quotes inside names are escaped (`"x\" [ref=e99]"`).
+- `ardia call windows` reports `focused: true` for Ardia's last focused window even while Ardia is
+  hidden and another app is in front.
+- A click on a `target=_blank` link (and, by the same path, `window.open`) opened a page target
+  that `ardia tabs` does not list (`appTabId: null` in `tab list`, `changes` reports nothing),
+  and switched the user's window to the Mono's profile. The gate reads the link's `target`
+  before a click and loads such a link in the session's own tab instead (after the origin check);
+  after every act it closes any new page target without an `appTabId` (`cdp Target.closeTarget`,
+  gate-internal) and puts the window back on the profile it showed before.
+
+Flows (section 7):
+
+- Stored per site, not per profile: `<Ardia data>/Flows/<site>/<name>.json`, shared by every
+  profile, session and the user's own terminal. A run uses the session's bound tab, so the logins
+  of the Mono's profile.
+- Two kinds: data flows (`kind` absent, `writes: false`: GET requests only, returns
+  `{list, total, matched, items}`) and page-action flows (`kind: "actions"`, `writes: true`,
+  `flow save <name> --actions`). An action flow refuses to run without `--yes` (exit 1, code
+  `failed`); the gate passes `--yes` only after its own check.
+- `flow show <name> --json` returns `data.flow`: `version` (2), `name`, `site`, `origin`,
+  `startUrl`, `hosts`, `params`, `steps[] {seq, command[], url, action {type, intent, candidates,
+  fingerprint, value}}`, `kind`, `writes`. Step `action.type` seen: `open`, `click`; `command[0]`
+  is an `ardia browse` command (`open`, `find ... click|fill`). The hash covers the `data.flow`
+  JSON with `createdAt` kept. Every `startUrl`, `hosts` entry and step `url` is checked against the
+  origins. `flow run` returns per-step `ok` but not the final URL; the gate reads `get url` after.
+- Measured 2026-11-28: `flow list` and `flow show -- <name>` work with no bound tab.
+  `flow run --yes [--param k=v] [--limit n] -- <name>` takes its options before `--`; a `--param`
+  the flow lacks fails (`"<name> has no param q; its params are: none"`, `command_failed`).
+  `flow steps` returns `{steps[] {seq, command[], url, ok, requests, notKept}, savedThrough,
+  dropped}`; `flow save` saves the steps since the last save (a second save right after fails
+  `no_steps`), replaces a flow of the same name on the same site without a word, and refuses a
+  range that does not start on an http(s) page (`not_a_web_page`). The gate therefore tells the
+  user on the card when a save replaces an existing flow. Not measured: a data flow's run output
+  and how an action flow names its params.
+- Measured 2026-11-28 on a local http page: an action flow's `params` are
+  `[{name, example, source}]` with `source` `typed` or `secret` (a password field). Steps name a
+  param as `{{name}}` in `command` and `action.value`; a secret step's command holds `<redacted>`.
+  The gate refuses a flow that has any `secret` param. `flow steps` records `wait` but not the
+  gate's own `snapshot`, `eval`, `get attr` or `get count`; its `--all` form shows the typed
+  values in clear, so the gate masks them. A name saved on two sites makes `flow show` and
+  `flow run` fail (`"<name> is saved for a, b; pick one with --site <site>"`); `--site <site>`
+  (an option, before `--`) picks one, so the gate always passes the site from `flow list`.
+  Killing the `ardia` process during `flow run` stopped the remaining steps (a step after a
+  4 s `wait` never ran).
+- `flow list --json`: `data.flows[] {site, name, description, params, verified, kind, writes}`.
+  Typed passwords are kept as params with no value (`<redacted>` in `flow steps`).
+- Measured 2026-11-28: `flow steps --all` recorded only `open` and `scroll` from a session that
+  also ran `tab list`, `form`, `cdp --target browser -- Target.getTargets`, `get url`, `get title`,
+  `get text`, `read`, `console` and `errors`. With the earlier measurement (`snapshot`, `eval`,
+  `get attr` and `get count` not recorded), the gate's own probes never end up in a saved flow. The
+  gate's own `open` for a target=_blank link is recorded like any `open`.
+
+Ardia closed, launch and quit (section 2a):
+
+- Closed: `ardia call hello` and `ardia browse ...` exit 2. Quit mid-call: the running
+  `ardia browse` exits 2 with `code: "daemon_unreachable"`.
+- `open -g -j -a Ardia` reached `hello` in 1.0-1.5 s again, hidden and not frontmost; tabs opened
+  and driven while hidden left it hidden.
+- Quit: `osascript -e 'tell application id "com.ardia.browser" to quit'`, gone after about 7 s.
+  `warnBeforeQuitting` (default off) would make Ardia ask first; the gate reads it with
+  `settings.get {keys}` and does not idle-quit when it is on.
+- Telling the user's Ardia from zptah's: not measured live (bringing Ardia forward would have
+  taken focus from the user). Signals the gate uses, both leaning to "the user's": an
+  `app.activated` or `window.opened` event on an `ardia events app.activated window.opened --json`
+  stream kept open while a zptah-launched Ardia runs, and Ardia no longer being hidden (macOS
+  `NSRunningApplication.isHidden`) at idle-quit time. Events seen: `tab.opened`, `tab.navigated`,
+  `tab.closed` with `{windowId, tabId, profile, url, title}`.
+
+Risk data: `crates/monocode-core` reads the risk lexicon and site table from `BD/risk/data/`. In M4 they
+moved there from `extensions/zptah-browser/shared/` with their generator (`gen-risk-lexicon.mjs`, its
+manual input and its test, run by `npm run risk:lexicon`), and the CI check that the generated files
+are in sync (`risk-data` job in `native.yml`) moved with them.
 
 ## 13. Risks
 

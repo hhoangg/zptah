@@ -19,6 +19,13 @@ pub struct Message {
     pub at: usize,
     pub error: Option<String>,
     pub steer: bool,
+    /// The message is an automation's stored prompt (the user wrote it earlier). It travels with
+    /// the message, so a typed message sent after it never inherits the mark.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub automated: bool,
+    /// The message is the app's own resume at a usage-limit reset (nobody typed it).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub automatic_resume: bool,
 }
 impl Message {
     pub fn label(&self) -> String {

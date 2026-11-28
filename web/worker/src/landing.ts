@@ -1,7 +1,7 @@
 // The public landing page of the official host (web/landing). It is a static asset under /landing/ (built into the
 // assets directory next to the SPA), and the Worker decides which of the two a request for `/` gets:
 //   - `/home`: always the landing page.
-//   - `/privacy`: the privacy policy of the zptah Browser extension (landing/privacy/), a plain static page.
+//   - `/privacy`: the privacy policy of the Mono Browser (Ardia) (landing/privacy/), a plain static page.
 //   - `/`: the landing page when the request has no session cookie, the SPA (the assets' index.html) when it has one.
 // Presence check only: the cookie is not validated and D1 is not touched. A stale or forged cookie gets the SPA, whose
 // own auth guard sends it to /login. Both answers vary on the cookie, so no cache may share one with the other.

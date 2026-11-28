@@ -7,7 +7,7 @@
 //! gate exists because those modes never ask on their own. A planning turn, a read-only session or
 //! a run nobody can answer (no controls) is denied at once.
 use super::*;
-use crate::mono::browser::gate::{Ask, Category, SUGGEST_ID_PREFIX};
+use crate::mono::browser::gate::Ask;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -18,7 +18,6 @@ pub(super) const ID_PREFIX: &str = "browser-gate-";
 pub(super) struct Open {
     reply: mpsc::Sender<bool>,
     abandoned: Arc<AtomicBool>,
-    never: Arc<AtomicBool>,
 }
 
 impl Protocol {
@@ -30,24 +29,13 @@ impl Protocol {
             let _ = ask.reply.send(false);
             return Vec::new();
         }
-        let suggestion = ask.request.category == Category::Suggestion;
-        let id = format!(
-            "{}{}",
-            if suggestion {
-                SUGGEST_ID_PREFIX
-            } else {
-                ID_PREFIX
-            },
-            SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        );
+        let id = format!("{ID_PREFIX}{}", SEQUENCE.fetch_add(1, Ordering::Relaxed));
         let approval = Approval {
             id: id.clone(),
             title: ask.request.title(),
             detail: ask.request.detail(),
-            // "Always allow" would turn a one-off question into a standing permission. The
-            // suggestion card is the exception: its session answer is "Never for this site",
-            // which only the desktop offers (a remote device can allow once or deny).
-            can_remember: suggestion,
+            // "Always allow" would turn a one-off question into a standing permission.
+            can_remember: false,
             can_allow_once: true,
         };
         self.gate_asks.insert(
@@ -55,7 +43,6 @@ impl Protocol {
             Open {
                 reply: ask.reply,
                 abandoned: ask.abandoned,
-                never: ask.never,
             },
         );
         vec![Event::Approval(approval)]
@@ -66,9 +53,6 @@ impl Protocol {
         let Some(open) = self.gate_asks.remove(id) else {
             return false;
         };
-        if matches!(decision, Decision::Session) {
-            open.never.store(true, Ordering::SeqCst);
-        }
         let _ = open
             .reply
             .send(matches!(decision, Decision::Allow | Decision::Session));

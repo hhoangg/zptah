@@ -1,0 +1,1 @@
+{"success":true,"data":{"origin":"file://","refs":{"e1":{"name":"OK","role":"button"}},"snapshot":"- dialog\n  - StaticText \"Remove \\\"all\\\" items?\"\n  - button \"OK\" [ref=e1]","epoch":1,"modal":{"role":"dialog","name":"","ref":null}},"error":null}

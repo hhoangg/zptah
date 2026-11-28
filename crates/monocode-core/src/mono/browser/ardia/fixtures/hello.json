@@ -1,0 +1,6 @@
+{
+  "app": "Ardia",
+  "version": "0.2.49",
+  "protocol": 4,
+  "minClientProtocol": 4
+}

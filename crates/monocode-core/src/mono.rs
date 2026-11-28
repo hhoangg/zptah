@@ -91,7 +91,7 @@ pub struct Mono {
     /// (spec 9.1). Not the emoji-library setting above. `None`: the mascot's emoji.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub badge_emoji: Option<String>,
-    /// Real Chrome through the zptah Browser extension (see `browser::MonoBrowser`).
+    /// The Mono's Ardia browser (see `browser::MonoBrowser`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub browser: Option<browser::MonoBrowser>,
 }
@@ -372,7 +372,10 @@ pub struct Roster {
 impl Roster {
     pub fn load(store: &Store) -> Result<Self, String> {
         let text = store.setting("mono-roster")?;
-        let text = browser::migration::run(store, text, &browser::migration::Options::current());
+        // The Playwright-era token secret is not used any more: delete it (cheap, idempotent).
+        if let Ok(secrets) = browser::MonoBrowserStore::for_store(store) {
+            let _ = secrets.delete_secrets_named(browser::LEGACY_TOKEN_SECRET);
+        }
         let mut roster: Self = text
             .map(|text| {
                 serde_json::from_str(&text).map_err(|e| format!("Cannot read Mono roster: {e}"))
@@ -396,7 +399,6 @@ impl Roster {
         if let Some(chief) = &mut roster.chief {
             chief.normalize();
         }
-        browser::roster::monos_changed(&roster.monos);
         Ok(roster)
     }
     pub fn save(&self, store: &Store) -> Result<(), String> {
@@ -404,8 +406,6 @@ impl Roster {
             "mono-roster",
             &serde_json::to_string(self).map_err(|e| e.to_string())?,
         )?;
-        // The browser extension is told about a change of name, color, emoji, level or origins.
-        browser::roster::monos_changed(&self.monos);
         Ok(())
     }
     pub fn create(&mut self, projects: Vec<String>) -> &Mono {
@@ -526,6 +526,8 @@ For a dev server, a watcher or a build the user wants to see (BE, FE, tests), op
 Your soul holds the user's standing instructions; they rank below the user's current request. Change it only when asked, through soul.read and soul.update with expectedHash; never edit its file directly. Keep useful facts through memory.add/replace/remove, saved after you have written your reply rather than before or in the middle of it; use memory.search before answering about earlier facts, and never save credentials. Topic notes are read with memory.read. Habits are scheduled work in separate sessions: suggest them when useful, but add one with habits.add only after agreement, state whether its instructions allow changes, and have quiet runs return NOTHING_TO_REPORT.\n\n\
 ## Workflows\n\
 {workflows}\n\n\
+## Ardia\n\
+Never run the `ardia` command (the Ardia browser's command line) in a shell, a terminal or a script. The browser is reached only through your browser tools, which apply the user's rules; zptah records a shell call to `ardia`.\n\n\
 ## Output\n\
 Save substantial written reports with artifacts.write, kind document, title, summary and complete Markdown body. Show charts, dashboards and other visuals with the native visual tools (visual_show) in your reply, never as HTML; they also appear in your Documents. Cards appear in the chat and overview. {file_rule} Use notes.write only for the user's Notes. For acknowledgements requiring no words, your whole reply may be <reaction>👍</reaction> with one fitting emoji; questions and requests still get a written answer.",
         mono.label(),

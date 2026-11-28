@@ -1,9 +1,9 @@
 //! The zptah Browser approval surface of a Mono's conversation (spec 8.2): the approval cards, the
-//! password stop notices, the stopped banner and the rule review prompt. It sits on the ledge above
+//! password stop notices, the "Working in Ardia" row with its Stop button and the rule review prompt. It sits on the ledge above
 //! the composer and never takes focus: the user reaches it with the mouse or by tabbing to it.
 //!
 //! The data comes from `monos::browser_approval`, which watches the Mono's approval queue and
-//! pushes a [`Surface`] here. Answers go straight to the queue; Resume and the rule prompt are
+//! pushes a [`Surface`] here. Answers go straight to the queue; Stop and the rule prompt are
 //! emitted as [`BrowserAction`] for the Mono manager, which owns the link and the database.
 use super::composer_shelf;
 use super::*;
@@ -23,25 +23,35 @@ pub(crate) struct ReviewPrompt {
 pub(crate) struct Surface {
     pub cards: Vec<PendingApproval>,
     pub notices: Vec<Notice>,
-    pub stopped: bool,
+    /// A browser call of this conversation is running (including one waiting for an approval):
+    /// the "Working in Ardia" row with its Stop button shows.
+    pub working: bool,
     pub review: Option<ReviewPrompt>,
+    /// An Ardia that zptah started is running: its indicator and Quit button show.
+    pub ardia_running: bool,
 }
 
 impl Surface {
     pub(crate) fn is_empty(&self) -> bool {
-        self.cards.is_empty() && self.notices.is_empty() && !self.stopped && self.review.is_none()
+        self.cards.is_empty()
+            && self.notices.is_empty()
+            && !self.working
+            && self.review.is_none()
+            && !self.ardia_running
     }
 }
 
 /// What the user pressed that the conversation cannot do itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BrowserAction {
-    /// Resume on the stopped banner.
-    Resume,
+    /// "Stop" on the "Working in Ardia" row: the Mono's browser work of this turn ends.
+    StopBrowser,
     /// "Confirm the new rules".
     ConfirmRules,
     /// "Keep the old rules": hide the prompt, change nothing.
     KeepRules,
+    /// "Quit" on the row of an Ardia that zptah started.
+    QuitArdia,
 }
 impl EventEmitter<BrowserAction> for Conversation {}
 
@@ -424,18 +434,22 @@ impl Conversation {
             .into_any_element()
     }
 
-    fn browser_banner(&self, cx: &mut Context<Self>) -> AnyElement {
-        let (message, resume) = copy::stopped_banner(copy::app_language());
+    /// "Working in Ardia" with its Stop button.
+    fn browser_working_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (message, stop) = match copy::app_language() {
+            Lang::En => ("Working in Ardia", "Stop"),
+            Lang::Vi => ("Đang làm việc trong Ardia", "Dừng"),
+        };
         div()
-            .id("browser-stopped-banner")
-            .debug_selector(|| "browser-stopped-banner".into())
+            .id("browser-working")
+            .debug_selector(|| "browser-working".into())
             .role(Role::Group)
             .aria_label(message)
             .flex()
             .items_center()
             .gap(px(10.))
             .py(px(6.))
-            .child(icon("circle-alert", 14.).text_color(gpui::rgb(0xffb900)))
+            .child(icon("globe", 14.).text_color(content(0.6)))
             .child(
                 div()
                     .min_w_0()
@@ -444,14 +458,42 @@ impl Conversation {
                     .child(message),
             )
             .child(
-                button("browser-resume".into(), resume)
-                    .bg(content(1.))
-                    .text_color({
-                        let mut ink = shell_fill();
-                        ink.a = 1.;
-                        ink
-                    })
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(BrowserAction::Resume))),
+                button("browser-stop".into(), stop)
+                    .bg(content(0.06))
+                    .hover(|s| s.bg(content(0.1)))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(BrowserAction::StopBrowser))),
+            )
+            .into_any_element()
+    }
+
+    /// "Ardia running (started by zptah)" with its Quit button.
+    fn browser_ardia_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (message, quit) = match copy::app_language() {
+            Lang::En => ("Ardia running (started by zptah)", "Quit"),
+            Lang::Vi => ("Ardia đang chạy (do zptah mở)", "Thoát"),
+        };
+        div()
+            .id("browser-ardia-running")
+            .debug_selector(|| "browser-ardia-running".into())
+            .role(Role::Group)
+            .aria_label(message)
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .py(px(6.))
+            .child(icon("globe", 14.).text_color(content(0.6)))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .text_color(content(0.8))
+                    .child(message),
+            )
+            .child(
+                button("browser-ardia-quit".into(), quit)
+                    .bg(content(0.06))
+                    .hover(|s| s.bg(content(0.1)))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(BrowserAction::QuitArdia))),
             )
             .into_any_element()
     }
@@ -531,8 +573,11 @@ impl Conversation {
             return div().into_any_element();
         }
         let mut rows: Vec<AnyElement> = Vec::new();
-        if surface.stopped {
-            rows.push(self.browser_banner(cx));
+        if surface.working {
+            rows.push(self.browser_working_row(cx));
+        }
+        if surface.ardia_running {
+            rows.push(self.browser_ardia_row(cx));
         }
         if let Some(prompt) = &surface.review {
             rows.push(self.browser_review(prompt, cx));
@@ -894,7 +939,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn the_banner_the_review_prompt_and_the_notice_emit_their_actions(cx: &mut TestAppContext) {
+    fn the_review_prompt_and_the_notice_emit_their_actions(cx: &mut TestAppContext) {
         let mono = format!("card-banner-{}", monocode_core::mono::new_id());
         let window = conversation(cx, &mono);
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
@@ -919,7 +964,6 @@ mod tests {
             visual,
             Surface {
                 notices: queue.notices(),
-                stopped: true,
                 review: Some(ReviewPrompt {
                     mono_label: "Mira".into(),
                     changed_lines: vec!["ask: click \"Pay\" on shop.example".into()],
@@ -927,22 +971,14 @@ mod tests {
                 ..Default::default()
             },
         );
-        for button in [
-            "browser-resume",
-            "browser-rules-confirm",
-            "browser-rules-keep",
-        ] {
+        for button in ["browser-rules-confirm", "browser-rules-keep"] {
             let center = visual.debug_bounds(button).unwrap().center();
             visual.simulate_click(center, Default::default());
             visual.refresh().unwrap();
         }
         assert_eq!(
             *seen.lock().unwrap(),
-            vec![
-                BrowserAction::Resume,
-                BrowserAction::ConfirmRules,
-                BrowserAction::KeepRules
-            ]
+            vec![BrowserAction::ConfirmRules, BrowserAction::KeepRules]
         );
         assert!(visual.debug_bounds("browser-notice").is_some());
         let center = visual
@@ -953,5 +989,92 @@ mod tests {
         visual.refresh().unwrap();
         assert!(queue.notices().is_empty());
         assert!(visual.debug_bounds("browser-notice").is_none());
+    }
+
+    #[gpui::test]
+    fn the_ardia_row_shows_for_an_ardia_zptah_started_and_quit_emits_its_action(
+        cx: &mut TestAppContext,
+    ) {
+        let mono = format!("card-ardia-{}", monocode_core::mono::new_id());
+        let window = conversation(cx, &mono);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let entity = window.entity(visual).unwrap();
+        let _sub = visual.update(|_, cx| {
+            cx.subscribe(&entity, move |_, event: &BrowserAction, _| {
+                log.lock().unwrap().push(*event)
+            })
+        });
+        assert!(visual.debug_bounds("browser-ardia-running").is_none());
+        show(&window, visual, Surface::default());
+        assert!(visual.debug_bounds("browser-shelf").is_none());
+        show(
+            &window,
+            visual,
+            Surface {
+                ardia_running: true,
+                ..Default::default()
+            },
+        );
+        for part in [
+            "browser-shelf",
+            "browser-ardia-running",
+            "browser-ardia-quit",
+        ] {
+            assert!(visual.debug_bounds(part).is_some(), "{part} is on screen");
+        }
+        assert!(
+            !window
+                .read_with(visual, |view, _| view.browser_needs_attention())
+                .unwrap(),
+            "an indicator is not something waiting for the user"
+        );
+        let center = visual.debug_bounds("browser-ardia-quit").unwrap().center();
+        visual.simulate_click(center, Default::default());
+        visual.refresh().unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![BrowserAction::QuitArdia]);
+    }
+
+    #[gpui::test]
+    fn the_working_row_shows_only_while_working_and_stop_emits_its_action(cx: &mut TestAppContext) {
+        let mono = format!("card-working-{}", monocode_core::mono::new_id());
+        let window = conversation(cx, &mono);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let entity = window.entity(visual).unwrap();
+        let _sub = visual.update(|_, cx| {
+            cx.subscribe(&entity, move |_, event: &BrowserAction, _| {
+                log.lock().unwrap().push(*event)
+            })
+        });
+        show(&window, visual, Surface::default());
+        assert!(visual.debug_bounds("browser-working").is_none());
+        assert!(visual.debug_bounds("browser-shelf").is_none());
+        show(
+            &window,
+            visual,
+            Surface {
+                working: true,
+                ..Default::default()
+            },
+        );
+        for part in ["browser-shelf", "browser-working", "browser-stop"] {
+            assert!(visual.debug_bounds(part).is_some(), "{part} is on screen");
+        }
+        assert!(
+            !window
+                .read_with(visual, |view, _| view.browser_needs_attention())
+                .unwrap(),
+            "work in progress is not something waiting for the user"
+        );
+        let center = visual.debug_bounds("browser-stop").unwrap().center();
+        visual.simulate_click(center, Default::default());
+        visual.refresh().unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![BrowserAction::StopBrowser]);
+        show(&window, visual, Surface::default());
+        assert!(visual.debug_bounds("browser-working").is_none());
+        assert!(visual.debug_bounds("browser-stop").is_none());
     }
 }
