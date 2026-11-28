@@ -780,6 +780,18 @@ impl Input {
         self.replace_text_in_range(None, text, window, cx);
         self.edit_step = false;
     }
+    /// Types `text` at the caret (over the selection, if any) as one undo step, as if the user
+    /// had pasted it.
+    pub(crate) fn insert_at_cursor(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_step = true;
+        self.replace_text_in_range(None, text, window, cx);
+        self.edit_step = false;
+    }
     /// Layouts and native text callbacks can still refer to the previous value.
     /// Every cursor and edit range must index the current UTF-8 buffer.
     fn clip_offset(&self, offset: usize) -> usize {

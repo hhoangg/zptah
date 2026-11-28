@@ -21,14 +21,14 @@ pub struct WorkflowIssue {
     pub message: String,
 }
 
-const RUN_VARS: [&str; 3] = ["round", "id", "startedAt"];
+pub(super) const RUN_VARS: [&str; 3] = ["round", "id", "startedAt"];
 /// Template variables a node output must not shadow.
 const RESERVED_NODE_IDS: [&str; 4] = ["run", "inputs", "results", "trigger"];
 /// Extra `run` fields only the summary template gets (see `compose_report`).
 const REPORT_RUN_VARS: [&str; 4] = ["name", "status", "statusLabel", "endedAt"];
 /// The fields of `{{trigger.*}}`: the trigger node that fired, what kind of caller started the run
 /// and, for an event run, the item. "trigger" is a reserved node id, so nothing else shares it.
-const TRIGGER_VARS: [&str; 3] = ["node", "kind", "item"];
+pub(super) const TRIGGER_VARS: [&str; 3] = ["node", "kind", "item"];
 const FOR_EACH_FIELDS: [&str; 1] = ["results"];
 const PATH_ROOTS: [&str; 14] = [
     "Users",
@@ -289,7 +289,7 @@ struct Checker<'a> {
 
 /// The names `{{node.<name>}}` may use for `node`: the built-in outputs and what a session
 /// declares.
-fn output_fields(node: &Node) -> Vec<String> {
+pub(super) fn output_fields(node: &Node) -> Vec<String> {
     match &node.kind {
         NodeKind::Session { output, target, .. } => {
             let mut fields: Vec<String> =
@@ -1341,6 +1341,28 @@ fn requirement_problem(r: &Requirement) -> Option<String> {
         ));
     }
     None
+}
+
+/// What a template in node `node_id` may refer to, by the same rules `validate_workflow` applies
+/// to it: the nodes whose output is in scope and the loop variable names (innermost first).
+/// `None` when the workflow has no such node. The variable list of the inspector is built on this
+/// so it can never offer what validation would refuse.
+pub(super) fn node_scope(w: &Workflow, node_id: &str) -> Option<(HashSet<String>, Vec<String>)> {
+    let c = Checker {
+        w,
+        windows: false,
+        g: Graph::new(w),
+        issues: Vec::new(),
+        ancestors_cache: RefCell::default(),
+        descendants_cache: RefCell::default(),
+    };
+    let node = c.g.by_id.get(node_id).copied()?;
+    let items = c
+        .parent_chain(node)
+        .iter()
+        .filter_map(|p| item_name(p))
+        .collect();
+    Some((c.scope_of(node_id), items))
 }
 
 pub fn validate_workflow(w: &Workflow) -> Vec<WorkflowIssue> {

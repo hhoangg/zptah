@@ -60,6 +60,9 @@ mod tick_tests;
 #[cfg(test)]
 mod ui_fixtures;
 pub mod validate;
+pub mod variables;
+#[cfg(test)]
+mod variables_tests;
 pub mod yaml;
 pub(crate) mod yaml_emit;
 pub(crate) mod yaml_read;

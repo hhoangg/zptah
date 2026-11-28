@@ -441,6 +441,13 @@ impl Monos {
             NodeKind::Session { .. } | NodeKind::Command { .. }
         );
         let fields = self.board_node_fields(scope, w, node, window, cx);
+        // Last, so the controls above keep their place whether the list is long or short.
+        let variables = match &node.kind {
+            NodeKind::Session { .. } => Some(BoardField::Prompt(id.clone())),
+            NodeKind::Command { .. } => Some(BoardField::Command(id.clone())),
+            _ => None,
+        }
+        .and_then(|target| self.board_variables(w, &id, target, cx));
         let loop_out = w
             .edges
             .iter()
@@ -544,6 +551,7 @@ impl Monos {
             })
             .child(fields)
             .children(loop_section)
+            .children(variables)
             .into_any_element()
     }
 
