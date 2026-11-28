@@ -137,24 +137,25 @@ fn a_session_not_seen_working_is_given_up_on_unless_it_failed_to_start() {
         over(TurnEnd::Failed("No network".into())),
         &mut armed,
         &mut unstarted,
+        true,
     );
     assert_eq!(failed.unwrap().error.as_deref(), Some("No network"));
     // An idle session that was never working: patience, then a failure.
     for _ in 0..10 {
         assert_eq!(
-            look(over(TurnEnd::Completed), &mut armed, &mut unstarted),
+            look(over(TurnEnd::Completed), &mut armed, &mut unstarted, true),
             None
         );
     }
-    let late = look(over(TurnEnd::Completed), &mut armed, &mut unstarted).unwrap();
+    let late = look(over(TurnEnd::Completed), &mut armed, &mut unstarted, true).unwrap();
     assert_eq!(
         late.error.as_deref(),
         Some("The session did not start a turn.")
     );
     // Once seen working, idle means the turn is over.
-    assert_eq!(look(Seen::Working, &mut armed, &mut unstarted), None);
+    assert_eq!(look(Seen::Working, &mut armed, &mut unstarted, true), None);
     assert_eq!(
-        look(over(TurnEnd::Completed), &mut armed, &mut unstarted)
+        look(over(TurnEnd::Completed), &mut armed, &mut unstarted, true)
             .unwrap()
             .status,
         Status::Completed
@@ -168,7 +169,10 @@ fn an_idle_ready_session_with_no_finished_turn_is_not_an_end() {
     // The prompt was counted as working (something was pending), but no turn ran: the start
     // error may still be on its way, so the run waits instead of recording an empty reply.
     let (mut armed, mut unstarted) = (true, 0);
-    assert_eq!(look(Seen::NoTurnYet, &mut armed, &mut unstarted), None);
+    assert_eq!(
+        look(Seen::NoTurnYet, &mut armed, &mut unstarted, true),
+        None
+    );
     // The error that lands afterwards ends the step as failed.
     let failed = look(
         Seen::Over(WorkflowTurn {
@@ -177,6 +181,7 @@ fn an_idle_ready_session_with_no_finished_turn_is_not_an_end() {
         }),
         &mut armed,
         &mut unstarted,
+        true,
     );
     assert_eq!(
         failed.unwrap().error.as_deref(),
@@ -191,14 +196,34 @@ fn an_idle_ready_session_with_no_finished_turn_is_not_an_end() {
         }),
         &mut armed,
         &mut unstarted,
+        true,
     );
     assert_eq!(ran.unwrap().status, Status::Completed);
-    // A session that never begins is given up on.
+    // A burst of wake-ups is not time: it never fails a session that is slow to start.
     unstarted = 0;
-    for _ in 0..10 {
-        assert_eq!(look(Seen::NoTurnYet, &mut armed, &mut unstarted), None);
+    for _ in 0..1000 {
+        assert_eq!(
+            look(Seen::NoTurnYet, &mut armed, &mut unstarted, false),
+            None
+        );
     }
-    assert!(look(Seen::NoTurnYet, &mut armed, &mut unstarted).is_some());
+    // A session that never begins is given up on after about a minute of timer ticks.
+    for _ in 0..60 {
+        assert_eq!(
+            look(Seen::NoTurnYet, &mut armed, &mut unstarted, true),
+            None
+        );
+        // Wake-ups in between change nothing.
+        assert_eq!(
+            look(Seen::NoTurnYet, &mut armed, &mut unstarted, false),
+            None
+        );
+    }
+    let stuck = look(Seen::NoTurnYet, &mut armed, &mut unstarted, true).unwrap();
+    assert_eq!(
+        stuck.error.as_deref(),
+        Some("The session did not start a turn.")
+    );
 }
 
 #[test]
@@ -214,19 +239,19 @@ fn a_cloud_session_that_is_still_starting_is_waited_for_without_end() {
     let (mut armed, mut unstarted) = (false, 0);
     // Far more looks than the patience for a turn that never begins, all while the start runs.
     for _ in 0..500 {
-        assert_eq!(look(Seen::Starting, &mut armed, &mut unstarted), None);
+        assert_eq!(look(Seen::Starting, &mut armed, &mut unstarted, true), None);
     }
     assert!(!armed, "a start is not a turn");
     // Once it is over the usual patience for the turn to appear begins from nothing.
     for _ in 0..10 {
-        assert_eq!(look(idle(), &mut armed, &mut unstarted), None);
+        assert_eq!(look(idle(), &mut armed, &mut unstarted, true), None);
     }
     // A start that comes round again (a retry) gives the patience back.
-    assert_eq!(look(Seen::Starting, &mut armed, &mut unstarted), None);
+    assert_eq!(look(Seen::Starting, &mut armed, &mut unstarted, true), None);
     for _ in 0..10 {
-        assert_eq!(look(idle(), &mut armed, &mut unstarted), None);
+        assert_eq!(look(idle(), &mut armed, &mut unstarted, true), None);
     }
-    assert!(look(idle(), &mut armed, &mut unstarted).is_some());
+    assert!(look(idle(), &mut armed, &mut unstarted, true).is_some());
 }
 
 // --- the primitives -------------------------------------------------------------------------

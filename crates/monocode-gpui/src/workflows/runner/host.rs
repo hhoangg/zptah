@@ -28,6 +28,9 @@ use std::{collections::HashMap, rc::Rc, time::Duration};
 const WATCH_POLL: Duration = Duration::from_secs(1);
 /// A session that never shows a turn going is not waited for forever.
 const UNSTARTED_POLLS: u32 = 10;
+/// How many timer ticks (about a minute) a session that sent its prompt may take to start a turn
+/// or to report why it could not.
+const NO_TURN_POLLS: u32 = 60;
 
 /// A probe that finds every harness installed and lists no models, so a harness is never
 /// refused; what a test wants refused it says itself.
@@ -138,7 +141,15 @@ pub(in crate::workflows) enum Seen {
 /// What one look at a watched session means: its outcome, or `None` to keep waiting. `armed`
 /// says a turn has been seen going; an idle session that never was is given up on after a while,
 /// unless it ended in an error (a prompt that failed to start says why).
-pub(super) fn look(seen: Seen, armed: &mut bool, unstarted: &mut u32) -> Option<Outcome> {
+/// `tick` is true when the look follows the timer, false when a wake-up from the conversation
+/// asked for it: only ticks count toward giving up, so a burst of wake-ups cannot fail a session
+/// that is slow to start.
+pub(super) fn look(
+    seen: Seen,
+    armed: &mut bool,
+    unstarted: &mut u32,
+    tick: bool,
+) -> Option<Outcome> {
     match seen {
         Seen::Working => {
             *armed = true;
@@ -153,15 +164,15 @@ pub(super) fn look(seen: Seen, armed: &mut bool, unstarted: &mut u32) -> Option<
         // Patience as for a turn that never began; an error that lands meanwhile ends it.
         Seen::Ran(turn) => Some(outcome_of(turn)),
         Seen::NoTurnYet => {
-            *unstarted += 1;
-            (*unstarted > UNSTARTED_POLLS)
+            *unstarted += u32::from(tick);
+            (*unstarted > NO_TURN_POLLS)
                 .then(|| Outcome::failed("The session did not start a turn."))
         }
         Seen::Over(turn) if *armed || matches!(turn.end, TurnEnd::Failed(_)) => {
             Some(outcome_of(turn))
         }
         Seen::Over(_) => {
-            *unstarted += 1;
+            *unstarted += u32::from(tick);
             (*unstarted > UNSTARTED_POLLS)
                 .then(|| Outcome::failed("The session did not start a turn."))
         }
@@ -178,17 +189,20 @@ async fn settle(
     turns_before: Option<u64>,
 ) -> Outcome {
     let mut unstarted = 0;
+    // The first look, and each one after the timer; a wake-up is not a tick.
+    let mut tick = true;
     loop {
         match workflows.update(&mut cx, |w, cx| w.workflow_turn(session, turns_before, cx)) {
             Err(_) => return Outcome::failed("The app is closing."),
             Ok(None) => return Outcome::failed("The session is no longer available."),
             Ok(Some(seen)) => {
-                if let Some(outcome) = look(seen, &mut armed, &mut unstarted) {
+                if let Some(outcome) = look(seen, &mut armed, &mut unstarted, tick) {
                     return outcome;
                 }
             }
         }
-        let _ = race(wake.recv(), cx.background_executor().timer(WATCH_POLL)).await;
+        let woken = race(wake.recv(), cx.background_executor().timer(WATCH_POLL)).await;
+        tick = matches!(woken, super::sync::Either::Right(_));
     }
 }
 

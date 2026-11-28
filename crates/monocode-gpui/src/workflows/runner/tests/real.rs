@@ -488,7 +488,7 @@ fn a_turn_that_was_never_taken_is_given_up_on_and_an_idle_one_has_ended(cx: &mut
     let never = collect(cx, never);
     cx.run_until_parked();
     assert!(never.borrow().is_none());
-    cx.executor().advance_clock(Duration::from_secs(15));
+    cx.executor().advance_clock(Duration::from_secs(70));
     cx.run_until_parked();
     assert_eq!(
         never.borrow().clone().unwrap().error.as_deref(),
